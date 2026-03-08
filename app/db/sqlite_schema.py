@@ -13,9 +13,19 @@ import sqlite3
 
 from ..utils.crypto import hash_password
 from ..utils.time import utcnow
-from .sqlite_runtime import transaction
+from .sqlite_runtime import connect, transaction
 
 _log = logging.getLogger(__name__)
+
+
+def ensure_schema(db_path) -> None:
+	"""Open a connection to *db_path*, apply the schema, and close."""
+	from pathlib import Path
+	conn = connect(Path(db_path))
+	try:
+		init_schema(conn)
+	finally:
+		conn.close()
 
 
 def init_schema(conn: sqlite3.Connection) -> None:

@@ -16,7 +16,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from .api import auth, frontend_pages, frontend_shared, monitors, passkeys, users
+from .api import auth, frontend_pages, frontend_shared, monitors, passkeys, settings, users
 from .api.frontend_shared import RedirectTo, redirect_to_handler
 from .db.sqlite_runtime import close_all_connections
 from .db.sqlite_schema import ensure_default_admin, ensure_schema
@@ -89,6 +89,7 @@ def create_app() -> FastAPI:
 	app.include_router(users.router, prefix="/api/users")
 	app.include_router(passkeys.router, prefix="/api/passkeys")
 	app.include_router(monitors.router, prefix="/api/monitors")
+	app.include_router(settings.router, prefix="/api/settings")
 
 	# ── Frontend routes ──
 	app.include_router(frontend_pages.router)
