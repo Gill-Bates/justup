@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+{% block title %}Monitors – justUp{% endblock %}
+
+{% block content %}
+<div class="ju-page">
+    <div class="ju-page-header">
+        <h1 class="page-title">Monitors</h1>
+        <button class="btn btn-primary" id="addMonitorBtn">
+            <span class="material-icons">add</span>Add Monitor
+        </button>
+    </div>
+
+    <div class="card">
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-hover mb-0">
+                    <thead>
+                        <tr>
+                            <th>Status</th>
+                            <th>Name</th>
+                            <th>Type</th>
+                            <th>URL / Host</th>
+                            <th>Interval</th>
+                            <th>Response</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="monitors-body">
+                        {% for m in monitors %}
+                        <tr data-id="{{ m['id'] }}">
+                            <td>
+                                {% if m['is_up'] %}
+                                <span class="badge bg-success">UP</span>
+                                {% elif m['is_up'] is none %}
+                                <span class="badge bg-secondary">PENDING</span>
+                                {% else %}
+                                <span class="badge bg-danger">DOWN</span>
+                                {% endif %}
+                            </td>
+                            <td>{{ m['name'] | e }}</td>
+                            <td><span class="badge bg-secondary">{{ m['monitor_type'] | upper | e }}</span></td>
+                            <td class="text-truncate" style="max-width:250px">{{ m['url'] or m['hostname'] or '–' | e }}
+                            </td>
+                            <td>{{ m['interval_seconds'] | e }}s</td>
+                            <td>{{ (m['response_time_ms'] or 0) | round(0) | int }} ms</td>
+                            <td>
+                                <button class="btn btn-sm btn-outline-primary edit-monitor" data-id="{{ m['id'] }}"
+                                    title="Edit">
+                                    <span class="material-icons icon-sm">edit</span>
+                                </button>
+                                <button class="btn btn-sm btn-outline-danger delete-monitor" data-id="{{ m['id'] }}"
+                                    title="Delete">
+                                    <span class="material-icons icon-sm">delete</span>
+                                </button>
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="7" class="text-center text-muted py-4">
+                                <span class="material-icons d-block mb-2" style="font-size:2rem">monitor_heart</span>
+                                No monitors yet. Click "Add Monitor" to get started.
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Add/Edit Monitor Modal -->
+<div class="modal fade" id="monitorModal" tabindex="-1" aria-labelledby="monitorModalTitle">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="monitorModalTitle">Add Monitor</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <form id="monitor-form">
+                    <input type="hidden" id="monitor-id">
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label for="monitor-name" class="form-label">Name</label>
+                            <input type="text" class="form-control" id="monitor-name" required maxlength="200">
+                        </div>
+                        <div class="col-md-6">
+                            <label for="monitor-type" class="form-label">Type</label>
+                            <select class="form-select" id="monitor-type" required>
+                                <option value="http">HTTP(S)</option>
+                                <option value="tcp">TCP Port</option>
+                                <option value="ping">Ping (ICMP)</option>
+                                <option value="dns">DNS</option>
+                                <option value="keyword">Keyword</option>
+                            </select>
+                        </div>
+                        <div class="col-12" id="url-group">
+                            <label for="monitor-url" class="form-label">URL</label>
+                            <input type="url" class="form-control" id="monitor-url" placeholder="https://example.com">
+                        </div>
+                        <div class="col-md-8" id="hostname-group" style="display:none">
+                            <label for="monitor-hostname" class="form-label">Hostname</label>
+                            <input type="text" class="form-control" id="monitor-hostname" placeholder="example.com">
+                        </div>
+                        <div class="col-md-4" id="port-group" style="display:none">
+                            <label for="monitor-port" class="form-label">Port</label>
+                            <input type="number" class="form-control" id="monitor-port" min="1" max="65535" value="80">
+                        </div>
+                        <div class="col-12" id="keyword-group" style="display:none">
+                            <label for="monitor-keyword" class="form-label">Expected Keyword</label>
+                            <input type="text" class="form-control" id="monitor-keyword"
+                                placeholder="Text to search for in response">
+                        </div>
+                        <div class="col-md-6">
+                            <label for="monitor-interval" class="form-label">Check Interval (seconds)</label>
+                            <input type="number" class="form-control" id="monitor-interval" min="10" max="86400"
+                                value="60">
+                        </div>
+                        <div class="col-md-6">
+                            <label for="monitor-timeout" class="form-label">Timeout (seconds)</label>
+                            <input type="number" class="form-control" id="monitor-timeout" min="1" max="120" value="30">
+                        </div>
+                        <div class="col-12">
+                            <label for="monitor-description" class="form-label">Description (optional)</label>
+                            <textarea class="form-control" id="monitor-description" rows="2"
+                                maxlength="1000"></textarea>
+                        </div>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" id="saveMonitorBtn">Save</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="/static/js/monitors.js"></script>
+{% endblock %}

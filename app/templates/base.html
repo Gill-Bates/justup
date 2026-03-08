@@ -1,0 +1,248 @@
+{% from 'macros/nav.html' import nav_item with context %}
+{# Define navigation items once for DRY principle #}
+{% set nav_items = [
+('/ui/dashboard', 'dashboard', 'Dashboard'),
+('/ui/monitors', 'monitor_heart', 'Monitors'),
+] %}
+{% if user and user['is_admin'] %}
+{% set nav_items = nav_items + [('/ui/users', 'people', 'Users')] %}
+{% endif %}
+{% set nav_items = nav_items + [
+('/ui/settings', 'settings', 'Settings'),
+('/ui/about', 'info', 'About'),
+] %}
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="{{ theme | default('light') | e }}">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="csrf-token" content="{{ csrf_token | e }}">
+    <title>{% block title %}justUp{% endblock %}</title>
+    <link rel="icon" type="image/svg+xml" href="/static/img/justup.svg">
+    <!-- Preload critical font to prevent FOIT -->
+    <link rel="preload" href="/static/vendor/fonts/MaterialIcons.ttf" as="font" type="font/ttf" crossorigin>
+    <!-- Theme Script in <head> prevents FOUC -->
+    <script src="/static/js/theme.js"></script>
+    <link href="/static/vendor/bootstrap.min.css" rel="stylesheet">
+    <link href="/static/vendor/material-icons.css" rel="stylesheet">
+    <link href="/static/css/style.css" rel="stylesheet">
+    <link href="/static/css/ju-ui-system.css" rel="stylesheet">
+    <style>
+        :root {
+            --ju-z-banner: 1080;
+            --ju-z-toast: 1090;
+        }
+
+        /* Blur background when any modal is open via backdrop-filter */
+        .modal-backdrop.show {
+            background-color: rgba(15, 23, 42, 0.6);
+            -webkit-backdrop-filter: blur(16px) saturate(0.85);
+            backdrop-filter: blur(16px) saturate(0.85);
+        }
+
+        /* Center modals vertically (except scrollable modals) */
+        .modal:not(.modal-dialog-scrollable) .modal-dialog {
+            display: flex;
+            align-items: center;
+            min-height: calc(100% - var(--bs-modal-margin) * 2);
+        }
+
+        /* Global spinner styling */
+        .spinner-border {
+            color: var(--bs-primary);
+        }
+
+        #juReconnectModal .modal-dialog {
+            max-width: 460px;
+        }
+
+        #juReconnectModal .modal-content {
+            border: 1px solid rgba(128, 128, 128, 0.25);
+            border-radius: var(--ju-radius-lg);
+        }
+
+        #juReconnectModal .spinner-border {
+            width: 2.25rem;
+            height: 2.25rem;
+        }
+
+        @keyframes juReconnectSoftPulse {
+            0% {
+                transform: scale(1);
+                box-shadow: 0 0 0 rgba(27, 94, 32, 0.0);
+            }
+
+            50% {
+                transform: scale(1.012);
+                box-shadow: 0 0 0.85rem rgba(27, 94, 32, 0.22);
+            }
+
+            100% {
+                transform: scale(1);
+                box-shadow: 0 0 0 rgba(27, 94, 32, 0.0);
+            }
+        }
+
+        body.ju-reconnecting #juReconnectModal.show .ju-reconnect-pulse {
+            animation: juReconnectSoftPulse 1.9s ease-in-out infinite;
+            transform-origin: center;
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            body.ju-reconnecting #juReconnectModal.show .ju-reconnect-pulse {
+                animation: none;
+            }
+        }
+
+        /* Modal and utility classes for CSP compliance */
+        .ju-modal-icon {
+            margin-top: 2px;
+        }
+    </style>
+    {% block extra_css %}{% endblock %}
+</head>
+
+<body>
+    <!-- Navbar -->
+    <nav class="navbar navbar-expand-lg navbar-dark" aria-label="Top navigation bar">
+        <div class="container-fluid">
+            <a class="navbar-brand d-flex align-items-center" href="/ui/dashboard">
+                <img src="/static/img/justup.svg" alt="justUp" class="navbar-logo">
+            </a>
+            <!-- Always-visible right-side actions (outside collapse) -->
+            <div class="d-flex align-items-center gap-2 ms-auto order-lg-last navbar-controls">
+                {% if user %}
+                <div class="d-flex align-items-center gap-2 navbar-actions" aria-label="User actions">
+                    <span class="text-white navbar-user-label d-none d-lg-inline">{{ user['username'] | e }}</span>
+                    <button type="button" class="btn btn-link text-white p-0 border-0 navbar-theme-btn" id="themeToggle"
+                        aria-label="Toggle theme">
+                        <span class="material-icons" id="theme-icon">dark_mode</span>
+                    </button>
+                    <button class="btn btn-sm btn-outline-light d-inline-flex align-items-center navbar-logout-btn"
+                        id="logoutBtn" title="Logout" aria-label="Logout">
+                        <span class="material-icons navbar-logout-icon">logout</span>
+                        <span class="navbar-logout-label d-none d-lg-inline">Logout</span>
+                    </button>
+                </div>
+                {% endif %}
+                <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav"
+                    aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
+                    <span class="navbar-toggler-icon"></span>
+                </button>
+            </div>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <!-- Mobile Navigation Links (2-column grid) -->
+                <div class="d-lg-none navbar-mobile-grid" aria-label="Mobile navigation">
+                    {% for href, icon, label in nav_items %}
+                    {{ nav_item(href, icon, label) }}
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="ju-shell d-flex flex-grow-1">
+        <!-- Sidebar -->
+        <nav class="sidebar nav flex-column py-3 d-none d-lg-block" aria-label="Main navigation">
+            {% for href, icon, label in nav_items %}
+            {{ nav_item(href, icon, label) }}
+            {% endfor %}
+        </nav>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            {% block content %}{% endblock %}
+        </main>
+    </div>
+
+    <!-- Footer -->
+    <footer class="ju-footer">
+        <span class="ju-footer-content">
+            justUp v{{ VERSION | e }}
+            (<span class="font-monospace">{{ (BUILD_INFO or '')[:7] | e }}</span>)
+            &middot; &copy;&nbsp;<span id="copyright-year"></span>Gill-Bates
+            &middot;&nbsp;
+            <a href="https://github.com/Gill-Bates/justup" target="_blank" rel="noopener noreferrer"
+                class="text-decoration-none ju-footer-link">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" class="ju-footer-link-icon"
+                    aria-hidden="true">
+                    <path fill-rule="evenodd"
+                        d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z">
+                    </path>
+                </svg>
+                GitHub
+                <span class="visually-hidden">(opens in new tab)</span>
+            </a>
+        </span>
+    </footer>
+
+    <!-- Reusable Modal (alert / confirm / prompt) -->
+    <div class="modal fade" id="juModal" tabindex="-1" aria-labelledby="juModalTitle">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="juModalTitle">Info</h5>
+                    <button type="button" class="btn-close" id="juModalClose" data-bs-dismiss="modal"
+                        aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="d-flex align-items-start gap-3">
+                        <span class="material-icons fs-3 ju-modal-icon" id="juModalIcon">info</span>
+                        <div class="flex-grow-1">
+                            <p class="mb-0" id="juModalMessage"></p>
+                            <div class="mt-3 d-none" id="juModalInputWrap">
+                                <input type="text" class="form-control" id="juModalInput">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary d-none" id="juModalCancel"
+                        data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-primary" id="juModalOk">OK</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Reconnect Modal -->
+    <div class="modal fade" id="juReconnectModal" tabindex="-1" aria-labelledby="juReconnectTitle"
+        data-bs-backdrop="static" data-bs-keyboard="false">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content ju-reconnect-pulse">
+                <div class="modal-body py-5 px-4">
+                    <div class="d-flex flex-column align-items-center text-center gap-3">
+                        <div class="spinner-border text-primary" role="status" aria-hidden="true"></div>
+                        <div>
+                            <h5 id="juReconnectTitle" class="mb-2">Connection Lost</h5>
+                            <p role="alert" class="text-muted small mb-3">Trying to reconnect to the server...</p>
+                            <div class="mt-3 d-none" id="juReconnectFailsafeWrap">
+                                <button class="btn btn-sm btn-outline-secondary" id="juReconnectReload">Reload
+                                    Page</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast container -->
+    <div class="toast-container position-fixed top-0 end-0 p-3" id="juToastContainer"></div>
+
+    <!-- External JavaScript -->
+    <script src="/static/vendor/bootstrap.bundle.min.js"></script>
+    <script src="/static/js/api.js"></script>
+    <script src="/static/js/modal.js"></script>
+    <script src="/static/js/toast.js"></script>
+    <script src="/static/js/reconnect.js"></script>
+    <script>
+        document.getElementById('copyright-year').textContent = new Date().getFullYear();
+        document.getElementById('themeToggle')?.addEventListener('click', toggleTheme);
+        document.getElementById('logoutBtn')?.addEventListener('click', logout);
+    </script>
+    {% block extra_js %}{% endblock %}
+</body>
+
+</html>

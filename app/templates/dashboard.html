@@ -1,0 +1,165 @@
+{% extends "base.html" %}
+{% block title %}Dashboard – justUp{% endblock %}
+
+{% block content %}
+<div class="ju-page">
+    <div class="ju-page-header">
+        <h1 class="page-title">Dashboard</h1>
+    </div>
+
+    <!-- Stats Row -->
+    <div class="row g-3 mb-4">
+        <div class="col-6 col-md-3">
+            <div class="card ju-stat-card">
+                <div class="card-body">
+                    <div class="stat-value text-success" id="stat-up">0</div>
+                    <div class="stat-label">Up</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-6 col-md-3">
+            <div class="card ju-stat-card">
+                <div class="card-body">
+                    <div class="stat-value text-danger" id="stat-down">0</div>
+                    <div class="stat-label">Down</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-6 col-md-3">
+            <div class="card ju-stat-card">
+                <div class="card-body">
+                    <div class="stat-value" id="stat-paused">0</div>
+                    <div class="stat-label">Paused</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-6 col-md-3">
+            <div class="card ju-stat-card">
+                <div class="card-body">
+                    <div class="stat-value" id="stat-total">0</div>
+                    <div class="stat-label">Total</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Monitors Overview -->
+    <div class="card ju-section">
+        <div class="card-header d-flex align-items-center justify-content-between">
+            <h6 class="card-title mb-0">
+                <span class="material-icons icon-sm me-1">monitor_heart</span>Monitors
+            </h6>
+            <a href="/ui/monitors" class="btn btn-sm btn-outline-primary">View All</a>
+        </div>
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-hover mb-0">
+                    <thead>
+                        <tr>
+                            <th>Status</th>
+                            <th>Name</th>
+                            <th>Type</th>
+                            <th>Response</th>
+                            <th>Uptime</th>
+                        </tr>
+                    </thead>
+                    <tbody id="monitors-table-body">
+                        {% for m in monitors %}
+                        <tr>
+                            <td>
+                                {% if m['is_up'] %}
+                                <span class="badge bg-success">UP</span>
+                                {% elif m['is_up'] is none %}
+                                <span class="badge bg-secondary">PENDING</span>
+                                {% else %}
+                                <span class="badge bg-danger">DOWN</span>
+                                {% endif %}
+                            </td>
+                            <td>{{ m['name'] | e }}</td>
+                            <td><span class="badge bg-secondary">{{ m['monitor_type'] | upper | e }}</span></td>
+                            <td>{{ (m['response_time_ms'] or 0) | round(0) | int }} ms</td>
+                            <td>–</td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="5" class="text-center text-muted py-4">
+                                <span class="material-icons d-block mb-2" style="font-size:2rem">monitor_heart</span>
+                                No monitors configured yet.
+                                <a href="/ui/monitors">Add your first monitor</a>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Recent Incidents -->
+    <div class="card ju-section mt-4">
+        <div class="card-header">
+            <h6 class="card-title mb-0">
+                <span class="material-icons icon-sm me-1">warning</span>Recent Incidents
+            </h6>
+        </div>
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-hover mb-0">
+                    <thead>
+                        <tr>
+                            <th>Status</th>
+                            <th>Monitor</th>
+                            <th>Started</th>
+                            <th>Duration</th>
+                            <th>Error</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for inc in incidents %}
+                        <tr>
+                            <td>
+                                {% if inc['resolved_at'] %}
+                                <span class="badge bg-success">Resolved</span>
+                                {% else %}
+                                <span class="badge bg-danger">Ongoing</span>
+                                {% endif %}
+                            </td>
+                            <td>{{ inc['monitor_name'] | e if inc['monitor_name'] else '–' }}</td>
+                            <td>{{ inc['started_at'] | e if inc['started_at'] else '–' }}</td>
+                            <td>{{ inc['duration_seconds'] | e if inc['duration_seconds'] else '–' }}</td>
+                            <td class="text-truncate" style="max-width:200px">{{ inc['error_message'] | e if
+                                inc['error_message'] else '–' }}</td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="5" class="text-center text-muted py-4">No recent incidents.</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // Update stat counters from monitor data
+    (function () {
+        const rows = document.querySelectorAll('#monitors-table-body tr');
+        let up = 0, down = 0, paused = 0, total = 0;
+        rows.forEach(row => {
+            const badge = row.querySelector('.badge');
+            if (!badge) return;
+            total++;
+            const text = badge.textContent.trim();
+            if (text === 'UP') up++;
+            else if (text === 'DOWN') down++;
+            else paused++;
+        });
+        document.getElementById('stat-up').textContent = up;
+        document.getElementById('stat-down').textContent = down;
+        document.getElementById('stat-paused').textContent = paused;
+        document.getElementById('stat-total').textContent = total;
+    })();
+</script>
+{% endblock %}

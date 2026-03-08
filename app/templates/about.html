@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}About – justUp{% endblock %}
+
+{% block content %}
+<div class="ju-page">
+    <div class="ju-page-header">
+        <h1 class="page-title">About</h1>
+    </div>
+
+    <div class="row g-4">
+        <div class="col-12 col-lg-6">
+            <div class="card">
+                <div class="card-header">
+                    <h6 class="card-title mb-0">
+                        <span class="material-icons icon-sm me-1">info</span>Application Info
+                    </h6>
+                </div>
+                <div class="card-body">
+                    <table class="table table-borderless mb-0">
+                        <tr>
+                            <td class="text-muted">Application</td>
+                            <td><strong>justUp</strong></td>
+                        </tr>
+                        <tr>
+                            <td class="text-muted">Version</td>
+                            <td>{{ VERSION | e }}</td>
+                        </tr>
+                        <tr>
+                            <td class="text-muted">Build</td>
+                            <td><code>{{ (BUILD_INFO or 'development')[:12] | e }}</code></td>
+                        </tr>
+                        <tr>
+                            <td class="text-muted">License</td>
+                            <td>AGPL-3.0</td>
+                        </tr>
+                        <tr>
+                            <td class="text-muted">Source</td>
+                            <td>
+                                <a href="https://github.com/Gill-Bates/justup" target="_blank"
+                                    rel="noopener noreferrer">
+                                    GitHub
+                                </a>
+                            </td>
+                        </tr>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

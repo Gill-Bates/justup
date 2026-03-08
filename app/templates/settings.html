@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}Settings – justUp{% endblock %}
+
+{% block content %}
+<div class="ju-page">
+    <div class="ju-page-header">
+        <h1 class="page-title">Settings</h1>
+    </div>
+
+    <div class="row g-4">
+        <!-- General Settings -->
+        <div class="col-12 col-lg-6">
+            <div class="card">
+                <div class="card-header">
+                    <h6 class="card-title mb-0">
+                        <span class="material-icons icon-sm me-1">tune</span>General
+                    </h6>
+                </div>
+                <div class="card-body">
+                    <div class="mb-3">
+                        <label for="setting-port" class="form-label">GUI Port</label>
+                        <input type="number" class="form-control" id="setting-port" min="1" max="65535">
+                    </div>
+                    <div class="mb-3">
+                        <label for="setting-interval" class="form-label">Default Check Interval (seconds)</label>
+                        <input type="number" class="form-control" id="setting-interval" min="10" max="86400">
+                    </div>
+                    <div class="mb-3">
+                        <label for="setting-retention" class="form-label">TSDB Retention (days)</label>
+                        <input type="number" class="form-control" id="setting-retention" min="1" max="3650">
+                    </div>
+                    <button class="btn btn-primary" id="saveSettingsBtn">
+                        <span class="material-icons icon-sm">save</span>Save Settings
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Account Security -->
+        <div class="col-12 col-lg-6">
+            <div class="card">
+                <div class="card-header">
+                    <h6 class="card-title mb-0">
+                        <span class="material-icons icon-sm me-1">security</span>Account Security
+                    </h6>
+                </div>
+                <div class="card-body">
+                    <h6 class="mb-3">Change Password</h6>
+                    <div class="mb-3">
+                        <label for="current-password" class="form-label">Current Password</label>
+                        <input type="password" class="form-control" id="current-password"
+                            autocomplete="current-password">
+                    </div>
+                    <div class="mb-3">
+                        <label for="new-password" class="form-label">New Password</label>
+                        <input type="password" class="form-control" id="new-password" autocomplete="new-password">
+                    </div>
+                    <button class="btn btn-primary mb-4" id="changePasswordBtn">
+                        <span class="material-icons icon-sm">key</span>Change Password
+                    </button>
+
+                    <hr>
+
+                    <h6 class="mb-3">Two-Factor Authentication (OTP)</h6>
+                    <div id="otp-section">
+                        <!-- Populated by JS -->
+                    </div>
+
+                    <hr>
+
+                    <h6 class="mb-3">Passkeys</h6>
+                    <div id="passkeys-section">
+                        <!-- Populated by JS -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="/static/js/settings.js"></script>
+{% endblock %}
