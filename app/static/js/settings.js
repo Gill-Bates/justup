@@ -21,10 +21,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const saveSettingsBtn = document.getElementById('saveSettingsBtn');
     if (saveSettingsBtn) saveSettingsBtn.addEventListener('click', saveSettings);
 
-    // Password change
-    const changePwBtn = document.getElementById('changePasswordBtn');
-    if (changePwBtn) changePwBtn.addEventListener('click', changePassword);
-
     // OTP
     const enableOtpBtn = document.getElementById('enable-otp-btn');
     if (enableOtpBtn) enableOtpBtn.addEventListener('click', enableOtp);
@@ -139,45 +135,6 @@ function copySwaggerUrl() {
     }).catch(() => {
         juToast('Failed to copy URL', 'warning');
     });
-}
-
-// ─── Password Change ───────────────────────────────────────────
-
-async function changePassword() {
-    const btn = document.getElementById('changePasswordBtn');
-    if (btn) btn.disabled = true;
-
-    try {
-        const currentPw = document.getElementById('current-password').value;
-        const newPw = document.getElementById('new-password').value;
-        const confirmPw = document.getElementById('confirm-password').value;
-
-        if (!currentPw || !newPw) {
-            juToast('Please fill in all password fields', 'warning');
-            return;
-        }
-        if (newPw.length < 8) {
-            juToast('Password must be at least 8 characters', 'warning');
-            return;
-        }
-        if (newPw !== confirmPw) {
-            juToast('New passwords do not match', 'warning');
-            return;
-        }
-
-        await api('POST', '/api/users/me/password', {
-            current_password: currentPw,
-            new_password: newPw,
-        });
-        juToast('Password changed successfully', 'success');
-        document.getElementById('current-password').value = '';
-        document.getElementById('new-password').value = '';
-        document.getElementById('confirm-password').value = '';
-    } catch (err) {
-        juToast(err.message, 'danger');
-    } finally {
-        if (btn) btn.disabled = false;
-    }
 }
 
 // ─── OTP / 2FA ─────────────────────────────────────────────────
