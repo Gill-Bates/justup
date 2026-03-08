@@ -146,8 +146,60 @@
         </div>
     </div>
 </div>
+
+<!-- Metrics Modal -->
+<div class="modal fade" id="metricsModal" tabindex="-1" aria-labelledby="metricsModalTitle">
+    <div class="modal-dialog modal-dialog-centered modal-xl">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="metricsModalTitle">Metrics</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <div class="d-flex gap-2 align-items-center">
+                        <label for="metricsHours" class="form-label mb-0">Timeframe:</label>
+                        <select class="form-select form-select-sm" id="metricsHours" style="width:auto">
+                            <option value="1">Last 1 hour</option>
+                            <option value="6">Last 6 hours</option>
+                            <option value="24" selected>Last 24 hours</option>
+                            <option value="72">Last 3 days</option>
+                            <option value="168">Last 7 days</option>
+                        </select>
+                    </div>
+                    {% if user['is_admin'] %}
+                    <button class="btn btn-sm btn-outline-danger" id="deleteMetricsBtn" title="Delete all metrics">
+                        <span class="material-icons icon-sm">delete_forever</span>
+                        Delete Metrics
+                    </button>
+                    {% endif %}
+                </div>
+                <div id="metricsLoading" class="text-center py-4">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                </div>
+                <div id="metricsContent" class="d-none">
+                    <div class="mb-4">
+                        <h6 class="text-muted mb-2">Response Time (ms)</h6>
+                        <canvas id="responseTimeChart" height="200"></canvas>
+                    </div>
+                    <div>
+                        <h6 class="text-muted mb-2">Availability</h6>
+                        <canvas id="availabilityChart" height="100"></canvas>
+                    </div>
+                </div>
+                <div id="metricsEmpty" class="text-center text-muted py-4 d-none">
+                    <span class="material-icons d-block mb-2" style="font-size:2rem">analytics</span>
+                    No metrics data available yet.
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
 {% endblock %}
 
 {% block extra_js %}
+<script src="/static/vendor/chart.min.js"></script>
 <script src="/static/js/monitors.js"></script>
 {% endblock %}
