@@ -23,6 +23,7 @@ from .db.sqlite_schema import ensure_default_admin, ensure_schema
 from .db.sqlite_settings import validate_secret_key
 from .middleware.csrf import CSRFMiddleware
 from .middleware.security_headers import SecurityHeadersMiddleware
+from .middleware.static_cache import CachedStaticFiles
 from .tasks.checker import start_checker, stop_checker
 from .utils.banner import print_banner
 from .utils.config import load_config
@@ -84,7 +85,7 @@ def create_app() -> FastAPI:
 	# ── Static files ──
 	static_dir = Path(__file__).parent / "static"
 	if static_dir.is_dir():
-		app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+		app.mount("/static", CachedStaticFiles(directory=str(static_dir)), name="static")
 
 	# ── API routes ──
 	app.include_router(auth.router, prefix="/api/auth")
