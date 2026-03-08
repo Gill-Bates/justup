@@ -1,0 +1,432 @@
+/* =========================================
+   justUp UI System
+   Zentrale Design-Definition für konsistentes UI
+   ========================================= */
+
+/* ---------- 1. Design Tokens ---------- */
+
+:root {
+    /* Typography */
+    --ju-font-base: 0.875rem;
+    --ju-font-sm: 0.75rem;
+    --ju-font-md: 0.875rem;
+    --ju-font-lg: 1rem;
+    --ju-font-xl: 1.25rem;
+
+    --ju-heading-page: 1.4rem;
+    --ju-heading-card: 0.95rem;
+
+    /* Radius */
+    --ju-radius-sm: 6px;
+    --ju-radius-md: 10px;
+    --ju-radius-lg: 12px;
+
+    /* Shadows */
+    --ju-shadow-1: 0 2px 8px rgba(0, 0, 0, 0.04);
+    --ju-shadow-2: 0 4px 16px rgba(0, 0, 0, 0.06);
+
+    /* Muted backgrounds */
+    --ju-muted-bg: rgba(0, 0, 0, 0.035);
+    --ju-hover-bg: rgba(0, 0, 0, 0.025);
+
+    /* Transition */
+    --ju-transition: all 0.2s ease;
+}
+
+[data-bs-theme="dark"] {
+    --ju-shadow-1: 0 2px 8px rgba(0, 0, 0, 0.55);
+    --ju-shadow-2: 0 4px 18px rgba(0, 0, 0, 0.65);
+    --ju-muted-bg: rgba(255, 255, 255, 0.06);
+    --ju-hover-bg: rgba(255, 255, 255, 0.04);
+}
+
+
+/* ---------- 2. Base Typography ---------- */
+
+body {
+    font-size: var(--ju-font-base);
+    font-weight: 400;
+}
+
+.page-title {
+    font-size: var(--ju-heading-page);
+    font-weight: 600;
+    letter-spacing: -0.01em;
+}
+
+.card-title {
+    font-size: var(--ju-heading-card);
+    font-weight: 600;
+}
+
+.small,
+small {
+    font-size: var(--ju-font-sm);
+}
+
+
+/* ---------- 3. Cards ---------- */
+
+.card {
+    border: 1px solid rgba(0, 0, 0, 0.06);
+    border-radius: var(--ju-radius-lg);
+    box-shadow: var(--ju-shadow-1);
+    transition: var(--ju-transition);
+}
+
+.card:hover {
+    box-shadow: var(--ju-shadow-2);
+}
+
+[data-bs-theme="dark"] .card {
+    border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.card-header {
+    padding: 0.6rem 1rem;
+}
+
+.card-body {
+    padding: 1rem;
+}
+
+
+/* ---------- 4. Buttons ---------- */
+
+.btn {
+    font-size: 0.8rem;
+    font-weight: 500;
+    padding: 0.4rem 0.8rem;
+    border-radius: var(--ju-radius-md);
+    transition: var(--ju-transition);
+}
+
+.btn-sm {
+    padding: 0.3rem 0.65rem;
+}
+
+.btn .material-icons {
+    font-size: 1rem;
+    vertical-align: middle;
+    line-height: 1;
+}
+
+.btn .material-icons:not(:only-child) {
+    margin-right: 0.35rem;
+}
+
+.btn .material-icons:only-child {
+    display: inline-flex;
+    margin: 0;
+}
+
+.btn-icon {
+    padding: 0.3rem 0.5rem;
+}
+
+.btn-icon .material-icons {
+    margin-right: 0;
+}
+
+
+/* ---------- 5. Tables ---------- */
+
+.table {
+    font-size: 0.8rem;
+    margin-bottom: 0;
+}
+
+.table thead th {
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+    border-bottom-width: 1px;
+}
+
+.table tbody tr {
+    transition: var(--ju-transition);
+}
+
+.table tbody tr:hover {
+    background-color: var(--ju-hover-bg);
+}
+
+
+/* ---------- 6. Badges ---------- */
+
+.badge {
+    font-weight: 500;
+    font-size: 0.7rem;
+    padding: 0.35em 0.6em;
+    border-radius: var(--ju-radius-sm);
+}
+
+
+/* ---------- 7. Form Controls ---------- */
+
+.form-control,
+.form-select {
+    font-size: 0.85rem;
+    border-radius: var(--ju-radius-md);
+    transition: var(--ju-transition);
+}
+
+
+/* ---------- 8. Section Spacing ---------- */
+
+.ju-section {
+    margin-bottom: 1.75rem;
+}
+
+.ju-page {
+    padding-top: 1.5rem;
+    padding-bottom: 2rem;
+}
+
+
+/* ---------- 9. Subtle Panels ---------- */
+
+.ju-muted-panel {
+    background: var(--ju-muted-bg);
+    border-radius: var(--ju-radius-md);
+    padding: 0.75rem 1rem;
+}
+
+
+/* ---------- 10. Page Header ---------- */
+
+.ju-page-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1.5rem;
+}
+
+.ju-page-header .page-title {
+    margin-bottom: 0;
+}
+
+
+/* ---------- 11. Stat Cards ---------- */
+
+.ju-stat-card {
+    text-align: center;
+}
+
+.ju-stat-card .stat-value {
+    font-size: 1.5rem;
+    font-weight: 600;
+    line-height: 1.2;
+}
+
+.ju-stat-card .stat-label {
+    font-size: var(--ju-font-sm);
+    color: var(--bs-secondary-color);
+}
+
+
+/* ---------- 12. Icon Consistency ---------- */
+
+.material-icons.icon-sm {
+    font-size: 1rem;
+}
+
+.material-icons.icon-md {
+    font-size: 1.25rem;
+}
+
+.material-icons.icon-lg {
+    font-size: 1.5rem;
+}
+
+.material-icons+span,
+span+.material-icons {
+    margin-left: 0.35rem;
+}
+
+
+/* ---------- 13. List Groups ---------- */
+
+.list-group-item {
+    font-size: var(--ju-font-base);
+    padding: 0.6rem 1rem;
+    transition: var(--ju-transition);
+}
+
+
+/* ---------- 14. Alerts ---------- */
+
+.alert {
+    font-size: var(--ju-font-base);
+    border-radius: var(--ju-radius-md);
+    padding: 0.75rem 1rem;
+}
+
+
+/* ---------- 15. Dropdowns ---------- */
+
+.dropdown-menu {
+    font-size: var(--ju-font-base);
+    border-radius: var(--ju-radius-md);
+    box-shadow: var(--ju-shadow-2);
+}
+
+.dropdown-item {
+    padding: 0.4rem 1rem;
+    transition: var(--ju-transition);
+}
+
+
+/* ---------- 16. Modal Consistency ---------- */
+
+.modal-content {
+    border-radius: var(--ju-radius-lg);
+    box-shadow: var(--ju-shadow-2);
+}
+
+.modal-header {
+    padding: 1rem 1.25rem;
+}
+
+.modal-body {
+    padding: 1.25rem;
+}
+
+.modal-footer {
+    padding: 0.75rem 1.25rem;
+}
+
+
+/* ---------- 17. Nav Tabs ---------- */
+
+.nav-tabs .nav-link {
+    font-size: var(--ju-font-base);
+    padding: 0.5rem 1rem;
+    border-radius: var(--ju-radius-md) var(--ju-radius-md) 0 0;
+    transition: var(--ju-transition);
+}
+
+
+/* ---------- 18. Progress Bars ---------- */
+
+.progress {
+    height: 0.5rem;
+    border-radius: var(--ju-radius-sm);
+}
+
+
+/* ---------- 19. Tooltips ---------- */
+
+.tooltip-inner {
+    font-size: var(--ju-font-sm);
+    border-radius: var(--ju-radius-sm);
+    padding: 0.35rem 0.6rem;
+}
+
+
+/* ---------- 20. Utility Classes ---------- */
+
+.text-muted-light {
+    color: var(--bs-secondary-color) !important;
+}
+
+.bg-muted-light {
+    background-color: var(--ju-muted-bg) !important;
+}
+
+.rounded-ju {
+    border-radius: var(--ju-radius-md) !important;
+}
+
+.rounded-ju-lg {
+    border-radius: var(--ju-radius-lg) !important;
+}
+
+
+/* ---------- 21. Mobile Optimizations ---------- */
+
+@media (max-width: 767.98px) {
+    .main-content {
+        padding-top: 0.75rem;
+        padding-left: 0.75rem;
+        padding-right: 0.75rem;
+    }
+
+    .container-fluid {
+        padding-left: 0.5rem;
+        padding-right: 0.5rem;
+    }
+
+    .navbar .container-fluid {
+        padding-left: 0.5rem !important;
+        padding-right: 1rem !important;
+    }
+
+    .navbar .navbar-controls {
+        margin-right: 0.5rem;
+    }
+
+    .navbar .navbar-brand {
+        margin-left: 0.8rem;
+    }
+
+    .ju-page {
+        padding-top: 1rem;
+        padding-bottom: 1rem;
+    }
+
+    .ju-page-header {
+        margin-bottom: 1rem;
+        gap: 0.5rem;
+    }
+
+    .ju-section {
+        margin-bottom: 1rem;
+    }
+
+    .card-header {
+        padding: 0.5rem 0.75rem;
+    }
+
+    .card-body {
+        padding: 0.75rem;
+    }
+}
+
+@media (max-width: 575.98px) {
+    .ju-page {
+        padding-bottom: 2rem;
+    }
+}
+
+@media (min-width: 768px) and (max-width: 991.98px) {
+    .main-content {
+        padding-top: 1rem;
+        padding-left: 1rem;
+        padding-right: 1rem;
+    }
+
+    .container-fluid {
+        padding-left: 0.75rem;
+        padding-right: 0.75rem;
+    }
+
+    .navbar .container-fluid {
+        padding-left: 0.75rem !important;
+        padding-right: 1.25rem !important;
+    }
+
+    .navbar .navbar-controls {
+        margin-right: 0.5rem;
+    }
+
+    .navbar .navbar-brand {
+        margin-left: 0.25rem;
+    }
+
+    .ju-page {
+        padding-top: 1.5rem;
+        padding-bottom: 1.5rem;
+    }
+}
