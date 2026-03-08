@@ -6,7 +6,7 @@
 ('/ui/dashboard', 'dashboard', 'Dashboard'),
 ('/ui/monitors', 'monitor_heart', 'Monitors'),
 ] %}
-{% if user.get('is_admin') %}
+{% if user['is_admin'] %}
 {% set nav_items = nav_items + [('/ui/users', 'people', 'Users')] %}
 {% endif %}
 {% set nav_items = nav_items + [
