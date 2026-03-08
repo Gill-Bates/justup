@@ -10,24 +10,48 @@ let userSaveBtn;
 let editingUserId = null;
 
 document.addEventListener('DOMContentLoaded', () => {
-    usersTable = document.getElementById('users-tbody');
+    usersTable = document.getElementById('users-body');
     userForm = document.getElementById('user-form');
-    userSaveBtn = document.getElementById('user-save-btn');
+    userSaveBtn = document.getElementById('saveUserBtn');
 
     const modalEl = document.getElementById('userModal');
     if (modalEl) userModal = new bootstrap.Modal(modalEl);
 
-    const addBtn = document.getElementById('add-user-btn');
+    const addBtn = document.getElementById('addUserBtn');
     if (addBtn) addBtn.addEventListener('click', () => openUserModal());
 
     if (userSaveBtn) userSaveBtn.addEventListener('click', saveUser);
+
+    // Password change
+    const changePwBtn = document.getElementById('changePasswordBtn');
+    if (changePwBtn) changePwBtn.addEventListener('click', changePassword);
+
+    // Event delegation for edit and delete buttons
+    document.addEventListener('click', (e) => {
+        const editBtn = e.target.closest('.edit-user');
+        if (editBtn) {
+            e.preventDefault();
+            const id = parseInt(editBtn.dataset.id);
+            if (id) editUser(id);
+            return;
+        }
+
+        const deleteBtn = e.target.closest('.delete-user');
+        if (deleteBtn) {
+            e.preventDefault();
+            const id = parseInt(deleteBtn.dataset.id);
+            const username = deleteBtn.dataset.username;
+            if (id) deleteUser(id, username);
+            return;
+        }
+    });
 
     loadUsers();
 });
 
 function openUserModal(user = null) {
     editingUserId = user ? user.id : null;
-    const title = document.getElementById('userModalLabel');
+    const title = document.getElementById('userModalTitle');
     title.textContent = user ? 'Edit User' : 'Add User';
 
     document.getElementById('user-username').value = user?.username || '';
@@ -54,7 +78,7 @@ function renderUsers(users) {
     if (!usersTable) return;
 
     if (users.length === 0) {
-        usersTable.innerHTML = '<tr><td colspan="4" class="text-center text-muted py-4">No users found.</td></tr>';
+        usersTable.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-4">No users found.</td></tr>';
         return;
     }
 
@@ -63,21 +87,33 @@ function renderUsers(users) {
             ? '<span class="badge bg-warning text-dark">Admin</span>'
             : '<span class="badge bg-secondary">User</span>';
 
-        const otpBadge = u.otp_enabled
-            ? '<span class="badge bg-success">OTP</span>'
-            : '';
+        const statusBadge = u.is_active
+            ? '<span class="badge bg-success">Active</span>'
+            : '<span class="badge bg-secondary">Inactive</span>';
+
+        const mfaBadge = u.otp_enabled
+            ? '<span class="badge bg-info">Enabled</span>'
+            : '<span class="badge bg-secondary">Disabled</span>';
+
+        const lastLogin = u.last_login_at || '–';
+
+        // Admin user (ID 1) cannot be deleted
+        const isSystemAdmin = u.id === 1;
+        const deleteBtn = isSystemAdmin
+            ? '<button class="btn btn-sm btn-outline-secondary" disabled title="System admin cannot be deleted"><span class="material-icons icon-sm">delete</span></button>'
+            : `<button class="btn btn-sm btn-outline-danger delete-user" data-id="${u.id}" data-username="${escapeHtml(u.username)}" title="Delete"><span class="material-icons icon-sm">delete</span></button>`;
 
         return `<tr>
             <td>${escapeHtml(u.username)}</td>
-            <td>${adminBadge} ${otpBadge}</td>
-            <td>${u.created_at || '-'}</td>
+            <td>${adminBadge}</td>
+            <td>${statusBadge}</td>
+            <td>${mfaBadge}</td>
+            <td>${lastLogin}</td>
             <td>
-                <button class="btn btn-sm btn-outline-primary me-1" onclick="editUser(${u.id})" title="Edit">
-                    <span class="material-icons" style="font-size:16px">edit</span>
+                <button class="btn btn-sm btn-outline-primary edit-user" data-id="${u.id}" title="Edit">
+                    <span class="material-icons icon-sm">edit</span>
                 </button>
-                <button class="btn btn-sm btn-outline-danger" onclick="deleteUser(${u.id}, '${escapeHtml(u.username)}')" title="Delete">
-                    <span class="material-icons" style="font-size:16px">delete</span>
-                </button>
+                ${deleteBtn}
             </td>
         </tr>`;
     }).join('');
@@ -142,6 +178,42 @@ async function deleteUser(id, username) {
         await api('DELETE', `/api/users/${id}`);
         juToast('User deleted', 'success');
         await loadUsers();
+    } catch (err) {
+        juToast(err.message, 'danger');
+    }
+}
+
+async function changePassword() {
+    const currentPassword = document.getElementById('current-password').value;
+    const newPassword = document.getElementById('new-password').value;
+
+    if (!currentPassword || !newPassword) {
+        juToast('Both fields are required', 'warning');
+        return;
+    }
+
+    if (newPassword.length < 8) {
+        juToast('Password must be at least 8 characters', 'warning');
+        return;
+    }
+
+    // Get current user ID from data attribute
+    const pageEl = document.querySelector('.ju-page');
+    const userId = pageEl?.dataset?.currentUserId;
+
+    if (!userId) {
+        juToast('User ID not found', 'danger');
+        return;
+    }
+
+    try {
+        await api('POST', `/api/users/${userId}/change-password`, {
+            current_password: currentPassword,
+            new_password: newPassword,
+        });
+        juToast('Password changed successfully', 'success');
+        document.getElementById('current-password').value = '';
+        document.getElementById('new-password').value = '';
     } catch (err) {
         juToast(err.message, 'danger');
     }

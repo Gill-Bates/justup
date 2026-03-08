@@ -47,7 +47,11 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    loadMonitors();
+    // Only load monitors if the table is empty (not pre-rendered by server)
+    const hasServerData = monitorsTable && monitorsTable.children.length > 0;
+    if (!hasServerData) {
+        loadMonitors();
+    }
 });
 
 function toggleTypeFields() {

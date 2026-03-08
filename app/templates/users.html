@@ -2,7 +2,7 @@
 {% block title %}Users – justUp{% endblock %}
 
 {% block content %}
-<div class="ju-page">
+<div class="ju-page" data-current-user-id="{{ user['id'] }}">
     <div class="ju-page-header">
         <h1 class="page-title">Users</h1>
         <button class="btn btn-primary" id="addUserBtn">
@@ -29,6 +29,30 @@
                     </tbody>
                 </table>
             </div>
+        </div>
+    </div>
+
+    <!-- Change Password Card -->
+    <div class="card mt-4">
+        <div class="card-header">
+            <h6 class="card-title mb-0">
+                <span class="material-icons icon-sm me-1">key</span>Change Password
+            </h6>
+        </div>
+        <div class="card-body">
+            <form id="change-password-form" autocomplete="on">
+                <div class="mb-3">
+                    <label for="current-password" class="form-label">Current Password</label>
+                    <input type="password" class="form-control" id="current-password" autocomplete="current-password">
+                </div>
+                <div class="mb-3">
+                    <label for="new-password" class="form-label">New Password</label>
+                    <input type="password" class="form-control" id="new-password" autocomplete="new-password">
+                </div>
+                <button type="button" class="btn btn-primary" id="changePasswordBtn">
+                    <span class="material-icons icon-sm">save</span>Change Password
+                </button>
+            </form>
         </div>
     </div>
 </div>

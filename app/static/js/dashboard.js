@@ -6,7 +6,14 @@
 let refreshInterval = null;
 
 document.addEventListener('DOMContentLoaded', () => {
-    loadDashboard();
+    // Only load dashboard if the table is empty (not pre-rendered by server)
+    const tbody = document.getElementById('monitors-table-body');
+    const hasServerData = tbody && tbody.children.length > 0 && !tbody.querySelector('.text-muted');
+
+    if (!hasServerData) {
+        loadDashboard();
+    }
+
     refreshInterval = setInterval(loadDashboard, 30000);
 
     window.addEventListener('ju:reconnect:stop', loadDashboard);
@@ -28,9 +35,9 @@ async function loadDashboard() {
 }
 
 function updateStats(monitors) {
-    const up = monitors.filter(m => m.active && m.status === 'up').length;
-    const down = monitors.filter(m => m.active && m.status === 'down').length;
-    const paused = monitors.filter(m => !m.active).length;
+    const up = monitors.filter(m => m.is_active && m.status === 'up').length;
+    const down = monitors.filter(m => m.is_active && m.status === 'down').length;
+    const paused = monitors.filter(m => !m.is_active || m.status === 'paused').length;
     const total = monitors.length;
 
     setText('stat-up', up);
@@ -51,30 +58,34 @@ function escapeHtml(text) {
 }
 
 function renderMonitorTable(monitors) {
-    const tbody = document.getElementById('dashboard-monitors-tbody');
+    const tbody = document.getElementById('monitors-table-body');
     if (!tbody) return;
 
     if (monitors.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted py-4">No monitors configured.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-4"><span class="material-icons d-block mb-2" style="font-size:2rem">monitor_heart</span>No monitors configured yet. <a href="/ui/monitors">Add your first monitor</a></td></tr>';
         return;
     }
 
     tbody.innerHTML = monitors.map(m => {
-        const badge = m.active
-            ? (m.status === 'up'
-                ? '<span class="badge bg-success">Up</span>'
-                : '<span class="badge bg-danger">Down</span>')
-            : '<span class="badge bg-secondary">Paused</span>';
+        const badge = m.status === 'up'
+            ? '<span class="badge bg-success">UP</span>'
+            : m.status === 'down'
+                ? '<span class="badge bg-danger">DOWN</span>'
+                : m.status === 'paused'
+                    ? '<span class="badge bg-secondary">PAUSED</span>'
+                    : '<span class="badge bg-secondary">PENDING</span>';
 
-        const responseTime = m.response_time != null
-            ? `${Math.round(m.response_time)}ms`
-            : '-';
+        const typeLabel = (m.monitor_type || 'http').toUpperCase();
+        const responseTime = m.last_response_time_ms != null
+            ? `${Math.round(m.last_response_time_ms)} ms`
+            : '–';
 
         return `<tr>
             <td>${badge}</td>
             <td>${escapeHtml(m.name)}</td>
-            <td>${escapeHtml(m.url || m.hostname || '-')}</td>
+            <td><span class="badge bg-secondary">${typeLabel}</span></td>
             <td>${responseTime}</td>
+            <td>–</td>
         </tr>`;
     }).join('');
 }
