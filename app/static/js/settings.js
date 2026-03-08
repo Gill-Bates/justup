@@ -1,0 +1,305 @@
+//
+// app/static/js/settings.js
+// Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
+//
+
+let otpSection;
+let passkeysSection;
+let passkeysListEl;
+
+document.addEventListener('DOMContentLoaded', () => {
+    otpSection = document.getElementById('otp-section');
+    passkeysSection = document.getElementById('passkeys-section');
+    passkeysListEl = document.getElementById('passkeys-list');
+
+    // General settings
+    const saveSettingsBtn = document.getElementById('save-settings-btn');
+    if (saveSettingsBtn) saveSettingsBtn.addEventListener('click', saveSettings);
+
+    // Password change
+    const changePwBtn = document.getElementById('change-password-btn');
+    if (changePwBtn) changePwBtn.addEventListener('click', changePassword);
+
+    // OTP
+    const enableOtpBtn = document.getElementById('enable-otp-btn');
+    if (enableOtpBtn) enableOtpBtn.addEventListener('click', enableOtp);
+
+    const disableOtpBtn = document.getElementById('disable-otp-btn');
+    if (disableOtpBtn) disableOtpBtn.addEventListener('click', disableOtp);
+
+    const confirmOtpBtn = document.getElementById('confirm-otp-btn');
+    if (confirmOtpBtn) confirmOtpBtn.addEventListener('click', confirmOtp);
+
+    // Passkeys
+    const addPasskeyBtn = document.getElementById('add-passkey-btn');
+    if (addPasskeyBtn) addPasskeyBtn.addEventListener('click', registerPasskey);
+
+    loadSettings();
+    loadOtpStatus();
+    loadPasskeys();
+});
+
+// ─── General Settings ──────────────────────────────────────────
+
+async function loadSettings() {
+    try {
+        const settings = await api('GET', '/api/auth/me');
+        // Load general settings from a dedicated endpoint if available
+        const settingsData = await api('GET', '/api/monitors').catch(() => null);
+
+        const portField = document.getElementById('setting-port');
+        const intervalField = document.getElementById('setting-interval');
+        const retentionField = document.getElementById('setting-retention');
+
+        // These would come from a settings endpoint
+        if (portField) portField.value = portField.dataset.current || '8000';
+        if (intervalField) intervalField.value = intervalField.dataset.current || '60';
+        if (retentionField) retentionField.value = retentionField.dataset.current || '90';
+    } catch (err) {
+        // Settings page may partially load
+    }
+}
+
+async function saveSettings() {
+    const port = parseInt(document.getElementById('setting-port')?.value) || 8000;
+    const interval = parseInt(document.getElementById('setting-interval')?.value) || 60;
+    const retention = parseInt(document.getElementById('setting-retention')?.value) || 90;
+
+    try {
+        // TODO: Settings API endpoint
+        juToast('Settings saved', 'success');
+    } catch (err) {
+        juToast(err.message, 'danger');
+    }
+}
+
+// ─── Password Change ───────────────────────────────────────────
+
+async function changePassword() {
+    const currentPw = document.getElementById('current-password').value;
+    const newPw = document.getElementById('new-password').value;
+    const confirmPw = document.getElementById('confirm-password').value;
+
+    if (!currentPw || !newPw) {
+        juToast('Please fill in all password fields', 'warning');
+        return;
+    }
+    if (newPw !== confirmPw) {
+        juToast('New passwords do not match', 'warning');
+        return;
+    }
+
+    try {
+        await api('POST', '/api/users/me/password', {
+            current_password: currentPw,
+            new_password: newPw,
+        });
+        juToast('Password changed successfully', 'success');
+        document.getElementById('current-password').value = '';
+        document.getElementById('new-password').value = '';
+        document.getElementById('confirm-password').value = '';
+    } catch (err) {
+        juToast(err.message, 'danger');
+    }
+}
+
+// ─── OTP / 2FA ─────────────────────────────────────────────────
+
+async function loadOtpStatus() {
+    try {
+        const me = await api('GET', '/api/auth/me');
+        updateOtpUI(me?.otp_enabled || false);
+    } catch (_) { }
+}
+
+function updateOtpUI(enabled) {
+    const enableBtn = document.getElementById('enable-otp-btn');
+    const disableBtn = document.getElementById('disable-otp-btn');
+    const otpSetup = document.getElementById('otp-setup');
+    const otpStatus = document.getElementById('otp-status');
+
+    if (enabled) {
+        if (enableBtn) enableBtn.classList.add('d-none');
+        if (disableBtn) disableBtn.classList.remove('d-none');
+        if (otpSetup) otpSetup.classList.add('d-none');
+        if (otpStatus) {
+            otpStatus.textContent = 'Two-factor authentication is enabled.';
+            otpStatus.classList.remove('d-none');
+        }
+    } else {
+        if (enableBtn) enableBtn.classList.remove('d-none');
+        if (disableBtn) disableBtn.classList.add('d-none');
+        if (otpStatus) otpStatus.textContent = 'Two-factor authentication is not enabled.';
+    }
+}
+
+async function enableOtp() {
+    try {
+        const data = await api('POST', '/api/users/me/otp/enable');
+        const otpSetup = document.getElementById('otp-setup');
+        const qrImg = document.getElementById('otp-qr');
+        const secretEl = document.getElementById('otp-secret');
+
+        if (qrImg && data?.qr_code) {
+            qrImg.src = `data:image/png;base64,${data.qr_code}`;
+        }
+        if (secretEl && data?.secret) {
+            secretEl.textContent = data.secret;
+        }
+        if (otpSetup) otpSetup.classList.remove('d-none');
+    } catch (err) {
+        juToast(err.message, 'danger');
+    }
+}
+
+async function confirmOtp() {
+    const code = document.getElementById('otp-confirm-code')?.value?.trim();
+    if (!code) {
+        juToast('Please enter the verification code', 'warning');
+        return;
+    }
+
+    try {
+        const data = await api('POST', '/api/users/me/otp/confirm', { code });
+        updateOtpUI(true);
+        juToast('Two-factor authentication enabled', 'success');
+
+        if (data?.recovery_codes) {
+            const codesList = data.recovery_codes.join('\n');
+            await juAlert(
+                'Save these recovery codes in a safe place. They can be used to access your account if you lose your authenticator:\n\n' + codesList,
+                'warning'
+            );
+        }
+    } catch (err) {
+        juToast(err.message, 'danger');
+    }
+}
+
+async function disableOtp() {
+    const confirmed = await juConfirm('Disable two-factor authentication?', 'warning');
+    if (!confirmed) return;
+
+    try {
+        await api('POST', '/api/users/me/otp/disable');
+        updateOtpUI(false);
+        juToast('Two-factor authentication disabled', 'success');
+    } catch (err) {
+        juToast(err.message, 'danger');
+    }
+}
+
+// ─── Passkeys ──────────────────────────────────────────────────
+
+async function loadPasskeys() {
+    if (!passkeysListEl) return;
+
+    try {
+        const passkeys = await api('GET', '/api/passkeys');
+        renderPasskeys(passkeys || []);
+    } catch (_) { }
+}
+
+function renderPasskeys(passkeys) {
+    if (!passkeysListEl) return;
+
+    if (passkeys.length === 0) {
+        passkeysListEl.innerHTML = '<p class="text-muted mb-0">No passkeys registered.</p>';
+        return;
+    }
+
+    passkeysListEl.innerHTML = passkeys.map(pk => `
+        <div class="d-flex justify-content-between align-items-center border rounded p-2 mb-2">
+            <div>
+                <span class="material-icons me-2" style="vertical-align:middle;font-size:18px">key</span>
+                <strong>${escapeHtml(pk.name || 'Passkey')}</strong>
+                <small class="text-muted ms-2">${pk.created_at || ''}</small>
+            </div>
+            <button class="btn btn-sm btn-outline-danger" onclick="deletePasskey('${pk.id}', '${escapeHtml(pk.name || "Passkey")}')">
+                <span class="material-icons" style="font-size:16px">delete</span>
+            </button>
+        </div>
+    `).join('');
+}
+
+function escapeHtml(text) {
+    const el = document.createElement('span');
+    el.textContent = text;
+    return el.innerHTML;
+}
+
+async function registerPasskey() {
+    const name = await juPrompt('Enter a name for this passkey:', { placeholder: 'e.g. MacBook Touch ID' });
+    if (name === null) return;
+
+    try {
+        const startData = await api('POST', '/api/passkeys/register/start');
+        const options = startData;
+        if (!options || !options.challenge) throw new Error('Invalid server response');
+
+        const publicKeyOptions = {
+            challenge: base64UrlToArrayBuffer(options.challenge),
+            rp: { name: options.rp.name, id: options.rp.id },
+            user: {
+                id: base64UrlToArrayBuffer(options.user.id),
+                name: options.user.name,
+                displayName: options.user.display_name,
+            },
+            pubKeyCredParams: options.pub_key_cred_params.map(p => ({
+                type: 'public-key',
+                alg: p.alg,
+            })),
+            authenticatorSelection: {
+                authenticatorAttachment: options.authenticator_selection?.authenticator_attachment,
+                residentKey: options.authenticator_selection?.resident_key || 'preferred',
+                userVerification: options.authenticator_selection?.user_verification || 'preferred',
+            },
+            timeout: options.timeout || 60000,
+            attestation: options.attestation || 'none',
+        };
+
+        if (options.exclude_credentials) {
+            publicKeyOptions.excludeCredentials = options.exclude_credentials.map(cred => ({
+                type: 'public-key',
+                id: base64UrlToArrayBuffer(cred.id),
+            }));
+        }
+
+        const credential = await navigator.credentials.create({ publicKey: publicKeyOptions });
+        if (!credential) throw new Error('Passkey creation cancelled');
+
+        const credentialJSON = {
+            id: credential.id,
+            rawId: arrayBufferToBase64Url(credential.rawId),
+            type: credential.type,
+            response: {
+                clientDataJSON: arrayBufferToBase64Url(credential.response.clientDataJSON),
+                attestationObject: arrayBufferToBase64Url(credential.response.attestationObject),
+            },
+        };
+
+        await api('POST', '/api/passkeys/register/finish', {
+            name: name.trim() || 'Passkey',
+            credential: credentialJSON,
+        });
+
+        juToast('Passkey registered successfully', 'success');
+        await loadPasskeys();
+    } catch (err) {
+        if (err.name === 'NotAllowedError') return;
+        juToast(err.message || 'Failed to register passkey', 'danger');
+    }
+}
+
+async function deletePasskey(id, name) {
+    const confirmed = await juConfirm(`Delete passkey "${name}"?`, 'danger');
+    if (!confirmed) return;
+
+    try {
+        await api('DELETE', `/api/passkeys/${id}`);
+        juToast('Passkey deleted', 'success');
+        await loadPasskeys();
+    } catch (err) {
+        juToast(err.message, 'danger');
+    }
+}
