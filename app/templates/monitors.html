@@ -2,7 +2,7 @@
 {% block title %}Monitors – justUp{% endblock %}
 
 {% block content %}
-<div class="ju-page">
+<div class="ju-page" data-user-is-admin="{{ 'true' if user['is_admin'] else 'false' }}">
     <div class="ju-page-header">
         <h1 class="page-title">Monitors</h1>
         <button class="btn btn-primary" id="addMonitorBtn">
@@ -27,7 +27,7 @@
                     </thead>
                     <tbody id="monitors-body">
                         {% for m in monitors %}
-                        <tr data-id="{{ m['id'] }}">
+                        <tr data-id="{{ m['id'] }}" class="monitor-row" style="cursor:pointer">
                             <td>
                                 {% if m['status'] == 'up' %}
                                 <span class="badge bg-success">UP</span>
@@ -45,7 +45,7 @@
                             </td>
                             <td>{{ m['interval_seconds'] | e }}s</td>
                             <td>{{ (m['last_response_time_ms'] or 0) | round(0) | int }} ms</td>
-                            <td>
+                            <td class="monitor-actions" onclick="event.stopPropagation()">
                                 <button class="btn btn-sm btn-outline-primary edit-monitor" data-id="{{ m['id'] }}"
                                     title="Edit">
                                     <span class="material-icons icon-sm">edit</span>

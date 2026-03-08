@@ -131,24 +131,22 @@ def _persist_result(cfg: Config, conn, monitor: dict, result: CheckResult) -> No
 	"""Write result to TSDB and update SQLite status/incidents (sync, uses shared connection)."""
 	monitor_id = monitor["id"]
 
-	# Write to TSDB
+	# Write to TSDB - individual metrics
 	ts = utcnow()
-	tsdb_append(cfg.tsdb_dir, str(monitor_id), {
-		"ts": ts.isoformat(),
-		"is_up": result.is_up,
-		"response_time_ms": result.response_time_ms,
-		"status_code": result.status_code,
-		"error": result.error,
-	})
+	tsdb_append(cfg.tsdb_dir, monitor_id, "response_time", result.response_time_ms, ts)
+	tsdb_append(cfg.tsdb_dir, monitor_id, "is_up", 1 if result.is_up else 0, ts)
+	if result.status_code:
+		tsdb_append(cfg.tsdb_dir, monitor_id, "status_code", result.status_code, ts)
 
 	# Update SQLite status
+	status_str = "up" if result.is_up else "down"
 	update_monitor_status(
 		conn, monitor_id,
-		is_up=result.is_up,
+		status=status_str,
 		response_time_ms=result.response_time_ms,
 		status_code=result.status_code,
-		error_message=result.error,
-		cert_expires_at=result.cert_expires_at,
+		error=result.error,
+		cert_expiry_at=result.cert_expires_at,
 		cert_issuer=result.cert_issuer,
 	)
 

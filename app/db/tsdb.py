@@ -201,3 +201,30 @@ def _prune_file(path: Path, cutoff: datetime) -> int:
 			os.replace(str(tmp), str(path))
 
 	return pruned
+
+
+def delete_monitor_metrics(tsdb_dir: Path, monitor_id: int) -> bool:
+	"""Delete all metrics for a specific monitor."""
+	monitor_dir = tsdb_dir / f"monitor_{monitor_id}"
+	if not monitor_dir.exists():
+		return False
+
+	try:
+		shutil.rmtree(monitor_dir)
+		_log.info("Deleted metrics for monitor %d", monitor_id)
+		return True
+	except Exception as e:
+		_log.error("Failed to delete metrics for monitor %d: %s", monitor_id, e)
+		return False
+
+
+def list_monitor_metrics(tsdb_dir: Path, monitor_id: int) -> list[str]:
+	"""List available metrics for a monitor."""
+	monitor_dir = tsdb_dir / f"monitor_{monitor_id}"
+	if not monitor_dir.exists():
+		return []
+
+	metrics = []
+	for jsonl_file in monitor_dir.glob("*.jsonl"):
+		metrics.append(jsonl_file.stem)
+	return sorted(metrics)
