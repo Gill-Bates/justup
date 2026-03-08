@@ -56,7 +56,7 @@ def validate_setting_key(key: str) -> bool:
 	return key in _ALLOWED_SETTINGS
 
 
-def validate_secret_key(conn: sqlite3.Connection) -> bool:
+def validate_secret_key(db_path) -> bool:
 	"""Check if the current secret key matches what was used for encryption."""
 	# For now, always return True. Actual validation happens at OTP decrypt time.
 	return True

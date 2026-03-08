@@ -302,7 +302,17 @@ def init_schema(conn: sqlite3.Connection) -> None:
 		)
 
 
-def ensure_default_admin(conn: sqlite3.Connection) -> None:
+def ensure_default_admin(db_path) -> None:
+	"""Open a connection to *db_path*, create a default admin if none exist."""
+	from pathlib import Path
+	conn = connect(Path(db_path))
+	try:
+		_create_default_admin(conn)
+	finally:
+		conn.close()
+
+
+def _create_default_admin(conn: sqlite3.Connection) -> None:
 	"""Create a default admin user if no users exist."""
 	cur = conn.execute("SELECT COUNT(*) FROM users")
 	if cur.fetchone()[0] > 0:

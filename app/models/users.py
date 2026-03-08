@@ -66,6 +66,12 @@ class MFAVerifyRequest(BaseModel):
 	code: str = Field(..., min_length=6, max_length=8)
 
 
+class MFARecoveryRequest(BaseModel):
+	username: str = Field(..., min_length=1, max_length=64)
+	mfa_token: str = Field(..., min_length=1)
+	recovery_code: str = Field(..., min_length=1, max_length=64)
+
+
 class OTPConfirmRequest(BaseModel):
 	code: str = Field(..., min_length=6, max_length=8)
 

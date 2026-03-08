@@ -8,18 +8,12 @@
 
 from __future__ import annotations
 
-import base64
 import ipaddress
-import io
 import logging
 import os
 import sqlite3
-import re
 import threading
 import time
-import zipfile
-from datetime import datetime, timezone
-from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -34,24 +28,20 @@ from ..db.sqlite_auth import (
 )
 from ..db.sqlite_users import (
 	decrypt_otp_secret,
+	get_user_by_id,
 	get_user_by_username,
-	update_user_recovery_codes,
 	update_last_login,
-	confirm_user_otp,
+	update_user_recovery_codes,
 )
 from ..models.users import (
 	LoginRequest,
+	MFARecoveryRequest,
 	MFAVerifyRequest,
-	OTPConfirmRequest,
-	RecoveryDownloadRequest,
 )
 from ..utils.crypto import DUMMY_PASSWORD_HASH, generate_token_expiry, new_token, verify_password
 from ..utils.deps import get_conn
 from ..utils.network import parse_ip_str
 from ..utils.otp import (
-	build_provisioning_uri,
-	generate_recovery_codes,
-	serialize_recovery_codes,
 	use_recovery_code,
 	verify_otp,
 )
