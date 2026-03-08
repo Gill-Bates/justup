@@ -16,6 +16,7 @@ import threading
 import time
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from ..db.sqlite_auth import (
@@ -271,7 +272,7 @@ def _issue_session(request: Request, conn: sqlite3.Connection, user: sqlite3.Row
 	if max_age < 0:
 		max_age = _AUTH_COOKIE_MAX_AGE
 
-	response = ok_response(data={"token": token})
+	response = JSONResponse(content=ok_response(data={"token": token}))
 	is_secure = _is_https(request)
 	response.set_cookie(
 		key=_AUTH_COOKIE,
@@ -388,6 +389,6 @@ def logout(request: Request, conn: sqlite3.Connection = Depends(get_conn)):
 	if token:
 		delete_auth_token(conn, token)
 	
-	response = ok_response()
+	response = JSONResponse(content=ok_response())
 	response.delete_cookie(_AUTH_COOKIE, path="/")
 	return response
