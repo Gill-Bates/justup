@@ -10,13 +10,17 @@ writes metrics to TSDB, and updates SQLite status/incidents."""
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import logging
+import re
 import socket
 import ssl
 import time
-from datetime import datetime, timezone
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
@@ -33,6 +37,22 @@ _log = logging.getLogger(__name__)
 
 _JOB_NAME = "uptime_checker"
 _DEFAULT_CHECK_INTERVAL = 60
+_MAX_CONCURRENT_CHECKS = 20
+
+# Hostname validation: RFC 952/1123 compliant
+_HOSTNAME_RE = re.compile(r'^[a-zA-Z0-9]([a-zA-Z0-9._-]{0,251}[a-zA-Z0-9])?$')
+
+
+def _validate_hostname(value: str) -> str:
+	"""Validate hostname to prevent command injection and ensure valid DNS names."""
+	value = value.strip()
+	if not value:
+		raise ValueError("Hostname is required")
+	if len(value) > 253:
+		raise ValueError(f"Hostname too long: {len(value)} chars")
+	if not _HOSTNAME_RE.match(value):
+		raise ValueError(f"Invalid hostname format: {value!r}")
+	return value
 
 
 async def start_checker(scheduler: Scheduler, cfg: Config) -> None:
@@ -46,46 +66,70 @@ async def start_checker(scheduler: Scheduler, cfg: Config) -> None:
 	async def _run():
 		await run_checks(cfg)
 
-	scheduler.add_job(_JOB_NAME, _run, interval_seconds=interval)
+	scheduler.add(_JOB_NAME, interval, _run)
 	_log.info("Uptime checker scheduled every %ds", interval)
 
 
 async def stop_checker(scheduler: Scheduler) -> None:
-	scheduler.remove_job(_JOB_NAME)
+	"""Stop the uptime checker (scheduler handles cleanup)."""
+	_log.info("Stopping uptime checker")
 
 
 async def run_checks(cfg: Config) -> None:
+	"""Run checks for all active monitors with concurrency limit and shared DB connection."""
 	conn = connect(cfg.db_path)
 	try:
 		monitors = get_active_monitors(conn)
+		if not monitors:
+			return
+
+		# Concurrency limit to prevent resource exhaustion
+		sem = asyncio.Semaphore(_MAX_CONCURRENT_CHECKS)
+
+		async def _bounded_check(monitor: dict) -> tuple[dict, CheckResult | Exception]:
+			async with sem:
+				try:
+					result = await _probe_monitor(dict(monitor))
+					return (monitor, result)
+				except Exception as e:
+					_log.error("Check failed for monitor %d: %s", monitor["id"], e)
+					return (monitor, CheckResult(is_up=False, response_time_ms=0, error=str(e)))
+
+		results = await asyncio.gather(
+			*[_bounded_check(dict(m)) for m in monitors],
+			return_exceptions=True,
+		)
+
+		# Persist all results using shared connection
+		for item in results:
+			if isinstance(item, Exception):
+				_log.error("Unhandled gather exception: %s", item)
+				continue
+			monitor, result = item
+			_persist_result(cfg, conn, monitor, result)
 	finally:
 		conn.close()
 
-	if not monitors:
-		return
 
-	tasks = [_check_monitor(cfg, dict(m)) for m in monitors]
-	await asyncio.gather(*tasks, return_exceptions=True)
-
-
-async def _check_monitor(cfg: Config, monitor: dict[str, Any]) -> None:
-	monitor_id = monitor["id"]
+async def _probe_monitor(monitor: dict[str, Any]) -> CheckResult:
+	"""Probe a single monitor and return the result (no DB I/O)."""
 	monitor_type = monitor["monitor_type"]
-	try:
-		if monitor_type == "http" or monitor_type == "keyword":
-			result = await _check_http(monitor)
-		elif monitor_type == "tcp":
-			result = await _check_tcp(monitor)
-		elif monitor_type == "ping":
-			result = await _check_ping(monitor)
-		elif monitor_type == "dns":
-			result = await _check_dns(monitor)
-		else:
-			_log.warning("Unknown monitor type %s for monitor %d", monitor_type, monitor_id)
-			return
-	except Exception as e:
-		_log.error("Check failed for monitor %d: %s", monitor_id, e)
-		result = CheckResult(is_up=False, response_time_ms=0, status_code=0, error=str(e))
+	if monitor_type == "http" or monitor_type == "keyword":
+		return await _check_http(monitor)
+	elif monitor_type == "tcp":
+		return await _check_tcp(monitor)
+	elif monitor_type == "ping":
+		return await _check_ping(monitor)
+	elif monitor_type == "dns":
+		return await _check_dns(monitor)
+	else:
+		_log.warning("Unknown monitor type %s for monitor %d", monitor_type, monitor["id"])
+		return CheckResult(is_up=False, response_time_ms=0, error=f"Unknown type: {monitor_type}")
+
+
+def _persist_result(cfg: Config, conn, monitor: dict, result: CheckResult) -> None:
+	"""Write result to TSDB and update SQLite status/incidents (sync, uses shared connection)."""
+	monitor_id = monitor["id"]
 
 	# Write to TSDB
 	ts = utcnow()
@@ -98,49 +142,64 @@ async def _check_monitor(cfg: Config, monitor: dict[str, Any]) -> None:
 	})
 
 	# Update SQLite status
-	conn = connect(cfg.db_path)
-	try:
-		update_monitor_status(
-			conn, monitor_id,
-			is_up=result.is_up,
-			response_time_ms=result.response_time_ms,
-			status_code=result.status_code,
-			error_message=result.error,
-			cert_expires_at=result.cert_expires_at,
-			cert_issuer=result.cert_issuer,
-		)
+	update_monitor_status(
+		conn, monitor_id,
+		is_up=result.is_up,
+		response_time_ms=result.response_time_ms,
+		status_code=result.status_code,
+		error_message=result.error,
+		cert_expires_at=result.cert_expires_at,
+		cert_issuer=result.cert_issuer,
+	)
 
-		# Incident management
-		if not result.is_up:
-			open_incident = get_open_incident(conn, monitor_id)
-			if not open_incident:
-				create_incident(conn, monitor_id, error_message=result.error or "Monitor down")
-		else:
-			open_incident = get_open_incident(conn, monitor_id)
-			if open_incident:
-				resolve_incident(conn, open_incident["id"])
-	finally:
-		conn.close()
+	# Incident management
+	if not result.is_up:
+		open_incident = get_open_incident(conn, monitor_id)
+		if not open_incident:
+			create_incident(conn, monitor_id, error_message=result.error or "Monitor down")
+	else:
+		open_incident = get_open_incident(conn, monitor_id)
+		if open_incident:
+			resolve_incident(conn, open_incident["id"])
 
 
+@dataclass(slots=True)
 class CheckResult:
-	__slots__ = ("is_up", "response_time_ms", "status_code", "error", "cert_expires_at", "cert_issuer")
+	"""Result of a monitor check probe."""
+	is_up: bool
+	response_time_ms: float
+	status_code: int = 0
+	error: str | None = None
+	cert_expires_at: str | None = None
+	cert_issuer: str | None = None
 
-	def __init__(
-		self,
-		is_up: bool,
-		response_time_ms: float,
-		status_code: int = 0,
-		error: str | None = None,
-		cert_expires_at: str | None = None,
-		cert_issuer: str | None = None,
-	):
-		self.is_up = is_up
-		self.response_time_ms = response_time_ms
-		self.status_code = status_code
-		self.error = error
-		self.cert_expires_at = cert_expires_at
-		self.cert_issuer = cert_issuer
+
+@asynccontextmanager
+async def _timed_check():
+	"""Context manager that times execution and catches common exceptions."""
+	start = time.monotonic()
+	result = {"value": None}
+	try:
+		yield result
+	except asyncio.TimeoutError:
+		elapsed_ms = (time.monotonic() - start) * 1000
+		result["value"] = CheckResult(is_up=False, response_time_ms=round(elapsed_ms, 2), error="Timeout")
+	except Exception as e:
+		elapsed_ms = (time.monotonic() - start) * 1000
+		result["value"] = CheckResult(is_up=False, response_time_ms=round(elapsed_ms, 2), error=str(e))
+
+
+def _fetch_cert_sync(hostname: str, port: int) -> dict | None:
+	"""Synchronously fetch SSL certificate info (runs in thread pool)."""
+	try:
+		ctx = ssl.create_default_context()
+		with ctx.wrap_socket(socket.socket(), server_hostname=hostname) as s:
+			s.settimeout(5)
+			s.connect((hostname, port))
+			return s.getpeercert()
+	except Exception as e:
+		_log.debug("Failed to fetch cert for %s:%d: %s", hostname, port, e)
+		return None
 
 
 async def _check_http(monitor: dict[str, Any]) -> CheckResult:
@@ -165,43 +224,38 @@ async def _check_http(monitor: dict[str, Any]) -> CheckResult:
 	cert_expires_at = None
 	cert_issuer = None
 
-	start = time.monotonic()
-	try:
+	async with _timed_check() as ctx:
 		async with httpx.AsyncClient(
 			verify=verify_ssl,
 			follow_redirects=follow_redirects,
 			max_redirects=max_redirects,
 			timeout=timeout_seconds,
 		) as client:
+			start = time.monotonic()
 			resp = await client.request(method, url, headers=headers, content=body)
 			elapsed_ms = (time.monotonic() - start) * 1000
 
 		status_code = resp.status_code
 
-		# SSL certificate info
+		# SSL certificate info (async-safe, offloaded to thread pool)
 		if url.startswith("https://"):
-			try:
-				from urllib.parse import urlparse
-				parsed = urlparse(url)
-				hostname = parsed.hostname or ""
-				port = parsed.port or 443
-				ctx = ssl.create_default_context()
-				with ctx.wrap_socket(socket.socket(), server_hostname=hostname) as s:
-					s.settimeout(5)
-					s.connect((hostname, port))
-					cert = s.getpeercert()
-					if cert:
-						not_after = cert.get("notAfter", "")
-						if not_after:
-							cert_expires_at = not_after
-						issuer = cert.get("issuer", ())
-						for rdn in issuer:
-							for attr_type, attr_value in rdn:
-								if attr_type == "organizationName":
-									cert_issuer = attr_value
-									break
-			except Exception:
-				pass
+			parsed = urlparse(url)
+			hostname = parsed.hostname or ""
+			port = parsed.port or 443
+			loop = asyncio.get_running_loop()
+			cert = await loop.run_in_executor(
+				None, functools.partial(_fetch_cert_sync, hostname, port)
+			)
+			if cert:
+				not_after = cert.get("notAfter", "")
+				if not_after:
+					cert_expires_at = not_after
+				issuer = cert.get("issuer", ())
+				for rdn in issuer:
+					for attr_type, attr_value in rdn:
+						if attr_type == "organizationName":
+							cert_issuer = attr_value
+							break
 
 		# Determine success
 		is_up = status_code == expected_status
@@ -216,27 +270,22 @@ async def _check_http(monitor: dict[str, Any]) -> CheckResult:
 				is_up = False
 				error = f'Keyword "{keyword}" not found in response'
 
-		return CheckResult(
+		ctx["value"] = CheckResult(
 			is_up=is_up, response_time_ms=round(elapsed_ms, 2),
 			status_code=status_code, error=error,
 			cert_expires_at=cert_expires_at, cert_issuer=cert_issuer,
 		)
 
-	except httpx.TimeoutException:
-		elapsed_ms = (time.monotonic() - start) * 1000
-		return CheckResult(is_up=False, response_time_ms=round(elapsed_ms, 2), error="Timeout")
-	except Exception as e:
-		elapsed_ms = (time.monotonic() - start) * 1000
-		return CheckResult(is_up=False, response_time_ms=round(elapsed_ms, 2), error=str(e))
+	return ctx["value"]
 
 
 async def _check_tcp(monitor: dict[str, Any]) -> CheckResult:
-	hostname = monitor.get("hostname", "")
+	hostname = _validate_hostname(monitor.get("hostname", ""))
 	port = monitor.get("port") or 80
 	timeout_seconds = monitor.get("timeout_seconds") or 10
 
-	start = time.monotonic()
-	try:
+	async with _timed_check() as ctx:
+		start = time.monotonic()
 		_, writer = await asyncio.wait_for(
 			asyncio.open_connection(hostname, port),
 			timeout=timeout_seconds,
@@ -244,21 +293,18 @@ async def _check_tcp(monitor: dict[str, Any]) -> CheckResult:
 		elapsed_ms = (time.monotonic() - start) * 1000
 		writer.close()
 		await writer.wait_closed()
-		return CheckResult(is_up=True, response_time_ms=round(elapsed_ms, 2))
-	except asyncio.TimeoutError:
-		elapsed_ms = (time.monotonic() - start) * 1000
-		return CheckResult(is_up=False, response_time_ms=round(elapsed_ms, 2), error="Timeout")
-	except Exception as e:
-		elapsed_ms = (time.monotonic() - start) * 1000
-		return CheckResult(is_up=False, response_time_ms=round(elapsed_ms, 2), error=str(e))
+		ctx["value"] = CheckResult(is_up=True, response_time_ms=round(elapsed_ms, 2))
+
+	return ctx["value"]
 
 
 async def _check_ping(monitor: dict[str, Any]) -> CheckResult:
-	hostname = monitor.get("hostname", "")
+	"""ICMP ping check. Note: Uses Linux-specific 'ping -c 1 -W <timeout>' syntax."""
+	hostname = _validate_hostname(monitor.get("hostname", ""))
 	timeout_seconds = monitor.get("timeout_seconds") or 10
 
-	start = time.monotonic()
-	try:
+	async with _timed_check() as ctx:
+		start = time.monotonic()
 		proc = await asyncio.create_subprocess_exec(
 			"ping", "-c", "1", "-W", str(timeout_seconds), hostname,
 			stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
@@ -277,36 +323,34 @@ async def _check_ping(monitor: dict[str, Any]) -> CheckResult:
 					except (IndexError, ValueError):
 						pass
 					break
-			return CheckResult(is_up=True, response_time_ms=round(elapsed_ms, 2))
+			ctx["value"] = CheckResult(is_up=True, response_time_ms=round(elapsed_ms, 2))
 		else:
-			return CheckResult(is_up=False, response_time_ms=round(elapsed_ms, 2), error="Ping failed")
-	except asyncio.TimeoutError:
-		elapsed_ms = (time.monotonic() - start) * 1000
-		return CheckResult(is_up=False, response_time_ms=round(elapsed_ms, 2), error="Timeout")
-	except Exception as e:
-		elapsed_ms = (time.monotonic() - start) * 1000
-		return CheckResult(is_up=False, response_time_ms=round(elapsed_ms, 2), error=str(e))
+			ctx["value"] = CheckResult(is_up=False, response_time_ms=round(elapsed_ms, 2), error="Ping failed")
+
+	return ctx["value"]
 
 
 async def _check_dns(monitor: dict[str, Any]) -> CheckResult:
-	hostname = monitor.get("hostname", "")
+	hostname = _validate_hostname(monitor.get("hostname", ""))
 	timeout_seconds = monitor.get("timeout_seconds") or 10
 
-	start = time.monotonic()
-	try:
-		loop = asyncio.get_event_loop()
+	async with _timed_check() as ctx:
+		start = time.monotonic()
+		loop = asyncio.get_running_loop()
 		await asyncio.wait_for(
 			loop.getaddrinfo(hostname, None),
 			timeout=timeout_seconds,
 		)
 		elapsed_ms = (time.monotonic() - start) * 1000
-		return CheckResult(is_up=True, response_time_ms=round(elapsed_ms, 2))
-	except asyncio.TimeoutError:
-		elapsed_ms = (time.monotonic() - start) * 1000
-		return CheckResult(is_up=False, response_time_ms=round(elapsed_ms, 2), error="DNS timeout")
-	except socket.gaierror as e:
-		elapsed_ms = (time.monotonic() - start) * 1000
-		return CheckResult(is_up=False, response_time_ms=round(elapsed_ms, 2), error=f"DNS resolution failed: {e}")
-	except Exception as e:
-		elapsed_ms = (time.monotonic() - start) * 1000
-		return CheckResult(is_up=False, response_time_ms=round(elapsed_ms, 2), error=str(e))
+		ctx["value"] = CheckResult(is_up=True, response_time_ms=round(elapsed_ms, 2))
+
+	# Custom error messages for DNS-specific failures
+	if ctx["value"] and ctx["value"].error:
+		if "gaierror" in str(ctx["value"].error):
+			ctx["value"] = CheckResult(
+				is_up=False,
+				response_time_ms=ctx["value"].response_time_ms,
+				error=f"DNS resolution failed: {ctx['value'].error}"
+			)
+
+	return ctx["value"]

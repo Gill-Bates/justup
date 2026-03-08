@@ -57,8 +57,15 @@ _DUMMY_OTP_SECRET = "JBSWY3DPEHPK3PXP"
 _MFA_CHALLENGE_TTL_SECONDS = 180
 _RECOVERY_DOWNLOAD_TTL_SECONDS = 300
 _AUTH_COOKIE = "auth_token"
-_CSRF_COOKIE = "csrf_token"
+_AUTH_COOKIE_MAX_AGE = 86400  # 24 hours in seconds
 _DEFAULT_TRUSTED_PROXY_CIDRS = "127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7,169.254.0.0/16,fe80::/10"
+
+# CSRF protection is handled by CSRFMiddleware (double-submit cookie + Origin validation)
+# Auth cookies use SameSite=Strict for additional defense-in-depth
+
+# WARNING: In-memory caches are per-process. Multi-worker deployments (Gunicorn, k8s)
+# will cause MFA challenges to fail intermittently if the login and verify requests
+# hit different workers. For production, use Redis, DB, or signed JWT tokens.
 _mfa_challenge_cache: dict[str, tuple[int, str, str, float]] = {}
 _mfa_challenge_cache_lock = threading.Lock()
 _recovery_download_cache: dict[str, tuple[int, str, list[str], float]] = {}
@@ -99,6 +106,7 @@ def _parse_ip(value: str | None) -> str | None:
 
 
 def _store_mfa_challenge(user_id: int, username: str, client_ip: str) -> str:
+	"""Store MFA challenge. Note: cleanup only runs on write, stale entries may leak if traffic stops."""
 	token = new_token()
 	expires_at = time.monotonic() + _MFA_CHALLENGE_TTL_SECONDS
 	with _mfa_challenge_cache_lock:
@@ -191,7 +199,7 @@ def _is_https(request: Request) -> bool:
 	return False
 
 
-def _lookup_user_by_token(token: str, conn: sqlite3.Connection, require_active: bool = True) -> Optional[sqlite3.Row]:
+def _lookup_user_by_token(token: str, conn: sqlite3.Connection, require_active: bool = True) -> sqlite3.Row | None:
 	user = get_user_by_token(conn, token)
 	if user and require_active and not user["is_active"]:
 		return None
@@ -200,9 +208,9 @@ def _lookup_user_by_token(token: str, conn: sqlite3.Connection, require_active: 
 
 def get_current_user_optional(
 	request: Request,
-	credentials: Optional[HTTPAuthorizationCredentials] = Depends(_security),
+	credentials: HTTPAuthorizationCredentials | None = Depends(_security),
 	conn: sqlite3.Connection = Depends(get_conn),
-) -> Optional[sqlite3.Row]:
+) -> sqlite3.Row | None:
 	if credentials and credentials.credentials:
 		return _lookup_user_by_token(credentials.credentials, conn, require_active=True)
 	path = request.url.path
@@ -216,7 +224,7 @@ def get_current_user_optional(
 
 def get_current_user(
 	request: Request,
-	credentials: Optional[HTTPAuthorizationCredentials] = Depends(_security),
+	credentials: HTTPAuthorizationCredentials | None = Depends(_security),
 	conn: sqlite3.Connection = Depends(get_conn),
 ) -> sqlite3.Row:
 	if credentials and credentials.credentials:
@@ -246,6 +254,35 @@ def require_admin(
 	if not user["is_admin"]:
 		raise HTTPException(status_code=403, detail="Admin access required")
 	return user
+
+
+def _issue_session(request: Request, conn: sqlite3.Connection, user: sqlite3.Row, client_ip: str) -> Response:
+	"""Issue a session token and return a response with cookie + token in body."""
+	token = new_token()
+	expires_at, max_expires_at = generate_token_expiry()
+	create_auth_token(conn, user["id"], token, expires_at, max_expires_at)
+	clear_login_attempts(conn, client_ip)
+	update_last_login(conn, user["id"], client_ip)
+
+	# Calculate max_age from actual token expiry
+	from ..utils.time import utcnow
+	now = utcnow()
+	max_age = int((expires_at - now).total_seconds())
+	if max_age < 0:
+		max_age = _AUTH_COOKIE_MAX_AGE
+
+	response = ok_response(data={"token": token})
+	is_secure = _is_https(request)
+	response.set_cookie(
+		key=_AUTH_COOKIE,
+		value=token,
+		httponly=True,
+		samesite="strict",
+		secure=is_secure,
+		path="/",
+		max_age=max_age,
+	)
+	return response
 
 
 # ── Login / Logout ──
@@ -279,27 +316,7 @@ def login(request: Request, payload: LoginRequest, conn: sqlite3.Connection = De
 		return ok_response(data={"mfa_required": True, "mfa_token": mfa_token})
 
 	# Issue auth token
-	token = new_token()
-	expires_at, max_expires_at = generate_token_expiry()
-	create_auth_token(conn, user["id"], token, expires_at, max_expires_at)
-	clear_login_attempts(conn, client_ip)
-	update_last_login(conn, user["id"], client_ip)
-
-	response = Response(
-		content='{"status":"ok"}',
-		media_type="application/json",
-	)
-	is_secure = _is_https(request)
-	response.set_cookie(
-		key=_AUTH_COOKIE,
-		value=token,
-		httponly=True,
-		samesite="strict",
-		secure=is_secure,
-		path="/",
-		max_age=86400,
-	)
-	return response
+	return _issue_session(request, conn, user, client_ip)
 
 
 @router.post("/mfa/verify")
@@ -315,83 +332,62 @@ def mfa_verify(request: Request, payload: MFAVerifyRequest, conn: sqlite3.Connec
 		record_failed_login(conn, client_ip)
 		raise HTTPException(status_code=401, detail="Invalid or expired MFA challenge")
 
-	from ..db.sqlite_users import get_user_by_id
 	user = get_user_by_id(conn, user_id)
+	
+	# Timing-safe check: always verify OTP even if user missing/OTP not enabled
 	if not user or not user["otp_enabled"]:
-		raise HTTPException(status_code=401, detail="MFA not configured")
+		verify_otp(_DUMMY_OTP_SECRET, payload.code)  # burn time
+		record_failed_login(conn, client_ip)
+		raise HTTPException(status_code=401, detail="Invalid OTP code")
 
 	otp_secret = decrypt_otp_secret(user["otp_secret"])
 	if not otp_secret or not verify_otp(otp_secret, payload.code):
 		record_failed_login(conn, client_ip)
 		raise HTTPException(status_code=401, detail="Invalid OTP code")
 
-	token = new_token()
-	expires_at, max_expires_at = generate_token_expiry()
-	create_auth_token(conn, user["id"], token, expires_at, max_expires_at)
-	clear_login_attempts(conn, client_ip)
-	update_last_login(conn, user["id"], client_ip)
-
-	response = Response(content='{"status":"ok"}', media_type="application/json")
-	is_secure = _is_https(request)
-	response.set_cookie(
-		key=_AUTH_COOKIE, value=token, httponly=True, samesite="strict",
-		secure=is_secure, path="/", max_age=86400,
-	)
-	return response
+	return _issue_session(request, conn, user, client_ip)
 
 
 @router.post("/mfa/recovery")
 @limiter.limit(RATE_LIMIT_AUTH)
-def mfa_recovery(request: Request, conn: sqlite3.Connection = Depends(get_conn)):
+def mfa_recovery(request: Request, payload: MFARecoveryRequest, conn: sqlite3.Connection = Depends(get_conn)):
 	client_ip = _get_client_ip(request)
-	import json as _json
-	try:
-		body = _json.loads(request._body if hasattr(request, '_body') else b'{}')
-	except Exception:
-		raise HTTPException(status_code=400, detail="Invalid request body")
 
-	username = body.get("username", "")
-	mfa_token = body.get("mfa_token", "")
-	recovery_code = body.get("recovery_code", "")
-
-	user_id = _consume_mfa_challenge(mfa_token, username, client_ip)
+	user_id = _consume_mfa_challenge(payload.mfa_token, payload.username, client_ip)
 	if user_id is None:
 		record_failed_login(conn, client_ip)
 		raise HTTPException(status_code=401, detail="Invalid or expired MFA challenge")
 
-	from ..db.sqlite_users import get_user_by_id
 	user = get_user_by_id(conn, user_id)
 	if not user:
-		raise HTTPException(status_code=401, detail="User not found")
+		record_failed_login(conn, client_ip)
+		raise HTTPException(status_code=401, detail="Invalid recovery code")
 
 	stored_codes = user["otp_recovery_codes"] or "[]"
-	valid, remaining_codes = use_recovery_code(stored_codes, recovery_code)
+	valid, remaining_codes = use_recovery_code(stored_codes, payload.recovery_code)
 	if not valid:
 		record_failed_login(conn, client_ip)
 		raise HTTPException(status_code=401, detail="Invalid recovery code")
 
 	update_user_recovery_codes(conn, user_id, remaining_codes)
 
-	token = new_token()
-	expires_at, max_expires_at = generate_token_expiry()
-	create_auth_token(conn, user["id"], token, expires_at, max_expires_at)
-	clear_login_attempts(conn, client_ip)
-	update_last_login(conn, user["id"], client_ip)
-
-	response = Response(content='{"status":"ok"}', media_type="application/json")
-	is_secure = _is_https(request)
-	response.set_cookie(
-		key=_AUTH_COOKIE, value=token, httponly=True, samesite="strict",
-		secure=is_secure, path="/", max_age=86400,
-	)
-	return response
+	return _issue_session(request, conn, user, client_ip)
 
 
 @router.post("/logout")
 def logout(request: Request, conn: sqlite3.Connection = Depends(get_conn)):
+	# Check cookie first
 	token = request.cookies.get(_AUTH_COOKIE)
+	
+	# If no cookie, check Authorization header
+	if not token:
+		auth_header = request.headers.get("Authorization", "")
+		if auth_header.lower().startswith("bearer "):
+			token = auth_header[7:].strip()
+	
 	if token:
 		delete_auth_token(conn, token)
-	response = Response(content='{"status":"ok"}', media_type="application/json")
+	
+	response = ok_response()
 	response.delete_cookie(_AUTH_COOKIE, path="/")
 	return response

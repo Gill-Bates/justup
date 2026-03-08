@@ -1,7 +1,11 @@
 //
 // app/static/js/settings.js
-// Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
+// Copyright (C) 2025 Gill-Bates http://github.com/Gill-Bates
 //
+// Dependencies:
+//   - api.js (api function)
+//   - theme.js (base64UrlToArrayBuffer, arrayBufferToBase64Url)
+//   - toast.js (juToast, juConfirm, juPrompt, juAlert)
 
 let otpSection;
 let passkeysSection;
@@ -72,7 +76,7 @@ async function loadSettings() {
         }
         updateSwaggerUrl();
     } catch (err) {
-        // Settings page may partially load
+        console.warn('Failed to load settings:', err);
     }
 }
 
@@ -90,11 +94,14 @@ function updateSwaggerUrl() {
 }
 
 async function saveSettings() {
-    const port = parseInt(document.getElementById('setting-port')?.value) || 8000;
-    const interval = parseInt(document.getElementById('setting-interval')?.value) || 60;
-    const retention = parseInt(document.getElementById('setting-retention')?.value) || 90;
+    const btn = document.getElementById('saveSettingsBtn');
+    if (btn) btn.disabled = true;
 
     try {
+        const port = parseInt(document.getElementById('setting-port')?.value, 10) || 8000;
+        const interval = parseInt(document.getElementById('setting-interval')?.value, 10) || 60;
+        const retention = parseInt(document.getElementById('setting-retention')?.value, 10) || 90;
+
         await api('PUT', '/api/settings', {
             gui_port: String(port),
             check_interval_default: String(interval),
@@ -104,6 +111,8 @@ async function saveSettings() {
         updateSwaggerUrl();
     } catch (err) {
         juToast(err.message, 'danger');
+    } finally {
+        if (btn) btn.disabled = false;
     }
 }
 
@@ -134,20 +143,27 @@ function copySwaggerUrl() {
 // ─── Password Change ───────────────────────────────────────────
 
 async function changePassword() {
-    const currentPw = document.getElementById('current-password').value;
-    const newPw = document.getElementById('new-password').value;
-    const confirmPw = document.getElementById('confirm-password').value;
-
-    if (!currentPw || !newPw) {
-        juToast('Please fill in all password fields', 'warning');
-        return;
-    }
-    if (newPw !== confirmPw) {
-        juToast('New passwords do not match', 'warning');
-        return;
-    }
+    const btn = document.getElementById('changePasswordBtn');
+    if (btn) btn.disabled = true;
 
     try {
+        const currentPw = document.getElementById('current-password').value;
+        const newPw = document.getElementById('new-password').value;
+        const confirmPw = document.getElementById('confirm-password').value;
+
+        if (!currentPw || !newPw) {
+            juToast('Please fill in all password fields', 'warning');
+            return;
+        }
+        if (newPw.length < 8) {
+            juToast('Password must be at least 8 characters', 'warning');
+            return;
+        }
+        if (newPw !== confirmPw) {
+            juToast('New passwords do not match', 'warning');
+            return;
+        }
+
         await api('POST', '/api/users/me/password', {
             current_password: currentPw,
             new_password: newPw,
@@ -158,6 +174,8 @@ async function changePassword() {
         document.getElementById('confirm-password').value = '';
     } catch (err) {
         juToast(err.message, 'danger');
+    } finally {
+        if (btn) btn.disabled = false;
     }
 }
 
@@ -167,7 +185,9 @@ async function loadOtpStatus() {
     try {
         const me = await api('GET', '/api/auth/me');
         updateOtpUI(me?.otp_enabled || false);
-    } catch (_) { }
+    } catch (err) {
+        console.warn('Failed to load OTP status:', err);
+    }
 }
 
 function updateOtpUI(enabled) {
@@ -192,6 +212,9 @@ function updateOtpUI(enabled) {
 }
 
 async function enableOtp() {
+    const btn = document.getElementById('enable-otp-btn');
+    if (btn) btn.disabled = true;
+
     try {
         const data = await api('POST', '/api/users/me/otp/enable');
         const otpSetup = document.getElementById('otp-setup');
@@ -207,6 +230,8 @@ async function enableOtp() {
         if (otpSetup) otpSetup.classList.remove('d-none');
     } catch (err) {
         juToast(err.message, 'danger');
+    } finally {
+        if (btn) btn.disabled = false;
     }
 }
 
@@ -238,12 +263,17 @@ async function disableOtp() {
     const confirmed = await juConfirm('Disable two-factor authentication?', 'warning');
     if (!confirmed) return;
 
+    const btn = document.getElementById('disable-otp-btn');
+    if (btn) btn.disabled = true;
+
     try {
         await api('POST', '/api/users/me/otp/disable');
         updateOtpUI(false);
         juToast('Two-factor authentication disabled', 'success');
     } catch (err) {
         juToast(err.message, 'danger');
+    } finally {
+        if (btn) btn.disabled = false;
     }
 }
 
@@ -255,7 +285,9 @@ async function loadPasskeys() {
     try {
         const passkeys = await api('GET', '/api/passkeys');
         renderPasskeys(passkeys || []);
-    } catch (_) { }
+    } catch (err) {
+        console.warn('Failed to load passkeys:', err);
+    }
 }
 
 function renderPasskeys(passkeys) {
@@ -266,31 +298,48 @@ function renderPasskeys(passkeys) {
         return;
     }
 
-    passkeysListEl.innerHTML = passkeys.map(pk => `
-        <div class="d-flex justify-content-between align-items-center border rounded p-2 mb-2">
-            <div>
-                <span class="material-icons me-2" style="vertical-align:middle;font-size:18px">key</span>
-                <strong>${escapeHtml(pk.name || 'Passkey')}</strong>
-                <small class="text-muted ms-2">${pk.created_at || ''}</small>
-            </div>
-            <button class="btn btn-sm btn-outline-danger" onclick="deletePasskey('${pk.id}', '${escapeHtml(pk.name || "Passkey")}')">
-                <span class="material-icons" style="font-size:16px">delete</span>
-            </button>
-        </div>
-    `).join('');
-}
+    passkeysListEl.innerHTML = '';
+    passkeys.forEach(pk => {
+        const row = document.createElement('div');
+        row.className = 'd-flex justify-content-between align-items-center border rounded p-2 mb-2';
 
-function escapeHtml(text) {
-    const el = document.createElement('span');
-    el.textContent = text;
-    return el.innerHTML;
+        const info = document.createElement('div');
+        const icon = document.createElement('span');
+        icon.className = 'material-icons me-2';
+        icon.style.cssText = 'vertical-align:middle;font-size:18px';
+        icon.textContent = 'key';
+
+        const nameEl = document.createElement('strong');
+        nameEl.textContent = pk.name || 'Passkey';
+
+        const dateEl = document.createElement('small');
+        dateEl.className = 'text-muted ms-2';
+        dateEl.textContent = pk.created_at || '';
+
+        info.append(icon, nameEl, dateEl);
+
+        const delBtn = document.createElement('button');
+        delBtn.className = 'btn btn-sm btn-outline-danger';
+        const delIcon = document.createElement('span');
+        delIcon.className = 'material-icons';
+        delIcon.style.fontSize = '16px';
+        delIcon.textContent = 'delete';
+        delBtn.appendChild(delIcon);
+        delBtn.addEventListener('click', () => deletePasskey(pk.id, pk.name || 'Passkey'));
+
+        row.append(info, delBtn);
+        passkeysListEl.appendChild(row);
+    });
 }
 
 async function registerPasskey() {
-    const name = await juPrompt('Enter a name for this passkey:', { placeholder: 'e.g. MacBook Touch ID' });
-    if (name === null) return;
+    const btn = document.getElementById('add-passkey-btn');
+    if (btn) btn.disabled = true;
 
     try {
+        const name = await juPrompt('Enter a name for this passkey:', { placeholder: 'e.g. MacBook Touch ID' });
+        if (name === null) return;
+
         const startData = await api('POST', '/api/passkeys/register/start');
         const options = startData;
         if (!options || !options.challenge) throw new Error('Invalid server response');
@@ -346,15 +395,23 @@ async function registerPasskey() {
     } catch (err) {
         if (err.name === 'NotAllowedError') return;
         juToast(err.message || 'Failed to register passkey', 'danger');
+    } finally {
+        if (btn) btn.disabled = false;
     }
 }
 
 async function deletePasskey(id, name) {
+    // Validate ID format to prevent path injection
+    if (!/^[a-zA-Z0-9_-]+$/.test(id)) {
+        juToast('Invalid passkey ID', 'danger');
+        return;
+    }
+
     const confirmed = await juConfirm(`Delete passkey "${name}"?`, 'danger');
     if (!confirmed) return;
 
     try {
-        await api('DELETE', `/api/passkeys/${id}`);
+        await api('DELETE', `/api/passkeys/${encodeURIComponent(id)}`);
         juToast('Passkey deleted', 'success');
         await loadPasskeys();
     } catch (err) {

@@ -63,7 +63,7 @@ async def _lifespan(app: FastAPI):
 
 	_log.info("Shutting down %s …", APP_NAME)
 	await stop_checker(scheduler)
-	await scheduler.stop()
+	await scheduler.stop_graceful()
 	close_all_connections()
 	_log.info("Bye.")
 
