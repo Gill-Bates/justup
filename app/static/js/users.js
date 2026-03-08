@@ -22,10 +22,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (userSaveBtn) userSaveBtn.addEventListener('click', saveUser);
 
-    // Password change
-    const changePwBtn = document.getElementById('changePasswordBtn');
-    if (changePwBtn) changePwBtn.addEventListener('click', changePassword);
-
     // Event delegation for edit and delete buttons
     document.addEventListener('click', (e) => {
         const editBtn = e.target.closest('.edit-user');
@@ -54,9 +50,31 @@ function openUserModal(user = null) {
     const title = document.getElementById('userModalTitle');
     title.textContent = user ? 'Edit User' : 'Add User';
 
+    // Get current user ID from page data attribute
+    const pageEl = document.querySelector('.ju-page');
+    const currentUserId = pageEl?.dataset?.currentUserId ? parseInt(pageEl.dataset.currentUserId) : null;
+
+    // Show change password section only when editing own user
+    const changePasswordSection = document.getElementById('change-password-section');
+    const isEditingOwnUser = user && currentUserId && user.id === currentUserId;
+
+    if (changePasswordSection) {
+        if (isEditingOwnUser) {
+            changePasswordSection.classList.remove('d-none');
+        } else {
+            changePasswordSection.classList.add('d-none');
+        }
+    }
+
     document.getElementById('user-username').value = user?.username || '';
     document.getElementById('user-password').value = '';
     document.getElementById('user-is-admin').checked = user ? user.is_admin : false;
+
+    // Clear password change fields
+    const currentPwField = document.getElementById('user-current-password');
+    const newPwField = document.getElementById('user-new-password');
+    if (currentPwField) currentPwField.value = '';
+    if (newPwField) newPwField.value = '';
 
     const pwField = document.getElementById('user-password');
     pwField.required = !user;
@@ -130,6 +148,10 @@ async function saveUser() {
     const password = document.getElementById('user-password').value;
     const is_admin = document.getElementById('user-is-admin').checked;
 
+    // Get password change fields
+    const currentPassword = document.getElementById('user-current-password')?.value || '';
+    const newPassword = document.getElementById('user-new-password')?.value || '';
+
     if (!username) {
         juToast('Username is required', 'warning');
         return;
@@ -139,6 +161,32 @@ async function saveUser() {
         if (editingUserId) {
             const data = { username, is_admin };
             if (password) data.password = password;
+
+            // Handle password change if current user is editing their own account
+            const pageEl = document.querySelector('.ju-page');
+            const currentUserId = pageEl?.dataset?.currentUserId ? parseInt(pageEl.dataset.currentUserId) : null;
+            const isEditingOwnUser = currentUserId && editingUserId === currentUserId;
+
+            if (isEditingOwnUser && currentPassword && newPassword) {
+                // Validate new password length
+                if (newPassword.length < 8) {
+                    juToast('New password must be at least 8 characters', 'warning');
+                    return;
+                }
+
+                // Change password first
+                try {
+                    await api('POST', `/api/users/${editingUserId}/change-password`, {
+                        current_password: currentPassword,
+                        new_password: newPassword,
+                    });
+                    juToast('Password changed successfully', 'success');
+                } catch (err) {
+                    juToast(`Password change failed: ${err.message}`, 'danger');
+                    return;
+                }
+            }
+
             await api('PUT', `/api/users/${editingUserId}`, data);
             juToast('User updated', 'success');
         } else {
@@ -178,42 +226,6 @@ async function deleteUser(id, username) {
         await api('DELETE', `/api/users/${id}`);
         juToast('User deleted', 'success');
         await loadUsers();
-    } catch (err) {
-        juToast(err.message, 'danger');
-    }
-}
-
-async function changePassword() {
-    const currentPassword = document.getElementById('current-password').value;
-    const newPassword = document.getElementById('new-password').value;
-
-    if (!currentPassword || !newPassword) {
-        juToast('Both fields are required', 'warning');
-        return;
-    }
-
-    if (newPassword.length < 8) {
-        juToast('Password must be at least 8 characters', 'warning');
-        return;
-    }
-
-    // Get current user ID from data attribute
-    const pageEl = document.querySelector('.ju-page');
-    const userId = pageEl?.dataset?.currentUserId;
-
-    if (!userId) {
-        juToast('User ID not found', 'danger');
-        return;
-    }
-
-    try {
-        await api('POST', `/api/users/${userId}/change-password`, {
-            current_password: currentPassword,
-            new_password: newPassword,
-        });
-        juToast('Password changed successfully', 'success');
-        document.getElementById('current-password').value = '';
-        document.getElementById('new-password').value = '';
     } catch (err) {
         juToast(err.message, 'danger');
     }

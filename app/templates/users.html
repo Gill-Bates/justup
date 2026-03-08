@@ -32,29 +32,6 @@
         </div>
     </div>
 
-    <!-- Change Password Card -->
-    <div class="card mt-4">
-        <div class="card-header">
-            <h6 class="card-title mb-0">
-                <span class="material-icons icon-sm me-1">key</span>Change Password
-            </h6>
-        </div>
-        <div class="card-body">
-            <form id="change-password-form" autocomplete="on">
-                <div class="mb-3">
-                    <label for="current-password" class="form-label">Current Password</label>
-                    <input type="password" class="form-control" id="current-password" autocomplete="current-password">
-                </div>
-                <div class="mb-3">
-                    <label for="new-password" class="form-label">New Password</label>
-                    <input type="password" class="form-control" id="new-password" autocomplete="new-password">
-                </div>
-                <button type="button" class="btn btn-primary" id="changePasswordBtn">
-                    <span class="material-icons icon-sm">save</span>Change Password
-                </button>
-            </form>
-        </div>
-    </div>
 </div>
 
 <!-- Add/Edit User Modal -->
@@ -77,6 +54,25 @@
                         <label for="user-password" class="form-label">Password</label>
                         <input type="password" class="form-control" id="user-password" autocomplete="new-password">
                     </div>
+
+                    <!-- Change Password Section (only for editing own user) -->
+                    <div class="mb-3 d-none" id="change-password-section">
+                        <hr class="my-3">
+                        <h6 class="mb-3">
+                            <span class="material-icons icon-sm me-1">key</span>Change Password
+                        </h6>
+                        <div class="mb-3">
+                            <label for="user-current-password" class="form-label">Current Password</label>
+                            <input type="password" class="form-control" id="user-current-password"
+                                autocomplete="current-password">
+                        </div>
+                        <div class="mb-3">
+                            <label for="user-new-password" class="form-label">New Password</label>
+                            <input type="password" class="form-control" id="user-new-password"
+                                autocomplete="new-password">
+                        </div>
+                    </div>
+
                     <div class="form-check form-switch mb-3">
                         <input class="form-check-input" type="checkbox" id="user-is-admin">
                         <label class="form-check-label" for="user-is-admin">Admin</label>

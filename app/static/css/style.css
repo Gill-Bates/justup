@@ -31,7 +31,7 @@
     /* Layout dimensions */
     --ju-navbar-height: 56px;
     --ju-footer-height: 2.5rem;
-    --ju-shell-top: 0px;
+    --ju-shell-top: var(--ju-navbar-height);
     --ju-shell-bottom: var(--ju-footer-height);
 }
 
