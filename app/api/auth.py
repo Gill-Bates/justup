@@ -1,0 +1,407 @@
+#!/usr/bin/env python3
+#
+# app/api/auth.py
+# Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
+#
+
+"""Authentication API routes and dependencies."""
+
+from __future__ import annotations
+
+import base64
+import ipaddress
+import io
+import logging
+import os
+import sqlite3
+import re
+import threading
+import time
+import zipfile
+from datetime import datetime, timezone
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+
+from ..db.sqlite_auth import (
+	clear_login_attempts,
+	create_auth_token,
+	delete_auth_token,
+	get_user_by_token,
+	is_ip_locked,
+	record_failed_login,
+)
+from ..db.sqlite_users import (
+	decrypt_otp_secret,
+	get_user_by_username,
+	update_user_recovery_codes,
+	update_last_login,
+	confirm_user_otp,
+)
+from ..models.users import (
+	LoginRequest,
+	MFAVerifyRequest,
+	OTPConfirmRequest,
+	RecoveryDownloadRequest,
+)
+from ..utils.crypto import DUMMY_PASSWORD_HASH, generate_token_expiry, new_token, verify_password
+from ..utils.deps import get_conn
+from ..utils.network import parse_ip_str
+from ..utils.otp import (
+	build_provisioning_uri,
+	generate_recovery_codes,
+	serialize_recovery_codes,
+	use_recovery_code,
+	verify_otp,
+)
+from ..utils.rate_limit import RATE_LIMIT_AUTH, limiter
+from .response import ok_response
+
+_log = logging.getLogger(__name__)
+_security = HTTPBearer(auto_error=False)
+
+router = APIRouter(tags=["auth"])
+
+_DUMMY_OTP_SECRET = "JBSWY3DPEHPK3PXP"
+_MFA_CHALLENGE_TTL_SECONDS = 180
+_RECOVERY_DOWNLOAD_TTL_SECONDS = 300
+_AUTH_COOKIE = "auth_token"
+_CSRF_COOKIE = "csrf_token"
+_DEFAULT_TRUSTED_PROXY_CIDRS = "127.0.0.0/8,::1/128"
+_mfa_challenge_cache: dict[str, tuple[int, str, str, float]] = {}
+_mfa_challenge_cache_lock = threading.Lock()
+_recovery_download_cache: dict[str, tuple[int, str, list[str], float]] = {}
+_recovery_download_cache_lock = threading.Lock()
+
+_COOKIE_AUTH_PREFIXES = ("/ui", "/api", "/status", "/swagger")
+_COOKIE_AUTH_PREFIXES_NORMALIZED = tuple(prefix.rstrip("/") for prefix in _COOKIE_AUTH_PREFIXES)
+
+
+def _load_trusted_proxy_networks() -> tuple[ipaddress._BaseNetwork, ...]:
+	raw = os.environ.get("TRUSTED_PROXY_CIDRS", _DEFAULT_TRUSTED_PROXY_CIDRS)
+	networks: list[ipaddress._BaseNetwork] = []
+	for cidr in (item.strip() for item in raw.split(",")):
+		if not cidr:
+			continue
+		try:
+			networks.append(ipaddress.ip_network(cidr, strict=False))
+		except ValueError:
+			_log.warning("Ignoring invalid TRUSTED_PROXY_CIDRS entry: %s", cidr)
+	if not networks:
+		networks = [ipaddress.ip_network("127.0.0.0/8"), ipaddress.ip_network("::1/128")]
+	return tuple(networks)
+
+
+_TRUSTED_PROXY_NETWORKS = _load_trusted_proxy_networks()
+
+
+def _is_trusted_proxy_ip(ip_text: str) -> bool:
+	try:
+		ip_obj = ipaddress.ip_address(ip_text)
+	except ValueError:
+		return False
+	return any(ip_obj in network for network in _TRUSTED_PROXY_NETWORKS)
+
+
+def _parse_ip(value: str | None) -> str | None:
+	return parse_ip_str(value)
+
+
+def _store_mfa_challenge(user_id: int, username: str, client_ip: str) -> str:
+	token = new_token()
+	expires_at = time.monotonic() + _MFA_CHALLENGE_TTL_SECONDS
+	with _mfa_challenge_cache_lock:
+		now = time.monotonic()
+		expired = [key for key, value in _mfa_challenge_cache.items() if value[3] <= now]
+		for key in expired:
+			_mfa_challenge_cache.pop(key, None)
+		_mfa_challenge_cache[token] = (user_id, username, client_ip, expires_at)
+	return token
+
+
+def _consume_mfa_challenge(token: str, username: str, client_ip: str) -> int | None:
+	with _mfa_challenge_cache_lock:
+		entry = _mfa_challenge_cache.pop(token, None)
+	if not entry:
+		return None
+	user_id, expected_username, expected_ip, expires_at = entry
+	if expires_at <= time.monotonic():
+		return None
+	if expected_username != username:
+		return None
+	if expected_ip != client_ip:
+		return None
+	return user_id
+
+
+def _store_recovery_download(user_id: int, username: str, codes: list[str]) -> str:
+	token = new_token()
+	expires_at = time.monotonic() + _RECOVERY_DOWNLOAD_TTL_SECONDS
+	with _recovery_download_cache_lock:
+		now = time.monotonic()
+		expired = [key for key, value in _recovery_download_cache.items() if value[3] <= now]
+		for key in expired:
+			_recovery_download_cache.pop(key, None)
+		_recovery_download_cache[token] = (user_id, username, list(codes), expires_at)
+	return token
+
+
+def _consume_recovery_download(token: str, user_id: int) -> tuple[str, list[str]] | None:
+	with _recovery_download_cache_lock:
+		entry = _recovery_download_cache.pop(token, None)
+	if not entry:
+		return None
+	stored_user_id, username, codes, expires_at = entry
+	if stored_user_id != user_id:
+		return None
+	if expires_at <= time.monotonic():
+		return None
+	return username, codes
+
+
+def _allow_cookie_auth_for_path(path: str) -> bool:
+	normalized = path.rstrip("/") or "/"
+	return any(
+		normalized == prefix or normalized.startswith(prefix + "/")
+		for prefix in _COOKIE_AUTH_PREFIXES_NORMALIZED
+	)
+
+
+def _get_client_ip(request: Request) -> str:
+	scope_client = request.scope.get("client")
+	if not scope_client or not scope_client[0]:
+		raise HTTPException(status_code=400, detail="Unable to determine client IP")
+	socket_ip = _parse_ip(scope_client[0])
+	if not socket_ip:
+		raise HTTPException(status_code=400, detail="Unable to determine client IP")
+
+	if _is_trusted_proxy_ip(socket_ip):
+		forwarded_for = request.headers.get("X-Forwarded-For")
+		if forwarded_for:
+			candidate = _parse_ip(forwarded_for.split(",")[0])
+			if candidate:
+				return candidate
+		x_real_ip = request.headers.get("X-Real-IP")
+		if x_real_ip:
+			candidate = _parse_ip(x_real_ip)
+			if candidate:
+				return candidate
+
+	return socket_ip
+
+
+def _is_https(request: Request) -> bool:
+	if request.url.scheme == "https":
+		return True
+	scope_client = request.scope.get("client")
+	socket_ip = _parse_ip(scope_client[0]) if scope_client and scope_client[0] else None
+	if socket_ip and _is_trusted_proxy_ip(socket_ip):
+		return request.headers.get("X-Forwarded-Proto", "").lower() == "https"
+	return False
+
+
+def _lookup_user_by_token(token: str, conn: sqlite3.Connection, require_active: bool = True) -> Optional[sqlite3.Row]:
+	user = get_user_by_token(conn, token)
+	if user and require_active and not user["is_active"]:
+		return None
+	return user
+
+
+def get_current_user_optional(
+	request: Request,
+	credentials: Optional[HTTPAuthorizationCredentials] = Depends(_security),
+	conn: sqlite3.Connection = Depends(get_conn),
+) -> Optional[sqlite3.Row]:
+	if credentials and credentials.credentials:
+		return _lookup_user_by_token(credentials.credentials, conn, require_active=True)
+	path = request.url.path
+	if not _allow_cookie_auth_for_path(path):
+		return None
+	token = request.cookies.get(_AUTH_COOKIE)
+	if token:
+		return _lookup_user_by_token(token, conn, require_active=True)
+	return None
+
+
+def get_current_user(
+	request: Request,
+	credentials: Optional[HTTPAuthorizationCredentials] = Depends(_security),
+	conn: sqlite3.Connection = Depends(get_conn),
+) -> sqlite3.Row:
+	if credentials and credentials.credentials:
+		user = _lookup_user_by_token(credentials.credentials, conn, require_active=False)
+		if user:
+			if not user["is_active"]:
+				raise HTTPException(status_code=403, detail="Account disabled")
+			return user
+		raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+	path = request.url.path
+	if _allow_cookie_auth_for_path(path):
+		token = request.cookies.get(_AUTH_COOKIE)
+		if token:
+			user = _lookup_user_by_token(token, conn, require_active=False)
+			if user:
+				if not user["is_active"]:
+					raise HTTPException(status_code=403, detail="Account disabled")
+				return user
+
+	raise HTTPException(status_code=401, detail="Not authenticated")
+
+
+def require_admin(
+	user: sqlite3.Row = Depends(get_current_user),
+) -> sqlite3.Row:
+	if not user["is_admin"]:
+		raise HTTPException(status_code=403, detail="Admin access required")
+	return user
+
+
+# ── Login / Logout ──
+
+@router.post("/login")
+@limiter.limit(RATE_LIMIT_AUTH)
+def login(request: Request, payload: LoginRequest, conn: sqlite3.Connection = Depends(get_conn)):
+	client_ip = _get_client_ip(request)
+	is_locked, seconds_remaining = is_ip_locked(conn, client_ip)
+	if is_locked:
+		raise HTTPException(
+			status_code=429,
+			detail="Too many failed attempts. Please try again later.",
+			headers={"Retry-After": str(seconds_remaining)},
+		)
+
+	user = get_user_by_username(conn, payload.username)
+	pw_hash = user["password_hash"] if user else DUMMY_PASSWORD_HASH
+	valid = verify_password(payload.password, pw_hash)
+
+	if not user or not valid:
+		record_failed_login(conn, client_ip)
+		raise HTTPException(status_code=401, detail="Invalid username or password")
+
+	if not user["is_active"]:
+		raise HTTPException(status_code=403, detail="Account disabled")
+
+	# Check MFA
+	if user["otp_enabled"]:
+		mfa_token = _store_mfa_challenge(user["id"], user["username"], client_ip)
+		return ok_response(data={"mfa_required": True, "mfa_token": mfa_token})
+
+	# Issue auth token
+	token = new_token()
+	expires_at, max_expires_at = generate_token_expiry()
+	create_auth_token(conn, user["id"], token, expires_at, max_expires_at)
+	clear_login_attempts(conn, client_ip)
+	update_last_login(conn, user["id"], client_ip)
+
+	response = Response(
+		content='{"status":"ok"}',
+		media_type="application/json",
+	)
+	is_secure = _is_https(request)
+	response.set_cookie(
+		key=_AUTH_COOKIE,
+		value=token,
+		httponly=True,
+		samesite="strict",
+		secure=is_secure,
+		path="/",
+		max_age=86400,
+	)
+	return response
+
+
+@router.post("/mfa/verify")
+@limiter.limit(RATE_LIMIT_AUTH)
+def mfa_verify(request: Request, payload: MFAVerifyRequest, conn: sqlite3.Connection = Depends(get_conn)):
+	client_ip = _get_client_ip(request)
+	is_locked, seconds_remaining = is_ip_locked(conn, client_ip)
+	if is_locked:
+		raise HTTPException(status_code=429, detail="Too many failed attempts.")
+
+	user_id = _consume_mfa_challenge(payload.mfa_token, payload.username, client_ip)
+	if user_id is None:
+		record_failed_login(conn, client_ip)
+		raise HTTPException(status_code=401, detail="Invalid or expired MFA challenge")
+
+	from ..db.sqlite_users import get_user_by_id
+	user = get_user_by_id(conn, user_id)
+	if not user or not user["otp_enabled"]:
+		raise HTTPException(status_code=401, detail="MFA not configured")
+
+	otp_secret = decrypt_otp_secret(user["otp_secret"])
+	if not otp_secret or not verify_otp(otp_secret, payload.code):
+		record_failed_login(conn, client_ip)
+		raise HTTPException(status_code=401, detail="Invalid OTP code")
+
+	token = new_token()
+	expires_at, max_expires_at = generate_token_expiry()
+	create_auth_token(conn, user["id"], token, expires_at, max_expires_at)
+	clear_login_attempts(conn, client_ip)
+	update_last_login(conn, user["id"], client_ip)
+
+	response = Response(content='{"status":"ok"}', media_type="application/json")
+	is_secure = _is_https(request)
+	response.set_cookie(
+		key=_AUTH_COOKIE, value=token, httponly=True, samesite="strict",
+		secure=is_secure, path="/", max_age=86400,
+	)
+	return response
+
+
+@router.post("/mfa/recovery")
+@limiter.limit(RATE_LIMIT_AUTH)
+def mfa_recovery(request: Request, conn: sqlite3.Connection = Depends(get_conn)):
+	client_ip = _get_client_ip(request)
+	import json as _json
+	try:
+		body = _json.loads(request._body if hasattr(request, '_body') else b'{}')
+	except Exception:
+		raise HTTPException(status_code=400, detail="Invalid request body")
+
+	username = body.get("username", "")
+	mfa_token = body.get("mfa_token", "")
+	recovery_code = body.get("recovery_code", "")
+
+	user_id = _consume_mfa_challenge(mfa_token, username, client_ip)
+	if user_id is None:
+		record_failed_login(conn, client_ip)
+		raise HTTPException(status_code=401, detail="Invalid or expired MFA challenge")
+
+	from ..db.sqlite_users import get_user_by_id
+	user = get_user_by_id(conn, user_id)
+	if not user:
+		raise HTTPException(status_code=401, detail="User not found")
+
+	stored_codes = user["otp_recovery_codes"] or "[]"
+	valid, remaining_codes = use_recovery_code(stored_codes, recovery_code)
+	if not valid:
+		record_failed_login(conn, client_ip)
+		raise HTTPException(status_code=401, detail="Invalid recovery code")
+
+	update_user_recovery_codes(conn, user_id, remaining_codes)
+
+	token = new_token()
+	expires_at, max_expires_at = generate_token_expiry()
+	create_auth_token(conn, user["id"], token, expires_at, max_expires_at)
+	clear_login_attempts(conn, client_ip)
+	update_last_login(conn, user["id"], client_ip)
+
+	response = Response(content='{"status":"ok"}', media_type="application/json")
+	is_secure = _is_https(request)
+	response.set_cookie(
+		key=_AUTH_COOKIE, value=token, httponly=True, samesite="strict",
+		secure=is_secure, path="/", max_age=86400,
+	)
+	return response
+
+
+@router.post("/logout")
+def logout(request: Request, conn: sqlite3.Connection = Depends(get_conn)):
+	token = request.cookies.get(_AUTH_COOKIE)
+	if token:
+		delete_auth_token(conn, token)
+	response = Response(content='{"status":"ok"}', media_type="application/json")
+	response.delete_cookie(_AUTH_COOKIE, path="/")
+	return response
