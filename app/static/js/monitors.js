@@ -115,11 +115,10 @@ async function saveMonitor() {
     const type = document.getElementById('monitor-type').value;
     const data = {
         name: document.getElementById('monitor-name').value.trim(),
-        type,
-        interval: parseInt(document.getElementById('monitor-interval').value) || 60,
-        timeout: parseInt(document.getElementById('monitor-timeout').value) || 10,
+        monitor_type: type,
+        interval_seconds: parseInt(document.getElementById('monitor-interval').value) || 60,
+        timeout_seconds: parseInt(document.getElementById('monitor-timeout').value) || 10,
         description: document.getElementById('monitor-description').value.trim() || null,
-        active: document.getElementById('monitor-active').checked,
     };
 
     if (['http', 'keyword'].includes(type)) {

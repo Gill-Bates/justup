@@ -45,14 +45,14 @@
 }
 
 [data-bs-theme="dark"] #juReconnectModal .modal-content {
-    background-color: #0d0d0d;
-    border: 1px solid #03a806;
-    box-shadow: 0 0 20px rgba(3, 168, 6, 0.3);
+    background-color: var(--ju-bg-surface);
+    border: 1px solid var(--ju-border-subtle);
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
 }
 
 [data-bs-theme="dark"] .modal-content {
-    background-color: #0d0d0d;
-    border: 1px solid #03a806;
+    background-color: var(--ju-bg-surface);
+    border: 1px solid var(--ju-border-subtle);
 }
 
 #juReconnectModal .spinner-border {
@@ -63,7 +63,7 @@
 @keyframes juReconnectSoftPulse {
     0% {
         transform: scale(1);
-        box-shadow: 0 0 0 rgba(3, 168, 6, 0.0);
+        box-shadow: 0 0 0 rgba(0, 0, 0, 0.0);
     }
 
     50% {
@@ -73,24 +73,24 @@
 
     100% {
         transform: scale(1);
-        box-shadow: 0 0 0 rgba(3, 168, 6, 0.0);
+        box-shadow: 0 0 0 rgba(0, 0, 0, 0.0);
     }
 }
 
 [data-bs-theme="dark"] @keyframes juReconnectSoftPulseDark {
     0% {
         transform: scale(1);
-        box-shadow: 0 0 0 rgba(3, 168, 6, 0.0);
+        box-shadow: 0 0 0 rgba(0, 0, 0, 0.0);
     }
 
     50% {
         transform: scale(1.012);
-        box-shadow: 0 0 1.5rem rgba(3, 168, 6, 0.6);
+        box-shadow: 0 0 1.5rem rgba(3, 168, 6, 0.35);
     }
 
     100% {
         transform: scale(1);
-        box-shadow: 0 0 0 rgba(3, 168, 6, 0.0);
+        box-shadow: 0 0 0 rgba(0, 0, 0, 0.0);
     }
 }
 
