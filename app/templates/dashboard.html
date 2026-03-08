@@ -67,17 +67,19 @@
                         {% for m in monitors %}
                         <tr>
                             <td>
-                                {% if m['is_up'] %}
+                                {% if m['status'] == 'up' %}
                                 <span class="badge bg-success">UP</span>
-                                {% elif m['is_up'] is none %}
-                                <span class="badge bg-secondary">PENDING</span>
-                                {% else %}
+                                {% elif m['status'] == 'down' %}
                                 <span class="badge bg-danger">DOWN</span>
+                                {% elif m['status'] == 'paused' %}
+                                <span class="badge bg-secondary">PAUSED</span>
+                                {% else %}
+                                <span class="badge bg-secondary">PENDING</span>
                                 {% endif %}
                             </td>
                             <td>{{ m['name'] | e }}</td>
                             <td><span class="badge bg-secondary">{{ m['monitor_type'] | upper | e }}</span></td>
-                            <td>{{ (m['response_time_ms'] or 0) | round(0) | int }} ms</td>
+                            <td>{{ (m['last_response_time_ms'] or 0) | round(0) | int }} ms</td>
                             <td>–</td>
                         </tr>
                         {% else %}
