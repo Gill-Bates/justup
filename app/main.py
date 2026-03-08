@@ -16,7 +16,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from .api import auth, frontend_pages, frontend_shared, monitors, passkeys, settings, users
+from .api import auth, frontend_pages, frontend_shared, monitors, passkeys, settings, system, users
 from .api.frontend_shared import RedirectTo, redirect_to_handler
 from .db.sqlite_runtime import close_all_connections
 from .db.sqlite_schema import ensure_default_admin, ensure_schema
@@ -92,6 +92,7 @@ def create_app() -> FastAPI:
 	app.include_router(passkeys.router, prefix="/api/passkeys")
 	app.include_router(monitors.router, prefix="/api/monitors")
 	app.include_router(settings.router, prefix="/api/settings")
+	app.include_router(system.router, prefix="/api/system")
 
 	# ── Frontend routes ──
 	app.include_router(frontend_pages.router)
@@ -104,6 +105,16 @@ def create_app() -> FastAPI:
 	@app.get("/")
 	def root_redirect():
 		return RedirectResponse(url="/ui/dashboard", status_code=303)
+
+	# ── Favicon ──
+	@app.get("/favicon.ico", include_in_schema=False)
+	def favicon():
+		"""Serve favicon to prevent 404 errors."""
+		from fastapi.responses import FileResponse
+		favicon_path = Path(__file__).parent / "static" / "img" / "justup.svg"
+		if favicon_path.exists():
+			return FileResponse(favicon_path, media_type="image/svg+xml")
+		return Response(status_code=204)
 
 	return app
 
@@ -142,9 +153,7 @@ _SWAGGER_HTML = f"""
 <head>
   <meta charset="UTF-8">
   <title>{APP_NAME} – API Docs</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5.18.2/swagger-ui.css"
-        integrity="sha384-OiJUz2Or7cLjcY1Eaw2xhMeUY3z5Csh2+HG9WXElrCqx45ddJCnYXN0a/HQQsJtz"
-        crossorigin="anonymous">
+  <link rel="stylesheet" href="/static/vendor/swagger-ui.css">
   <style>
     html {{ box-sizing: border-box; overflow-y: scroll; }}
     body {{ margin: 0; background: #fafafa; }}
@@ -153,9 +162,7 @@ _SWAGGER_HTML = f"""
 </head>
 <body>
   <div id="swagger-ui"></div>
-  <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5.18.2/swagger-ui-bundle.js"
-          integrity="sha384-BxL6Z8PoHDrYi8O8M1NBMsFQH7sRaSmCF6y7iWMN6ijIc0+QfMwJ3ZqY5rkGNwmq"
-          crossorigin="anonymous"></script>
+  <script src="/static/vendor/swagger-ui-bundle.js"></script>
   <script>
     SwaggerUIBundle({{
       url: "/swagger/openapi.json",

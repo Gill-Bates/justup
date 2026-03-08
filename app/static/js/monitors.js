@@ -12,7 +12,7 @@ let editingMonitorId = null;
 document.addEventListener('DOMContentLoaded', () => {
     monitorsTable = document.getElementById('monitors-tbody');
     monitorForm = document.getElementById('monitor-form');
-    monitorSaveBtn = document.getElementById('monitor-save-btn');
+    monitorSaveBtn = document.getElementById('saveMonitorBtn');
 
     const modalEl = document.getElementById('monitorModal');
     if (modalEl) monitorModal = new bootstrap.Modal(modalEl);
@@ -31,7 +31,7 @@ document.addEventListener('DOMContentLoaded', () => {
 function toggleTypeFields() {
     const type = document.getElementById('monitor-type').value;
     const urlGroup = document.getElementById('url-group');
-    const hostGroup = document.getElementById('host-group');
+    const hostGroup = document.getElementById('hostname-group');
     const portGroup = document.getElementById('port-group');
     const keywordGroup = document.getElementById('keyword-group');
 
@@ -43,7 +43,7 @@ function toggleTypeFields() {
 
 function openMonitorModal(monitor = null) {
     editingMonitorId = monitor ? monitor.id : null;
-    const title = document.getElementById('monitorModalLabel');
+    const title = document.getElementById('monitorModalTitle');
     title.textContent = monitor ? 'Edit Monitor' : 'Add Monitor';
 
     document.getElementById('monitor-name').value = monitor?.name || '';
@@ -54,6 +54,7 @@ function openMonitorModal(monitor = null) {
     document.getElementById('monitor-keyword').value = monitor?.keyword || '';
     document.getElementById('monitor-interval').value = monitor?.interval || 60;
     document.getElementById('monitor-timeout').value = monitor?.timeout || 10;
+    document.getElementById('monitor-description').value = monitor?.description || '';
     document.getElementById('monitor-active').checked = monitor ? monitor.active : true;
 
     toggleTypeFields();
@@ -117,6 +118,7 @@ async function saveMonitor() {
         type,
         interval: parseInt(document.getElementById('monitor-interval').value) || 60,
         timeout: parseInt(document.getElementById('monitor-timeout').value) || 10,
+        description: document.getElementById('monitor-description').value.trim() || null,
         active: document.getElementById('monitor-active').checked,
     };
 

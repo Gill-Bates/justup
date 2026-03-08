@@ -99,15 +99,15 @@
                             <label for="monitor-url" class="form-label">URL</label>
                             <input type="url" class="form-control" id="monitor-url" placeholder="https://example.com">
                         </div>
-                        <div class="col-md-8" id="hostname-group" style="display:none">
+                        <div class="col-md-8 d-none" id="hostname-group">
                             <label for="monitor-hostname" class="form-label">Hostname</label>
                             <input type="text" class="form-control" id="monitor-hostname" placeholder="example.com">
                         </div>
-                        <div class="col-md-4" id="port-group" style="display:none">
+                        <div class="col-md-4 d-none" id="port-group">
                             <label for="monitor-port" class="form-label">Port</label>
                             <input type="number" class="form-control" id="monitor-port" min="1" max="65535" value="80">
                         </div>
-                        <div class="col-12" id="keyword-group" style="display:none">
+                        <div class="col-12 d-none" id="keyword-group">
                             <label for="monitor-keyword" class="form-label">Expected Keyword</label>
                             <input type="text" class="form-control" id="monitor-keyword"
                                 placeholder="Text to search for in response">
@@ -125,6 +125,14 @@
                             <label for="monitor-description" class="form-label">Description (optional)</label>
                             <textarea class="form-control" id="monitor-description" rows="2"
                                 maxlength="1000"></textarea>
+                        </div>
+                        <div class="col-12">
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" id="monitor-active" checked>
+                                <label class="form-check-label" for="monitor-active">
+                                    Active (monitor is currently enabled)
+                                </label>
+                            </div>
                         </div>
                     </div>
                 </form>
