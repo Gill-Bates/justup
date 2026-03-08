@@ -184,8 +184,8 @@ async function changePassword() {
 
 async function loadOtpStatus() {
     try {
-        const me = await api('GET', '/api/auth/me');
-        updateOtpUI(me?.otp_enabled || false);
+        const resp = await api('GET', '/api/auth/me');
+        updateOtpUI(resp?.data?.otp_enabled || false);
     } catch (err) {
         console.warn('Failed to load OTP status:', err);
     }

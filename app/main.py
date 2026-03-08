@@ -22,6 +22,7 @@ from .db.sqlite_runtime import close_all_connections
 from .db.sqlite_schema import ensure_default_admin, ensure_schema
 from .db.sqlite_settings import validate_secret_key
 from .middleware.csrf import CSRFMiddleware
+from .middleware.security_headers import SecurityHeadersMiddleware
 from .tasks.checker import start_checker, stop_checker
 from .utils.banner import print_banner
 from .utils.config import load_config
@@ -75,6 +76,7 @@ def create_app() -> FastAPI:
 	app.state.limiter = limiter
 	app.add_middleware(RequestIDMiddleware)
 	app.add_middleware(CSRFMiddleware)
+	app.add_middleware(SecurityHeadersMiddleware)
 
 	# ── Exception handlers ──
 	app.add_exception_handler(RedirectTo, redirect_to_handler)

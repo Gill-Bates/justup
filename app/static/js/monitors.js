@@ -17,7 +17,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const modalEl = document.getElementById('monitorModal');
     if (modalEl) monitorModal = new bootstrap.Modal(modalEl);
 
-    const addBtn = document.getElementById('add-monitor-btn');
+    const addBtn = document.getElementById('addMonitorBtn');
     if (addBtn) addBtn.addEventListener('click', () => openMonitorModal());
 
     if (monitorSaveBtn) monitorSaveBtn.addEventListener('click', saveMonitor);

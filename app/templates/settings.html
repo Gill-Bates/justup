@@ -71,18 +71,20 @@
                 </div>
                 <div class="card-body">
                     <h6 class="mb-3">Change Password</h6>
-                    <div class="mb-3">
-                        <label for="current-password" class="form-label">Current Password</label>
-                        <input type="password" class="form-control" id="current-password"
-                            autocomplete="current-password">
-                    </div>
-                    <div class="mb-3">
-                        <label for="new-password" class="form-label">New Password</label>
-                        <input type="password" class="form-control" id="new-password" autocomplete="new-password">
-                    </div>
-                    <button class="btn btn-primary mb-4" id="changePasswordBtn">
-                        <span class="material-icons icon-sm">key</span>Change Password
-                    </button>
+                    <form id="change-password-form" autocomplete="on">
+                        <div class="mb-3">
+                            <label for="current-password" class="form-label">Current Password</label>
+                            <input type="password" class="form-control" id="current-password"
+                                autocomplete="current-password">
+                        </div>
+                        <div class="mb-3">
+                            <label for="new-password" class="form-label">New Password</label>
+                            <input type="password" class="form-control" id="new-password" autocomplete="new-password">
+                        </div>
+                        <button type="button" class="btn btn-primary mb-4" id="changePasswordBtn">
+                            <span class="material-icons icon-sm">key</span>Change Password
+                        </button>
+                    </form>
 
                     <hr>
 

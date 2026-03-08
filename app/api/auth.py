@@ -392,3 +392,18 @@ def logout(request: Request, conn: sqlite3.Connection = Depends(get_conn)):
 	response = JSONResponse(content=ok_response())
 	response.delete_cookie(_AUTH_COOKIE, path="/")
 	return response
+
+
+@router.get("/me")
+def get_me(
+	user: sqlite3.Row = Depends(get_current_user),
+) -> dict:
+	"""Return current authenticated user's profile info."""
+	return ok_response(data={
+		"id": user["id"],
+		"username": user["username"],
+		"is_admin": bool(user["is_admin"]),
+		"is_active": bool(user["is_active"]),
+		"otp_enabled": bool(user["otp_enabled"]),
+		"auth_method": user["auth_method"] or "password",
+	})
