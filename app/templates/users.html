@@ -19,7 +19,6 @@
                             <th>Username</th>
                             <th>Role</th>
                             <th>Status</th>
-                            <th>MFA</th>
                             <th>Last Login</th>
                             <th>Actions</th>
                         </tr>
@@ -32,6 +31,69 @@
         </div>
     </div>
 
+</div>
+
+<!-- OTP Management Modal -->
+<div class="modal fade" id="otpModal" tabindex="-1" aria-labelledby="otpModalTitle">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="otpModalTitle">
+                    <span class="material-icons icon-sm me-1">security</span>Two-Factor Authentication
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div id="otp-status-section">
+                    <p id="otp-status" class="text-muted mb-3">Two-factor authentication is not enabled.</p>
+                    <button class="btn btn-primary" id="enable-otp-btn">
+                        <span class="material-icons icon-sm me-1">add</span>Enable 2FA
+                    </button>
+                    <button class="btn btn-danger d-none" id="disable-otp-btn">
+                        <span class="material-icons icon-sm me-1">remove_circle</span>Disable 2FA
+                    </button>
+                </div>
+                <div id="otp-setup" class="d-none mt-3">
+                    <p class="small text-muted">Scan the QR code with your authenticator app:</p>
+                    <div class="text-center mb-3">
+                        <img id="otp-qr" alt="OTP QR Code" class="img-fluid" style="max-width:200px">
+                    </div>
+                    <p class="small text-muted">Or enter this secret manually:</p>
+                    <code id="otp-secret" class="d-block mb-3 p-2 bg-light rounded text-center"></code>
+                    <div class="mb-3">
+                        <label for="otp-confirm-code" class="form-label">Enter 6-digit code to confirm:</label>
+                        <input type="text" class="form-control" id="otp-confirm-code" maxlength="6" pattern="[0-9]{6}"
+                            inputmode="numeric" autocomplete="one-time-code">
+                    </div>
+                    <button class="btn btn-success" id="confirm-otp-btn">
+                        <span class="material-icons icon-sm me-1">check</span>Confirm
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Passkeys Management Modal -->
+<div class="modal fade" id="passkeysModal" tabindex="-1" aria-labelledby="passkeysModalTitle">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="passkeysModalTitle">
+                    <span class="material-icons icon-sm me-1">key</span>Passkeys
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div id="passkeys-list" class="mb-3">
+                    <p class="text-muted mb-0">No passkeys registered.</p>
+                </div>
+                <button class="btn btn-primary" id="add-passkey-btn">
+                    <span class="material-icons icon-sm me-1">add</span>Add Passkey
+                </button>
+            </div>
+        </div>
+    </div>
 </div>
 
 <!-- Add/Edit User Modal -->
@@ -86,8 +148,89 @@
         </div>
     </div>
 </div>
+
+<!-- OTP Modal -->
+<div class="modal fade" id="otpModal" tabindex="-1" aria-labelledby="otpModalTitle">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="otpModalTitle">
+                    <span class="material-icons icon-sm me-1">security</span>Two-Factor Authentication
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div id="otp-status-section">
+                    <p id="otp-status-text" class="text-muted mb-3">Loading...</p>
+                    <button class="btn btn-primary" id="enable-otp-btn">
+                        <span class="material-icons icon-sm">lock</span>Enable 2FA
+                    </button>
+                    <button class="btn btn-danger d-none" id="disable-otp-btn">
+                        <span class="material-icons icon-sm">lock_open</span>Disable 2FA
+                    </button>
+                </div>
+
+                <div id="otp-setup-section" class="d-none mt-4">
+                    <div class="alert alert-info">
+                        <strong>Setup Instructions:</strong>
+                        <ol class="mb-0 mt-2">
+                            <li>Scan the QR code with your authenticator app (e.g. Google Authenticator, Authy)</li>
+                            <li>Enter the 6-digit code to confirm</li>
+                        </ol>
+                    </div>
+                    <div class="text-center mb-3">
+                        <img id="otp-qr" src="" alt="QR Code" class="img-fluid" style="max-width: 200px;">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Manual Entry Code:</label>
+                        <code id="otp-secret" class="d-block p-2 bg-light rounded"></code>
+                    </div>
+                    <div class="mb-3">
+                        <label for="otp-confirm-code" class="form-label">Verification Code</label>
+                        <input type="text" class="form-control" id="otp-confirm-code" placeholder="000000" maxlength="6"
+                            pattern="[0-9]{6}">
+                    </div>
+                    <button class="btn btn-success" id="confirm-otp-btn">
+                        <span class="material-icons icon-sm">check</span>Confirm Setup
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Passkeys Modal -->
+<div class="modal fade" id="passkeysModal" tabindex="-1" aria-labelledby="passkeysModalTitle">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="passkeysModalTitle">
+                    <span class="material-icons icon-sm me-1">key</span>Passkeys
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <p class="text-muted mb-3">Passkeys provide fast, secure authentication using your device's biometrics
+                    or PIN.</p>
+
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <h6 class="mb-0">Your Passkeys</h6>
+                    <button class="btn btn-sm btn-primary" id="add-passkey-btn">
+                        <span class="material-icons icon-sm">add</span>Add Passkey
+                    </button>
+                </div>
+
+                <div id="passkeys-list">
+                    <p class="text-muted mb-0">Loading...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
 {% endblock %}
 
 {% block extra_js %}
+<script src="/static/js/theme.js"></script>
 <script src="/static/js/users.js"></script>
 {% endblock %}
