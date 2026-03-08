@@ -71,11 +71,11 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        // Row click for metrics
+        // Row click navigates to monitor detail page
         const row = e.target.closest('.monitor-row');
         if (row && !e.target.closest('.monitor-actions')) {
             const id = parseInt(row.dataset.id);
-            if (id) showMetrics(id, row.querySelector('td:nth-child(2)')?.textContent?.trim());
+            if (id) window.location.href = `/ui/monitors/${id}`;
         }
     });
 

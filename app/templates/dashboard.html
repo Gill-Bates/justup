@@ -65,7 +65,7 @@
                     </thead>
                     <tbody id="monitors-table-body">
                         {% for m in monitors %}
-                        <tr>
+                        <tr style="cursor:pointer" onclick="window.location.href='/ui/monitors/{{ m['id'] }}'">
                             <td>
                                 {% if m['status'] == 'up' %}
                                 <span class="badge bg-success">UP</span>

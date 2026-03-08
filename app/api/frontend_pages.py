@@ -14,12 +14,13 @@ import sqlite3
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import RedirectResponse
 
-from ..db.sqlite_monitors import get_all_monitor_statuses
+from ..db.sqlite_monitors import get_all_monitor_statuses, get_monitor_by_id, get_monitor_status
 from ..db.sqlite_incidents import get_recent_incidents
 from ..utils.deps import get_conn
 from .auth import get_current_user_optional
 from .frontend_shared import (
 	_get_csrf_token,
+	RedirectTo,
 	require_admin_or_redirect,
 	require_user_or_redirect,
 	templates,
@@ -69,6 +70,27 @@ def monitors_page(
 		"user": user,
 		"csrf_token": csrf_token,
 		"monitors": monitors,
+	})
+
+
+@router.get("/ui/monitors/{monitor_id}")
+def monitor_detail_page(
+	monitor_id: int,
+	request: Request,
+	user=Depends(require_user_or_redirect),
+	conn: sqlite3.Connection = Depends(get_conn),
+):
+	monitor = get_monitor_by_id(conn, monitor_id)
+	if not monitor:
+		raise RedirectTo("/ui/monitors")
+	status = get_monitor_status(conn, monitor_id) or {}
+	csrf_token = _get_csrf_token(request)
+	return templates.TemplateResponse("monitor.html", {
+		"request": request,
+		"user": user,
+		"csrf_token": csrf_token,
+		"monitor": dict(monitor),
+		"status": dict(status) if status else {},
 	})
 
 
