@@ -71,6 +71,7 @@ def create_monitor(
 		tags=payload.tags,
 		notification_group_id=payload.notification_group_id,
 		created_by=user["id"],
+		is_active=payload.is_active,
 	)
 	monitor = get_monitor_by_id(conn, monitor_id)
 	return ok_response(data=dict(monitor))

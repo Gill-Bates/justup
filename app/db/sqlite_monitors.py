@@ -56,6 +56,7 @@ def create_monitor(
 	tags: str | None = None,
 	notification_group_id: int | None = None,
 	created_by: int | None = None,
+	is_active: bool = True,
 ) -> int:
 	now = utcnow()
 	with transaction(conn):
@@ -67,14 +68,14 @@ def create_monitor(
 				retries, retry_interval_seconds, verify_ssl, follow_redirects,
 				max_redirects, headers_json, body, description, tags,
 				notification_group_id, created_by, is_active, created_at, updated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			""",
 			(
 				name, monitor_type, url, hostname, port, method,
 				expected_status_code, keyword, timeout_seconds, interval_seconds,
 				retries, retry_interval_seconds, int(verify_ssl), int(follow_redirects),
 				max_redirects, headers_json, body, description, tags,
-				notification_group_id, created_by, now, now,
+				notification_group_id, created_by, int(is_active), now, now,
 			),
 		)
 		monitor_id = cur.lastrowid

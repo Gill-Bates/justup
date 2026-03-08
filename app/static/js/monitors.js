@@ -10,7 +10,7 @@ let monitorSaveBtn;
 let editingMonitorId = null;
 
 document.addEventListener('DOMContentLoaded', () => {
-    monitorsTable = document.getElementById('monitors-tbody');
+    monitorsTable = document.getElementById('monitors-body');
     monitorForm = document.getElementById('monitor-form');
     monitorSaveBtn = document.getElementById('saveMonitorBtn');
 
@@ -24,6 +24,28 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const typeSelect = document.getElementById('monitor-type');
     if (typeSelect) typeSelect.addEventListener('change', toggleTypeFields);
+
+    // Event delegation for edit and delete buttons
+    document.addEventListener('click', (e) => {
+        const editBtn = e.target.closest('.edit-monitor');
+        if (editBtn) {
+            e.preventDefault();
+            const id = parseInt(editBtn.dataset.id);
+            if (id) editMonitor(id);
+            return;
+        }
+
+        const deleteBtn = e.target.closest('.delete-monitor');
+        if (deleteBtn) {
+            e.preventDefault();
+            const id = parseInt(deleteBtn.dataset.id);
+            const row = deleteBtn.closest('tr');
+            const nameCell = row?.querySelector('td:nth-child(2)');
+            const name = nameCell?.textContent?.trim() || 'this monitor';
+            if (id) deleteMonitor(id, name);
+            return;
+        }
+    });
 
     loadMonitors();
 });
@@ -47,15 +69,15 @@ function openMonitorModal(monitor = null) {
     title.textContent = monitor ? 'Edit Monitor' : 'Add Monitor';
 
     document.getElementById('monitor-name').value = monitor?.name || '';
-    document.getElementById('monitor-type').value = monitor?.type || 'http';
+    document.getElementById('monitor-type').value = monitor?.monitor_type || 'http';
     document.getElementById('monitor-url').value = monitor?.url || '';
     document.getElementById('monitor-hostname').value = monitor?.hostname || '';
     document.getElementById('monitor-port').value = monitor?.port || '';
     document.getElementById('monitor-keyword').value = monitor?.keyword || '';
-    document.getElementById('monitor-interval').value = monitor?.interval || 60;
-    document.getElementById('monitor-timeout').value = monitor?.timeout || 10;
+    document.getElementById('monitor-interval').value = monitor?.interval_seconds || 60;
+    document.getElementById('monitor-timeout').value = monitor?.timeout_seconds || 10;
     document.getElementById('monitor-description').value = monitor?.description || '';
-    document.getElementById('monitor-active').checked = monitor ? monitor.active : true;
+    document.getElementById('monitor-active').checked = monitor ? monitor.is_active : true;
 
     toggleTypeFields();
     monitorModal.show();
@@ -74,31 +96,36 @@ function renderMonitors(monitors) {
     if (!monitorsTable) return;
 
     if (monitors.length === 0) {
-        monitorsTable.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-4">No monitors configured yet.</td></tr>';
+        monitorsTable.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-4"><span class="material-icons d-block mb-2" style="font-size:2rem">monitor_heart</span>No monitors yet. Click "Add Monitor" to get started.</td></tr>';
         return;
     }
 
     monitorsTable.innerHTML = monitors.map(m => {
         const statusBadge = m.status === 'up'
-            ? '<span class="badge bg-success">Up</span>'
+            ? '<span class="badge bg-success">UP</span>'
             : m.status === 'down'
-                ? '<span class="badge bg-danger">Down</span>'
-                : '<span class="badge bg-secondary">Paused</span>';
+                ? '<span class="badge bg-danger">DOWN</span>'
+                : m.status === 'paused'
+                    ? '<span class="badge bg-secondary">PAUSED</span>'
+                    : '<span class="badge bg-secondary">PENDING</span>';
 
-        const typeLabel = (m.type || 'http').toUpperCase();
+        const typeLabel = (m.monitor_type || 'http').toUpperCase();
+        const urlOrHost = escapeHtml(m.url || m.hostname || '–');
+        const responseTime = m.last_response_time_ms ? Math.round(m.last_response_time_ms) : 0;
 
-        return `<tr>
+        return `<tr data-id="${m.id}">
             <td>${statusBadge}</td>
             <td>${escapeHtml(m.name)}</td>
-            <td><span class="badge bg-dark">${typeLabel}</span></td>
-            <td>${escapeHtml(m.url || m.hostname || '-')}</td>
-            <td>${m.interval || 60}s</td>
+            <td><span class="badge bg-secondary">${typeLabel}</span></td>
+            <td class="text-truncate" style="max-width:250px">${urlOrHost}</td>
+            <td>${m.interval_seconds || 60}s</td>
+            <td>${responseTime} ms</td>
             <td>
-                <button class="btn btn-sm btn-outline-primary me-1" onclick="editMonitor(${m.id})" title="Edit">
-                    <span class="material-icons" style="font-size:16px">edit</span>
+                <button class="btn btn-sm btn-outline-primary edit-monitor" data-id="${m.id}" title="Edit">
+                    <span class="material-icons icon-sm">edit</span>
                 </button>
-                <button class="btn btn-sm btn-outline-danger" onclick="deleteMonitor(${m.id}, '${escapeHtml(m.name)}')" title="Delete">
-                    <span class="material-icons" style="font-size:16px">delete</span>
+                <button class="btn btn-sm btn-outline-danger delete-monitor" data-id="${m.id}" title="Delete">
+                    <span class="material-icons icon-sm">delete</span>
                 </button>
             </td>
         </tr>`;
@@ -119,6 +146,7 @@ async function saveMonitor() {
         interval_seconds: parseInt(document.getElementById('monitor-interval').value) || 60,
         timeout_seconds: parseInt(document.getElementById('monitor-timeout').value) || 10,
         description: document.getElementById('monitor-description').value.trim() || null,
+        is_active: document.getElementById('monitor-active').checked,
     };
 
     if (['http', 'keyword'].includes(type)) {
@@ -141,7 +169,7 @@ async function saveMonitor() {
 
     try {
         if (editingMonitorId) {
-            await api('PUT', `/api/monitors/${editingMonitorId}`, data);
+            await api('PATCH', `/api/monitors/${editingMonitorId}`, data);
             juToast('Monitor updated', 'success');
         } else {
             await api('POST', '/api/monitors', data);

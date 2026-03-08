@@ -132,6 +132,7 @@ class MonitorCreate(_MonitorFieldValidators, BaseModel):
 	description: str | None = Field(None, max_length=1000)
 	tags: str | None = Field(None, max_length=500)
 	notification_group_id: int | None = None
+	is_active: bool = True
 
 	@model_validator(mode="after")
 	def check_required_fields_by_type(self) -> MonitorCreate:
