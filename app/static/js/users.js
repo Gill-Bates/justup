@@ -13,6 +13,7 @@
     let editingUserId = null;
     let otpModal;
     let passkeysModal;
+    let passkeysListEl;
 
     // Helper: Get current logged-in user ID from page data attribute
     function getCurrentUserId() {

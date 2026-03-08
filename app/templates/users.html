@@ -109,8 +109,8 @@
                     <input type="hidden" id="user-id">
                     <div class="mb-3">
                         <label for="user-username" class="form-label">Username</label>
-                        <input type="text" class="form-control" id="user-username" required minlength="3"
-                            maxlength="64">
+                        <input type="text" class="form-control" id="user-username" required minlength="3" maxlength="64"
+                            autocomplete="username">
                     </div>
                     <div class="mb-3" id="password-group">
                         <label for="user-password" class="form-label">Password</label>
@@ -231,6 +231,5 @@
 {% endblock %}
 
 {% block extra_js %}
-<script src="/static/js/theme.js"></script>
 <script src="/static/js/users.js"></script>
 {% endblock %}
