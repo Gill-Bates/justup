@@ -287,6 +287,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
 				("gui_localhost_only", "false", now),
 				("check_interval_default", "60", now),
 				("tsdb_retention_days", "90", now),
+				("enable_swagger", "0", now),
 			],
 		)
 

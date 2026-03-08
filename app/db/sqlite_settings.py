@@ -45,6 +45,17 @@ def get_tsdb_retention_days(conn: sqlite3.Connection) -> int:
 		return 90
 
 
+_BOOLEAN_SETTINGS = {"gui_localhost_only", "enable_swagger"}
+_ALLOWED_SETTINGS = {
+	"gui_port", "gui_localhost_only", "check_interval_default",
+	"tsdb_retention_days", "enable_swagger",
+}
+
+
+def validate_setting_key(key: str) -> bool:
+	return key in _ALLOWED_SETTINGS
+
+
 def validate_secret_key(conn: sqlite3.Connection) -> bool:
 	"""Check if the current secret key matches what was used for encryption."""
 	# For now, always return True. Actual validation happens at OTP decrypt time.

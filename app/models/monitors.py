@@ -8,10 +8,34 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
+
+_NAME_RE = re.compile(r"^[\w][\w .\-/()]{0,198}[\w)]$")
+_HOSTNAME_RE = re.compile(
+	r"^(?!-)[A-Za-z0-9-]{1,63}(?<!-)"
+	r"(\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))*$"
+)
+
+
+def _validate_name(v: str) -> str:
+	v = v.strip()
+	if not v or not _NAME_RE.fullmatch(v):
+		raise ValueError(
+			"Name must be 1-200 chars and contain only letters, digits, "
+			"spaces, hyphens, underscores, dots, slashes, or parentheses"
+		)
+	return v
+
+
+def _validate_hostname(v: str) -> str:
+	v = v.strip()
+	if not v or len(v) > 253 or not _HOSTNAME_RE.fullmatch(v):
+		raise ValueError("Invalid hostname")
+	return v
 
 
 class MonitorCreate(BaseModel):
@@ -37,6 +61,11 @@ class MonitorCreate(BaseModel):
 	tags: str | None = Field(None, max_length=500)
 	notification_group_id: int | None = None
 
+	@field_validator("name")
+	@classmethod
+	def validate_name(cls, v: str) -> str:
+		return _validate_name(v)
+
 	@field_validator("url")
 	@classmethod
 	def validate_url(cls, v: str | None) -> str | None:
@@ -44,6 +73,13 @@ class MonitorCreate(BaseModel):
 			v = v.strip()
 			if not v.startswith(("http://", "https://")):
 				raise ValueError("URL must start with http:// or https://")
+		return v
+
+	@field_validator("hostname")
+	@classmethod
+	def validate_hostname(cls, v: str | None) -> str | None:
+		if v is not None:
+			return _validate_hostname(v)
 		return v
 
 
@@ -66,6 +102,20 @@ class MonitorUpdate(BaseModel):
 	tags: str | None = Field(None, max_length=500)
 	notification_group_id: int | None = None
 	is_active: bool | None = None
+
+	@field_validator("name")
+	@classmethod
+	def validate_name(cls, v: str | None) -> str | None:
+		if v is not None:
+			return _validate_name(v)
+		return v
+
+	@field_validator("hostname")
+	@classmethod
+	def validate_hostname(cls, v: str | None) -> str | None:
+		if v is not None:
+			return _validate_hostname(v)
+		return v
 
 
 class MonitorPublic(BaseModel):

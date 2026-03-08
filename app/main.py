@@ -13,7 +13,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from .api import auth, frontend_pages, frontend_shared, monitors, passkeys, users
@@ -69,7 +69,7 @@ async def _lifespan(app: FastAPI):
 
 
 def create_app() -> FastAPI:
-	app = FastAPI(title=APP_NAME, version=VERSION, lifespan=_lifespan, docs_url="/swagger", redoc_url=None)
+	app = FastAPI(title=APP_NAME, version=VERSION, lifespan=_lifespan, docs_url=None, redoc_url=None)
 
 	# ── Middleware ──
 	app.state.limiter = limiter
@@ -94,9 +94,77 @@ def create_app() -> FastAPI:
 	app.include_router(frontend_pages.router)
 	app.include_router(frontend_shared.router)
 
+	# ── Swagger (admin-only, toggleable) ──
+	_register_swagger_routes(app)
+
 	# ── Root redirect ──
 	@app.get("/")
 	def root_redirect():
 		return RedirectResponse(url="/ui/dashboard", status_code=303)
 
 	return app
+
+
+def _register_swagger_routes(app: FastAPI) -> None:
+	"""Register admin-protected Swagger UI at /swagger."""
+	import sqlite3
+	from fastapi import Depends, HTTPException
+	from .api.auth import require_admin
+	from .utils.deps import get_conn
+	from .db.sqlite_settings import get_setting
+
+	_SWAGGER_ENABLE_KEY = "enable_swagger"
+	_SWAGGER_TRUTHY = {"1", "true", "yes", "on"}
+
+	def _is_swagger_enabled(conn: sqlite3.Connection) -> bool:
+		value = get_setting(conn, _SWAGGER_ENABLE_KEY, "0")
+		return str(value or "").strip().lower() in _SWAGGER_TRUTHY
+
+	@app.get("/swagger/openapi.json", include_in_schema=False)
+	async def swagger_openapi_json(_=Depends(require_admin), conn: sqlite3.Connection = Depends(get_conn)):
+		if not _is_swagger_enabled(conn):
+			raise HTTPException(status_code=404, detail="Swagger API disabled")
+		return JSONResponse(content=app.openapi())
+
+	@app.get("/swagger", include_in_schema=False)
+	async def swagger_ui(_=Depends(require_admin), conn: sqlite3.Connection = Depends(get_conn)):
+		if not _is_swagger_enabled(conn):
+			raise HTTPException(status_code=404, detail="Swagger API disabled")
+		return HTMLResponse(_SWAGGER_HTML)
+
+
+_SWAGGER_HTML = f"""
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>{APP_NAME} – API Docs</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5.18.2/swagger-ui.css"
+        integrity="sha384-OiJUz2Or7cLjcY1Eaw2xhMeUY3z5Csh2+HG9WXElrCqx45ddJCnYXN0a/HQQsJtz"
+        crossorigin="anonymous">
+  <style>
+    html {{ box-sizing: border-box; overflow-y: scroll; }}
+    body {{ margin: 0; background: #fafafa; }}
+    .swagger-ui .topbar {{ display: none; }}
+  </style>
+</head>
+<body>
+  <div id="swagger-ui"></div>
+  <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5.18.2/swagger-ui-bundle.js"
+          integrity="sha384-BxL6Z8PoHDrYi8O8M1NBMsFQH7sRaSmCF6y7iWMN6ijIc0+QfMwJ3ZqY5rkGNwmq"
+          crossorigin="anonymous"></script>
+  <script>
+    SwaggerUIBundle({{
+      url: "/swagger/openapi.json",
+      dom_id: "#swagger-ui",
+      presets: [
+        SwaggerUIBundle.presets.apis,
+        SwaggerUIBundle.SwaggerUIStandalonePreset,
+      ],
+      layout: "BaseLayout",
+      deepLinking: true,
+    }});
+  </script>
+</body>
+</html>
+"""
