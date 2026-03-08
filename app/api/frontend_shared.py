@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -28,6 +29,8 @@ _templates_path = Path(__file__).parent.parent / "templates"
 templates = Jinja2Templates(directory=str(_templates_path))
 templates.env.globals["VERSION"] = VERSION
 templates.env.globals["BUILD_INFO"] = BUILD_INFO
+templates.env.globals["build_short"] = (BUILD_INFO or "")[:7]
+templates.env.globals["current_year"] = datetime.now().year
 
 
 class RedirectTo(Exception):
