@@ -1,7 +1,8 @@
 //
 // app/static/js/settings.js
-// Copyright (C) 2025 Gill-Bates http://github.com/Gill-Bates
+// Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 //
+
 // Dependencies:
 //   - api.js (api function)
 //   - theme.js (base64UrlToArrayBuffer, arrayBufferToBase64Url)

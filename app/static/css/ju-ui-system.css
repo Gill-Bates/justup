@@ -34,10 +34,10 @@
 }
 
 [data-bs-theme="dark"] {
-    --ju-shadow-1: 0 2px 8px rgba(34, 197, 94, 0.15);
-    --ju-shadow-2: 0 4px 18px rgba(34, 197, 94, 0.25);
-    --ju-muted-bg: rgba(34, 197, 94, 0.08);
-    --ju-hover-bg: rgba(34, 197, 94, 0.12);
+    --ju-shadow-1: 0 2px 8px rgba(3, 168, 6, 0.15);
+    --ju-shadow-2: 0 4px 18px rgba(3, 168, 6, 0.25);
+    --ju-muted-bg: rgba(3, 168, 6, 0.08);
+    --ju-hover-bg: rgba(3, 168, 6, 0.12);
 }
 
 
@@ -79,8 +79,8 @@ small {
 }
 
 [data-bs-theme="dark"] .card {
-    border: 1px solid #22c55e;
-    box-shadow: 0 2px 12px rgba(34, 197, 94, 0.2);
+    border: 1px solid #03a806;
+    box-shadow: 0 2px 12px rgba(3, 168, 6, 0.2);
 }
 
 .card-header {
