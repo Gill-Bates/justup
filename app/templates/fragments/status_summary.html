@@ -1,0 +1,29 @@
+{# Status Summary Cards Fragment (HTMX) #}
+<div class="card ui-card card-status text-center shadow-sm">
+	<div class="d-flex justify-content-center align-items-center gap-2 mb-1">
+		<span class="material-icons text-success fs-5">check_circle</span>
+		<span class="fs-3 fw-bold text-success">{{ stats.up }}</span>
+	</div>
+	<div class="text-muted small text-uppercase">Online</div>
+</div>
+<div class="card ui-card card-status text-center shadow-sm {% if stats.down > 0 %}border-start border-4 border-danger{% endif %}">
+	<div class="d-flex justify-content-center align-items-center gap-2 mb-1">
+		<span class="material-icons fs-5 {% if stats.down > 0 %}text-danger{% else %}text-secondary{% endif %}">cancel</span>
+		<span class="fs-3 fw-bold {% if stats.down > 0 %}text-danger{% else %}text-secondary{% endif %}">{{ stats.down }}</span>
+	</div>
+	<div class="text-muted small text-uppercase">Offline</div>
+</div>
+<div class="card ui-card card-status text-center shadow-sm">
+	<div class="d-flex justify-content-center align-items-center gap-2 mb-1">
+		<span class="material-icons text-secondary fs-5">pause_circle</span>
+		<span class="fs-3 fw-bold text-secondary">{{ stats.disabled }}</span>
+	</div>
+	<div class="text-muted small text-uppercase">Disabled</div>
+</div>
+<div class="card ui-card card-status text-center shadow-sm">
+	<div class="d-flex justify-content-center align-items-center gap-2 mb-1">
+		<span class="material-icons fs-5 {% if stats.total > 0 %}text-primary{% else %}text-secondary{% endif %}">gps_fixed</span>
+		<span class="fs-3 fw-bold {% if stats.total > 0 %}text-primary{% else %}text-secondary{% endif %}">{{ stats.total }}</span>
+	</div>
+	<div class="text-muted small text-uppercase">Total</div>
+</div>

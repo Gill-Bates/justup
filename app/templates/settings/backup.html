@@ -1,0 +1,32 @@
+{# Settings: Backup Tab Content #}
+<div class="row">
+	<div class="col-lg-6">
+		<div class="card shadow-sm mb-4">
+			<div class="card-header">
+				<h6 class="mb-0">Backup & Restore</h6>
+			</div>
+			<div class="card-body">
+				<p class="text-muted mb-2">Download a complete backup of all data or restore from a previous backup.</p>
+				<p class="text-warning mb-0"><span class="material-icons me-1">warning</span>Important: Do not rename
+					the backup file!</p>
+				<div id="last-backup-info" class="d-none">
+					<p class="text-muted small mb-0 mt-2">
+						<span class="material-icons me-1">history</span>Last backup: <span id="last-backup-time"></span>
+					</p>
+				</div>
+				<hr class="my-3">
+				<div class="d-flex gap-2 flex-wrap">
+					<button type="button" class="btn btn-outline-secondary" id="backup-btn" onclick="createBackup()">
+						<span class="material-icons me-1">download</span> Download Backup
+					</button>
+					<button type="button" class="btn btn-outline-secondary" id="restore-btn"
+						onclick="document.getElementById('restore-file').click()">
+						<span class="material-icons me-1">upload</span> Restore Backup
+					</button>
+					<input type="file" id="restore-file" accept=".tar.bz2" class="d-none"
+						onchange="restoreBackup(this)">
+				</div>
+			</div>
+		</div>
+	</div>
+</div>

@@ -1,0 +1,558 @@
+{# Purge Confirmation Modal #}
+<div class="modal fade" id="purgeModal" tabindex="-1" aria-labelledby="purgeModalLabel" aria-hidden="true">
+	<div class="modal-dialog">
+		<div class="modal-content">
+			<div class="modal-header bg-danger text-white">
+				<h5 class="modal-title" id="purgeModalLabel"><span class="material-icons me-2"
+						aria-hidden="true">warning</span>Confirm
+					Deletion</h5>
+				<button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"
+					aria-label="Close"></button>
+			</div>
+			<div class="modal-body">
+				<p class="text-danger fw-bold">This will permanently delete ALL metric data!</p>
+				<p>Please enter your password to confirm:</p>
+				<form id="purge-form" autocomplete="off">
+					<input type="text" name="username" autocomplete="username" tabindex="-1" aria-hidden="true"
+						style="position:absolute; left:-10000px;">
+					<input type="password" class="form-control" id="purge-password" name="password"
+						placeholder="Enter your password" autocomplete="current-password" aria-describedby="purge-error"
+						required>
+				</form>
+				<div id="purge-error" class="text-danger mt-2 d-none" role="alert"></div>
+			</div>
+			<div class="modal-footer">
+				<button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+				<button type="submit" form="purge-form" class="btn btn-danger" id="confirm-purge-btn">
+					<span class="material-icons" aria-hidden="true">delete</span> Delete all Metrics
+				</button>
+			</div>
+		</div>
+	</div>
+</div>
+
+{# Spooler Clear Log Confirmation Modal #}
+<div class="modal fade" id="spoolerClearLogModal" tabindex="-1" aria-labelledby="spoolerClearLogModalLabel"
+	aria-hidden="true">
+	<div class="modal-dialog">
+		<div class="modal-content">
+			<div class="modal-header bg-warning text-dark">
+				<h5 class="modal-title" id="spoolerClearLogModalLabel">
+					<span class="material-icons me-2" aria-hidden="true">playlist_remove</span>Clear Notification Log
+				</h5>
+				<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+			</div>
+			<div class="modal-body">
+				<p class="fw-bold mb-2">Delete all <code>sent</code> entries from the notification log?</p>
+				<p class="text-muted mb-0">Pending and failed queue items are not affected.</p>
+			</div>
+			<div class="modal-footer">
+				<button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+				<button type="button" class="btn btn-warning" id="confirm-spooler-clear-log-btn">
+					<span class="material-icons me-1" aria-hidden="true">delete</span> Clear Log
+				</button>
+			</div>
+		</div>
+	</div>
+</div>
+
+{# Purge Alerts Confirmation Modal #}
+<div class="modal fade" id="purgeAlertsModal" tabindex="-1" aria-labelledby="purgeAlertsModalLabel" aria-hidden="true">
+	<div class="modal-dialog">
+		<div class="modal-content">
+			<div class="modal-header bg-danger text-white">
+				<h5 class="modal-title" id="purgeAlertsModalLabel"><span class="material-icons me-2"
+						aria-hidden="true">warning</span>Confirm
+					Deletion</h5>
+				<button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"
+					aria-label="Close"></button>
+			</div>
+			<div class="modal-body">
+				<p class="text-danger fw-bold">This will permanently delete ALL alert history!</p>
+				<p>Please enter your password to confirm:</p>
+				<form id="purge-alerts-form" autocomplete="off">
+					<input type="text" name="username" autocomplete="username" tabindex="-1" aria-hidden="true"
+						style="position:absolute; left:-10000px;">
+					<input type="password" class="form-control" id="purge-alerts-password" name="password"
+						placeholder="Enter your password" autocomplete="current-password"
+						aria-describedby="purge-alerts-error" required>
+				</form>
+				<div id="purge-alerts-error" class="text-danger mt-2 d-none" role="alert"></div>
+			</div>
+			<div class="modal-footer">
+				<button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+				<button type="submit" form="purge-alerts-form" class="btn btn-danger" id="confirm-purge-alerts-btn">
+					<span class="material-icons" aria-hidden="true">notifications_off</span> Clear all Alerts
+				</button>
+			</div>
+		</div>
+	</div>
+</div>
+
+{# Restore Confirmation Modal #}
+<div class="modal fade" id="restoreModal" tabindex="-1" aria-labelledby="restoreModalLabel" aria-hidden="true">
+	<div class="modal-dialog">
+		<div class="modal-content">
+			<div class="modal-header bg-warning text-dark">
+				<h5 class="modal-title" id="restoreModalLabel"><span class="material-icons me-2"
+						aria-hidden="true">warning</span>Confirm
+					Restore</h5>
+				<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+			</div>
+			<div class="modal-body">
+				<p class="fw-bold">Are you sure you want to restore from this backup?</p>
+				<p class="text-muted mb-2">File: <code id="restore-filename"></code></p>
+				<p class="text-warning"><span class="material-icons me-1" aria-hidden="true">warning</span>This will
+					replace all
+					current data. The application will restart automatically.</p>
+				<p class="mt-3">Please enter your password to confirm:</p>
+				<form id="restore-form" autocomplete="off">
+					<input type="text" name="username" autocomplete="username" tabindex="-1" aria-hidden="true"
+						style="position:absolute; left:-10000px;">
+					<input type="password" class="form-control" id="restore-password" name="password"
+						placeholder="Enter your password" autocomplete="current-password"
+						aria-describedby="restore-error" required>
+				</form>
+				<div id="restore-error" class="text-danger mt-2 d-none" role="alert"></div>
+			</div>
+			<div class="modal-footer">
+				<button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+				<button type="submit" form="restore-form" class="btn btn-warning" id="confirm-restore-btn">
+					<span class="material-icons me-1" aria-hidden="true">upload</span> Restore Backup
+				</button>
+			</div>
+		</div>
+	</div>
+</div>
+
+{# Auth Toggle Confirmation Modal #}
+<div class="modal fade" id="authToggleModal" tabindex="-1" aria-labelledby="authToggleModalLabel" aria-hidden="true">
+	<div class="modal-dialog">
+		<div class="modal-content">
+			<div class="modal-header bg-warning text-dark">
+				<h5 class="modal-title" id="authToggleModalLabel"><span class="material-icons me-2"
+						aria-hidden="true">security</span>Confirm
+					Change</h5>
+				<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+			</div>
+			<div class="modal-body">
+				<p id="auth-toggle-message" class="fw-bold"></p>
+				<p>Please enter your password to confirm:</p>
+				<form id="auth-toggle-form" autocomplete="off">
+					<input type="text" name="username" autocomplete="username" tabindex="-1" aria-hidden="true"
+						style="position:absolute; left:-10000px;">
+					<input type="password" class="form-control" id="auth-toggle-password" name="password"
+						placeholder="Enter your password" autocomplete="current-password"
+						aria-describedby="auth-toggle-error" required>
+				</form>
+				<div id="auth-toggle-error" class="text-danger mt-2 d-none" role="alert"></div>
+			</div>
+			<div class="modal-footer">
+				<button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+				<button type="submit" form="auth-toggle-form" class="btn btn-warning" id="confirm-auth-toggle-btn">
+					<span class="material-icons me-1" aria-hidden="true">check</span> Confirm
+				</button>
+			</div>
+		</div>
+	</div>
+</div>
+
+{# Unlink Signal Device Modal (simple confirmation with password) #}
+<div class="modal fade" id="unlinkDeviceModal" tabindex="-1" aria-labelledby="unlinkDeviceModalLabel"
+	aria-hidden="true">
+	<div class="modal-dialog">
+		<div class="modal-content">
+			<div class="modal-header bg-warning">
+				<h5 class="modal-title" id="unlinkDeviceModalLabel">
+					<span class="material-icons me-2" aria-hidden="true">link_off</span>Unlink Signal Device
+				</h5>
+				<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+			</div>
+			<div class="modal-body">
+				<p class="mb-3">
+					This will remove the Signal connection from justUp!. You will no longer receive
+					Signal alerts until you link a device again.
+				</p>
+				<p class="text-success small mb-3">
+					<span class="material-icons me-1" style="font-size: 16px;" aria-hidden="true">check_circle</span>
+					Your Signal account will not be affected.
+				</p>
+
+				<hr>
+				<div class="form-check mb-3">
+					<input class="form-check-input" type="checkbox" id="unlink-delete-cache" name="delete_cache"
+						value="1">
+					<label class="form-check-label" for="unlink-delete-cache">
+						Delete local cache data
+						<small class="text-muted d-block">Removes all Signal data from justUp! (keys, session data,
+							etc.)</small>
+					</label>
+				</div>
+
+				<p class="mb-2">Enter your password to confirm:</p>
+				<form id="unlink-device-form" autocomplete="off">
+					<input type="text" name="username" autocomplete="username" tabindex="-1" aria-hidden="true"
+						style="position:absolute; left:-10000px;">
+					<input type="password" class="form-control" id="unlink-device-password" name="password"
+						placeholder="Password" autocomplete="current-password" aria-describedby="unlink-device-error"
+						required>
+				</form>
+				<div id="unlink-device-error" class="text-danger mt-2 d-none" role="alert"></div>
+			</div>
+			<div class="modal-footer">
+				<button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+				<button type="submit" form="unlink-device-form" class="btn btn-warning" id="confirm-unlink-device-btn">
+					<span class="material-icons me-1" aria-hidden="true">link_off</span> Unlink Device
+				</button>
+			</div>
+		</div>
+	</div>
+</div>
+
+{# Unregister Phone Number Modal #}
+<div class="modal fade" id="unregisterPhoneModal" tabindex="-1" aria-labelledby="unregisterPhoneModalLabel"
+	aria-hidden="true">
+	<div class="modal-dialog">
+		<div class="modal-content">
+			<div class="modal-header bg-danger text-white">
+				<h5 class="modal-title" id="unregisterPhoneModalLabel">
+					<span class="material-icons me-2" aria-hidden="true">phone_disabled</span>Unregister from Signal
+				</h5>
+				<button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"
+					aria-label="Close"></button>
+			</div>
+			<div class="modal-body">
+				<div class="alert alert-danger">
+					<span class="material-icons me-1" aria-hidden="true">warning</span>
+					<strong>This action is irreversible!</strong>
+				</div>
+
+				<p class="mb-3">
+					This will permanently delete your Signal account from the Signal servers.
+					You will lose all message history and contacts associated with this number.
+				</p>
+
+				<div class="form-check mb-3">
+					<input class="form-check-input" type="checkbox" id="unregister-delete-cache" name="delete_cache"
+						value="1" checked>
+					<label class="form-check-label" for="unregister-delete-cache">
+						Delete local cache data
+						<small class="text-muted d-block">Removes all Signal data from justUp! (keys, session data,
+							etc.)</small>
+					</label>
+				</div>
+
+				<p class="mb-2">Enter your password to confirm:</p>
+				<form id="unregister-phone-form" autocomplete="off">
+					<input type="text" name="username" autocomplete="username" tabindex="-1" aria-hidden="true"
+						style="position:absolute; left:-10000px;">
+					<input type="password" class="form-control" id="unregister-phone-password" name="password"
+						placeholder="Password" autocomplete="current-password" aria-describedby="unregister-phone-error"
+						required>
+				</form>
+				<div id="unregister-phone-error" class="text-danger mt-2 d-none" role="alert"></div>
+			</div>
+			<div class="modal-footer">
+				<button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+				<button type="submit" form="unregister-phone-form" class="btn btn-danger"
+					id="confirm-unregister-phone-btn">
+					<span class="material-icons me-1" aria-hidden="true">phone_disabled</span> Unregister
+				</button>
+			</div>
+		</div>
+	</div>
+</div>
+
+{# Add Recipient Modal #}
+<div class="modal fade" id="addRecipientModal" tabindex="-1" aria-labelledby="addRecipientModalLabel"
+	aria-hidden="true">
+	<div class="modal-dialog">
+		<div class="modal-content">
+			<div class="modal-header">
+				<h5 class="modal-title" id="addRecipientModalLabel">
+					<span class="material-icons me-2" aria-hidden="true">person_add</span>Add Alert Recipient
+				</h5>
+				<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+			</div>
+			<div class="modal-body">
+				<form id="add-recipient-form">
+					<div class="mb-3">
+						<label for="recipient-name" class="form-label">Name *</label>
+						<input type="text" class="form-control" id="recipient-name" required placeholder="John Doe"
+							autocomplete="off">
+					</div>
+
+					<div class="mb-3">
+						<label class="form-label">Notification Channels *</label>
+						<div class="form-text mb-2">Select at least one channel</div>
+
+						{# Signal Channel #}
+						<div class="card mb-2">
+							<div class="card-body py-2">
+								<div class="form-check form-switch mb-2">
+									<input type="checkbox" class="form-check-input" id="recipient-signal-enabled">
+									<label class="form-check-label fw-semibold" for="recipient-signal-enabled">
+										<span class="material-icons me-1"
+											style="font-size: 16px; vertical-align: text-bottom;"
+											aria-hidden="true">sms</span>
+										Signal
+									</label>
+								</div>
+								<div id="recipient-phone-container">
+									<input type="tel" class="form-control form-control-sm" id="recipient-phone"
+										placeholder="+49123456789" autocomplete="off">
+									<small class="form-text text-muted">International format with country code, e.g.
+										+49123456789</small>
+								</div>
+							</div>
+						</div>
+
+						{# Email Channel #}
+						<div class="card">
+							<div class="card-body py-2">
+								<div class="form-check form-switch mb-2">
+									<input type="checkbox" class="form-check-input" id="recipient-email-enabled">
+									<label class="form-check-label fw-semibold" for="recipient-email-enabled">
+										<span class="material-icons me-1"
+											style="font-size: 16px; vertical-align: text-bottom;"
+											aria-hidden="true">email</span>
+										Email
+									</label>
+								</div>
+								<div id="recipient-email-container">
+									<input type="email" class="form-control form-control-sm" id="recipient-email"
+										placeholder="user@example.com" autocomplete="off">
+								</div>
+							</div>
+						</div>
+					</div>
+
+					<div class="form-check form-switch">
+						<input type="checkbox" class="form-check-input" id="recipient-enabled" checked>
+						<label class="form-check-label" for="recipient-enabled">Recipient Enabled</label>
+					</div>
+				</form>
+				<div id="add-recipient-error" class="text-danger mt-2 d-none" role="alert"></div>
+			</div>
+			<div class="modal-footer">
+				<button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+				<button type="submit" form="add-recipient-form" class="btn btn-primary" id="add-recipient-btn">
+					<span class="material-icons me-1" aria-hidden="true">check</span>Add Recipient
+				</button>
+			</div>
+		</div>
+	</div>
+</div>
+
+{# Edit Recipient Modal #}
+<div class="modal fade" id="editRecipientModal" tabindex="-1" aria-labelledby="editRecipientModalLabel"
+	aria-hidden="true">
+	<div class="modal-dialog">
+		<div class="modal-content">
+			<div class="modal-header">
+				<h5 class="modal-title" id="editRecipientModalLabel">
+					<span class="material-icons me-2" aria-hidden="true">edit</span>Edit Recipient
+				</h5>
+				<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+			</div>
+			<div class="modal-body">
+				<form id="edit-recipient-form">
+					<input type="hidden" id="edit-recipient-id">
+					<div class="mb-3">
+						<label for="edit-recipient-name" class="form-label">Name *</label>
+						<input type="text" class="form-control" id="edit-recipient-name" required autocomplete="off">
+					</div>
+
+					<div class="mb-3">
+						<label class="form-label">Notification Channels *</label>
+						<div class="form-text mb-2">Select at least one channel</div>
+
+						{# Signal Channel #}
+						<div class="card mb-2">
+							<div class="card-body py-2">
+								<div class="form-check form-switch mb-2">
+									<input type="checkbox" class="form-check-input" id="edit-recipient-signal-enabled">
+									<label class="form-check-label fw-semibold" for="edit-recipient-signal-enabled">
+										<span class="material-icons me-1"
+											style="font-size: 16px; vertical-align: text-bottom;"
+											aria-hidden="true">sms</span>
+										Signal
+									</label>
+								</div>
+								<div id="edit-recipient-phone-container">
+									<input type="tel" class="form-control form-control-sm" id="edit-recipient-phone"
+										autocomplete="off">
+									<small class="form-text text-muted">International format with country code, e.g.
+										+49123456789</small>
+								</div>
+							</div>
+						</div>
+
+						{# Email Channel #}
+						<div class="card">
+							<div class="card-body py-2">
+								<div class="form-check form-switch mb-2">
+									<input type="checkbox" class="form-check-input" id="edit-recipient-email-enabled">
+									<label class="form-check-label fw-semibold" for="edit-recipient-email-enabled">
+										<span class="material-icons me-1"
+											style="font-size: 16px; vertical-align: text-bottom;"
+											aria-hidden="true">email</span>
+										Email
+									</label>
+								</div>
+								<div id="edit-recipient-email-container">
+									<input type="email" class="form-control form-control-sm" id="edit-recipient-email"
+										autocomplete="off">
+								</div>
+							</div>
+						</div>
+					</div>
+
+					<div class="form-check form-switch">
+						<input type="checkbox" class="form-check-input" id="edit-recipient-enabled">
+						<label class="form-check-label" for="edit-recipient-enabled">Recipient Enabled</label>
+					</div>
+				</form>
+				<div id="edit-recipient-error" class="text-danger mt-2 d-none" role="alert"></div>
+			</div>
+			<div class="modal-footer">
+				<button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+				<button type="submit" form="edit-recipient-form" class="btn btn-primary" id="edit-recipient-btn">
+					<span class="material-icons me-1" aria-hidden="true">check</span>Save Changes
+				</button>
+			</div>
+		</div>
+	</div>
+</div>
+
+{# Create User Modal #}
+<div class="modal fade" id="createUserModal" tabindex="-1" aria-labelledby="createUserModalLabel" aria-hidden="true">
+	<div class="modal-dialog">
+		<div class="modal-content">
+			<div class="modal-header">
+				<h5 class="modal-title" id="createUserModalLabel">
+					<span class="material-icons me-2" aria-hidden="true">person_add</span>Create New User
+				</h5>
+				<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+			</div>
+			<div class="modal-body">
+				<form id="create-user-form">
+					<div class="mb-3">
+						<label for="new-user-username" class="form-label">Username *</label>
+						<input type="text" class="form-control" id="new-user-username" required minlength="1"
+							maxlength="64" autocomplete="off">
+					</div>
+					<div class="mb-3">
+						<label for="new-user-password" class="form-label">Password *</label>
+						<input type="password" class="form-control" id="new-user-password" required minlength="8"
+							maxlength="256" autocomplete="new-password">
+						<div class="form-text">At least 8 characters</div>
+					</div>
+					<div class="form-check form-switch">
+						<input type="checkbox" class="form-check-input" id="new-user-is-admin">
+						<label class="form-check-label" for="new-user-is-admin">Admin privileges</label>
+					</div>
+					<div class="form-check form-switch mt-2" id="new-user-close-alerts-container">
+						<input type="checkbox" class="form-check-input" id="new-user-can-close-alerts">
+						<label class="form-check-label" for="new-user-can-close-alerts">Can close alerts</label>
+						<div class="form-text">Allow user to close/acknowledge alerts</div>
+					</div>
+				</form>
+				<div id="create-user-error" class="text-danger mt-2 d-none" role="alert"></div>
+			</div>
+			<div class="modal-footer">
+				<button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+				<button type="submit" form="create-user-form" class="btn btn-primary" id="create-user-btn">
+					<span class="material-icons me-1" aria-hidden="true">check</span> Create User
+				</button>
+			</div>
+		</div>
+	</div>
+</div>
+
+{# Edit User Modal #}
+<div class="modal fade" id="editUserModal" tabindex="-1" aria-labelledby="editUserModalLabel" aria-hidden="true">
+	<div class="modal-dialog">
+		<div class="modal-content">
+			<div class="modal-header">
+				<h5 class="modal-title" id="editUserModalLabel">
+					<span class="material-icons me-2" aria-hidden="true">edit</span>Edit User
+				</h5>
+				<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+			</div>
+			<div class="modal-body">
+				<form id="edit-user-form" autocomplete="off">
+					<input type="hidden" id="edit-user-id">
+					<div class="mb-3">
+						<label for="edit-user-username" class="form-label">Username *</label>
+						<input type="text" class="form-control" id="edit-user-username" required minlength="1"
+							maxlength="64" autocomplete="off">
+					</div>
+					<div class="mb-3">
+						<label for="edit-user-role" class="form-label">Role</label>
+						<select class="form-select" id="edit-user-role">
+							<option value="user">User</option>
+							<option value="admin">Admin</option>
+						</select>
+					</div>
+					<div class="form-check form-switch mb-3" id="edit-user-close-alerts-container">
+						<input type="checkbox" class="form-check-input" id="edit-user-can-close-alerts">
+						<label class="form-check-label" for="edit-user-can-close-alerts">Can close alerts</label>
+						<div class="form-text">Allow user to close/acknowledge alerts</div>
+					</div>
+					<hr class="my-3">
+					<div class="mb-2">
+						<div class="d-flex align-items-center gap-2">
+							<span class="material-icons text-muted" aria-hidden="true">vpn_key</span>
+							<span class="fw-semibold">Change Password</span>
+						</div>
+						<div class="form-text">Leave blank to keep the current password.</div>
+					</div>
+					<div class="mb-3">
+						<label for="edit-user-password" class="form-label">New Password</label>
+						<input type="password" class="form-control" id="edit-user-password" minlength="8"
+							maxlength="256" autocomplete="new-password">
+					</div>
+					<div class="mb-3">
+						<label for="edit-user-password-confirm" class="form-label">Confirm New Password</label>
+						<input type="password" class="form-control" id="edit-user-password-confirm" minlength="8"
+							maxlength="256" autocomplete="new-password">
+					</div>
+				</form>
+				<div id="edit-user-error" class="text-danger mt-2 d-none" role="alert"></div>
+			</div>
+			<div class="modal-footer">
+				<button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+				<button type="submit" form="edit-user-form" class="btn btn-primary" id="edit-user-btn">
+					<span class="material-icons me-1" aria-hidden="true">check</span>Save Changes
+				</button>
+			</div>
+		</div>
+	</div>
+</div>
+
+{# Confirm Delete User Modal #}
+<div class="modal fade" id="confirmDeleteUserModal" tabindex="-1" aria-labelledby="confirmDeleteUserModalLabel"
+	aria-hidden="true">
+	<div class="modal-dialog modal-dialog-centered">
+		<div class="modal-content">
+			<div class="modal-header bg-danger text-white">
+				<h5 class="modal-title" id="confirmDeleteUserModalLabel">
+					<span class="material-icons me-2" aria-hidden="true">warning</span>Delete User
+				</h5>
+				<button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"
+					aria-label="Close"></button>
+			</div>
+			<div class="modal-body">
+				<p class="mb-0" id="confirm-delete-user-text">Delete this user? This cannot be undone.</p>
+				<div id="confirm-delete-user-error" class="text-danger mt-2 d-none" role="alert"></div>
+			</div>
+			<div class="modal-footer">
+				<button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+				<button type="button" class="btn btn-danger" id="confirm-delete-user-btn">
+					<span class="material-icons me-1" aria-hidden="true">delete</span>Delete
+				</button>
+			</div>
+		</div>
+	</div>
+</div>

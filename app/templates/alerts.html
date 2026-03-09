@@ -1,0 +1,294 @@
+{% extends "base.html" %}
+{% block title %}Alerts – justUp!{% endblock %}
+
+{% block content %}
+{% set can_close_alerts = (user.is_admin or user.can_close_alerts) %}
+{% set has_open_alerts = (open_count|default(0)|int > 0) %}
+
+<div class="ui-page">
+
+   <!-- Header -->
+   <div class="d-flex justify-content-between align-items-center mb-4">
+      <h2 class="mb-0">
+         <span class="material-icons me-2">notifications</span>Alerts
+      </h2>
+      <div class="d-flex gap-2 align-items-center">
+         {% if open_count and open_count > 0 %}
+         <span class="badge bg-danger">{{ open_count }} Open</span>
+         {% endif %}
+         <span class="badge bg-secondary">{{ total }} Total</span>
+      </div>
+   </div>
+
+   <!-- Filters -->
+   <div class="card ui-card mb-4 shadow-sm">
+      <form method="get" action="/ui/alerts" class="row g-3">
+
+         <div class="col-12 col-md-6 col-lg-4">
+            <label class="form-label">Target</label>
+            <select name="target_id" class="form-select">
+               <option value="">All targets</option>
+               {% for target in targets %}
+               <option value="{{ target.id }}" {% if selected_target_id==target.id %}selected{% endif %}>
+                  {{ target.name }}
+               </option>
+               {% endfor %}
+            </select>
+         </div>
+
+         <div class="col-12 col-md-6 col-lg-2">
+            <label class="form-label">Status</label>
+            <select name="status" class="form-select">
+               <option value="">All</option>
+               <option value="open" {% if selected_status=='open' %}selected{% endif %}>Open</option>
+               <option value="resolved" {% if selected_status=='resolved' %}selected{% endif %}>Resolved</option>
+            </select>
+         </div>
+
+         <div class="col-12 col-md-6 col-lg-3">
+            <label class="form-label">Date range</label>
+            <div class="row g-2">
+               <div class="col-12 col-sm-6">
+                  <input type="date" name="from_date" class="form-control" value="{{ from_date }}">
+               </div>
+               <div class="col-12 col-sm-6">
+                  <input type="date" name="to_date" class="form-control" value="{{ to_date }}">
+               </div>
+            </div>
+         </div>
+
+         <div class="col-12">
+            <div class="sticky-actions d-flex justify-content-center justify-content-md-end gap-2 align-items-center">
+               {% if can_close_alerts %}
+               <button type="button" class="btn btn-outline-primary" {% if has_open_alerts %}
+                  onclick="closeAllAlerts(); return false;" {% else %} disabled title="No open alerts" {% endif %}>
+                  <span class="material-icons">notifications</span>Close all Alerts
+               </button>
+               {% endif %}
+               <button type="submit" class="btn btn-primary">
+                  <span class="material-icons">filter_alt</span>Apply
+               </button>
+               <a href="/ui/alerts" class="btn btn-outline-secondary">
+                  Reset
+               </a>
+            </div>
+         </div>
+
+      </form>
+   </div>
+
+   <!-- Alerts Table -->
+   <div class="card shadow-sm">
+      {% if alerts %}
+      <div class="table-responsive">
+         <table class="table table-hover align-middle rtable mb-0">
+            <thead>
+               <tr>
+                  <th class="ui-col-status text-center"><span class="visually-hidden">Status</span></th>
+                  <th>Target</th>
+                  <th>Service</th>
+                  <th>Started</th>
+                  <th>Duration</th>
+                  <th>Closed by</th>
+                  <th class="text-center">Notified</th>
+                  <th class="text-end"><span class="visually-hidden">Actions</span></th>
+               </tr>
+            </thead>
+            <tbody>
+
+               {% for alert in alerts %}
+               <tr {% if alert.is_acknowledged %}class="alert-row-acked" {% endif %}>
+
+                  <td data-label="Status" class="text-center">
+                     {% if alert.status == 'open' %}
+                     <span class="material-icons fs-5 text-danger">error</span>
+                     {% else %}
+                     <span class="material-icons fs-5 text-success">check_circle</span>
+                     {% endif %}
+                  </td>
+
+                  <td data-label="Target">
+                     <a href="/ui/targets/{{ alert.target_id }}" class="text-decoration-none fw-semibold">
+                        {{ alert.target_name }}
+                     </a>
+                  </td>
+
+                  <td data-label="Service" class="checks-cell">
+                     <div class="check-badges">
+                        {% set failed_list = alert.failed_service.split(', ') %}
+                        {% if alert.target_services %}
+                        {% for svc in alert.target_services %}
+                        {% if svc in failed_list %}
+                        <span class="badge bg-danger">{{ svc }}</span>
+                        {% else %}
+                        <span class="badge bg-secondary">{{ svc }}</span>
+                        {% endif %}
+                        {% endfor %}
+                        {% else %}
+                        {# Fallback: Target deleted or not found, show only failed services #}
+                        {% for svc in failed_list %}
+                        <span class="badge bg-danger">{{ svc }}</span>
+                        {% endfor %}
+                        {% endif %}
+                     </div>
+                  </td>
+
+                  <td data-label="Started">
+                     {% set started_iso = alert.started_at.isoformat() if alert.started_at.isoformat is callable else
+                     alert.started_at %}
+                     <small class="text-muted local-time" data-utc="{{ started_iso }}">
+                        {{ alert.started_at_formatted }}
+                     </small>
+                  </td>
+
+                  <td data-label="Duration">
+                     {% if alert.duration_formatted %}
+                     <small class="text-muted">{{ alert.duration_formatted }}</small>
+                     {% elif alert.status == 'open' %}
+                     <span class="text-danger">Ongoing</span>
+                     {% else %}
+                     <span class="text-muted">–</span>
+                     {% endif %}
+                  </td>
+
+                  <td data-label="Closed by">
+                     {% if alert.is_acknowledged and alert.acknowledged_by %}
+                     <small class="text-muted">{{ alert.acknowledged_by }}</small>
+                     {% else %}
+                     <span class="text-muted">–</span>
+                     {% endif %}
+                  </td>
+
+                  <td data-label="Notified" class="text-center">
+                     {% if alert.recipients_notified %}
+                     <span class="text-muted">{{ alert.recipients_notified | length }}</span>
+                     {% else %}
+                     <span class="text-muted">–</span>
+                     {% endif %}
+                  </td>
+
+                  <td data-label="Actions" class="text-end actions-cell">
+                     <div class="action-buttons">
+                        {% if alert.is_acknowledged %}
+                        <button type="button" class="btn btn-sm btn-icon btn-outline-secondary"
+                           title="Closed by {{ alert.acknowledged_by or 'unknown' }}" disabled>
+                           <span class="material-icons">done_all</span>
+                        </button>
+                        {% else %}
+                        {% if can_close_alerts %}
+                        <button type="button" class="btn btn-sm btn-icon btn-outline-primary" title="Acknowledge"
+                           onclick="acknowledgeAlert('{{ alert.id }}'); return false;">
+                           <span class="material-icons">check_circle</span>
+                        </button>
+                        {% else %}
+                        <button type="button" class="btn btn-sm btn-icon btn-outline-secondary"
+                           title="No permission to close alerts" disabled>
+                           <span class="material-icons">lock</span>
+                        </button>
+                        {% endif %}
+                        {% endif %}
+                     </div>
+                  </td>
+
+               </tr>
+               {% endfor %}
+            </tbody>
+         </table>
+      </div>
+      {% else %}
+      <div class="ui-empty text-center text-muted">
+         <span class="material-icons fs-1 mb-2">notifications_off</span>
+         <p class="mb-0">No alerts found.</p>
+      </div>
+      {% endif %}
+   </div>
+
+   <!-- Pagination -->
+   {% if total_pages > 1 %}
+   <nav class="mt-4">
+      <ul class="pagination justify-content-center mb-0">
+         <li class="page-item {% if page == 1 %}disabled{% endif %}">
+            <a class="page-link" href="?page={{ page - 1 }}&{{ query_string }}">«</a>
+         </li>
+
+         {% for p in range(1, total_pages + 1) %}
+         {% if p == page %}
+         <li class="page-item active"><span class="page-link">{{ p }}</span></li>
+         {% elif p == 1 or p == total_pages or (p >= page - 2 and p <= page + 2) %} <li class="page-item">
+            <a class="page-link" href="?page={{ p }}&{{ query_string }}">{{ p }}</a>
+            </li>
+            {% elif p == page - 3 or p == page + 3 %}
+            <li class="page-item disabled"><span class="page-link">…</span></li>
+            {% endif %}
+            {% endfor %}
+
+            <li class="page-item {% if page == total_pages %}disabled{% endif %}">
+               <a class="page-link" href="?page={{ page + 1 }}&{{ query_string }}">»</a>
+            </li>
+      </ul>
+   </nav>
+   {% endif %}
+
+   <script>
+      async function acknowledgeAlert(alertId) {
+         try {
+            const resp = await apiFetch('/alerts/' + alertId + '/acknowledge', {
+               method: 'POST'
+            });
+            if (resp.ok) {
+               window.justUpToast?.success?.('Alert acknowledged');
+               window.location.reload();
+            } else {
+               // Try to extract error detail from response
+               let errorMsg = 'Failed to acknowledge alert';
+               try {
+                  const data = await resp.json();
+                  if (data.detail) {
+                     errorMsg = data.detail;
+                  }
+               } catch (e) {
+                  // Response wasn't JSON, use status text
+                  errorMsg = `Error ${resp.status}: ${resp.statusText}`;
+               }
+               console.error('Acknowledge failed:', resp.status, errorMsg);
+               window.justUpToast?.error?.(errorMsg);
+            }
+         } catch (e) {
+            console.error('Acknowledge error:', e);
+            window.justUpToast?.error?.('Network error: ' + e.message);
+         }
+      }
+
+      async function closeAllAlerts() {
+         if (!confirm('Close all open alerts?')) {
+            return;
+         }
+         try {
+            const resp = await apiFetch('/alerts/acknowledge-all', {
+               method: 'POST'
+            });
+            if (resp.ok) {
+               const data = await resp.json();
+               window.justUpToast?.success?.(`${data.updated || 0} alert(s) closed`);
+               window.location.reload();
+            } else {
+               let errorMsg = 'Failed to close alerts';
+               try {
+                  const data = await resp.json();
+                  if (data.detail) {
+                     errorMsg = data.detail;
+                  }
+               } catch (e) {
+                  errorMsg = `Error ${resp.status}: ${resp.statusText}`;
+               }
+               window.justUpToast?.error?.(errorMsg);
+            }
+         } catch (e) {
+            window.justUpToast?.error?.('Network error: ' + e.message);
+         }
+      }
+   </script>
+
+</div>
+
+{% endblock %}

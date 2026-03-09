@@ -1,0 +1,123 @@
+{# Uptime Graph (full width, above other charts) #}
+<div class="row">
+	<div class="col-12">
+		<div class="card shadow-sm">
+			<div class="card-header">
+				<i class="material-icons me-1">bar_chart</i> Availability (Up / Down)
+			</div>
+			<div class="card-body py-2">
+				<div style="height: 160px; position: relative;">
+					<canvas id="chart-uptime"></canvas>
+				</div>
+			</div>
+		</div>
+	</div>
+</div>
+
+{# Availability & Performance Charts #}
+<div class="row mt-4">
+	{% if target.enable_http_check %}
+	<div class="col-12 col-lg-6 col-xl-6 mb-4">
+		<div class="card shadow-sm h-100">
+			<div class="card-header">
+				<i class="material-icons me-1">speed</i> Response Time (ms)
+			</div>
+			<div class="card-body">
+				<div style="height: 200px; position: relative;">
+					<canvas id="chart-response-time"></canvas>
+				</div>
+			</div>
+		</div>
+	</div>
+	{% endif %}
+	{% if target.enable_ping %}
+	<div class="col-12{% if target.enable_http_check %} col-lg-6 col-xl-3{% endif %} mb-4">
+		<div class="card shadow-sm h-100">
+			<div class="card-header">
+				<i class="material-icons me-1">signal_cellular_4_bar</i> Ping Latency (ms)
+			</div>
+			<div class="card-body">
+				<div style="height: 200px; position: relative;">
+					<canvas id="chart-ping"></canvas>
+				</div>
+			</div>
+		</div>
+	</div>
+	{% endif %}
+	{% if target.enable_http_check %}
+	<div class="col-12 col-lg-6 col-xl-3 mb-4">
+		<div class="card shadow-sm h-100">
+			<div class="card-header">
+				<i class="material-icons me-1">swap_horiz</i> HTTP Status Code
+			</div>
+			<div class="card-body">
+				<div style="height: 200px; position: relative;">
+					<canvas id="chart-status-code"></canvas>
+				</div>
+			</div>
+		</div>
+	</div>
+	{% endif %}
+</div>
+
+{# Network & Downtime #}
+<div class="row">
+	{% if target.enable_tcp_connect %}
+	<div class="col-12 mb-4">
+		<div class="card shadow-sm h-100">
+			<div class="card-header">
+				<i class="material-icons me-1">power</i> TCP Latency (ms)
+			</div>
+			<div class="card-body">
+				{# Hidden container (kept for backwards compatibility) #}
+				<div id="tcp-small-multiples-container" style="display: none;"></div>
+				{# Combined chart with clickable legend #}
+				<div id="tcp-fallback-chart">
+					<div style="height: 200px; position: relative;">
+						<canvas id="chart-tcp"></canvas>
+					</div>
+				</div>
+			</div>
+		</div>
+	</div>
+	{% endif %}
+
+	{# Network Path (MTR) - Only shown when target is not fully up #}
+	{% if target.overall_status != "up" %}
+	<div class="col-12 mb-4">
+		<div class="card shadow-sm">
+			<div class="card-header">
+				<i class="material-icons me-1">account_tree</i> Network Path
+			</div>
+			<div class="card-body" id="traceroute-container" hx-get="/ui/fragments/traceroute/{{ target.id }}"
+				hx-trigger="revealed" hx-swap="innerHTML">
+				<div class="text-center py-4">
+					<div class="spinner-border spinner-border-sm text-primary" role="status">
+						<span class="visually-hidden">Loading...</span>
+					</div>
+					<div class="small text-muted mt-2">Network Scan in Progress...</div>
+				</div>
+			</div>
+		</div>
+	</div>
+	{% endif %}
+
+	{# Downtime History #}
+	<div class="col-12 mb-4">
+		<div class="card shadow-sm h-100" id="downtime-history-card">
+			<div class="card-header">
+				<i class="material-icons me-1">history</i> <span id="downtime-header-label">Downtimes (30d)</span>
+			</div>
+			<div class="card-body p-0">
+				<div class="p-2 border-top" id="downtime-history-body"
+					hx-get="/ui/fragments/downtime-history/{{ target.id }}" hx-trigger="load" hx-swap="innerHTML">
+					<div class="text-center py-4">
+						<div class="spinner-border spinner-border-sm text-primary" role="status">
+							<span class="visually-hidden">Loading...</span>
+						</div>
+					</div>
+				</div>
+			</div>
+		</div>
+	</div>
+</div>

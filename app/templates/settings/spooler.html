@@ -1,0 +1,101 @@
+{# Settings: Spooler Tab Content #}
+
+{# Stats Tiles (same layout as Dashboard summary-grid) #}
+<div class="summary-grid mb-4">
+	<div class="card ui-card card-status text-center shadow-sm">
+		<div class="d-flex justify-content-center align-items-center gap-2 mb-1">
+			<span class="material-icons text-warning fs-5">schedule</span>
+			<span class="fs-3 fw-bold" id="spooler-stat-queue">&ndash;</span>
+		</div>
+		<div class="text-muted small text-uppercase">Queue</div>
+	</div>
+	<div class="card ui-card card-status text-center shadow-sm">
+		<div class="d-flex justify-content-center align-items-center gap-2 mb-1">
+			<span class="material-icons text-danger fs-5">error_outline</span>
+			<span class="fs-3 fw-bold" id="spooler-stat-failed">&ndash;</span>
+		</div>
+		<div class="text-muted small text-uppercase">Failed</div>
+	</div>
+	<div class="card ui-card card-status text-center shadow-sm">
+		<div class="d-flex justify-content-center align-items-center gap-2 mb-1">
+			<span class="material-icons text-success fs-5">check_circle</span>
+			<span class="fs-3 fw-bold" id="spooler-stat-sent">&ndash;</span>
+		</div>
+		<div class="text-muted small text-uppercase">Sent</div>
+	</div>
+	<div class="card ui-card card-status text-center shadow-sm">
+		<div class="d-flex justify-content-center align-items-center gap-2 mb-1">
+			<span class="material-icons text-info fs-5">sync</span>
+			<span class="fs-3 fw-bold" id="spooler-stat-processing">&ndash;</span>
+		</div>
+		<div class="text-muted small text-uppercase">Processing</div>
+	</div>
+</div>
+
+{# Action Bar #}
+<div class="d-flex justify-content-between align-items-center mb-3">
+	<div class="d-flex align-items-center gap-2">
+		<h6 class="mb-0">Notification Log</h6>
+		<small class="text-muted" id="spooler-log-info"></small>
+	</div>
+	<div class="d-flex flex-wrap gap-2 justify-content-end">
+		{# Filters #}
+		<select class="form-select form-select-sm" id="spooler-filter-status" style="width: auto; min-width: 110px;">
+			<option value="">All Status</option>
+			<option value="pending">Pending</option>
+			<option value="processing">Processing</option>
+			<option value="sent">Sent</option>
+			<option value="failed">Failed</option>
+		</select>
+		<select class="form-select form-select-sm" id="spooler-filter-channel" style="width: auto; min-width: 110px;">
+			<option value="">All Channels</option>
+			<option value="signal">Signal</option>
+			<option value="email">Email</option>
+		</select>
+		<div class="d-flex gap-2 flex-nowrap">
+			<button type="button" class="btn btn-sm btn-outline-secondary btn-icon" id="spooler-refresh-btn"
+				title="Refresh">
+				<i class="material-icons">refresh</i>
+			</button>
+			<button type="button" class="btn btn-sm btn-outline-secondary" id="spooler-clear-log-btn"
+				title="Clear sent entries from log" data-bs-toggle="modal" data-bs-target="#spoolerClearLogModal">
+				<i class="material-icons me-1">playlist_remove</i><span class="d-none d-sm-inline">Clear Log</span>
+			</button>
+			<button type="button" class="btn btn-sm btn-outline-danger" id="spooler-flush-btn"
+				title="Flush pending & failed">
+				<i class="material-icons me-1">delete_sweep</i><span class="d-none d-sm-inline">Flush</span>
+			</button>
+		</div>
+	</div>
+</div>
+
+{# Log Table #}
+<div class="card shadow-sm">
+	<div class="table-responsive">
+		<table class="table table-sm table-hover mb-0 spooler-log" style="width: 100%;" id="spooler-log-table">
+			<thead>
+				<tr>
+					<th style="width: 165px;">Time</th>
+					<th style="width: 82px;"></th>
+					<th style="width: 20%;">Target</th>
+					<th style="width: 22%;">Recipient</th>
+					<th style="width: 90px;">Type</th>
+					<th style="width: 90px;">Status</th>
+					<th style="width: 72px; white-space: nowrap;">Retries</th>
+					<th>Error</th>
+				</tr>
+			</thead>
+			<tbody id="spooler-log-body">
+				<tr>
+					<td colspan="8" class="text-center py-4">
+						<span class="spinner-border spinner-border-sm"></span>
+					</td>
+				</tr>
+			</tbody>
+		</table>
+	</div>
+</div>
+
+{# Pagination #}
+<div class="d-flex justify-content-between align-items-center mt-3" id="spooler-pagination">
+</div>

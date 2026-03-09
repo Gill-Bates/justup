@@ -1,0 +1,477 @@
+{# Settings: Signal Tab Content #}
+<div class="row align-items-stretch">
+	{# Left Column: Signal Integration (half width) #}
+	<div class="col-12 d-flex">
+		<div class="card shadow-sm mb-4 w-100 h-100">
+			<div class="card-header d-flex justify-content-between align-items-center">
+				<div class="d-flex align-items-center gap-3">
+					<h6 class="mb-0">Signal Messenger Integration</h6>
+					<div class="form-check form-switch mb-0">
+						<input type="checkbox" class="form-check-input" id="signal_enabled" name="signal_enabled"
+							role="switch" aria-label="Enable Signal alerting" {% if signal_enabled %}checked{% endif %}>
+					</div>
+				</div>
+				<div id="signal-status-badges" class="d-flex gap-2">
+					{# Badges loaded via JS #}
+				</div>
+			</div>
+			<div class="card-body collapse" id="signal-panel">
+				{# Signal Status Card (read-only) #}
+				<div class="alert alert-light border mb-3" id="signal-device-status">
+					<div class="d-flex align-items-center">
+						<div class="signal-app-icon me-3">
+							<img src="/static/signal_logo.svg" alt="Signal" style="width: 44px; height: 44px;">
+						</div>
+						<div>
+							<strong>Local Signal Client</strong>
+							<div class="small text-muted" id="signal-device-info">Loading device status...</div>
+						</div>
+					</div>
+				</div>
+
+				{# Device Actions #}
+				<div class="mb-3">
+					<div class="d-flex justify-content-between align-items-center mb-2">
+						<button type="button" class="btn btn-link text-decoration-none px-0"
+							id="signal-setup-collapse-toggle" data-bs-toggle="collapse"
+							data-bs-target="#signal-setup-collapse" aria-expanded="false"
+							aria-controls="signal-setup-collapse">
+							<span class="material-icons me-1" id="signal-setup-collapse-icon">chevron_right</span>
+							<span class="fw-semibold">Device Actions</span>
+						</button>
+					</div>
+					<div class="collapse" id="signal-setup-collapse">
+						<div class="border rounded p-3">
+
+							{# Setup Mode Selection (hidden until status loaded) #}
+							<div class="mb-3" id="signal-mode-selection" style="display: none;">
+								<div class="d-flex flex-column gap-2">
+									<button type="button" class="btn btn-primary text-start" id="signal-mode-link-btn"
+										onclick="signalSelectMode('link')">
+										<span class="d-flex align-items-center">
+											<span class="material-icons me-2">qr_code_2</span>
+											<span>
+												<strong>Use your existing Signal app</strong>
+												<small class="d-block opacity-75">Recommended – scan QR code to
+													link</small>
+											</span>
+										</span>
+									</button>
+									{# Register button loaded via HTMX #}
+									<div hx-get="/ui/fragments/signal-mobile-check" hx-trigger="load"
+										hx-swap="innerHTML">
+									</div>
+								</div>
+							</div>
+
+							{# ═══════════════════════════════════════════════════════════════════ #}
+							{# FLOW 1: Link to existing account (QR Code) #}
+							{# ═══════════════════════════════════════════════════════════════════ #}
+							<div class="d-none" id="signal-flow-link">
+								<div class="d-flex align-items-center mb-3">
+									<button type="button" class="btn btn-link btn-sm px-0 me-2"
+										onclick="signalBackToModeSelection()">
+										<span class="material-icons">arrow_back</span>
+									</button>
+									<h6 class="mb-0">Link to existing Signal account</h6>
+								</div>
+
+								{# Step 1: Enter phone number (optional) #}
+								<div id="signal-link-step-number" class="mb-3">
+									<label class="form-label small">Your Signal phone number <span
+											class="text-muted">(optional)</span></label>
+									<div class="input-group input-group-sm">
+										<input type="tel" class="form-control" id="signal-link-number"
+											placeholder="+49 123 456789"
+											aria-label="Your Signal phone number (optional)">
+										<button type="button" class="btn btn-primary" id="signal-link-generate-qr-btn"
+											onclick="signalGenerateQrCode()">
+											<span class="material-icons me-1" style="font-size: 18px;">qr_code_2</span>
+											Generate QR
+										</button>
+									</div>
+									<div class="form-text">Optionally enter your number - the linked account will be
+										detected automatically</div>
+									<div id="signal-link-number-status" class="small mt-1"></div>
+								</div>
+
+								{# Step 2: QR Code (hidden until number is entered) #}
+								<div id="signal-link-step-qr" style="display: none;">
+									<div class="alert alert-info small py-2 mb-3">
+										<span class="material-icons align-middle me-1"
+											style="font-size: 16px;">info</span>
+										Open Signal on your phone → Settings → Linked Devices → Scan QR code
+									</div>
+
+									{# QR Code #}
+									<div id="signal-qr-container-link" class="text-center mb-3">
+										<div class="spinner-border spinner-border-sm text-muted" role="status">
+											<span class="visually-hidden">Loading QR...</span>
+										</div>
+									</div>
+
+									{# Confirm button after scanning #}
+									<div class="mb-3 text-center">
+										<button type="button" class="btn btn-success" id="signal-link-confirm-btn"
+											onclick="signalConfirmLink()">
+											<span class="material-icons me-1" style="font-size: 18px;">check</span> I've
+											scanned the QR code
+										</button>
+									</div>
+									<div id="signal-link-status" class="small text-center"></div>
+								</div>
+
+								{# Profile Name (optional) #}
+								<div class="mt-3 pt-3 border-top" id="signal-link-profile-section"
+									style="display: none;">
+									<label class="form-label small">Display name <span
+											class="text-muted">(optional)</span></label>
+									<div class="input-group input-group-sm">
+										<input type="text" class="form-control" id="signal-link-profile-name"
+											placeholder="justUp Monitor" aria-label="Signal display name">
+										<button type="button" class="btn btn-outline-secondary"
+											onclick="signalSetProfileNameLink()">
+											<span class="material-icons" style="font-size: 18px;">check</span>
+										</button>
+									</div>
+									<div id="signal-link-profile-status" class="small mt-1"></div>
+								</div>
+							</div>
+
+							{# ═══════════════════════════════════════════════════════════════════ #}
+							{# FLOW 2: Register new phone number #}
+							{# ═══════════════════════════════════════════════════════════════════ #}
+							<div class="d-none" id="signal-flow-register">
+								<div class="d-flex align-items-center mb-3">
+									<button type="button" class="btn btn-link btn-sm px-0 me-2"
+										onclick="signalBackToModeSelection()">
+										<span class="material-icons">arrow_back</span>
+									</button>
+									<h6 class="mb-0">Register new number</h6>
+								</div>
+
+								{# Step 1: Enter phone number #}
+								<div class="signal-step signal-step-active" id="signal-reg-step-1">
+									<div class="input-group input-group-sm mb-2">
+										<input type="tel" class="form-control" id="signal-register-number"
+											placeholder="+49 123 456789" aria-label="Phone number">
+										<button type="button" class="btn btn-primary" id="signal-register-btn"
+											onclick="signalRegister()">
+											Send verification code
+										</button>
+									</div>
+									{# Voice option hidden by default #}
+									<details class="small text-muted mb-2">
+										<summary style="cursor: pointer;">More options</summary>
+										<div class="form-check mt-2">
+											<input class="form-check-input" type="checkbox" id="signal-use-voice">
+											<label class="form-check-label" for="signal-use-voice">
+												Receive code via voice call instead of SMS
+											</label>
+										</div>
+									</details>
+									{# Captcha (shown only when Signal requires it) #}
+									<div id="signal-captcha-section" class="mt-3 p-3 bg-light rounded d-none">
+										<p class="small mb-2"><strong>Signal requires a captcha to continue.</strong>
+										</p>
+										<div class="d-flex gap-2 mb-2">
+											<a href="https://signalcaptchas.org/registration/generate.html"
+												target="_blank" rel="noopener" class="btn btn-primary btn-sm">
+												Open captcha page
+											</a>
+										</div>
+										<div class="input-group input-group-sm">
+											<input type="text" class="form-control" id="signal-captcha-token"
+												placeholder="Paste captcha link here" aria-label="Captcha token">
+											<button type="button" class="btn btn-primary" id="signal-captcha-submit-btn"
+												onclick="signalRegister()">
+												Continue
+											</button>
+										</div>
+										<div class="form-text small">Right-click "Open Signal" → Copy link</div>
+									</div>
+									<div id="signal-register-status" class="small mt-1"></div>
+								</div>
+
+								{# Step 2: Verify code #}
+								<div class="signal-step signal-step-disabled mt-3" id="signal-reg-step-2">
+									<p class="small text-muted mb-2" id="signal-verify-hint">Enter the code sent to your
+										phone</p>
+									<div class="d-flex gap-2 justify-content-start mb-2" id="signal-verify-boxes">
+										<input type="text" inputmode="numeric" pattern="[0-9]" maxlength="1"
+											class="form-control form-control-lg text-center signal-code-box"
+											data-index="0" autocomplete="off" disabled>
+										<input type="text" inputmode="numeric" pattern="[0-9]" maxlength="1"
+											class="form-control form-control-lg text-center signal-code-box"
+											data-index="1" autocomplete="off" disabled>
+										<input type="text" inputmode="numeric" pattern="[0-9]" maxlength="1"
+											class="form-control form-control-lg text-center signal-code-box"
+											data-index="2" autocomplete="off" disabled>
+										<input type="text" inputmode="numeric" pattern="[0-9]" maxlength="1"
+											class="form-control form-control-lg text-center signal-code-box"
+											data-index="3" autocomplete="off" disabled>
+										<input type="text" inputmode="numeric" pattern="[0-9]" maxlength="1"
+											class="form-control form-control-lg text-center signal-code-box"
+											data-index="4" autocomplete="off" disabled>
+										<input type="text" inputmode="numeric" pattern="[0-9]" maxlength="1"
+											class="form-control form-control-lg text-center signal-code-box"
+											data-index="5" autocomplete="off" disabled>
+									</div>
+									<div id="signal-verify-status" class="small mt-1"></div>
+									{# Hidden elements for backwards compatibility #}
+									<input type="hidden" id="signal-verify-code">
+									<button type="button" class="d-none" id="signal-verify-btn"></button>
+								</div>
+
+								{# Step 3: Profile Name (Optional) #}
+								<div class="signal-step signal-step-disabled mt-3" id="signal-reg-step-3">
+									<p class="small text-muted mb-2">Optional: Set a display name for Signal chats</p>
+									<div class="input-group input-group-sm">
+										<input type="text" class="form-control" id="signal-profile-name"
+											placeholder="justUp Monitor" aria-label="Display name" disabled>
+										<button type="button" class="btn btn-outline-secondary" id="signal-set-name-btn"
+											onclick="signalSetProfileName()" disabled>
+											Set
+										</button>
+										<button type="button" class="btn btn-outline-secondary"
+											id="signal-skip-profile-btn" onclick="signalSkipProfile()" disabled>
+											Skip
+										</button>
+									</div>
+									<div id="signal-profile-status" class="small mt-1"></div>
+								</div>
+							</div>
+						</div>
+					</div>
+				</div>
+
+				{# Signal Test (only visible when registered) #}
+				<div class="d-flex align-items-center gap-2 mb-3" id="signal-test-section" style="display: none;">
+					<button type="button" class="btn btn-outline-secondary btn-sm" id="send-signal-test-btn"
+						onclick="sendSignalTestMessage()">
+						<span class="material-icons me-1">send</span> Send Test Message
+					</button>
+				</div>
+			</div>
+		</div>
+	</div>
+</div>
+
+{# Signal Message Templates (full width, below the two-column layout) #}
+<div class="accordion mt-4 mb-4 w-100" id="signalTemplatesAccordion">
+	<div class="accordion-item shadow-sm w-100">
+		<h2 class="accordion-header" id="signalTemplatesHeading">
+			<button class="accordion-button collapsed" type="button" data-bs-toggle="collapse"
+				data-bs-target="#signalTemplatesCollapse" aria-expanded="false" aria-controls="signalTemplatesCollapse">
+				<span class="d-flex align-items-center gap-2">
+					<span class="material-icons" style="font-size: 20px;">edit_note</span>
+					Signal Message Templates
+				</span>
+			</button>
+		</h2>
+		<div id="signalTemplatesCollapse" class="accordion-collapse collapse" aria-labelledby="signalTemplatesHeading"
+			data-bs-parent="#signalTemplatesAccordion">
+			<div class="accordion-body">
+				<div class="d-grid gap-2 d-sm-flex justify-content-sm-end mb-3">
+					<button type="button" class="btn btn-primary btn-sm" id="save-signal-templates-btn">
+						<span class="material-icons me-1" style="font-size: 16px;">save</span>Save Templates
+					</button>
+					<button type="button" class="btn btn-outline-secondary btn-sm" id="reset-signal-templates-btn">
+						<span class="material-icons me-1" style="font-size: 16px;">refresh</span>Reset to Default
+					</button>
+				</div>
+				<div class="signal-templates-grid">
+					<div class="signal-templates-down">
+						<div class="border rounded p-3 h-100">
+							<div class="d-flex align-items-center gap-2 mb-2">
+								<span class="material-icons text-danger" style="font-size: 20px;">south</span>
+								<span class="fw-semibold">DOWN</span>
+								<small class="text-muted">(Service down / alert open)</small>
+							</div>
+							<textarea id="signal-template-down" class="form-control font-monospace" rows="10"
+								style="font-size: 13px;">{{ signal_template.down | e }}</textarea>
+
+							<div class="mt-3">
+								<div class="d-flex justify-content-between align-items-center mb-2">
+									<small class="text-muted">Preview</small>
+									<small class="text-muted">Signal</small>
+								</div>
+								<div class="ios-preview">
+									<div class="ios-preview-statusbar">
+										<span class="ios-preview-time">9:41</span>
+										<span class="ios-preview-icons">
+											<span class="ios-dot"></span>
+											<span class="ios-dot"></span>
+											<span class="ios-dot"></span>
+										</span>
+									</div>
+									<div class="ios-preview-body ios-chat">
+										<div class="ios-chat-row">
+											<div class="ios-chat-bubble ios-chat-bubble-right">
+												<div id="signal-template-down-preview" class="ios-preview-text"></div>
+											</div>
+										</div>
+									</div>
+								</div>
+							</div>
+						</div>
+					</div>
+
+					<div class="signal-templates-up">
+						<div class="border rounded p-3 h-100">
+							<div class="d-flex align-items-center gap-2 mb-2">
+								<span class="material-icons text-success" style="font-size: 20px;">north</span>
+								<span class="fw-semibold">UP</span>
+								<small class="text-muted">(Service up / resolved)</small>
+							</div>
+							<textarea id="signal-template-up" class="form-control font-monospace" rows="10"
+								style="font-size: 13px;">{{ signal_template.up | e }}</textarea>
+
+							<div class="mt-3">
+								<div class="d-flex justify-content-between align-items-center mb-2">
+									<small class="text-muted">Preview</small>
+									<small class="text-muted">Signal</small>
+								</div>
+								<div class="ios-preview">
+									<div class="ios-preview-statusbar">
+										<span class="ios-preview-time">9:41</span>
+										<span class="ios-preview-icons">
+											<span class="ios-dot"></span>
+											<span class="ios-dot"></span>
+											<span class="ios-dot"></span>
+										</span>
+									</div>
+									<div class="ios-preview-body ios-chat">
+										<div class="ios-chat-row">
+											<div class="ios-chat-bubble ios-chat-bubble-right">
+												<div id="signal-template-up-preview" class="ios-preview-text"></div>
+											</div>
+										</div>
+									</div>
+								</div>
+							</div>
+						</div>
+					</div>
+
+					<div class="signal-templates-placeholders">
+						<div class="border rounded p-3 h-100">
+							<div class="d-flex justify-content-between align-items-center mb-2">
+								<h6 class="mb-0">Available Placeholders</h6>
+								<small class="text-muted">Reference</small>
+							</div>
+							<div class="border rounded p-2 bg-body-tertiary">
+								<div class="table-responsive" style="max-height: 520px; overflow-y: auto;">
+									<table class="table table-sm table-bordered mb-0 bg-body placeholders-table">
+										<thead class="sticky-top placeholders-thead">
+											<tr>
+												<th>Category</th>
+												<th>Placeholder</th>
+												<th>Description</th>
+											</tr>
+										</thead>
+										<tbody>
+											{% raw %}
+											<tr>
+												<td rowspan="4">Target</td>
+												<td><code>{{target.name}}</code></td>
+												<td>Target name</td>
+											</tr>
+											<tr>
+												<td><code>{{target.host}}</code></td>
+												<td>Target hostname/IP</td>
+											</tr>
+											<tr>
+												<td><code>{{target.group}}</code></td>
+												<td>Target group</td>
+											</tr>
+											<tr>
+												<td><code>{{target.check_type}}</code></td>
+												<td>Check type (HTTP/PING/TCP/CERT)</td>
+											</tr>
+
+											<tr>
+												<td rowspan="5">Alert</td>
+												<td><code>{{alert.status}}</code></td>
+												<td>OPEN or RESOLVED</td>
+											</tr>
+											<tr>
+												<td><code>{{alert.started_at}}</code></td>
+												<td>Alert start time</td>
+											</tr>
+											<tr>
+												<td><code>{{alert.resolved_at}}</code></td>
+												<td>Alert resolved time</td>
+											</tr>
+											<tr>
+												<td><code>{{alert.duration}}</code></td>
+												<td>Alert duration</td>
+											</tr>
+											<tr>
+												<td><code>{{alert.reason}}</code></td>
+												<td>Failure reason / service</td>
+											</tr>
+
+											<tr>
+												<td rowspan="3">Status</td>
+												<td><code>{{status.emoji}}</code></td>
+												<td>Status emoji</td>
+											</tr>
+											<tr>
+												<td><code>{{status.color}}</code></td>
+												<td>Status color (hex)</td>
+											</tr>
+											<tr>
+												<td><code>{{status.text}}</code></td>
+												<td>Status text label</td>
+											</tr>
+
+											<tr>
+												<td rowspan="2">Downtime</td>
+												<td><code>{{downtime.minutes}}</code></td>
+												<td>Downtime in minutes</td>
+											</tr>
+											<tr>
+												<td><code>{{downtime.human}}</code></td>
+												<td>Human-readable downtime</td>
+											</tr>
+
+											<tr>
+												<td rowspan="2">SLA</td>
+												<td><code>{{sla.threshold}}</code></td>
+												<td>SLA threshold</td>
+											</tr>
+											<tr>
+												<td><code>{{sla.actual}}</code></td>
+												<td>Actual SLA</td>
+											</tr>
+
+											<tr>
+												<td rowspan="4">System</td>
+												<td><code>{{system.name}}</code></td>
+												<td>System name (justUp)</td>
+											</tr>
+											<tr>
+												<td><code>{{system.url}}</code></td>
+												<td>Dashboard URL</td>
+											</tr>
+											<tr>
+												<td><code>{{system.timestamp}}</code></td>
+												<td>Current timestamp</td>
+											</tr>
+											<tr>
+												<td><code>{{system.github_url}}</code></td>
+												<td>Project URL</td>
+											</tr>
+											{% endraw %}
+										</tbody>
+									</table>
+								</div>
+							</div>
+						</div>
+					</div>
+				</div>
+			</div>
+		</div>
+	</div>
+</div>
+</div>

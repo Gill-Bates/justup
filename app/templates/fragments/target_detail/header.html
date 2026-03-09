@@ -1,0 +1,55 @@
+<nav aria-label="breadcrumb" class="mb-3">
+	<ol class="breadcrumb">
+		<li class="breadcrumb-item"><a href="/">Dashboard</a></li>
+		<li class="breadcrumb-item"><a href="/ui/targets">Targets</a></li>
+		{% if target.group %}<li class="breadcrumb-item active">{{ target.group }}</li>{% endif %}
+	</ol>
+</nav>
+
+	<div class="target-header">
+		<div class="target-header-left">
+			<span id="target-status" class="target-status"
+				hx-get="/ui/fragments/target-status/{{ target.id }}" hx-trigger="load, every 15s" hx-swap="innerHTML">
+				<i class="material-icons text-secondary">circle</i>
+			</span>
+			<div>
+				<h2 class="mb-0 text-break" style="font-family: 'Noto Serif', serif; font-weight: 400;">{{ target.name }}</h2>
+			</div>
+		</div>
+
+		<div class="target-header-actions">
+			{% if user and user.is_admin %}
+			<a href="/ui/targets/{{ target.id }}/edit" class="btn btn-outline-secondary btn-sm btn-icon" title="Edit target">
+				<i class="material-icons">edit</i>
+			</a>
+			{% endif %}
+			<button class="btn btn-outline-secondary btn-sm btn-icon" id="export-pdf-btn" title="Export PDF report">
+				<i class="material-icons" id="pdf-icon">picture_as_pdf</i>
+				<span class="spinner-border spinner-border-sm d-none" id="pdf-spinner"></span>
+			</button>
+			{% if user and user.is_admin %}
+			<button class="btn btn-outline-info btn-sm btn-icon" id="test-alert-btn" 
+				{% if not has_recipients %}disabled{% endif %}
+				title="{% if has_recipients %}Send test alert to all configured recipients{% else %}No recipients configured - add recipients in target settings{% endif %}">
+				<i class="material-icons" id="test-alert-icon">notifications_active</i>
+				<span class="spinner-border spinner-border-sm d-none" id="test-alert-spinner"></span>
+			</button>
+			<button class="btn btn-outline-warning btn-sm btn-icon" hx-post="/targets/{{ target.id }}/reset"
+				hx-confirm="Reset all metrics for {{ target.name }}?"
+				hx-swap="none"
+				data-success-toast="Metrics reset"
+				data-success-reload="1"
+				title="Reset metrics">
+				<i class="material-icons">recycling</i>
+			</button>
+		<button class="btn btn-outline-danger btn-sm btn-icon" hx-delete="/targets/{{ target.id }}"
+				hx-confirm="Really delete this target? All metrics will be removed." hx-swap="none"
+				data-success-toast="Target deleted"
+				data-success-redirect="/ui/targets"
+				data-success-delay="500"
+				title="Delete target">
+				<i class="material-icons">delete</i>
+			</button>
+			{% endif %}
+		</div>
+	</div>

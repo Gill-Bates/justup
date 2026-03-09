@@ -1,0 +1,114 @@
+{# Alert Recipients (assigned to this target) #}
+{% set recs = alert_recipients or [] %}
+
+<div class="card shadow-sm mb-4">
+	<div class="card-header d-flex flex-nowrap justify-content-between align-items-center">
+		<span><i class="material-icons me-1">notifications_active</i> Alert Recipients</span>
+		<div class="d-flex align-items-center gap-2 flex-shrink-0">
+			<div class="form-check form-switch mb-0" title="Automatically close alerts when target recovers">
+				<input class="form-check-input" type="checkbox" role="switch"
+					id="auto-close-alert-toggle"
+					{{ 'checked' if target.auto_close_alert else '' }}>
+				<label class="form-check-label small" for="auto-close-alert-toggle">Auto-Close</label>
+			</div>
+			<span class="badge bg-secondary">{{ recs | length }}</span>
+		</div>
+	</div>
+	<div class="card-body">
+		{% if recs | length == 0 %}
+			<div class="text-muted small">
+				No recipients configured.
+				{% if user and user.is_admin %}
+					<a href="/ui/targets/{{ target.id }}/edit">Add recipients</a>
+				{% endif %}
+			</div>
+		{% else %}
+			{% set head = recs[:8] %}
+			<div class="alert-recipients-grid">
+				{% for r in head %}
+					<div class="alert-recipient-tile">
+						<div class="alert-recipient-name-row">
+							<div class="alert-recipient-name" title="{{ r.name }}">
+								<span class="material-icons" aria-hidden="true">person</span>
+								<span class="alert-recipient-name-text">{{ r.name }}</span>
+							</div>
+							<div class="alert-recipient-status">
+								{% if r.is_enabled %}
+									<span class="badge bg-success">Active</span>
+								{% else %}
+									<span class="badge bg-secondary">Disabled</span>
+								{% endif %}
+							</div>
+						</div>
+						<div class="alert-recipient-channels">
+							{% if r.phone %}
+								<span class="alert-recipient-channel" title="{{ r.phone }}">
+									<span class="material-icons">sms</span>
+									<span class="alert-recipient-channel-text">{{ r.phone }}</span>
+								</span>
+							{% endif %}
+							{% if r.email %}
+								<span class="alert-recipient-channel" title="{{ r.email }}">
+									<span class="material-icons">email</span>
+									<span class="alert-recipient-channel-text">{{ r.email }}</span>
+								</span>
+							{% endif %}
+							{% if not r.phone and not r.email %}
+								<span class="text-muted">No channels</span>
+							{% endif %}
+						</div>
+					</div>
+				{% endfor %}
+			</div>
+
+			{% if recs | length > (head | length) %}
+				<div class="collapse mt-2" id="alert-recipients-more">
+					<div class="alert-recipients-grid mt-2">
+						{% for r in recs[8:] %}
+							<div class="alert-recipient-tile">
+								<div class="alert-recipient-name-row">
+									<div class="alert-recipient-name" title="{{ r.name }}">
+										<span class="material-icons" aria-hidden="true">person</span>
+										<span class="alert-recipient-name-text">{{ r.name }}</span>
+									</div>
+									<div class="alert-recipient-status">
+										{% if r.is_enabled %}
+											<span class="badge bg-success">Active</span>
+										{% else %}
+											<span class="badge bg-secondary">Disabled</span>
+										{% endif %}
+									</div>
+								</div>
+								<div class="alert-recipient-channels">
+									{% if r.phone %}
+										<span class="alert-recipient-channel" title="{{ r.phone }}">
+											<span class="material-icons">sms</span>
+											<span class="alert-recipient-channel-text">{{ r.phone }}</span>
+										</span>
+									{% endif %}
+									{% if r.email %}
+										<span class="alert-recipient-channel" title="{{ r.email }}">
+											<span class="material-icons">email</span>
+											<span class="alert-recipient-channel-text">{{ r.email }}</span>
+										</span>
+									{% endif %}
+									{% if not r.phone and not r.email %}
+										<span class="text-muted">No channels</span>
+									{% endif %}
+								</div>
+							</div>
+						{% endfor %}
+					</div>
+				</div>
+				<div class="mt-2">
+					<button class="btn btn-sm btn-outline-secondary" type="button"
+						data-bs-toggle="collapse" data-bs-target="#alert-recipients-more"
+						aria-expanded="false" aria-controls="alert-recipients-more">
+						Show all ({{ recs | length }})
+					</button>
+				</div>
+			{% endif %}
+		{% endif %}
+	</div>
+</div>
+

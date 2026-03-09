@@ -4,3 +4,5 @@
 # Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 #
 
+"""API route modules."""
+

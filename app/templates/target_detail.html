@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}{{ target.name }} – justUp!{% endblock %}
+
+{% block content %}
+<div class="ui-page">
+	{% include "fragments/target_detail/header.html" %}
+	{% include "fragments/target_detail/info_cards.html" %}
+	{% include "fragments/target_detail/alert_recipients.html" %}
+	{% include "fragments/target_detail/time_range_selector.html" %}
+	{% include "fragments/target_detail/charts_and_downtime.html" %}
+
+	<!-- Server-rendered config for JS (no inline script, no |safe, XSS-safe) -->
+	<div id="target-config" class="d-none" data-target-id="{{ target.id }}"
+		data-use-utc="{{ 'true' if use_utc else 'false' }}" data-pdf-page-size="{{ pdf_page_size or 'a4' }}"
+		data-tcp-ports="{{ target.tcp_ports or '80' }}"
+		data-sla-enabled="{{ 'true' if target.sla_enabled else 'false' }}"
+		data-sla-availability="{{ target.sla_availability_pct if target.sla_availability_pct is not none else 99.9 }}"
+		data-sla-response-time="{{ target.sla_response_time_ms if target.sla_response_time_ms is not none else 500 }}"
+		data-sla-ping-latency="{{ target.sla_ping_latency_ms if target.sla_ping_latency_ms is not none else 100 }}"
+		data-enable-http="{{ 'true' if target.enable_http_check else 'false' }}"
+		data-enable-ping="{{ 'true' if target.enable_ping else 'false' }}"
+		data-enable-tcp="{{ 'true' if target.enable_tcp_connect else 'false' }}"
+		data-enable-cert="{{ 'true' if target.enable_cert_expiration else 'false' }}">
+	</div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/chartjs-adapter-date-fns.bundle.min.js"></script>
+<script src="/static/js/chartjs-plugin-zoom.min.js"></script>
+<script src="/static/js/chartjs-plugin-annotation.min.js"></script>
+<script src="/static/js/utils/throttle.js"></script>
+<script src="/static/js/utils/with-alpha.js"></script>
+<script src="/static/js/charts/chart-config.js"></script>
+<script src="/static/js/charts/chart-sampling.js"></script>
+<script src="/static/js/charts/chart-builder.js"></script>
+<script src="/static/js/charts/chart-theme.js"></script>
+<script src="/static/js/target-detail/date-range.js"></script>
+<script src="/static/js/target-detail/metrics.js"></script>
+<script src="/static/js/target-detail/pdf-export.js"></script>
+<script src="/static/js/target-detail/test-alert.js"></script>
+<script src="/static/js/target-detail.js"></script>
+<script src="/static/js/traceroute-map.js"></script>
+{% endblock %}

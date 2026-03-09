@@ -1,0 +1,136 @@
+{# Info Cards #}
+<div class="info-cards-grid mb-4">
+
+	{# Interval #}
+	<div class="card text-center shadow-sm">
+		<div class="card-body">
+			<p class="text-muted small mb-1 text-uppercase fw-semibold">Interval</p>
+			<h5 class="mb-0 fw-bold fs-4">{{ target.interval_seconds }}s</h5>
+		</div>
+	</div>
+
+	{# Retries #}
+	<div class="card text-center shadow-sm">
+		<div class="card-body">
+			<p class="text-muted small mb-1 text-uppercase fw-semibold">Retries</p>
+			<h5 class="mb-0 fw-bold fs-4">{{ target.max_retries }}</h5>
+		</div>
+	</div>
+
+	{# Retention #}
+	<div class="card text-center shadow-sm">
+		<div class="card-body">
+			<p class="text-muted small mb-1 text-uppercase fw-semibold">Retention</p>
+			<h5 class="mb-0 fw-bold fs-4">{{ target.retention_days }}d</h5>
+		</div>
+	</div>
+
+	{# Cert Expiry #}
+	{% if target.enable_cert_expiration %}
+	<div class="card text-center shadow-sm" id="cert-days-card">
+		<div class="card-body">
+			<p class="text-muted small mb-1 text-uppercase fw-semibold">Cert Exp.</p>
+			<h5 id="cert-days-value" class="mb-0 fw-bold fs-4
+{% if target.cert_status == 'ok' %}text-success
+{% elif target.cert_status == 'warning' %}text-warning
+{% elif target.cert_status == 'critical' %}text-danger
+{% else %}text-muted{% endif %}">
+				--
+			</h5>
+		</div>
+	</div>
+	{% endif %}
+
+	{# Checks #}
+	<div class="card text-center shadow-sm">
+		<div class="card-body">
+			<p class="text-muted small mb-2 text-uppercase fw-semibold">Checks</p>
+			<div class="d-flex justify-content-center gap-1 flex-wrap">
+				{% if target.enable_http_check %}
+				<span class="badge rounded-pill
+{% if target.http_status == 'up' %}bg-success
+{% elif target.http_status == 'down' %}bg-danger
+{% else %}bg-secondary{% endif %}">
+					HTTP
+				</span>
+				{% endif %}
+				{% if target.enable_ping %}
+				<span class="badge rounded-pill
+{% if target.ping_status == 'up' %}bg-success
+{% elif target.ping_status == 'down' %}bg-danger
+{% else %}bg-secondary{% endif %}">
+					PING
+				</span>
+				{% endif %}
+				{% if target.enable_cert_expiration %}
+				<span class="badge rounded-pill
+{% if target.cert_status == 'ok' %}bg-success
+{% elif target.cert_status == 'warning' %}bg-warning text-dark
+{% elif target.cert_status == 'critical' %}bg-danger
+{% else %}bg-secondary{% endif %}">
+					Cert
+				</span>
+				{% endif %}
+				{% if target.enable_tcp_connect %}
+				{% set port_status = target.tcp_port_status or {} %}
+				{% set ports = (target.tcp_ports or '80').split(',') %}
+				{% set up_count = port_status.values() | select('eq', 'up') | list | length %}
+				{% set total_count = ports | length %}
+				{% if total_count == 1 %}
+				{# Single port: show simple TCP badge #}
+				<span class="badge rounded-pill
+{% if target.tcp_status == 'up' %}bg-success
+{% elif target.tcp_status == 'down' %}bg-danger
+{% else %}bg-secondary{% endif %}">
+					TCP:{{ ports[0] }}
+				</span>
+				{% else %}
+				{# Multiple ports: show individual port badges with status colors #}
+				{% for port in ports %}
+				{% set ps = port_status.get(port | trim, 'unknown') %}
+				<span class="badge rounded-pill
+{% if ps == 'up' %}bg-success
+{% elif ps == 'down' %}bg-danger
+{% else %}bg-secondary{% endif %}">
+					TCP:{{ port | trim }}
+				</span>
+				{% endfor %}
+				{% endif %}
+				{% endif %}
+			</div>
+		</div>
+	</div>
+
+	{# Uptime #}
+	<div class="card text-center shadow-sm" id="uptime-card">
+		<div class="card-body">
+			<div class="d-flex justify-content-around">
+				<div>
+					<p class="text-muted small mb-1 text-uppercase fw-semibold">24h</p>
+					<h5 id="uptime-percent" class="mb-0 fw-bold fs-4
+{% if target.uptime_percent is not none %}
+{% if target.uptime_percent >= 99 %}text-success
+{% elif target.uptime_percent >= 95 %}text-warning
+{% else %}text-danger{% endif %}
+{% else %}text-muted{% endif %}">
+						{{ target.uptime_percent_display }}
+					</h5>
+				</div>
+				<div>
+					<p class="text-muted small mb-1 text-uppercase fw-semibold">30d</p>
+					<h5 id="uptime-percent-30d" class="mb-0 fw-bold fs-4
+{% if target.uptime_percent_30d is defined and target.uptime_percent_30d is not none %}
+{% if target.uptime_percent_30d >= 99 %}text-success
+{% elif target.uptime_percent_30d >= 95 %}text-warning
+{% else %}text-danger{% endif %}
+{% else %}text-muted{% endif %}">
+						{{ target.uptime_percent_30d_display|default('–') }}
+					</h5>
+				</div>
+			</div>
+		</div>
+	</div>
+
+</div>
+
+{# SLA Thresholds are displayed as yellow lines in the charts #}

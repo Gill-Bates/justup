@@ -1,0 +1,20 @@
+{# Settings: Recipients Tab Content #}
+<div class="card shadow-sm mb-4">
+	<div class="card-header d-flex justify-content-between align-items-center">
+		<h6 class="mb-0"><span class="material-icons me-1" style="font-size: 18px;">notifications_active</span>Alert
+			Recipients</h6>
+		<button type="button" class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#addRecipientModal">
+			<span class="material-icons me-1" style="font-size: 16px;">person_add</span>New Recipient
+		</button>
+	</div>
+	<div class="card-body p-0">
+		<div id="recipients-list">
+			{# Recipients loaded via JS - initial loading state #}
+			<div class="text-center text-muted py-4">
+				<div class="spinner-border spinner-border-sm text-secondary" role="status">
+					<span class="visually-hidden">Loading...</span>
+				</div>
+			</div>
+		</div>
+	</div>
+</div>

@@ -1,0 +1,140 @@
+{# MTR Network Path Fragment (Leaflet Interactive Map) #}
+{# Macro for hostname display - eliminates code duplication #}
+{% macro hop_hostname(h) %}
+{% if h.hostname_display and h.hostname_display != '—' %}
+<span class="hostname-small" title="{{ h.hostname or h.hostname_display }}">{{ h.hostname_display }}</span>
+{% elif h.hostname and h.hostname != '—' %}
+<span class="hostname-small" title="{{ h.hostname }}">{{ h.hostname }}</span>
+{% endif %}
+{% endmacro %}
+
+{% macro country_flag(country_code, title_text='') %}
+{% if country_code and country_code|length == 2 %}
+<span class="country-flag-wrap" title="{{ title_text or country_code|upper }}">
+    <img class="country-flag-svg" src="/static/vendor/images/flags/{{ country_code|lower }}.svg"
+        alt="{{ country_code|upper }} flag" loading="lazy" decoding="async"
+        onerror="this.style.display='none'; this.nextElementSibling.style.display='inline';">
+    <span class="country-flag-fallback" style="display:none;">{{ country_code|upper }}</span>
+</span>
+{% endif %}
+{% endmacro %}
+
+{% if hops %}
+<div class="row g-3 align-items-stretch traceroute-fragment">
+
+    {# LEFT: MTR hop table #}
+    <div class="col-12 {% if geo_points %}col-lg-5{% endif %}">
+        <div class="table-responsive small">
+            <table class="table table-sm align-middle mb-0 hop-table">
+                <thead>
+                    <tr>
+                        <th>Hop</th>
+                        <th>Network Path</th>
+                        <th class="d-none d-md-table-cell">Location</th>
+                        <th>Latency</th>
+                        <th>Loss</th>
+                        <th class="text-end">Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for h in hops %}
+                    <tr class="{% if h._collapsed or h._interpolated or h.status == 'timeout' %}text-muted{% endif %}">
+                        <td>{{ h.hop_display or h.hop }}</td>
+                        <td class="ip-host-cell">
+                            {% if h._collapsed or h.ip_display == '—' %}
+                            <span class="ip-address text-muted">—</span>
+                            <span class="hostname-small text-muted" title="ICMP blocked">ICMP blocked</span>
+                            {% else %}
+                            {% set ip_title = h.ip_full if (h.is_ipv6 and h.ip_full and h.ip_full != h.ip_display) else
+                            (h.ip_display or h.ip) %}
+                            <span class="ip-address" title="{{ ip_title }}">{{ h.ip_display or h.ip }}</span>
+                            {{ hop_hostname(h) }}
+                            {% endif %}
+                        </td>
+                        <td class="d-none d-md-table-cell">
+                            {% if h._collapsed %}
+                            <span class="text-muted">—</span>
+                            {% elif h.city %}
+                            <span class="text-muted"
+                                title="{{ h.city }}{% if h.country %} ({{ h.country }}){% endif %}">
+                                {% if h.country %}{{ country_flag(h.country, h.country) }}{% endif %}
+                                {{ h.city }}
+                            </span>
+                            {% elif h.country %}
+                            <span class="text-muted" title="{{ h.country }}">{{ country_flag(h.country, h.country)
+                                }}</span>
+                            {% else %}
+                            <span class="text-muted">—</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ h.latency_display or '–' }}</td>
+                        <td>{{ h.loss_display or '–' }}</td>
+                        <td class="text-end">
+                            {% set status = h.status_display or h.status %}
+                            {% if status == 'ok' %}
+                            <span class="badge bg-success-subtle text-success border border-success-subtle">ok</span>
+                            {% elif status == 'partial' %}
+                            <span
+                                class="badge bg-warning-subtle text-warning border border-warning-subtle">partial</span>
+                            {% elif status == 'n/a' %}
+                            <span class="badge bg-secondary-subtle text-muted border border-secondary-subtle">n/a</span>
+                            {% elif status == 'interpolated' %}
+                            <span class="badge bg-secondary-subtle text-muted border border-secondary-subtle">n/a</span>
+                            {% else %}
+                            <span
+                                class="badge bg-secondary-subtle text-muted border border-secondary-subtle">timeout</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        {% if geo_unavailable_reason %}
+        <div class="small text-muted mt-2">
+            <span class="material-icons me-1" aria-hidden="true">info</span>
+            {{ geo_unavailable_reason }}
+        </div>
+        {% endif %}
+    </div>
+
+    {# RIGHT: Leaflet interactive map #}
+    {% if geo_points %}
+    <div class="col-12 col-lg-7 d-flex flex-column">
+        <div class="flex-grow-1 d-flex flex-column">
+            {# Desktop: min-height 350px, grows with table. Mobile: fixed 350px #}
+            {% set map_id = map_id | default('traceroute-map') %}
+            <div id="{{ map_id }}" class="flex-grow-1 rounded border traceroute-map-container"
+                data-geo-points='{{ geo_points | tojson | replace("'", " &#39;") }}' data-map-id="{{ map_id }}"></div>
+
+            {% if geo_summary %}
+            <div class="d-flex flex-wrap justify-content-between mt-2 small text-muted gap-2">
+                <span>
+                    <span class="material-icons text-primary me-1" aria-hidden="true">location_on</span>
+                    {% if geo_summary.source_country %}{{ country_flag(geo_summary.source_country,
+                    geo_summary.source_country) }}{% endif %}
+                    {{ geo_summary.source_city or 'Unknown' }}
+                </span>
+                <span class="opacity-50 d-none d-sm-inline">→</span>
+                <span>
+                    <span class="material-icons text-danger me-1" aria-hidden="true">location_on</span>
+                    {% if geo_summary.dest_country %}{{ country_flag(geo_summary.dest_country, geo_summary.dest_country)
+                    }}{% endif %}
+                    {{ geo_summary.dest_city or 'Unknown' }}
+                </span>
+                <span class="badge bg-secondary">{{ geo_summary.hops }} hops</span>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+    {% endif %}
+
+</div>
+
+{% else %}
+<div class="text-center text-muted small py-3">
+    <span class="material-icons fs-4 d-block mb-1 opacity-50" aria-hidden="true">account_tree</span>
+    {{ unavailable_reason or 'Network path data unavailable' }}
+</div>
+{% endif %}

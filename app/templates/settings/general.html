@@ -1,0 +1,140 @@
+{# Settings: General Tab Content #}
+<div class="row">
+	<div class="col-lg-6">
+		<div class="card shadow-sm mb-4">
+			<div class="card-header">
+				<h6 class="mb-0">General Settings</h6>
+			</div>
+			<div class="card-body">
+				{# NOTE: Submit is handled by parent settings.html page via global settings save mechanism #}
+				<form id="settings-form" autocomplete="off">
+					<div class="mb-3">
+						<div class="form-check form-switch">
+							<input type="checkbox" class="form-check-input" role="switch" name="purge_enabled"
+								id="purge_enabled" {% if settings.purge_enabled %}checked{% endif %}>
+							<label class="form-check-label" for="purge_enabled">Allow TSDB Purge</label>
+						</div>
+					</div>
+					<div class="mb-3">
+						<div class="form-check form-switch">
+							<input type="checkbox" class="form-check-input" role="switch" name="use_utc_dashboard"
+								id="use_utc_dashboard" {% if settings.use_utc_dashboard %}checked{% endif %}>
+							<label class="form-check-label" for="use_utc_dashboard">
+								Use UTC in Dashboard
+								<span class="material-icons text-muted ms-1" data-bs-toggle="tooltip"
+									data-bs-placement="top"
+									title="When enabled, all times are shown in UTC instead of local browser time">info</span>
+							</label>
+						</div>
+					</div>
+					<div class="mb-3">
+						<div class="form-check form-switch">
+							<input type="checkbox" class="form-check-input" role="switch" name="downsample_enabled"
+								id="downsample_enabled" {% if settings.downsample_enabled %}checked{% endif %}>
+							<label class="form-check-label" for="downsample_enabled">
+								Downsample Metrics
+								<span class="material-icons text-muted ms-1" data-bs-toggle="tooltip"
+									data-bs-placement="top"
+									title="Daily aggregation with 5min jitter per target. Creates rollups for long-term storage: Raw data 30 days, 5-min median 180 days, 1-hour median 365 days. Runs retroactively on existing data when enabled.">info</span>
+							</label>
+						</div>
+					</div>
+					<div class="mb-3">
+						<div class="form-check form-switch">
+							<input type="checkbox" class="form-check-input" role="switch" name="geoip_auto_update"
+								id="geoip_auto_update" {% if settings.geoip_auto_update %}checked{% endif %}>
+							<label class="form-check-label" for="geoip_auto_update">
+								GeoLite DB Auto-Update
+								<span class="material-icons text-muted ms-1" data-bs-toggle="tooltip"
+									data-bs-placement="top"
+									title="Automatically update the MaxMind GeoLite2 database on startup when a new version is available">info</span>
+							</label>
+						</div>
+					</div>
+					<div class="mb-3">
+						<div class="form-check form-switch">
+							<input type="checkbox" class="form-check-input" role="switch" name="telemetry_enabled"
+								id="telemetry_enabled" {% if settings.telemetry_enabled %}checked{% endif %}>
+							<label class="form-check-label" for="telemetry_enabled">
+								Enable Telemetry
+								<span class="material-icons text-muted ms-1" data-bs-toggle="tooltip"
+									data-bs-placement="top"
+									title="Send anonymous usage statistics to help improve JustUp. No personal data is collected.">info</span>
+							</label>
+						</div>
+					</div>
+					<div class="mb-3">
+						<label class="form-label" for="pdf_page_size">PDF Report Paper Size</label>
+						<select class="form-select" id="pdf_page_size" name="pdf_page_size">
+							<option value="a4" {% if settings.pdf_page_size=='a4' %}selected{% endif %}>A4 (210 x 297
+								mm)</option>
+							<option value="letter" {% if settings.pdf_page_size=='letter' %}selected{% endif %}>US
+								Letter (216 x 279 mm)</option>
+						</select>
+					</div>
+
+					{# Danger Zone: Authentication Control #}
+					<hr class="my-3">
+					<div class="mb-3 p-3 border border-warning rounded bg-warning bg-opacity-10">
+						<div class="small text-uppercase text-warning fw-semibold mb-2">
+							<span class="material-icons me-1" style="font-size: 0.875rem;">warning</span>
+							Danger Zone
+						</div>
+						<div class="form-check form-switch">
+							<input type="checkbox" class="form-check-input" role="switch" name="auth_disabled"
+								id="auth_disabled" {% if settings.auth_disabled %}checked{% endif %}>
+							<label class="form-check-label" for="auth_disabled">
+								Disable Authentication
+								<span class="material-icons text-warning ms-1" id="auth-disabled-warning"
+									style="{% if not settings.auth_disabled %}display: none;{% endif %}"
+									data-bs-toggle="tooltip" data-bs-placement="top"
+									title="Authentication is disabled! All pages are publicly accessible.">warning</span>
+							</label>
+							<div class="form-text text-warning-emphasis">
+								When enabled, all pages are publicly accessible without login.
+							</div>
+						</div>
+					</div>
+
+					{# Metrics Timeout Range Slider #}
+					<hr class="my-3">
+					<div class="mb-0">
+						<label for="metrics_timeout_minutes" class="form-label">
+							<span class="material-icons me-1">timer</span>Metrics Timeout: <span
+								class="badge badge-interval" id="metrics_timeout_value">{{
+								settings.metrics_timeout_minutes }} min</span>
+						</label>
+						{% set timeout_min = 1 %}
+						{% set timeout_max = 10 %}
+						<div class="range-wrapper">
+							<div class="range-ticks">
+								{% for i in range(timeout_min, timeout_max + 1) %}
+								<div class="tick">
+									<span class="tick-label">{{ i }}</span>
+									<span class="tick-mark"></span>
+								</div>
+								{% endfor %}
+							</div>
+							<input type="range" class="form-range" name="metrics_timeout_minutes"
+								id="metrics_timeout_minutes" min="{{ timeout_min }}" max="{{ timeout_max }}" step="1"
+								value="{{ settings.metrics_timeout_minutes }}">
+						</div>
+						<div class="form-text">Alert after no data for this duration.</div>
+					</div>
+				</form>
+			</div>
+		</div>
+	</div>
+
+	{# Status Information Panel (Optional) #}
+	<div class="col-lg-6">
+		<div class="card shadow-sm mb-4">
+			<div class="card-header">
+				<h6 class="mb-0">System Status</h6>
+			</div>
+			<div class="card-body">
+				<div class="text-muted small">System status information coming soon...</div>
+			</div>
+		</div>
+	</div>
+</div>

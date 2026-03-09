@@ -1,0 +1,41 @@
+# =============================================================================
+# JustUp Telemetry Collector - Docker Compose
+# =============================================================================
+
+services:
+  justup-tracking:
+    image: docker.cirrio.de/justup-tracking:latest
+    container_name: justup-tracking
+    restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      PUID: 1000
+      PGID: 1000
+      HOST: "0.0.0.0"
+      PORT: "8080"
+      TRACKING_API_SECRET: "gW6ufXTMejEK?ApO5TtyqIrC=JSxV4er"
+      TRACKING_ADMIN_USER: "admin"
+      TRACKING_ADMIN_PASS: "jesusrocks"
+      TRACKING_DB_PATH: /app/data/tracking.db
+      GEOIP_DB_PATH: /app/data/GeoLite2-City.mmdb
+    volumes:
+      - /opt/docker/justup-tracking:/app/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      cloudnet:
+        ipv4_address: 10.30.0.16
+
+networks:
+  cloudnet:
+    external: true

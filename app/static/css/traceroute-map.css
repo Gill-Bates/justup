@@ -1,0 +1,168 @@
+/**
+ * Traceroute Map Fragment Styles
+ * Extracted from inline <style> blocks for better maintainability and HTMX compatibility
+ */
+
+/* ============================================================================
+   MTR Hop Table Styling
+   ============================================================================ */
+
+/* Wrapper for higher specificity without !important */
+.traceroute-fragment table.hop-table.table-sm tbody tr td,
+.traceroute-fragment table.hop-table.table-sm thead tr th {
+    padding: 0.35rem 0.5rem;
+    line-height: 1.4;
+    vertical-align: middle;
+    font-size: 0.85rem;
+}
+
+/* Map container: fixed on mobile, grows with table on desktop */
+.traceroute-map-container {
+    height: 350px;
+}
+
+@media (min-width: 992px) {
+    .traceroute-map-container {
+        height: auto;
+        min-height: 350px;
+    }
+}
+
+/* Hard reset: no vertical gridlines; keep only horizontal separators */
+.traceroute-fragment table.hop-table {
+    border-collapse: collapse;
+    width: 100%;
+}
+
+.traceroute-fragment table.hop-table> :not(caption)>*>* {
+    border: 0;
+    border-bottom: 1px solid var(--bs-border-color-translucent);
+}
+
+.traceroute-fragment table.hop-table thead th {
+    border-bottom: 1px solid var(--bs-border-color);
+}
+
+.traceroute-fragment table.hop-table tbody tr:last-child td {
+    border-bottom: 0;
+}
+
+.traceroute-fragment table.hop-table .badge {
+    font-size: 0.85em;
+    padding: 0.35em 0.65em;
+}
+
+/* All cells: no wrap, take natural width */
+.traceroute-fragment table.hop-table td,
+.traceroute-fragment table.hop-table th {
+    white-space: nowrap;
+}
+
+/* Network Path cell: allow stacking but limit width */
+.traceroute-fragment table.hop-table .ip-host-cell {
+    max-width: min(300px, 40vw);
+    /* 40% viewport width, max 300px */
+    overflow: hidden;
+}
+
+/* IP address: truncate with ellipsis, allow breaking IPv6 */
+.traceroute-fragment table.hop-table .ip-address {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    word-break: break-all;
+    /* Break long IPv6 addresses if needed */
+}
+
+/* Hostname in gray below IP: always truncate */
+.traceroute-fragment table.hop-table .hostname-small {
+    display: block;
+    font-size: 0.75rem;
+    color: var(--bs-secondary);
+    margin-top: 0.15rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.traceroute-fragment .country-flag-svg {
+    width: 1.1rem;
+    height: 0.78rem;
+    margin-right: 0.32rem;
+    vertical-align: -0.08rem;
+    border-radius: 0.12rem;
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08);
+}
+
+.traceroute-fragment .country-flag-fallback {
+    font-size: 0.72rem;
+    margin-right: 0.28rem;
+    color: var(--bs-secondary-color);
+}
+
+/* Mobile: Reduce max width */
+@media (max-width: 576px) {
+    .traceroute-fragment table.hop-table .ip-host-cell {
+        max-width: 180px;
+    }
+}
+
+/* ============================================================================
+   Leaflet Map Customization
+   ============================================================================ */
+
+.leaflet-div-icon-custom {
+    background: transparent;
+    border: none;
+}
+
+/* Zoom controls - keep !important for third-party library override */
+.leaflet-control-zoom a {
+    background-color: rgba(33, 37, 41, 0.7) !important;
+    color: rgba(255, 255, 255, 0.8) !important;
+    border-color: rgba(255, 255, 255, 0.1) !important;
+}
+
+.leaflet-control-zoom a:hover {
+    background-color: rgba(33, 37, 41, 0.9) !important;
+    color: #fff !important;
+}
+
+/* Hide tile seams caused by subpixel rendering gaps */
+.leaflet-tile-container {
+    will-change: transform;
+    transform: translateZ(0);
+}
+
+.leaflet-tile {
+    /* Multi-layer fix for tile seams */
+    outline: 1px solid transparent !important;
+    border: none !important;
+    /* Slight scale-up eliminates subpixel gaps between tiles */
+    transform: scale(1.002);
+    transform-origin: center center;
+    backface-visibility: hidden;
+    -webkit-backface-visibility: hidden;
+    image-rendering: crisp-edges;
+}
+
+.leaflet-tile-pane {
+    image-rendering: auto;
+}
+
+/* Force GPU compositing layer */
+.traceroute-map-container {
+    transform: translateZ(0);
+    -webkit-transform: translateZ(0);
+}
+
+/* Prevent light flash in dark mode - set background before tiles load */
+[data-bs-theme="dark"] .traceroute-map-container {
+    background-color: #2b2d31;
+}
+
+[data-bs-theme="light"] .traceroute-map-container,
+:root:not([data-bs-theme="dark"]) .traceroute-map-container {
+    background-color: #e9ecef;
+}

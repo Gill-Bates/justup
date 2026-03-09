@@ -1,0 +1,219 @@
+{# Targets Table Fragment (HTMX) - Grouped by Group Name #}
+{% if grouped_targets %}
+	<div class="accordion targets-group" id="targets-accordion">
+		{% for group_name, group_targets in grouped_targets.items() %}
+		{% set is_ungrouped = (group_name == 'Ungrouped') %}
+		{# Slugify group_id: remove all non-alphanumeric chars, lowercase #}
+		{% set group_id = group_name | lower | replace(' ', '_') | regex_replace('[^a-z0-9_]', '') %}
+		{% set group_id = group_id if group_id else 'default' %}
+		<div class="accordion-item">
+			<h2 class="accordion-header">
+				<button class="accordion-button targets-group-header" type="button" data-bs-toggle="collapse"
+					data-bs-target="#group-{{ group_id }}" aria-expanded="true"
+					data-group-key="targets_group_{{ group_id }}">
+					{% if is_ungrouped %}
+					<span class="group-icon text-muted"><span class="material-icons" aria-hidden="true">inbox</span></span>
+					<span class="text-muted">Ungrouped</span>
+					{% else %}
+				<span class="group-icon"><span class="material-icons" aria-hidden="true">folder</span></span>
+				<strong>{{ group_name }}</strong>
+				{% endif %}
+				<span class="badge bg-secondary">{{ group_targets | length }}</span>
+				</button>
+			</h2>
+			<div id="group-{{ group_id }}" class="accordion-collapse collapse show"
+				data-group-key="targets_group_{{ group_id }}">
+				<div class="accordion-body p-0">
+					<div class="ui-card">
+						<table class="table table-hover align-middle rtable targets-table mb-0">
+						<colgroup>
+							<col class="col-status">
+							<col class="col-name">
+							<col class="col-checks">
+							<col class="col-uptime">
+							<col class="col-lastchk">
+							<col class="col-lastdown">
+							<col class="col-http">
+							<col class="col-interval">
+							<col class="col-actions">
+						</colgroup>
+						<thead>
+							<tr>
+								<th class="text-center"><span class="visually-hidden">Status</span></th>
+								<th>Name</th>
+								<th>Checks</th>
+								<th>Uptime</th>
+								<th>Last Check</th>
+								<th>Last Downtime</th>
+								<th>HTTP</th>
+								<th>Interval</th>
+								<th class="text-end"><span class="visually-hidden">Actions</span></th>
+							</tr>
+						</thead>
+						<tbody>
+							{% for t in group_targets %}
+							<tr>
+								<td data-label="Status" class="text-center">
+									<span hx-get="/ui/fragments/target-status/{{ t.id }}" hx-trigger="load, every 15s"
+										hx-swap="innerHTML">
+										<span class="material-icons fs-5 status-unknown">circle</span>
+									</span>
+								</td>
+								<td data-label="Name">
+									<a href="/ui/targets/{{ t.id }}" class="text-decoration-none" title="{{ t.name }}">
+										{{ t.name }}
+									</a>
+								</td>
+								<td data-label="Checks" class="checks-cell">
+									<div class="check-badges">
+									{% if t.enable_ping %}
+									<span class="badge {% if t.ping_status == 'up' %}bg-success{% elif t.ping_status == 'down' %}bg-danger{% else %}bg-secondary{% endif %}">Ping</span>
+									{% endif %}
+									{% if t.enable_http_check %}
+									<span class="badge {% if t.http_status == 'up' %}bg-success{% elif t.http_status == 'down' %}bg-danger{% else %}bg-secondary{% endif %}">HTTP</span>
+									{% endif %}
+									{% if t.enable_cert_expiration %}
+									<span class="badge {% if t.cert_status == 'ok' %}bg-success{% elif t.cert_status == 'warning' %}bg-warning text-dark{% elif t.cert_status == 'critical' %}bg-danger{% else %}bg-secondary{% endif %}">Cert</span>
+									{% endif %}
+									{% if t.enable_tcp_connect %}
+									{% set port_status = t.tcp_port_status or {} %}
+									{% set ports = (t.tcp_ports or '80').split(',') %}
+									{% set up_count = port_status.values() | select('eq', 'up') | list | length %}
+									{% set total_count = ports | length %}
+									{% set has_data = port_status | length > 0 %}
+									{% if total_count == 1 %}
+									<span class="badge {% if t.tcp_status == 'up' %}bg-success{% elif t.tcp_status == 'down' %}bg-danger{% else %}bg-secondary{% endif %}" title="TCP Port {{ ports[0] }}">TCP:{{ ports[0] }}</span>
+									{% else %}
+									{# Multiple ports: show individual port badges #}
+									{% for port in ports %}
+									{% set ps = port_status.get(port | trim, 'unknown') %}
+									<span class="badge {% if ps == 'up' %}bg-success{% elif ps == 'down' %}bg-danger{% else %}bg-secondary{% endif %}" title="TCP Port {{ port | trim }}">TCP:{{ port | trim }}</span>
+									{% endfor %}
+									{% endif %}
+									{% endif %}
+									</div>
+								</td>
+								<td data-label="Uptime">
+									{% if t.uptime_percent is not none %}
+									{% if t.uptime_percent >= 99.9 %}
+									<span class="uptime-value uptime-ok">{{ t.uptime_percent|format_percent }}</span>
+									{% elif t.uptime_percent >= 99.0 %}
+									<span class="uptime-value uptime-warn">{{ t.uptime_percent|format_percent }}</span>
+									{% else %}
+									<span class="uptime-value uptime-bad">{{ t.uptime_percent|format_percent }}</span>
+									{% endif %}
+									{% else %}
+									<span class="text-muted">–</span>
+									{% endif %}
+								</td>
+								<td data-label="Last Check">
+									{% if t.last_check %}
+									{# Backend should provide ISO string; template just renders #}
+									{% set last_check_iso = t.last_check.isoformat() if t.last_check.isoformat is callable else t.last_check %}
+									<small class="text-muted local-time" data-utc="{{ last_check_iso }}">
+										{{ last_check_iso[:16] | replace('T', ' ') }} UTC
+									</small>
+									{% else %}
+									<span class="text-muted">–</span>
+									{% endif %}
+								</td>
+								<td data-label="Last Downtime">
+									{% if t.last_downtime %}
+									{% set last_downtime_iso = t.last_downtime.isoformat() if t.last_downtime.isoformat is callable else t.last_downtime %}
+									<small class="text-muted local-time" data-utc="{{ last_downtime_iso }}">
+										{{ last_downtime_iso[:16] | replace('T', ' ') }} UTC
+									</small>
+									{% else %}
+									<span class="text-success"><span class="material-icons fs-5">check_circle</span></span>
+									{% endif %}
+								</td>
+								<td data-label="HTTP">
+									{% if t.enable_http_check and t.http_response_code is not none %}
+									<span class="badge badge-http">{{ t.http_response_code }}</span>
+									{% else %}
+									<span class="text-muted">–</span>
+									{% endif %}
+								</td>
+								<td data-label="Interval"><span class="badge badge-interval">{{ t.interval_seconds }}s</span></td>
+									<td data-label="Actions" class="text-end actions-cell">
+										<div class="action-buttons">
+											<a href="/ui/targets/{{ t.id }}" class="btn btn-sm btn-icon btn-outline-secondary" title="View Details">
+												<span class="material-icons">visibility</span>
+											</a>
+											{% if user and user.is_admin %}
+											<a href="/ui/targets/{{ t.id }}/edit" class="btn btn-sm btn-icon btn-outline-secondary" title="Edit">
+												<span class="material-icons">edit</span>
+											</a>
+											<button class="btn btn-sm btn-icon btn-outline-secondary" title="Reset Metrics"
+												hx-post="/targets/{{ t.id }}/reset"
+												hx-confirm="Reset all metrics for {{ t.name }}?"
+												hx-swap="none"
+												hx-disabled-elt="this"
+												data-success-toast="Metrics reset"
+												data-success-trigger="#targets-table"
+												data-success-event="refresh">
+												<i class="material-icons">recycling</i>
+											</button>
+											<button class="btn btn-sm btn-icon btn-outline-danger" title="Delete"
+												hx-delete="/targets/{{ t.id }}"
+												hx-confirm="Really delete this target?"
+												hx-swap="none"
+												hx-disabled-elt="this"
+												data-success-toast="Target deleted"
+												data-success-trigger="#targets-table"
+												data-success-event="refresh">
+												<span class="material-icons">delete</span>
+											</button>
+											{% endif %}
+										</div>
+									</td>
+							</tr>
+							{% endfor %}
+						</tbody>
+					</table>
+				</div>
+			</div>
+		</div>
+	</div>
+	{% endfor %}
+</div>
+
+{# Init handled by global htmx:load handler in base.html #}
+
+{% if total_pages > 1 %}
+<div class="d-flex justify-content-between align-items-center mt-3 px-2">
+    <div class="text-muted small">
+        Page {{ page }} of {{ total_pages }} ({{ total }} targets)
+    </div>
+    <ul class="pagination pagination-sm m-0">
+        <li class="page-item {% if page <= 1 %}disabled{% endif %}">
+            <button class="page-link" 
+                    hx-get="/ui/fragments/targets-table?page={{ page - 1 }}" 
+                    hx-target="#targets-table" 
+                    hx-swap="innerHTML"
+                    {% if page <= 1 %}disabled{% endif %}>
+                <span class="material-icons" style="font-size: 14px; vertical-align: middle;">chevron_left</span>
+            </button>
+        </li>
+        
+        <li class="page-item {% if page >= total_pages %}disabled{% endif %}">
+            <button class="page-link" 
+                    hx-get="/ui/fragments/targets-table?page={{ page + 1 }}" 
+                    hx-target="#targets-table" 
+                    hx-swap="innerHTML"
+                    {% if page >= total_pages %}disabled{% endif %}>
+                <span class="material-icons" style="font-size: 14px; vertical-align: middle;">chevron_right</span>
+            </button>
+        </li>
+    </ul>
+</div>
+{% endif %}
+
+{% else %}
+<div class="ui-empty text-center text-muted">
+	<span class="material-icons fs-1 mb-2">inbox</span>
+	<p class="mb-0">No targets configured yet.</p>
+</div>
+{% endif %}
+
+

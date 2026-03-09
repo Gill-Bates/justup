@@ -4,3 +4,5 @@
 # Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 #
 
+"""Database access layer (SQLite and TSDB)."""
+

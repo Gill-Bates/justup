@@ -3,112 +3,306 @@
 // Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 //
 
-let refreshInterval = null;
+(function () {
+	'use strict';
 
-document.addEventListener('DOMContentLoaded', () => {
-    // Only load dashboard if the table is empty (not pre-rendered by server)
-    const tbody = document.getElementById('monitors-table-body');
-    const hasServerData = tbody && tbody.children.length > 0 && !tbody.querySelector('.text-muted');
+	// Defensive check: Ensure apiFetch is available
+	if (typeof window.apiFetch !== 'function') {
+		console.error('apiFetch is not defined. Ensure base.html loads the API utility.');
+		return;
+	}
 
-    if (!hasServerData) {
-        loadDashboard();
-    }
+	// ─────────────────────────────────────────────────────────────
+	// Configuration Constants
+	// ─────────────────────────────────────────────────────────────
+	const MIN_DOWNTIME_MS = 60 * 1000;          // 60s — minimum duration to count as incident
+	const LOOKBACK_WINDOW_MS = 24 * 60 * 60 * 1000; // 24h — time window for downtime stats
+	const POLL_INTERVAL_MS = 30 * 1000;         // 30s — polling interval when tab is visible
+	const MAX_POINTS_PER_TARGET = 2000;         // Cap to prevent UI freeze with large datasets
 
-    refreshInterval = setInterval(loadDashboard, 30000);
+	// ─────────────────────────────────────────────────────────────
+	// Utility Functions
+	// ─────────────────────────────────────────────────────────────
 
-    window.addEventListener('ju:reconnect:stop', loadDashboard);
-});
+	function formatDuration(ms) {
+		if (ms <= 0) return '0s';
+		if (ms < 1000) return '< 1s';
+		const seconds = Math.floor(ms / 1000);
+		const minutes = Math.floor(seconds / 60);
+		const hours = Math.floor(minutes / 60);
 
-async function loadDashboard() {
-    try {
-        const monitors = await api('GET', '/api/monitors');
-        updateStats(monitors || []);
-        renderMonitorTable(monitors || []);
-    } catch (err) {
-        // Silently fail — reconnect logic handles display
-    }
+		if (hours > 0) {
+			const remainingMinutes = minutes % 60;
+			return remainingMinutes > 0 ? (hours + 'h ' + remainingMinutes + 'm') : (hours + 'h');
+		}
+		if (minutes > 0) {
+			const remainingSeconds = seconds % 60;
+			return remainingSeconds > 0 ? (minutes + 'm ' + remainingSeconds + 's') : (minutes + 'm');
+		}
+		return seconds + 's';
+	}
 
-    try {
-        const incidents = await api('GET', '/api/monitors/incidents/recent');
-        renderIncidents(incidents || []);
-    } catch (_) { }
-}
+	/**
+	 * Create a table cell displaying service downtime.
+	 * @param {Object} stats - Stats object with totalDowntimeMs property
+	 * @returns {HTMLTableCellElement}
+	 */
+	function createServiceCell(stats) {
+		const td = document.createElement('td');
+		td.className = 'text-end';
+		if (stats.totalDowntimeMs > 0) {
+			td.className += ' text-danger fw-semibold';
+			td.textContent = formatDuration(stats.totalDowntimeMs);
+		} else {
+			td.className += ' text-muted';
+			td.textContent = '—';
+		}
+		return td;
+	}
 
-function updateStats(monitors) {
-    const up = monitors.filter(m => m.is_active && m.status === 'up').length;
-    const down = monitors.filter(m => m.is_active && m.status === 'down').length;
-    const paused = monitors.filter(m => !m.is_active || m.status === 'paused').length;
-    const total = monitors.length;
+	// ─────────────────────────────────────────────────────────────
+	// Downtime Calculation
+	// ─────────────────────────────────────────────────────────────
 
-    setText('stat-up', up);
-    setText('stat-down', down);
-    setText('stat-paused', paused);
-    setText('stat-total', total);
-}
+	function calculateDowntimeStats(points) {
+		const withTs = (points || []).map(function (p) {
+			const ts = new Date(p.ts).getTime();
+			// Skip unparseable timestamps (NaN check)
+			if (isNaN(ts)) return null;
+			return { ...p, _ts: ts };
+		}).filter(Boolean);
+		withTs.sort(function (a, b) { return a._ts - b._ts; });
 
-function setText(id, value) {
-    const el = document.getElementById(id);
-    if (el) el.textContent = value;
-}
+		let totalDowntimeMs = 0;
+		let incidentCount = 0;
+		let wasDown = false;
+		let downStartTime = null;
 
-function escapeHtml(text) {
-    const el = document.createElement('span');
-    el.textContent = text;
-    return el.innerHTML;
-}
+		for (let i = 0; i < withTs.length; i++) {
+			const point = withTs[i];
+			const isDown = point.value === 0;
 
-function renderMonitorTable(monitors) {
-    const tbody = document.getElementById('monitors-table-body');
-    if (!tbody) return;
+			if (isDown && !wasDown) {
+				downStartTime = point._ts;
+				wasDown = true;
+			} else if (!isDown && wasDown) {
+				if (downStartTime !== null) {
+					const duration = point._ts - downStartTime;
+					// Only count as incident if downtime >= MIN_DOWNTIME_MS
+					if (duration >= MIN_DOWNTIME_MS) {
+						totalDowntimeMs += duration;
+						incidentCount++;
+					}
+				}
+				wasDown = false;
+				downStartTime = null;
+			}
+		}
 
-    if (monitors.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-4"><span class="material-icons d-block mb-2" style="font-size:2rem">monitor_heart</span>No monitors configured yet. <a href="/ui/monitors">Add your first monitor</a></td></tr>';
-        return;
-    }
+		// Ongoing downtime (still down at end of data)
+		if (wasDown && downStartTime !== null) {
+			const ongoingDuration = Date.now() - downStartTime;
+			if (ongoingDuration >= MIN_DOWNTIME_MS) {
+				totalDowntimeMs += ongoingDuration;
+				incidentCount++;
+			}
+		}
 
-    tbody.innerHTML = monitors.map(m => {
-        const badge = m.status === 'up'
-            ? '<span class="badge bg-success">UP</span>'
-            : m.status === 'down'
-                ? '<span class="badge bg-danger">DOWN</span>'
-                : m.status === 'paused'
-                    ? '<span class="badge bg-secondary">PAUSED</span>'
-                    : '<span class="badge bg-secondary">PENDING</span>';
+		return { totalDowntimeMs, incidentCount };
+	}
 
-        const typeLabel = (m.monitor_type || 'http').toUpperCase();
-        const responseTime = m.last_response_time_ms != null
-            ? `${Math.round(m.last_response_time_ms)} ms`
-            : '–';
+	// ─────────────────────────────────────────────────────────────
+	// Main Data Loading
+	// ─────────────────────────────────────────────────────────────
 
-        return `<tr>
-            <td>${badge}</td>
-            <td>${escapeHtml(m.name)}</td>
-            <td><span class="badge bg-secondary">${typeLabel}</span></td>
-            <td>${responseTime}</td>
-            <td>–</td>
-        </tr>`;
-    }).join('');
-}
+	let downtimeLoading = false;
 
-function renderIncidents(incidents) {
-    const tbody = document.getElementById('dashboard-incidents-tbody');
-    if (!tbody) return;
+	async function loadDowntimeOverview() {
+		if (downtimeLoading) return;
+		downtimeLoading = true;
 
-    if (incidents.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted py-4">No recent incidents.</td></tr>';
-        return;
-    }
+		const since = new Date(Date.now() - LOOKBACK_WINDOW_MS).toISOString();
 
-    tbody.innerHTML = incidents.map(inc => {
-        const resolved = inc.resolved_at
-            ? '<span class="badge bg-success">Resolved</span>'
-            : '<span class="badge bg-danger">Ongoing</span>';
+		const tableContainer = document.getElementById('downtime-table-container');
+		const tableBody = document.getElementById('downtime-table-body');
+		const successState = document.getElementById('downtime-success');
+		const emptyState = document.getElementById('downtime-empty');
+		const loadingState = document.getElementById('downtime-loading');
+		const badge = document.getElementById('downtime-count-badge');
 
-        return `<tr>
-            <td>${escapeHtml(inc.monitor_name || '-')}</td>
-            <td>${resolved}</td>
-            <td>${inc.started_at || '-'}</td>
-            <td>${inc.duration || '-'}</td>
-        </tr>`;
-    }).join('');
-}
+		try {
+			const resp = await window.apiFetch(
+				'/dashboard/downtime?since=' + encodeURIComponent(since) +
+				'&limit=' + MAX_POINTS_PER_TARGET
+			);
+
+			if (!resp.ok) {
+				if (loadingState) loadingState.classList.add('d-hidden');
+				if (emptyState) emptyState.classList.remove('d-hidden');
+				return;
+			}
+
+			let data;
+			try {
+				data = await resp.json();
+			} catch (parseErr) {
+				console.error('Failed to parse downtime response:', parseErr);
+				if (loadingState) loadingState.classList.add('d-hidden');
+				if (emptyState) emptyState.classList.remove('d-hidden');
+				return;
+			}
+			const targets = data.targets || [];
+
+			if (loadingState) loadingState.classList.add('d-hidden');
+
+			if (targets.length === 0) {
+				try {
+					const uptimeResp = await window.apiFetch(
+						'/dashboard/uptime?since=' + encodeURIComponent(since) + '&limit=10'
+					);
+					if (uptimeResp.ok) {
+						const uptimeData = await uptimeResp.json();
+						const hasAnyData = (uptimeData.targets || []).some(function (t) {
+							return (t.points || []).length > 0;
+						});
+						if (hasAnyData) {
+							if (successState) successState.classList.remove('d-hidden');
+						} else {
+							if (emptyState) emptyState.classList.remove('d-hidden');
+						}
+					} else {
+						if (emptyState) emptyState.classList.remove('d-hidden');
+					}
+				} catch (innerErr) {
+					console.warn('Uptime fallback check failed:', innerErr);
+					if (emptyState) emptyState.classList.remove('d-hidden');
+				}
+
+				if (tableContainer) tableContainer.classList.add('d-hidden');
+				if (badge) badge.classList.add('d-hidden');
+				return;
+			}
+
+			const stats = targets.map(function (target) {
+				const services = target.services || {};
+				const httpStats = calculateDowntimeStats(
+					(services.http_up || []).slice(0, MAX_POINTS_PER_TARGET)
+				);
+				const pingStats = calculateDowntimeStats(
+					(services.ping_up || []).slice(0, MAX_POINTS_PER_TARGET)
+				);
+				const tcpStats = calculateDowntimeStats(
+					(services.tcp_up || []).slice(0, MAX_POINTS_PER_TARGET)
+				);
+
+				// Worst single-service downtime (used for sorting)
+				const worstDowntimeMs = Math.max(
+					httpStats.totalDowntimeMs,
+					pingStats.totalDowntimeMs,
+					tcpStats.totalDowntimeMs
+				);
+
+				return {
+					target_id: target.target_id,
+					name: target.name,
+					http: httpStats,
+					ping: pingStats,
+					tcp: tcpStats,
+					worstDowntimeMs,
+				};
+			}).sort(function (a, b) {
+				return b.worstDowntimeMs - a.worstDowntimeMs;
+			});
+
+			if (badge) {
+				badge.textContent = stats.length + ' affected';
+				badge.classList.remove('d-hidden');
+			}
+
+			// Build table rows with DOM API (prevents XSS via href injection)
+			if (tableBody) {
+				tableBody.innerHTML = '';
+				stats.forEach(function (s) {
+					const tr = document.createElement('tr');
+
+					// Target name column
+					const tdName = document.createElement('td');
+					const a = document.createElement('a');
+					a.href = '/ui/targets/' + encodeURIComponent(s.target_id);
+					a.className = 'text-decoration-none text-reset fw-semibold';
+
+					const icon = document.createElement('span');
+					icon.className = 'material-icons text-danger me-1';
+					icon.textContent = 'error';
+					a.appendChild(icon);
+					a.appendChild(document.createTextNode(s.name));
+					tdName.appendChild(a);
+					tr.appendChild(tdName);
+
+					// Service columns (HTTP, Ping, TCP)
+					tr.appendChild(createServiceCell(s.http));
+					tr.appendChild(createServiceCell(s.ping));
+					tr.appendChild(createServiceCell(s.tcp));
+
+					tableBody.appendChild(tr);
+				});
+			}
+
+			if (tableContainer) tableContainer.classList.remove('d-hidden');
+			if (successState) successState.classList.add('d-hidden');
+			if (emptyState) emptyState.classList.add('d-hidden');
+		} catch (e) {
+			console.error('Failed to load downtime overview:', e);
+			if (loadingState) loadingState.classList.add('d-hidden');
+			if (emptyState) emptyState.classList.remove('d-hidden');
+		} finally {
+			downtimeLoading = false;
+		}
+	}
+
+	// ─────────────────────────────────────────────────────────────
+	// UI Bindings
+	// ─────────────────────────────────────────────────────────────
+
+	function bindRefreshButton() {
+		const btn = document.getElementById('dashboard-refresh-btn');
+		if (!btn || btn.dataset.bound) return;
+		btn.dataset.bound = '1';
+		btn.addEventListener('click', function (e) {
+			e.preventDefault();
+			location.reload();
+		});
+	}
+
+	document.body.addEventListener('htmx:afterSwap', function (evt) {
+		const el = evt && evt.detail && evt.detail.elt;
+		if (el && el.classList) {
+			el.classList.remove('fade-in');
+			// Force reflow to restart animation
+			void el.offsetWidth;
+			el.classList.add('fade-in');
+		}
+	});
+
+	document.addEventListener('DOMContentLoaded', function () {
+		bindRefreshButton();
+		loadDowntimeOverview();
+
+		// Poll only when tab is visible (save resources in background tabs)
+		const intervalId = window.setInterval(function () {
+			if (document.visibilityState === 'hidden') return;
+			loadDowntimeOverview();
+		}, POLL_INTERVAL_MS);
+
+		// Cleanup interval when dashboard elements are removed
+		document.body.addEventListener('htmx:beforeSwap', function cleanup(evt) {
+			const swapTarget = evt.detail.target;
+			const dashboard = document.getElementById('downtime-table-container');
+			// Only cleanup if dashboard exists and is being removed
+			if (dashboard && swapTarget && (swapTarget.contains(dashboard) || swapTarget === document.body)) {
+				clearInterval(intervalId);
+				document.body.removeEventListener('htmx:beforeSwap', cleanup);
+			}
+		});
+	});
+})();

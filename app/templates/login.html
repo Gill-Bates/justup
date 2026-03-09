@@ -1,125 +1,168 @@
 <!DOCTYPE html>
-<html lang="en" data-bs-theme="light" class="login-page">
+<html lang="en" data-bs-theme="light">
 
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta http-equiv="Cache-Control" content="no-store">
-    <meta http-equiv="Pragma" content="no-cache">
-    <title>Login – justUp</title>
-    <link rel="icon" type="image/svg+xml" href="/static/img/justup.svg">
-    <link href="/static/vendor/bootstrap.min.css" rel="stylesheet">
-    <link href="/static/css/style.css" rel="stylesheet">
-    <link href="/static/css/ju-ui-system.css" rel="stylesheet">
-    <link href="/static/css/login.css" rel="stylesheet">
-    <link href="/static/vendor/material-icons.css" rel="stylesheet">
-    <script src="/static/js/theme.js"></script>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>Login – justUp</title>
+	<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+	<link href="/static/css/bootstrap.min.css" rel="stylesheet">
+	<link href="/static/css/material-icons.css" rel="stylesheet">
+	<script src="/static/js/theme-init.js"></script>
+	<style>
+		/* Finding #7: Allow scroll on small screens (mobile keyboard overlap fix) */
+		html,
+		body {
+			min-height: 100%;
+			margin: 0;
+			/* overflow: hidden removed - allows scroll when needed */
+			/* iOS: Prevent automatic text zoom on rotation */
+			-webkit-text-size-adjust: 100%;
+		}
+
+		body {
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			/* Use dvh for iOS Safari (accounts for address bar), fallback to vh */
+			min-height: 100vh;
+			min-height: 100dvh;
+			padding: 1rem 0;
+			/* Prevent cutoff on small screens */
+			/* iOS: Safe area padding for notch/home indicator (constant for iOS 11.0-11.2, env for 11.2+) */
+			padding-top: max(1rem, constant(safe-area-inset-top));
+			padding-top: max(1rem, env(safe-area-inset-top));
+			padding-bottom: max(1rem, constant(safe-area-inset-bottom));
+			padding-bottom: max(1rem, env(safe-area-inset-bottom));
+		}
+
+		/* iOS/mobile: Shift content slightly upward for better visual balance */
+		@media (max-width: 576px) {
+			body {
+				align-items: flex-start;
+				padding-top: max(2rem, constant(safe-area-inset-top, 2rem));
+				padding-top: max(2rem, env(safe-area-inset-top, 2rem));
+			}
+		}
+
+		[data-bs-theme="light"] body {
+			background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+		}
+
+		[data-bs-theme="dark"] body {
+			background: linear-gradient(135deg, #1a1d21 0%, #2d3436 100%);
+		}
+
+		[data-bs-theme="dark"] .card {
+			background-color: #212529;
+			border-color: #373b3e;
+		}
+
+		[data-bs-theme="dark"] .form-control {
+			background-color: #2c3034;
+			border-color: #495057;
+			color: #e1e3e5;
+		}
+
+		[data-bs-theme="dark"] .form-control:focus {
+			background-color: #343a40;
+			border-color: rgb(13, 202, 240);
+			color: #e1e3e5;
+		}
+
+		.login-card {
+			max-width: 400px;
+			width: 100%;
+			margin: 0 1rem;
+		}
+
+		/* Heartbeat animation */
+		@keyframes heartbeat-dash {
+			0% {
+				stroke-dashoffset: 600;
+			}
+
+			100% {
+				stroke-dashoffset: 0;
+			}
+		}
+
+		/* Finding #9: Fixed SVG aspect ratio - remove negative margin hack */
+		.heartbeat-line {
+			color: var(--bs-primary);
+			margin-bottom: 0.5rem;
+			/* Proper spacing instead of hack */
+		}
+
+		.heartbeat-path {
+			stroke-dasharray: 600;
+			animation: heartbeat-dash 2s linear infinite;
+		}
+
+		/* Logo styles */
+		.logo {
+			color: #212529;
+			height: auto;
+			filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.15));
+		}
+
+		[data-bs-theme="dark"] .logo {
+			color: #f8f9fa;
+			filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.4));
+		}
+	</style>
 </head>
 
-<body data-csrf-token="{{ csrf_token }}">
-    <div class="card login-card">
-        <div class="card-body p-4 p-sm-5">
-            <div class="text-center mb-4">
-                <div class="logo-icon mb-3 d-flex justify-content-center">
-                    <img src="/static/img/justup.svg" alt="justUp" class="logo-main logo-themed">
-                </div>
-                <p class="login-tagline small mb-2">Uptime monitoring made simple.</p>
-            </div>
-
-            <div class="alert alert-danger d-none" id="error-alert" role="alert" aria-live="assertive"
-                aria-atomic="true"></div>
-
-            <form id="login-form" aria-describedby="error-alert">
-                <div class="mb-3">
-                    <label for="username" class="form-label">Username</label>
-                    <input type="text" class="form-control form-control-lg" id="username" name="username"
-                        autocomplete="username" autocapitalize="off" autocorrect="off" required autofocus
-                        aria-describedby="error-alert">
-                </div>
-
-                <div class="mb-4">
-                    <label for="password" class="form-label">Password</label>
-                    <input type="password" class="form-control form-control-lg" id="password" name="password"
-                        autocomplete="current-password" required aria-describedby="error-alert">
-                </div>
-
-                <button type="submit" class="btn btn-primary btn-lg w-100" id="submit-btn">
-                    Sign In
-                </button>
-            </form>
-
-            <!-- Passkey Login Section -->
-            <div id="passkey-section" class="hidden">
-                <div class="d-flex align-items-center my-3">
-                    <hr class="flex-grow-1">
-                    <span class="px-3 text-muted small">or</span>
-                    <hr class="flex-grow-1">
-                </div>
-                <button type="button" class="btn btn-outline-secondary btn-lg w-100" id="passkey-login-btn">
-                    <span class="material-icons align-middle me-2 icon-sm">fingerprint</span>
-                    Sign in with Passkey
-                </button>
-            </div>
-
-            <div id="mfa-form" class="hidden">
-                <div class="text-center mb-3" id="mfa-header">
-                    <span class="material-icons icon-lg text-primary">security</span>
-                    <h5 class="mt-2 mb-1">Two-Factor Authentication</h5>
-                    <p class="text-muted small mb-0">Enter the 6-digit code from your authenticator app</p>
-                </div>
-
-                <div class="otp-digits-container mb-3" id="otp-digits">
-                    <input type="text" class="form-control otp-digit" maxlength="1" inputmode="numeric" pattern="[0-9]"
-                        autocomplete="off" data-index="0">
-                    <input type="text" class="form-control otp-digit" maxlength="1" inputmode="numeric" pattern="[0-9]"
-                        autocomplete="off" data-index="1">
-                    <input type="text" class="form-control otp-digit" maxlength="1" inputmode="numeric" pattern="[0-9]"
-                        autocomplete="off" data-index="2">
-                    <span class="otp-separator">–</span>
-                    <input type="text" class="form-control otp-digit" maxlength="1" inputmode="numeric" pattern="[0-9]"
-                        autocomplete="off" data-index="3">
-                    <input type="text" class="form-control otp-digit" maxlength="1" inputmode="numeric" pattern="[0-9]"
-                        autocomplete="off" data-index="4">
-                    <input type="text" class="form-control otp-digit" maxlength="1" inputmode="numeric" pattern="[0-9]"
-                        autocomplete="off" data-index="5">
-                </div>
-
-                <button type="button" class="btn btn-primary btn-lg w-100" id="mfa-submit-btn" disabled>
-                    Verify
-                </button>
-
-                <div class="text-center mt-3">
-                    <button type="button" class="btn btn-link btn-sm text-muted" id="use-recovery-btn">
-                        Use recovery code instead
-                    </button>
-                </div>
-
-                <div id="recovery-form" class="hidden mt-3">
-                    <div class="mb-3">
-                        <label for="recovery-code" class="form-label">Recovery Code</label>
-                        <input type="text" class="form-control form-control-lg" id="recovery-code"
-                            placeholder="Enter recovery code" autocomplete="off" aria-label="Enter your recovery code">
-                    </div>
-                    <button type="button" class="btn btn-warning btn-lg w-100" id="recovery-submit-btn">
-                        Verify Recovery Code
-                    </button>
-                </div>
-            </div>
-
-            <div class="text-center mt-4">
-                <button type="button" class="btn btn-sm btn-outline-secondary theme-toggle-btn" id="theme-toggle-btn"
-                    aria-label="Toggle theme">
-                    <span class="material-icons theme-icon" id="theme-icon-login">dark_mode</span>
-                </button>
-            </div>
-        </div>
-    </div>
-
-    <!-- External JavaScript -->
-    <script src="/static/vendor/bootstrap.bundle.min.js"></script>
-    <script src="/static/js/passkeys.js" defer></script>
-    <script src="/static/js/mfa.js" defer></script>
-    <script src="/static/js/login.js" defer></script>
+<body>
+	<div class="card login-card shadow-lg">
+		<div class="card-body p-4 p-sm-5">
+			<div class="text-center mb-4">
+				{# Finding #9: Heartbeat animation - height matches viewBox to prevent stretching #}
+				<svg class="heartbeat-line" width="200" height="40" viewBox="0 0 200 40" fill="none"
+					xmlns="http://www.w3.org/2000/svg">
+					<path class="heartbeat-path"
+						d="M0 20 L40 20 L50 20 L55 5 L60 35 L65 15 L70 25 L75 20 L85 20 L95 20 L100 5 L105 35 L110 15 L115 25 L120 20 L200 20"
+						stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"
+						fill="none"></path>
+				</svg>
+				<svg class="logo mb-3" width="220" fill="currentColor" xmlns="http://www.w3.org/2000/svg"
+					viewBox="0 0 774.55 289.16">
+					<path
+						d="M245.07,117.86l-14.01,80.86c-2.07,3.4-4.71,6.18-7.93,8.34-3.96,2.65-8.94,3.87-14.95,3.66-2.83-.07-5.09-.62-6.78-1.64-1.7-1.02-3-2.38-3.92-4.08-.92-1.7-1.48-3.62-1.7-5.78-.21-2.16-.21-4.43,0-6.84l12.51-74.52h-29.79l-12.4,74.09c-.57,5.8-.41,11.24.48,16.32.88,5.09,2.6,9.59,5.14,13.52s5.97,7.03,10.28,9.33c4.31,2.29,9.61,3.51,15.9,3.66,7.7.14,14.38-1.27,20.03-4.24,3.8-2,7.18-4.5,10.16-7.49l-1.04,9.51h27.98l19.93-114.69h-29.89Z" />
+					<path
+						d="M343.87,200.22c.56-3.39-.28-6.02-2.54-7.9-2.26-1.87-5.04-3.3-8.32-4.29-3.29-.99-6.13-1.77-8.53-2.33-4.24-1.13-8.5-2.56-12.77-4.29-4.28-1.73-8.15-3.9-11.61-6.52-3.46-2.61-6.22-5.81-8.27-9.59-2.05-3.78-2.97-8.25-2.76-13.41.21-6.15,1.78-11.5,4.72-16.06,2.93-4.56,6.73-8.34,11.4-11.34,4.66-3,9.75-5.25,15.26-6.73,5.51-1.48,10.99-2.16,16.43-2.01,7.63.07,14.72,1.48,21.25,4.24,6.54,2.76,11.84,6.86,15.9,12.3,4.06,5.44,6.1,12.23,6.1,20.35l-29.57-.11c.07-3.11-.42-5.83-1.48-8.16s-2.69-4.13-4.88-5.41c-2.19-1.27-4.98-1.91-8.37-1.91-2.69,0-5.35.51-8,1.54-2.65,1.03-4.93,2.53-6.84,4.5-1.91,1.98-3.11,4.42-3.6,7.31-.42,2.4-.07,4.38,1.06,5.94,1.13,1.56,2.65,2.81,4.56,3.76,1.91.95,3.92,1.73,6.04,2.33,2.12.6,4.03,1.08,5.72,1.43,6.22,1.63,12.3,3.71,18.23,6.25,5.94,2.54,10.78,6.09,14.52,10.65,3.74,4.56,5.48,10.62,5.19,18.18-.21,6.43-1.91,11.93-5.09,16.48s-7.26,8.27-12.24,11.13-10.35,4.95-16.11,6.25c-5.76,1.31-11.4,1.92-16.91,1.86-7.7-.14-14.93-1.7-21.68-4.66-6.75-2.97-12.21-7.3-16.38-12.99-4.17-5.69-6.29-12.67-6.36-20.93l27.98.11c.07,3.68.81,6.78,2.23,9.33,1.41,2.54,3.45,4.47,6.1,5.78,2.65,1.31,5.81,1.96,9.49,1.96,2.9.07,5.78-.32,8.64-1.17,2.86-.85,5.35-2.24,7.47-4.19,2.12-1.94,3.46-4.5,4.03-7.68Z" />
+					<path
+						d="M437.48,139.48h18.96l3.82-21.62h-19.06l4.86-28.3h-29.79l-4.76,28.3h-16.23l-3.82,21.62h16.4l-10.36,61.59c-.64,6.57-.02,12.35,1.86,17.33,1.87,4.98,4.98,8.89,9.33,11.71,4.35,2.83,9.91,4.31,16.7,4.45,2.97,0,5.88-.2,8.74-.58,2.86-.39,5.71-1.01,8.53-1.85l2.12-22.79c-1.56.21-3.07.41-4.56.58-1.48.18-2.97.23-4.45.16-2.69-.14-4.66-.67-5.94-1.59-1.27-.92-2.07-2.24-2.38-3.97-.32-1.73-.34-3.83-.05-6.31l10.08-58.72Z" />
+					<path
+						d="M568.17,78.21h30.95l-17.38,101.87c-1.63,11.45-5.39,21.29-11.29,29.52-5.9,8.23-13.46,14.52-22.68,18.87-9.22,4.35-19.59,6.45-31.11,6.31-10.74-.21-20.09-2.56-28.04-7.05-7.95-4.49-13.9-10.78-17.86-18.87-3.96-8.09-5.26-17.65-3.92-28.67l17.38-101.97h30.95l-17.28,102.08c-.64,5.3-.44,10.16.58,14.58,1.02,4.42,3.14,7.99,6.36,10.71,3.21,2.72,7.79,4.15,13.73,4.29,6.29.21,11.66-.92,16.11-3.39,4.45-2.47,8.02-5.99,10.71-10.55,2.69-4.56,4.49-9.81,5.41-15.74l17.38-101.97Z" />
+					<path
+						d="M705.91,153.53c-.67-6.68-2.32-12.84-4.93-18.5-2.62-5.65-6.41-10.25-11.39-13.78-4.98-3.53-11.4-5.41-19.24-5.62-7.56-.21-14.24,1.43-20.03,4.93-2.81,1.7-5.43,3.67-7.86,5.9l.65-8.6h-27.56l-27.56,158.79h29.89l9.97-57.46c2.43,3.92,5.46,7.24,9.11,9.97,4.73,3.53,10.67,5.41,17.81,5.62,8.13.21,15.19-1.43,21.2-4.93,6.01-3.5,11.06-8.16,15.16-13.99,4.1-5.83,7.33-12.28,9.7-19.34,2.37-7.07,3.97-14.06,4.82-20.99l.32-2.23c.64-6.5.62-13.09-.05-19.77ZM676.18,173.19l-.32,2.23c-.42,3.75-1.2,7.7-2.33,11.87-1.13,4.17-2.74,8.07-4.82,11.71-2.08,3.64-4.75,6.55-8,8.74-3.25,2.19-7.21,3.25-11.87,3.18-5.16-.14-9.1-1.59-11.82-4.35-2.57-2.6-4.33-5.86-5.29-9.75l8.08-46.6c.49-.72,1.01-1.42,1.55-2.1,2.23-2.79,4.96-4.96,8.21-6.52,3.25-1.55,7.03-2.23,11.34-2.01,4.24.14,7.49,1.38,9.75,3.71s3.82,5.23,4.66,8.69c.85,3.46,1.27,7.08,1.27,10.87s-.14,7.23-.42,10.33Z" />
+					<path
+						d="M717.73,219.09c-.14-4.8,1.43-8.75,4.72-11.82s7.26-4.61,11.92-4.61c4.52-.07,8.41,1.33,11.66,4.19,3.25,2.86,4.91,6.59,4.98,11.18.07,4.74-1.54,8.64-4.82,11.71-3.29,3.07-7.26,4.61-11.92,4.61-4.45.07-8.3-1.31-11.55-4.13-3.25-2.83-4.91-6.54-4.98-11.13ZM774.55,78.21l-22.05,107.17h-24.8l15.16-107.17h31.69Z" />
+					<path
+						d="M195.52,71.89c.81-18.12.71-36.22-1.35-54.28-.67-5.89-1.73-11.75-2.6-17.61l-71.32,51.39,31.37-2.96c-9.2,33.79-22.27,66.85-47.73,89.07-20.33,17.74-45.9,24.87-67.48,40.16-15.69,11.11-31.64,27.05-35.69,48.21l5.34-10.1c21.5-32.06,57.84-43.48,87.54-63.17,26.42-17.51,50.09-42.21,67.42-70.53.5.29-.09.89-.22,1.23-2.75,7.28-7.83,15.63-12.03,22.02-14.25,21.65-33.06,39.41-53.73,52.97C65.36,177.76,5.84,200.6.43,244.58c-4.61,37.48,28.6,49.49,55.77,42.84,43.87-10.73,68.51-57.38,83.21-100.92,11.04-32.7,20.09-66.25,31.11-98.99,3.3-9.81,7.08-19.46,9.83-29.48.5-.15.55.14.83.36,2.68,2.09,5.99,6.53,8.07,9.45,2.18,3.06,3.95,6.56,6.28,9.41.08-1.78-.09-3.59,0-5.38v.02ZM90.38,231.42c-11.49,13.94-28.73,25.12-46.24,23.67-13.22-1.1-20.84-12.37-17.09-26.92,6.69-25.91,43.96-44.34,63.26-57.45,13.89-9.44,26.94-20.09,38.86-32.46-12.8,31.1-17.43,67.26-38.79,93.16h0Z" />
+				</svg>
+				<p class="text-secondary small">Uptime Monitor - done right!</p>
+			</div>
+			<div id="error-msg" class="alert alert-danger d-none" role="alert" aria-live="assertive"></div>
+			<form id="login-form" aria-label="Login">
+				<div class="mb-3">
+					<label for="username" class="form-label">Username</label>
+					<input type="text" class="form-control" id="username" name="username" required
+						autocomplete="username">
+				</div>
+				<div class="mb-3">
+					<label for="password" class="form-label">Password</label>
+					<input type="password" class="form-control" id="password" name="password" required
+						autocomplete="current-password">
+				</div>
+				<button type="submit" class="btn btn-primary w-100">
+					<span class="material-icons me-1">login</span> Sign In
+				</button>
+			</form>
+		</div>
+	</div>
+	<script src="/static/js/login.js"></script>
 </body>
 
 </html>

@@ -4,17 +4,26 @@
 # Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 #
 
-"""Rate limiting configuration using slowapi."""
+"""Rate limiting configuration using slowapi.
 
-from __future__ import annotations
+Implementation is in the compiled Cython extension.
+"""
 
-from slowapi import Limiter
-from slowapi.util import get_remote_address
+from app._cython.rate_limit import (
+	RATE_LIMIT_AUTH,
+	RATE_LIMIT_DEFAULT,
+	RATE_LIMIT_HEAVY,
+	RATE_LIMIT_METRICS,
+	RATE_LIMIT_PDF,
+	limiter,
+)
 
-RATE_LIMIT_DEFAULT = "60/minute"
-RATE_LIMIT_AUTH = "5/minute"
-RATE_LIMIT_HEAVY = "10/minute"
-RATE_LIMIT_API = "120/minute"
-RATE_LIMIT_CRITICAL = "3/minute"
+__all__ = [
+	"RATE_LIMIT_AUTH",
+	"RATE_LIMIT_DEFAULT",
+	"RATE_LIMIT_HEAVY",
+	"RATE_LIMIT_METRICS",
+	"RATE_LIMIT_PDF",
+	"limiter",
+]
 
-limiter = Limiter(key_func=get_remote_address)

@@ -1,167 +1,122 @@
 {% extends "base.html" %}
-{% block title %}Dashboard – justUp{% endblock %}
+{% block title %}Dashboard – justUp!{% endblock %}
 
 {% block content %}
-<div class="ju-page">
-    <div class="ju-page-header">
-        <h1 class="page-title">Dashboard</h1>
-    </div>
+<div class="ui-page">
+	<div class="d-flex flex-wrap justify-content-between align-items-center mb-4 gap-2">
+		<h2 class="mb-0"><span class="material-icons me-2">speed</span>Dashboard</h2>
+		<div class="d-flex align-items-center gap-2">
+			<span class="badge bg-secondary d-none d-sm-inline-block">Auto-refresh: 30s</span>
+			<button class="btn btn-sm btn-icon btn-outline-secondary" id="dashboard-refresh-btn" title="Refresh">
+				<span class="material-icons">refresh</span>
+			</button>
+		</div>
+	</div>
 
-    <!-- Stats Row -->
-    <div class="row g-3 mb-4">
-        <div class="col-6 col-md-3">
-            <div class="card ju-stat-card">
-                <div class="card-body">
-                    <div class="stat-value text-success" id="stat-up">0</div>
-                    <div class="stat-label">Up</div>
-                </div>
-            </div>
-        </div>
-        <div class="col-6 col-md-3">
-            <div class="card ju-stat-card">
-                <div class="card-body">
-                    <div class="stat-value text-danger" id="stat-down">0</div>
-                    <div class="stat-label">Down</div>
-                </div>
-            </div>
-        </div>
-        <div class="col-6 col-md-3">
-            <div class="card ju-stat-card">
-                <div class="card-body">
-                    <div class="stat-value" id="stat-paused">0</div>
-                    <div class="stat-label">Paused</div>
-                </div>
-            </div>
-        </div>
-        <div class="col-6 col-md-3">
-            <div class="card ju-stat-card">
-                <div class="card-body">
-                    <div class="stat-value" id="stat-total">0</div>
-                    <div class="stat-label">Total</div>
-                </div>
-            </div>
-        </div>
-    </div>
+	<!-- Status Summary Cards -->
+	<div class="ui-section position-relative">
+		<!-- Loading indicator overlay -->
+		<div id="status-loading"
+			class="position-absolute top-0 start-0 w-100 h-100 d-flex align-items-center justify-content-center htmx-indicator"
+			style="z-index:10; background: rgba(var(--bs-body-bg-rgb, 255,255,255), 0.8);">
+			<div class="text-center">
+				<div class="spinner-border text-primary" role="status">
+					<span class="visually-hidden">Loading...</span>
+				</div>
+			</div>
+		</div>
 
-    <!-- Monitors Overview -->
-    <div class="card ju-section">
-        <div class="card-header d-flex align-items-center justify-content-between">
-            <h6 class="card-title mb-0">
-                <span class="material-icons icon-sm me-1">monitor_heart</span>Monitors
-            </h6>
-            <a href="/ui/monitors" class="btn btn-sm btn-outline-primary">View All</a>
-        </div>
-        <div class="card-body p-0">
-            <div class="table-responsive">
-                <table class="table table-hover mb-0">
-                    <thead>
-                        <tr>
-                            <th>Status</th>
-                            <th>Name</th>
-                            <th>Type</th>
-                            <th>Response</th>
-                            <th>Uptime</th>
-                        </tr>
-                    </thead>
-                    <tbody id="monitors-table-body">
-                        {% for m in monitors %}
-                        <tr style="cursor:pointer" onclick="window.location.href='/ui/monitors/{{ m['id'] }}'">
-                            <td>
-                                {% if m['status'] == 'up' %}
-                                <span class="badge bg-success">UP</span>
-                                {% elif m['status'] == 'down' %}
-                                <span class="badge bg-danger">DOWN</span>
-                                {% elif m['status'] == 'paused' %}
-                                <span class="badge bg-secondary">PAUSED</span>
-                                {% else %}
-                                <span class="badge bg-secondary">PENDING</span>
-                                {% endif %}
-                            </td>
-                            <td>{{ m['name'] | e }}</td>
-                            <td><span class="badge bg-secondary">{{ m['monitor_type'] | upper | e }}</span></td>
-                            <td>{{ (m['last_response_time_ms'] or 0) | round(0) | int }} ms</td>
-                            <td>–</td>
-                        </tr>
-                        {% else %}
-                        <tr>
-                            <td colspan="5" class="text-center text-muted py-4">
-                                <span class="material-icons d-block mb-2" style="font-size:2rem">monitor_heart</span>
-                                No monitors configured yet.
-                                <a href="/ui/monitors">Add your first monitor</a>
-                            </td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-        </div>
-    </div>
+		<div class="summary-grid" id="status-summary" hx-get="/ui/fragments/status-summary" hx-trigger="load, every 30s"
+			hx-swap="innerHTML" hx-indicator="#status-loading">
+			<!-- Skeleton placeholders -->
+			<div class="card ui-card card-status text-center shadow-sm">
+				<div class="d-flex justify-content-center align-items-center gap-2 mb-1">
+					<span class="material-icons text-secondary fs-5">check_circle</span>
+					<span class="fs-3 fw-bold text-secondary">–</span>
+				</div>
+				<div class="text-muted small text-uppercase">Online</div>
+			</div>
+			<div class="card ui-card card-status text-center shadow-sm">
+				<div class="d-flex justify-content-center align-items-center gap-2 mb-1">
+					<span class="material-icons text-secondary fs-5">cancel</span>
+					<span class="fs-3 fw-bold text-secondary">–</span>
+				</div>
+				<div class="text-muted small text-uppercase">Offline</div>
+			</div>
+			<div class="card ui-card card-status text-center shadow-sm">
+				<div class="d-flex justify-content-center align-items-center gap-2 mb-1">
+					<span class="material-icons text-secondary fs-5">pause_circle</span>
+					<span class="fs-3 fw-bold text-secondary">–</span>
+				</div>
+				<div class="text-muted small text-uppercase">Disabled</div>
+			</div>
+			<div class="card ui-card card-status text-center shadow-sm">
+				<div class="d-flex justify-content-center align-items-center gap-2 mb-1">
+					<span class="material-icons text-secondary fs-5">gps_fixed</span>
+					<span class="fs-3 fw-bold text-secondary">–</span>
+				</div>
+				<div class="text-muted small text-uppercase">Total</div>
+			</div>
+		</div>
+	</div>
 
-    <!-- Recent Incidents -->
-    <div class="card ju-section mt-4">
-        <div class="card-header">
-            <h6 class="card-title mb-0">
-                <span class="material-icons icon-sm me-1">warning</span>Recent Incidents
-            </h6>
-        </div>
-        <div class="card-body p-0">
-            <div class="table-responsive">
-                <table class="table table-hover mb-0">
-                    <thead>
-                        <tr>
-                            <th>Status</th>
-                            <th>Monitor</th>
-                            <th>Started</th>
-                            <th>Duration</th>
-                            <th>Error</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for inc in incidents %}
-                        <tr>
-                            <td>
-                                {% if inc['resolved_at'] %}
-                                <span class="badge bg-success">Resolved</span>
-                                {% else %}
-                                <span class="badge bg-danger">Ongoing</span>
-                                {% endif %}
-                            </td>
-                            <td>{{ inc['monitor_name'] | e if inc['monitor_name'] else '–' }}</td>
-                            <td>{{ inc['started_at'] | e if inc['started_at'] else '–' }}</td>
-                            <td>{{ inc['duration_seconds'] | e if inc['duration_seconds'] else '–' }}</td>
-                            <td class="text-truncate" style="max-width:200px">{{ inc['error_message'] | e if
-                                inc['error_message'] else '–' }}</td>
-                        </tr>
-                        {% else %}
-                        <tr>
-                            <td colspan="5" class="text-center text-muted py-4">No recent incidents.</td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-        </div>
-    </div>
+	<!-- Quality Gate Widget + Downtime Overview -->
+	<div class="ui-section dashboard-row">
+		<div class="dashboard-col-sidebar">
+			{% include "fragments/quality_widget.html" %}
+		</div>
+		<div class="dashboard-col-main">
+			<!-- Downtime Overview -->
+			<div class="card shadow-sm h-100">
+				<div class="card-header d-flex justify-content-between align-items-center">
+					<span><span class="material-icons me-1">warning</span> Downtime Overview (24h)</span>
+					<span class="badge bg-danger d-hidden" id="downtime-count-badge"></span>
+				</div>
+				<div class="card-body p-0" id="downtime-content">
+					<!-- Downtime Table -->
+					<div id="downtime-table-container" class="d-hidden"
+						style="max-height: 220px; overflow-y: auto; overflow-x: auto;">
+						<table class="table table-sm table-hover align-middle mb-0 table-clickable">
+							<thead class="table-light sticky-top">
+								<tr>
+									<th>Target</th>
+									<th class="text-end">HTTP</th>
+									<th class="text-end">Ping</th>
+									<th class="text-end">TCP</th>
+								</tr>
+							</thead>
+							<tbody id="downtime-table-body">
+							</tbody>
+						</table>
+					</div>
+					<!-- Empty State: All systems operational -->
+					<div id="downtime-success" class="text-center text-success py-5 d-hidden">
+						<span class="material-icons fs-1 d-block mb-2">check_circle</span>
+						<p class="mb-0">All systems operational</p>
+						<small class="text-muted">No downtime in the last 24 hours.</small>
+					</div>
+					<!-- Empty State: No metrics -->
+					<div id="downtime-empty" class="text-center text-muted py-5 d-hidden">
+						<span class="material-icons fs-1 d-block mb-2">trending_down</span>
+						<p class="mb-0">No metrics available yet.</p>
+						<small>Data will appear once monitoring starts collecting metrics.</small>
+					</div>
+					<!-- Loading State -->
+					<div id="downtime-loading" class="text-center text-muted py-5">
+						<div class="spinner-border spinner-border-sm text-secondary" role="status">
+							<span class="visually-hidden">Loading...</span>
+						</div>
+					</div>
+				</div>
+			</div>
+		</div>
+		<div class="dashboard-col-empty">
+			<!-- Intentionally empty -->
+		</div>
+	</div>
 </div>
+{% endblock %}
 
-<script>
-    // Update stat counters from monitor data
-    (function () {
-        const rows = document.querySelectorAll('#monitors-table-body tr');
-        let up = 0, down = 0, paused = 0, total = 0;
-        rows.forEach(row => {
-            const badge = row.querySelector('.badge');
-            if (!badge) return;
-            total++;
-            const text = badge.textContent.trim();
-            if (text === 'UP') up++;
-            else if (text === 'DOWN') down++;
-            else paused++;
-        });
-        document.getElementById('stat-up').textContent = up;
-        document.getElementById('stat-down').textContent = down;
-        document.getElementById('stat-paused').textContent = paused;
-        document.getElementById('stat-total').textContent = total;
-    })();
-</script>
+{% block scripts %}
+<script src="/static/js/dashboard.js"></script>
 {% endblock %}

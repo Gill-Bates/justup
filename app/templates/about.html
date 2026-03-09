@@ -1,51 +1,202 @@
 {% extends "base.html" %}
-{% block title %}About – justUp{% endblock %}
+
+{% block title %}About – justUp!{% endblock %}
 
 {% block content %}
-<div class="ju-page">
-    <div class="ju-page-header">
-        <h1 class="page-title">About</h1>
-    </div>
+<div class="ui-page about-page">
+	<div class="d-flex justify-content-between align-items-center mb-3 flex-shrink-0">
+		<h2 class="mb-0"><span class="material-icons me-2">info</span>About</h2>
+	</div>
 
-    <div class="row g-4">
-        <div class="col-12 col-lg-6">
-            <div class="card">
-                <div class="card-header">
-                    <h6 class="card-title mb-0">
-                        <span class="material-icons icon-sm me-1">info</span>Application Info
-                    </h6>
-                </div>
-                <div class="card-body">
-                    <table class="table table-borderless mb-0">
-                        <tr>
-                            <td class="text-muted">Application</td>
-                            <td><strong>justUp</strong></td>
-                        </tr>
-                        <tr>
-                            <td class="text-muted">Version</td>
-                            <td>{{ VERSION | e }}</td>
-                        </tr>
-                        <tr>
-                            <td class="text-muted">Build</td>
-                            <td><code>{{ (BUILD_INFO or 'development')[:12] | e }}</code></td>
-                        </tr>
-                        <tr>
-                            <td class="text-muted">License</td>
-                            <td>AGPL-3.0</td>
-                        </tr>
-                        <tr>
-                            <td class="text-muted">Source</td>
-                            <td>
-                                <a href="https://github.com/Gill-Bates/justup" target="_blank"
-                                    rel="noopener noreferrer">
-                                    GitHub
-                                </a>
-                            </td>
-                        </tr>
-                    </table>
-                </div>
-            </div>
-        </div>
-    </div>
+	<div class="row g-3 about-cards-row">
+		<!-- Card 1: Application Details -->
+		<div class="col-lg-6 d-flex">
+			<div class="card flex-grow-1 d-flex flex-column card-fill">
+				<div class="card-header d-flex align-items-center">
+					<span class="material-icons me-2">code</span>
+					<span class="fw-semibold">Application Details</span>
+				</div>
+				<div class="card-body flex-grow-1 flex-scroll">
+					<!-- Version & Build -->
+					<div class="mb-4">
+						<h6 class="text-muted mb-2">Version Information</h6>
+						<table class="table table-sm table-borderless mb-0">
+							<tbody>
+								<tr>
+									<td class="ps-0" style="width: 100px;"><strong>Version</strong></td>
+									<td><code>{{ version }}</code></td>
+								</tr>
+								<tr>
+									<td class="ps-0"><strong>Python</strong></td>
+									<td><code>{{ python_version }}</code></td>
+								</tr>
+								<tr>
+									<td class="ps-0"><strong>GeoIP (DB)</strong></td>
+									<td><code>{{ geoip_build_info if geoip_build_info else 'N/A' }}</code></td>
+								</tr>
+							</tbody>
+						</table>
+					</div>
+
+					<!-- Dependencies -->
+					<div class="mb-4">
+						<h6 class="text-muted mb-2">Dependencies</h6>
+						<div class="table-responsive" style="max-height: 300px; overflow-y: auto;">
+							<table class="table table-sm table-hover mb-0">
+								<thead class="table-light sticky-top">
+									<tr>
+										<th>Package</th>
+										<th>Version</th>
+									</tr>
+								</thead>
+								<tbody>
+									{% for pkg, ver in dependencies %}
+									<tr>
+										<td><code>{{ pkg }}</code></td>
+										<td><span class="badge bg-secondary">{{ ver }}</span></td>
+									</tr>
+									{% endfor %}
+								</tbody>
+							</table>
+						</div>
+					</div>
+
+					<!-- Author -->
+					<div>
+						<h6 class="text-muted mb-2">Author</h6>
+						<div class="d-flex align-items-center">
+							<span class="material-icons me-2 text-primary">person</span>
+							<div>
+								<strong>Gill-Bates</strong>
+								<br>
+								<a href="https://github.com/Gill-Bates/justUp" target="_blank" rel="noopener"
+									class="text-decoration-none small">
+									https://github.com/Gill-Bates/justUp
+								</a>
+							</div>
+						</div>
+					</div>
+				</div>
+			</div>
+		</div>
+
+		<!-- Card 2: Changelog -->
+		<div class="col-lg-6 d-flex">
+			<div class="card flex-grow-1 d-flex flex-column card-fill">
+				<div class="card-header d-flex align-items-center">
+					<span class="material-icons me-2">history</span>
+					<span class="fw-semibold">Changelog</span>
+				</div>
+				<div class="card-body changelog-content flex-grow-1 flex-scroll">
+					{{ changelog_text | markdown | safe }}
+				</div>
+			</div>
+		</div>
+
+	</div>
 </div>
+
+<style>
+	/* About page layout */
+	.about-page {
+		display: flex;
+		flex-direction: column;
+	}
+
+	.about-cards-row {
+		flex-grow: 1;
+	}
+
+	/* Desktop: fixed height layout */
+	@media (min-width: 992px) {
+		.about-page {
+			height: calc(100vh - 180px);
+			min-height: 400px;
+			overflow: hidden;
+		}
+
+		.about-cards-row {
+			height: 100%;
+			min-height: 0;
+		}
+
+		.about-cards-row>.col-lg-6 {
+			height: 100%;
+			min-height: 0;
+		}
+	}
+
+	/* Mobile: auto height, scrollable page */
+	@media (max-width: 991.98px) {
+		.about-cards-row .card-fill {
+			max-height: 400px;
+		}
+	}
+
+	/* Layout utilities */
+	.flex-scroll {
+		min-height: 0;
+		overflow-y: auto;
+	}
+
+	.card-fill {
+		min-height: 0;
+		overflow: hidden;
+	}
+
+	/* Changelog markdown styling */
+	.changelog-content h2 {
+		font-size: 1rem;
+		font-weight: 600;
+		color: var(--bs-primary);
+		border-bottom: 1px solid var(--bs-border-color);
+		padding-bottom: 0.5rem;
+		margin-top: 1rem;
+		margin-bottom: 0.75rem;
+	}
+
+	.changelog-content h2:first-child {
+		margin-top: 0;
+	}
+
+	.changelog-content ul {
+		padding-left: 1.25rem;
+		margin-bottom: 0.5rem;
+	}
+
+	.changelog-content li {
+		font-size: 0.875rem;
+		margin-bottom: 0.25rem;
+		color: var(--bs-body-color);
+	}
+
+	.changelog-content code {
+		font-size: 0.8rem;
+		background: var(--bs-tertiary-bg);
+		padding: 0.1rem 0.3rem;
+		border-radius: 3px;
+	}
+
+	.changelog-content details {
+		margin-top: 1rem;
+		border-top: 1px solid var(--bs-border-color);
+		padding-top: 0.75rem;
+	}
+
+	.changelog-content summary {
+		cursor: pointer;
+		font-weight: 500;
+		color: var(--bs-secondary);
+		font-size: 0.875rem;
+		margin-bottom: 0.5rem;
+	}
+
+	.changelog-content summary:hover {
+		color: var(--bs-primary);
+	}
+
+	.changelog-content details[open] summary {
+		margin-bottom: 1rem;
+	}
+</style>
 {% endblock %}

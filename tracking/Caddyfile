@@ -1,0 +1,84 @@
+
+upstats.cirrio.de {
+
+    # ─── ALLOWLIST APPROACH ─────────────────────────────────────────────
+    # Only allow known endpoints, reject everything else
+    
+    @allowed_public {
+        path /updater /health
+    }
+    
+    @allowed_admin {
+        path /login /logout /admin /admin/* /static/*
+    }
+    
+    # Handle public endpoints
+    handle @allowed_public {
+        reverse_proxy 10.30.0.16:8080 {
+            header_up X-Forwarded-Proto https
+            header_up X-Forwarded-Port 443
+            header_up X-Forwarded-Host {host}
+            header_up X-Real-IP {remote_host}
+            header_up X-Request-ID {http.request.uuid}
+
+            transport http {
+                keepalive 30s
+                read_timeout 10s
+                write_timeout 10s
+            }
+        }
+    }
+    
+    # Handle admin endpoints (with optional IP restriction)
+    handle @allowed_admin {
+        reverse_proxy 10.30.0.16:8080 {
+            header_up X-Forwarded-Proto https
+            header_up X-Forwarded-Port 443
+            header_up X-Forwarded-Host {host}
+            header_up X-Real-IP {remote_host}
+            header_up X-Request-ID {http.request.uuid}
+
+            transport http {
+                keepalive 30s
+                read_timeout 10s
+                write_timeout 10s
+            }
+        }
+    }
+    
+    # Everything else: silently abort connection
+    handle {
+        abort
+    }
+
+    # ─── SECURITY HEADERS ───────────────────────────────────────────────
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+        Referrer-Policy strict-origin-when-cross-origin
+        Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'"
+        Permissions-Policy "geolocation=(), microphone=(), camera=()"
+        -Server
+        -X-Powered-By
+        -X-AspNet-Version
+    }
+
+    # ─── REQUEST LIMITS ─────────────────────────────────────────────────
+    request_body {
+        max_size 64KB
+    }
+
+    # ─── COMPRESSION ────────────────────────────────────────────────────
+    encode zstd gzip
+
+    # ─── LOGGING ────────────────────────────────────────────────────────
+    log {
+        output file /var/log/caddy/upstats.log {
+            roll_size 10mb
+            roll_keep 5
+        }
+        format json
+        level INFO
+    }
+}

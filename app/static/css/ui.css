@@ -1,0 +1,2462 @@
+/**
+ * justUp UI - Global Styles
+ * Copyright (C) 2026 Gill-Bates
+ *
+ * Structure:
+ * 1. CSS Custom Properties (Theme Variables)
+ * 2. Base Layout
+ * 3. Components (Cards, Buttons, Tables, etc.)
+ * 4. Responsive: Tablet (max-width: 768px)
+ * 5. Responsive: Mobile (max-width: 576px)
+ * 6. Desktop Enhancements (min-width: 768px+)
+ */
+
+/* =============================================
+   FONTS
+   ============================================= */
+
+/*
+ * Frontend uses Roboto Flex (variable WOFF2) for better rendering,
+ * smaller transfer size, and smooth weight scaling.
+ * TTF fonts remain available for PDF/report generation in backend services.
+ */
+
+@font-face {
+	font-family: 'Noto Serif';
+	src: url('/static/fonts/NotoSerif-Regular.ttf') format('truetype');
+	font-weight: 400;
+	font-style: normal;
+	font-display: swap;
+}
+
+@font-face {
+	font-family: 'Noto Serif';
+	src: url('/static/fonts/NotoSerif-Bold.ttf') format('truetype');
+	font-weight: 700;
+	font-style: normal;
+	font-display: swap;
+}
+
+@font-face {
+	font-family: 'Roboto Flex';
+	src: url('/static/fonts/RobotoFlex.woff2') format('woff2');
+	font-weight: 100 1000;
+	font-stretch: 75% 125%;
+	font-style: normal;
+	font-display: swap;
+}
+
+/* =============================================
+   1. CSS CUSTOM PROPERTIES
+   ============================================= */
+
+:root {
+	--bs-font-sans-serif: "Roboto Flex", system-ui, -apple-system, "Segoe UI", "Helvetica Neue", "Noto Sans", "Liberation Sans", Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+	--bs-body-font-family: var(--bs-font-sans-serif);
+	--ui-font-opsz-body: 14;
+	--ui-font-opsz-heading: 20;
+	--ui-font-opsz-compact: 12;
+	--ui-font-opsz-caption: 10;
+
+	/* App-specific colors (light mode) */
+	--page-gutter: 1.5rem;
+	--ui-muted-bg: #f1f3f5;
+	--ui-muted-color: #495057;
+	--ui-muted-border: #dee2e6;
+	--ui-card-bg: var(--bs-body-bg, #ffffff);
+	--ui-card-border: var(--bs-border-color, #dee2e6);
+	--ui-shadow-subtle: 0 1px 3px rgba(0, 0, 0, 0.15);
+
+	/* Table row sizing - central control */
+	--table-row-padding-y: 0.5rem;
+	--table-row-padding-x: 0.6rem;
+	--table-row-line-height: 1.35;
+
+	/* Range slider geometry */
+	--range-thumb-size: 1rem;
+	/* must match actual thumb size */
+}
+
+@media (max-width: 576px) {
+	:root {
+		--page-gutter: 1.75rem;
+	}
+}
+
+[data-bs-theme="dark"] {
+	--ui-muted-bg: #2b2d31;
+	--ui-muted-color: #cfd3da;
+	--ui-muted-border: #3a3d43;
+	--ui-card-bg: #1e1f22;
+	--ui-card-border: #2b2d31;
+	--ui-shadow-subtle: 0 1px 3px rgba(0, 0, 0, 0.3);
+	/* Improved icon contrast in dark mode */
+	--ui-icon-secondary: #a8adb5;
+	--ui-icon-muted: #8b9099;
+}
+
+/* Dark mode: improve icon contrast for action buttons */
+[data-bs-theme="dark"] .btn-link.text-secondary,
+[data-bs-theme="dark"] .action-buttons .btn-link.text-secondary {
+	color: var(--ui-icon-secondary) !important;
+}
+
+[data-bs-theme="dark"] .btn-link.text-secondary:hover,
+[data-bs-theme="dark"] .action-buttons .btn-link.text-secondary:hover {
+	color: var(--bs-body-color) !important;
+}
+
+[data-bs-theme="dark"] .text-muted .material-icons,
+[data-bs-theme="dark"] .material-icons.text-muted {
+	color: var(--ui-icon-muted) !important;
+}
+
+[data-bs-theme="dark"] .material-icons.text-secondary {
+	color: var(--ui-icon-secondary) !important;
+}
+
+/* =============================================
+   2. BASE LAYOUT
+   ============================================= */
+
+/* Light mode: subtle gray gradient background */
+body {
+	background: linear-gradient(180deg, #f8f9fa 0%, #dee2e6 100%);
+	background-attachment: fixed;
+	min-height: 100vh;
+	font-family: var(--bs-body-font-family);
+	font-optical-sizing: auto;
+	font-variation-settings: "opsz" var(--ui-font-opsz-body), "slnt" 0;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+.h1,
+.h2,
+.h3,
+.h4,
+.h5,
+.h6 {
+	font-optical-sizing: auto;
+	font-variation-settings: "opsz" var(--ui-font-opsz-heading), "slnt" 0;
+}
+
+.table th,
+.table td,
+.badge,
+.btn-sm,
+.form-select-sm,
+.form-control-sm {
+	font-optical-sizing: auto;
+	font-variation-settings: "opsz" var(--ui-font-opsz-compact), "slnt" 0;
+}
+
+small,
+.small,
+.form-text,
+.text-muted {
+	font-optical-sizing: auto;
+	font-variation-settings: "opsz" var(--ui-font-opsz-caption), "slnt" 0;
+}
+
+/* Dark mode: keep solid dark background */
+[data-bs-theme="dark"] body {
+	background: var(--bs-body-bg);
+}
+
+/* Main app layout uses full width */
+.ui-page {
+	width: 100%;
+	max-width: none;
+	margin: 0;
+	padding: 1rem var(--page-gutter) 1.5rem;
+	overflow-x: hidden;
+}
+
+/* Keep navbar/content aligned to the same horizontal gutter */
+#app-shell>nav .container-fluid {
+	padding-left: var(--page-gutter);
+	padding-right: var(--page-gutter);
+}
+
+/* Vertical rhythm */
+.ui-section {
+	margin-bottom: 1.5rem;
+}
+
+.ui-section:last-child {
+	margin-bottom: 0;
+}
+
+.ui-card-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	margin-bottom: 0.5rem;
+}
+
+.ui-card-body {
+	display: flex;
+	flex-direction: column;
+	gap: 0.5rem;
+}
+
+/* Button icon sizing - make icons proportional to button size */
+.btn-sm .material-icons {
+	font-size: 1.25rem;
+	vertical-align: middle;
+}
+
+/* Material icons in buttons should inherit button color */
+.btn .material-icons {
+	color: inherit !important;
+}
+
+/* Summary cards: pure CSS Grid (no Bootstrap) */
+.summary-grid {
+	display: grid;
+	grid-template-columns: repeat(4, 1fr);
+	gap: 0.75rem;
+}
+
+.summary-grid>* {
+	margin: 0;
+}
+
+/* Dashboard row: Quality + Downtime + empty space (1fr 2fr 1fr) */
+.dashboard-row {
+	display: grid;
+	grid-template-columns: 1fr 2fr 1fr;
+	gap: 1rem;
+}
+
+.dashboard-col-sidebar,
+.dashboard-col-main {
+	min-width: 0;
+	/* prevent grid blowout */
+}
+
+/* Target detail info cards: auto-fit on desktop (fills full width), 3 columns on mobile */
+.info-cards-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+	gap: 1rem;
+}
+
+.info-cards-grid>* {
+	margin: 0;
+	min-width: 0;
+}
+
+/* Dashboard Summary Cards - larger typography */
+.summary-grid .card-status .fs-3 {
+	font-size: 2.5rem !important;
+	line-height: 1;
+}
+
+.summary-grid .card-status .fs-5 {
+	font-size: 2rem !important;
+}
+
+.summary-grid .card-status .small {
+	font-size: 0.9rem !important;
+}
+
+.summary-grid .card-status .mb-1 {
+	margin-bottom: 0.15rem !important;
+}
+
+/* Target Detail Info Cards - matching typography */
+.info-cards-grid .card-body .small {
+	font-size: 0.9rem !important;
+	font-weight: 400 !important;
+}
+
+/* Monitor badges container */
+.monitor-badges {
+	margin-top: 0.75rem;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.4rem;
+	justify-content: center;
+}
+
+/* Charts must always use available width */
+.chart-container,
+.dashboard-chart {
+	width: 100%;
+	max-width: none;
+}
+
+/* Constrain forms for readability */
+.ui-form,
+.ui-form-card {
+	max-width: 720px;
+	margin-left: auto;
+	margin-right: auto;
+}
+
+/* =============================================
+   3. COMPONENTS
+   ============================================= */
+
+/* ----- Cards ----- */
+
+.ui-card {
+	padding: 1rem;
+	display: flex;
+	flex-direction: column;
+	gap: 0.75rem;
+	background-color: var(--ui-card-bg);
+	border-color: var(--ui-card-border);
+}
+
+.ui-card>.card-body {
+	padding: 0;
+}
+
+/* Innere ui-card ohne Extra-Padding/Borders */
+.ui-card .ui-card {
+	padding: 0;
+	border: 0;
+	background: transparent;
+}
+
+.ui-card table {
+	margin-bottom: 0;
+}
+
+/* Table negative margins only on desktop - see media queries below */
+
+/* Toast containers - consistent styling across all pages */
+.ui-toast-container {
+	z-index: 1080;
+}
+
+/* Mobile: center toast with consistent width and rounded corners */
+@media (max-width: 576px) {
+	.ui-toast-container {
+		left: 50% !important;
+		right: auto !important;
+		transform: translateX(-50%);
+		width: calc(100% - 2rem);
+		max-width: 360px;
+		padding: 1rem !important;
+	}
+
+	.ui-toast-container .toast {
+		width: 100%;
+		border-radius: 0.5rem;
+	}
+}
+
+/* Utility helpers */
+.ui-max-200 {
+	max-width: 200px;
+}
+
+.ui-scroll-300 {
+	max-height: 300px;
+	overflow-y: auto;
+}
+
+.d-hidden {
+	display: none !important;
+}
+
+/* =============================================
+   RANGE SLIDER – LABEL ALIGNMENT FIX
+   ============================================= */
+
+.range-wrapper {
+	padding: 0 0.75rem;
+	/* keep Bootstrap visual spacing */
+}
+
+.range-wrapper .form-range {
+	padding-left: 0;
+	padding-right: 0;
+}
+
+.form-range::-webkit-slider-thumb {
+	width: var(--range-thumb-size);
+	height: var(--range-thumb-size);
+}
+
+.form-range::-moz-range-thumb {
+	width: var(--range-thumb-size);
+	height: var(--range-thumb-size);
+}
+
+/* Range slider with aligned labels */
+.range-labels {
+	display: flex;
+	justify-content: space-between;
+	font-size: 0.75rem;
+	color: var(--bs-secondary-color);
+	margin-bottom: 6px;
+
+	/* compensate for thumb radius so labels align to thumb center */
+	padding-left: calc(var(--range-thumb-size) / 2);
+	padding-right: calc(var(--range-thumb-size) / 2);
+	box-sizing: border-box;
+}
+
+.range-labels span {
+	text-align: center;
+	user-select: none;
+	flex: 0 0 auto;
+	min-width: 1ch;
+}
+
+/* Tick marks on the slider track with labels above */
+.range-ticks {
+	display: flex;
+	justify-content: space-between;
+	position: relative;
+	margin-bottom: 4px;
+	/* compensate for thumb radius so ticks align to thumb center */
+	padding-left: calc(var(--range-thumb-size) / 2);
+	padding-right: calc(var(--range-thumb-size) / 2);
+	box-sizing: border-box;
+}
+
+.range-ticks .tick {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 2px;
+}
+
+.range-ticks .tick-label {
+	font-size: 0.75rem;
+	color: var(--bs-secondary-color);
+	user-select: none;
+	line-height: 1;
+}
+
+.range-ticks .tick-mark {
+	width: 1px;
+	height: 6px;
+	background-color: var(--bs-secondary-color);
+	opacity: 0.5;
+}
+
+/* Column widths */
+.ui-col-status {
+	width: 50px;
+	text-align: center;
+}
+
+.ui-col-actions {
+	width: 1%;
+	white-space: nowrap;
+}
+
+/* ----- Buttons ----- */
+
+.ui-page .btn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 0.4rem;
+}
+
+.ui-page .btn:not(.btn-sm) {
+	min-height: 36px;
+}
+
+.btn-icon {
+	width: 36px;
+	height: 36px;
+	min-width: 36px;
+	min-height: 36px;
+	padding: 0;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	line-height: 1;
+	flex: 0 0 auto;
+	/* Minimal look: no visible "frame" around icon buttons */
+	border: 0 !important;
+	--bs-btn-border-width: 0;
+	--bs-btn-border-color: transparent;
+	--bs-btn-hover-border-color: transparent;
+	--bs-btn-active-border-color: transparent;
+	background-color: transparent;
+	box-shadow: var(--ui-shadow-subtle);
+	text-decoration: none !important;
+	transition: background-color 0.15s ease, box-shadow 0.15s ease;
+	/* Prevent Bootstrap focus ring from looking like a border frame */
+	--bs-btn-focus-box-shadow: none;
+}
+
+.btn-icon:hover {
+	border: 0 !important;
+	background-color: rgba(var(--bs-secondary-rgb), 0.12);
+	text-decoration: none !important;
+	box-shadow: var(--bs-box-shadow-sm);
+}
+
+.btn-icon:active {
+	border: 0 !important;
+}
+
+.btn-icon:focus,
+.btn-icon:focus-visible {
+	border: 0 !important;
+	text-decoration: none !important;
+	outline: none;
+	box-shadow: var(--bs-box-shadow-sm);
+}
+
+/* Keep variant colors, but use subtle hover backgrounds instead of outline frames */
+.btn-icon.btn-outline-primary:hover {
+	background-color: rgba(var(--bs-primary-rgb), 0.12);
+}
+
+.btn-icon.btn-outline-secondary:hover {
+	background-color: rgba(var(--bs-secondary-rgb), 0.12);
+}
+
+.btn-icon.btn-outline-success:hover {
+	background-color: rgba(var(--bs-success-rgb), 0.12);
+}
+
+.btn-icon.btn-outline-info:hover {
+	background-color: rgba(var(--bs-info-rgb), 0.12);
+}
+
+.btn-icon.btn-outline-warning:hover {
+	background-color: rgba(var(--bs-warning-rgb), 0.12);
+}
+
+.btn-icon.btn-outline-danger:hover {
+	background-color: rgba(var(--bs-danger-rgb), 0.12);
+}
+
+.btn-icon.btn-outline-primary:active {
+	background-color: rgba(var(--bs-primary-rgb), 0.18);
+}
+
+.btn-icon.btn-outline-secondary:active {
+	background-color: rgba(var(--bs-secondary-rgb), 0.18);
+}
+
+.btn-icon.btn-outline-success:active {
+	background-color: rgba(var(--bs-success-rgb), 0.18);
+}
+
+.btn-icon.btn-outline-info:active {
+	background-color: rgba(var(--bs-info-rgb), 0.18);
+}
+
+.btn-icon.btn-outline-warning:active {
+	background-color: rgba(var(--bs-warning-rgb), 0.18);
+}
+
+.btn-icon.btn-outline-danger:active {
+	background-color: rgba(var(--bs-danger-rgb), 0.18);
+}
+
+/* Icons inside buttons - prevent line-height stretch */
+.btn-icon .material-icons,
+.btn-icon i {
+	font-size: 22px;
+	line-height: 1;
+}
+
+/* FIX: force square icon buttons inside tables */
+.table .btn-icon {
+	width: 32px;
+	height: 32px;
+	min-width: 32px;
+	min-height: 32px;
+	padding: 0;
+	line-height: 1;
+	box-sizing: border-box;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	flex: 0 0 32px;
+	border: 0 !important;
+	box-shadow: var(--ui-shadow-subtle);
+}
+
+/* Material Icons: neutralize internal line-height */
+.table .btn-icon .material-icons {
+	font-size: 18px;
+	line-height: 1;
+	display: block;
+}
+
+.btn-page-action {
+	height: 36px;
+	padding: 0 1rem;
+	font-weight: 500;
+}
+
+.btn-page-primary {
+	height: 36px;
+	padding: 0 1rem;
+	font-weight: 500;
+	white-space: nowrap;
+}
+
+/* ----- Empty States ----- */
+
+.ui-empty {
+	border: 1px dashed var(--bs-border-color);
+	border-radius: 0.75rem;
+	padding: 2rem 1rem;
+}
+
+/* ----- Responsive Data Table (.rtable) ----- */
+
+/* .rtable marks tables that reflow into a card layout on mobile (see media query below). */
+.rtable {
+	width: 100%;
+}
+
+/* DESKTOP: echte Tabelle, kein Card-Reflow */
+@media (min-width: 768px) {
+	.targets-table td::before {
+		content: none !important;
+		display: none !important;
+	}
+
+	.targets-table tr {
+		display: table-row;
+	}
+
+	.targets-table td,
+	.targets-table th {
+		display: table-cell;
+	}
+}
+
+/* Global table row sizing - uses central CSS variables */
+.ui-page .table>:not(caption)>*>*,
+.ui-page .rtable>:not(caption)>*>*,
+.ui-page .table-sm>:not(caption)>*>* {
+	padding: var(--table-row-padding-y) var(--table-row-padding-x);
+	line-height: var(--table-row-line-height);
+}
+
+/* Opt-in compact class for denser tables */
+.table-compact>:not(caption)>*>* {
+	--table-row-padding-y: 0.35rem;
+	--table-row-padding-x: 0.5rem;
+	--table-row-line-height: 1.2;
+}
+
+/* ----- Alerts ----- */
+
+/* When an alert is acknowledged, render the whole row in a muted/closed state. */
+.alert-row-acked,
+.alert-row-acked a {
+	color: var(--bs-secondary-color) !important;
+}
+
+.alert-row-acked .material-icons,
+.alert-row-acked .text-danger,
+.alert-row-acked .text-success,
+.alert-row-acked .text-primary,
+.alert-row-acked .text-muted {
+	color: var(--bs-secondary-color) !important;
+}
+
+.alert-row-acked .badge {
+	background-color: transparent !important;
+	border: 1px solid var(--bs-border-color) !important;
+	color: var(--bs-secondary-color) !important;
+}
+
+/* ----- Key-Value Grid Layout ----- */
+
+.kv-list {
+	display: grid;
+	grid-template-columns: 110px auto;
+	column-gap: 1rem;
+	row-gap: 0.5rem;
+}
+
+.kv-key {
+	color: var(--bs-secondary-color);
+	font-weight: 500;
+	white-space: nowrap;
+}
+
+.kv-value {
+	text-align: left;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.4rem;
+	align-items: center;
+}
+
+.kv-value .badge {
+	margin-left: 0;
+	white-space: nowrap;
+}
+
+.kv-inline {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.4rem;
+}
+
+/* ----- Groups Card ----- */
+
+.group-card {
+	display: flex;
+	flex-direction: column;
+	gap: 0.6rem;
+}
+
+.target-actions,
+.group-actions {
+	display: flex;
+	gap: 0.5rem;
+	margin-top: 0.75rem;
+	padding-top: 0.75rem;
+	border-top: 1px solid var(--bs-border-color);
+}
+
+/* ----- Accordion / Group Header ----- */
+
+.ui-page .accordion-button {
+	padding-left: var(--page-gutter);
+	padding-right: var(--page-gutter);
+}
+
+.ui-page .accordion-button>i {
+	margin-right: 0.5rem;
+	flex-shrink: 0;
+}
+
+/* Keep accordion content aligned with the page gutter.
+	   Specific accordions can override via Bootstrap spacing utilities (e.g. p-0, px-3). */
+.ui-page .accordion-body {
+	padding-left: var(--page-gutter);
+	padding-right: var(--page-gutter);
+}
+
+.targets-group-header {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+}
+
+.targets-group-header .group-icon {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 20px;
+	height: 20px;
+	margin-left: 0.25rem;
+	opacity: 0.9;
+}
+
+/* Ensure accordion header aligns with card/table inner width
+   so header doesn't create a wider container than the table. */
+.targets-group .accordion-body>.ui-card {
+	width: 100%;
+}
+
+.targets-group .accordion-header {
+	padding: 0;
+}
+
+/* Accordion Header exakt wie Card/Table */
+.targets-group .accordion-button {
+	padding-left: var(--page-gutter);
+	padding-right: var(--page-gutter);
+	border-bottom: 1px solid var(--bs-border-color);
+}
+
+
+
+/* Optional: visually contain header to card edge */
+.targets-group-header {
+	margin: 0;
+}
+
+.targets-group .accordion-item {
+	overflow: hidden;
+}
+
+/* ----- Check Result Groups ----- */
+
+.check-group {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.35rem;
+	margin-right: 0.25rem;
+}
+
+.check-group .badge {
+	font-weight: 500;
+}
+
+.check-group .check-value {
+	background-color: var(--ui-muted-bg);
+	color: var(--ui-muted-color);
+	border: 1px solid var(--ui-muted-border);
+	font-weight: 500;
+}
+
+.checks-row {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.5rem;
+}
+
+/* ----- Settings List Tables (Users, Recipients) ----- */
+/* Ensures even column distribution in card-body tables */
+#users-list .table,
+#recipients-list .table {
+	table-layout: fixed;
+	width: 100%;
+}
+
+#users-list .table th,
+#users-list .table td,
+#recipients-list .table th,
+#recipients-list .table td {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* Equal width for all columns - table-layout:fixed distributes evenly */
+#users-list .table th,
+#users-list .table td {
+	width: auto;
+	/* Let table-layout: fixed handle equal distribution */
+}
+
+#recipients-list .table th,
+#recipients-list .table td {
+	width: auto;
+	/* Let table-layout: fixed handle equal distribution */
+}
+
+/* ----- Mobile Responsive: Settings Tables (Users, Recipients) ----- */
+@media (max-width: 991.98px) {
+
+	#users-list .table,
+	#recipients-list .table {
+		table-layout: auto;
+	}
+
+	/* Make tables horizontally scrollable on tablets */
+	#users-list,
+	#recipients-list {
+		overflow-x: auto;
+		-webkit-overflow-scrolling: touch;
+	}
+
+	#users-list .table,
+	#recipients-list .table {
+		min-width: 700px;
+	}
+}
+
+@media (max-width: 767.98px) {
+
+	/* Stack tables as cards on mobile */
+	#users-list .table,
+	#recipients-list .table {
+		table-layout: auto;
+		min-width: auto;
+	}
+
+	#users-list .table thead,
+	#recipients-list .table thead {
+		display: none;
+	}
+
+	#users-list .table tbody tr,
+	#recipients-list .table tbody tr {
+		display: block;
+		margin-bottom: 1rem;
+		border: 1px solid var(--bs-border-color);
+		border-radius: 0.5rem;
+		padding: 0.75rem;
+		background: var(--bs-body-bg);
+	}
+
+	#users-list .table tbody td,
+	#recipients-list .table tbody td {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		padding: 0.4rem 0;
+		border: none;
+		white-space: normal;
+		overflow: visible;
+		text-overflow: clip;
+	}
+
+	#users-list .table tbody td::before,
+	#recipients-list .table tbody td::before {
+		content: attr(data-label);
+		font-weight: 600;
+		color: var(--bs-secondary-color);
+		margin-right: 0.5rem;
+		flex-shrink: 0;
+	}
+
+	/* Actions row - full width */
+	#users-list .table tbody td:last-child,
+	#recipients-list .table tbody td:last-child {
+		justify-content: flex-end;
+		padding-top: 0.75rem;
+		margin-top: 0.5rem;
+		border-top: 1px solid var(--bs-border-color);
+	}
+
+	#users-list .table tbody td:last-child::before,
+	#recipients-list .table tbody td:last-child::before {
+		display: none;
+	}
+
+	/* Action buttons larger touch targets on mobile */
+	#users-list .action-buttons .btn,
+	#recipients-list .action-buttons .btn {
+		padding: 0.5rem;
+	}
+
+	#users-list .action-buttons .material-icons,
+	#recipients-list .action-buttons .material-icons {
+		font-size: 24px;
+	}
+}
+
+/* ----- Settings Table ----- */
+
+/* ----- Spooler Notification Log ----- */
+.spooler-log td {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.spooler-log td[data-label="Time"],
+.spooler-log td[data-label="Channel"] {
+	overflow: visible;
+	text-overflow: clip;
+}
+
+.spooler-log td[data-label="Target"],
+.spooler-log td[data-label="Recipient"],
+.spooler-log td[data-label="Error"] {
+	overflow: visible;
+	text-overflow: clip;
+	white-space: normal;
+	word-break: break-word;
+}
+
+.spooler-log td[data-label="Error"] {
+	font-size: 0.875rem;
+	line-height: 1.3;
+}
+
+/* ----- Mobile Responsive: Spooler Notification Log ----- */
+@media (max-width: 767.98px) {
+
+	/* Hide low-priority columns on mobile */
+	.spooler-log th:nth-child(3),
+	/* Target */
+	.spooler-log td[data-label="Target"],
+	.spooler-log th:nth-child(5),
+	/* Type */
+	.spooler-log td[data-label="Type"],
+	.spooler-log th:nth-child(7),
+	/* Retries */
+	.spooler-log td[data-label="Retries"],
+	.spooler-log th:nth-child(8),
+	/* Error */
+	.spooler-log td[data-label="Error"] {
+		display: none;
+	}
+
+	/* Compact font size */
+	.spooler-log {
+		font-size: 0.78rem;
+	}
+
+	/* Tighter cell padding */
+	.spooler-log th,
+	.spooler-log td {
+		padding: 0.3rem 0.4rem;
+	}
+
+	/* Time column: narrower */
+	.spooler-log th:nth-child(1),
+	.spooler-log td[data-label="Time"] {
+		white-space: nowrap;
+		font-size: 0.72rem;
+	}
+
+	/* Channel: icon only (hide text) */
+	.spooler-log td[data-label="Channel"] .material-icons {
+		margin-right: 0 !important;
+	}
+}
+
+.settings-table th {
+	width: 260px;
+	color: var(--bs-secondary-color);
+	font-weight: 500;
+}
+
+.settings-table td {
+	padding-top: 0.6rem;
+	padding-bottom: 0.6rem;
+}
+
+@media (min-width: 768px) {
+	.storage-danger-actions {
+		width: auto !important;
+	}
+
+	.storage-danger-text {
+		white-space: nowrap;
+	}
+}
+
+/* ----- Badges (scoped to app) ----- */
+
+.ui-page .badge,
+.badge {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	line-height: 1.1;
+	padding: 0.25em 0.5em;
+	font-size: 0.75rem;
+	border-radius: 0.25rem !important;
+	/* Less rounded than pill */
+}
+
+.badge .material-icons {
+	font-size: 16px;
+	line-height: 1;
+}
+
+/* Compact badges in tables */
+.table .badge {
+	font-size: 0.7rem;
+}
+
+/* Shadow only for status/highlight badges - not all */
+.ui-page .badge-status,
+.ui-page .badge-highlight {
+	box-shadow: var(--ui-shadow-subtle);
+}
+
+.badge.badge-muted {
+	background-color: var(--ui-muted-bg);
+	color: var(--ui-muted-color);
+	border: 1px solid var(--ui-muted-border);
+	font-weight: 500;
+}
+
+/* ----- Unified Table Typography ----- */
+
+/* Tables: unified font + tabular numbers for alignment */
+.ui-page table {
+	font-size: 0.85rem;
+	font-variant-numeric: tabular-nums;
+}
+
+/* Technical/numeric columns: monospace for readability (desktop only) */
+@media (min-width: 768px) {
+
+	.targets-table td[data-label="Uptime"],
+	.targets-table td[data-label="HTTP"],
+	.targets-table td[data-label="Interval"] {
+		font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+	}
+}
+
+/* HTTP & Interval: neutral badge styling (no semantic colors) */
+.badge-http,
+.badge-interval {
+	background-color: var(--ui-muted-bg) !important;
+	color: var(--ui-muted-color) !important;
+	border: 1px solid var(--ui-muted-border);
+	font-weight: 500;
+}
+
+/* Uptime: semantic colors without badge (lighter visual weight) */
+.uptime-value {
+	font-weight: 600;
+}
+
+.uptime-ok {
+	color: var(--bs-success);
+}
+
+.uptime-warn {
+	color: var(--bs-warning);
+}
+
+.uptime-bad {
+	color: var(--bs-danger);
+}
+
+/* Check badges: consistent neutral styling */
+.check-badges .badge {
+	font-weight: 500;
+	box-shadow: var(--ui-shadow-subtle);
+}
+
+/* Secondary badges: slightly darker grey (global) */
+.badge.bg-secondary {
+	background-color: #495057 !important;
+}
+
+[data-bs-theme="dark"] .badge.bg-secondary {
+	background-color: #3a3d43 !important;
+}
+
+/* ----- Target Detail Header ----- */
+
+.target-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 1rem;
+	margin-bottom: 1rem;
+}
+
+/* ----- Alert Recipients (Target Form + Details) ----- */
+
+.alert-recipients-picker {
+	border: 1px solid var(--bs-border-color);
+	border-radius: 0.75rem;
+	padding: 0.75rem;
+	background: var(--bs-body-bg);
+	box-shadow: var(--ui-shadow-subtle);
+	max-height: 260px;
+	overflow: auto;
+	scrollbar-gutter: stable both-edges;
+}
+
+.alert-recipients-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+	gap: 0.5rem;
+}
+
+.alert-recipient-tile {
+	border: 1px solid var(--bs-border-color);
+	border-radius: 0.6rem;
+	padding: 0.55rem 0.65rem;
+	background: var(--ui-card-bg, var(--bs-body-bg));
+}
+
+.alert-recipient-label {
+	display: flex;
+	gap: 0.6rem;
+	align-items: flex-start;
+	cursor: pointer;
+	width: 100%;
+	margin: 0;
+}
+
+.alert-recipient-label .form-check-input {
+	margin-top: 0.25rem;
+	flex: 0 0 auto;
+}
+
+.alert-recipient-body {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+.alert-recipient-name-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 0.5rem;
+}
+
+.alert-recipient-name {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.35rem;
+	font-weight: 600;
+	min-width: 0;
+}
+
+.alert-recipient-name .material-icons {
+	font-size: 18px;
+	line-height: 1;
+	color: var(--bs-secondary-color);
+}
+
+.alert-recipient-name-text {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.alert-recipient-status {
+	flex: 0 0 auto;
+}
+
+.alert-recipient-channels {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.35rem 0.5rem;
+	margin-top: 0.25rem;
+	color: var(--bs-secondary-color);
+	font-size: 0.85rem;
+}
+
+.alert-recipient-channel {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.25rem;
+	min-width: 0;
+}
+
+.alert-recipient-channel .material-icons {
+	font-size: 16px;
+	line-height: 1;
+}
+
+.alert-recipient-channel .alert-recipient-channel-text {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	max-width: 220px;
+}
+
+@media (max-width: 576px) {
+	.alert-recipients-picker {
+		max-height: 320px;
+		padding: 0.65rem;
+	}
+
+	.alert-recipients-grid {
+		grid-template-columns: repeat(2, 1fr);
+		gap: 0.4rem;
+	}
+
+	.alert-recipient-tile {
+		padding: 0.45rem 0.5rem;
+	}
+
+	.alert-recipient-channel .alert-recipient-channel-text {
+		max-width: 100%;
+	}
+}
+
+.target-header-left {
+	display: flex;
+	align-items: center;
+	gap: 0.75rem;
+}
+
+.target-header-left h2 {
+	margin-bottom: 0;
+}
+
+.target-status {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 40px;
+	height: 40px;
+	font-size: 2rem;
+}
+
+.target-header-actions {
+	display: flex;
+	gap: 0.5rem;
+	flex-shrink: 0;
+}
+
+/* ----- Action Buttons (Inline in Tables) ----- */
+
+.actions-cell {
+	width: 1%;
+	white-space: nowrap;
+	text-align: right !important;
+	overflow: visible;
+}
+
+.action-buttons {
+	display: inline-flex;
+	gap: 0.25rem;
+	align-items: center;
+	justify-content: flex-end;
+	flex-wrap: nowrap;
+}
+
+.action-buttons>* {
+	flex: 0 0 auto;
+}
+
+.action-buttons .material-icons {
+	font-size: 18px;
+	vertical-align: middle;
+}
+
+/* PDF export button icon readability */
+#export-pdf-btn .material-icons {
+	font-size: 20px;
+	line-height: 1;
+	vertical-align: middle;
+}
+
+#export-pdf-btn #pdf-icon {
+	color: var(--bs-secondary);
+}
+
+/* ----- Footer ----- */
+
+.footer-break {
+	display: none;
+}
+
+/* ----- Dark Mode (scoped overrides) ----- */
+
+[data-bs-theme="dark"] .ui-card {
+	background-color: var(--ui-card-bg);
+	border-color: var(--ui-card-border);
+}
+
+[data-bs-theme="dark"] .ui-page .table {
+	--bs-table-bg: transparent;
+}
+
+/* Dark mode table variants - Bootstrap's defaults are too bright */
+[data-bs-theme="dark"] .table-warning {
+	--bs-table-color: var(--bs-warning-text-emphasis);
+	--bs-table-bg: var(--bs-warning-bg-subtle);
+	--bs-table-border-color: var(--bs-warning-border-subtle);
+	--bs-table-striped-bg: rgba(255, 193, 7, 0.15);
+	--bs-table-striped-color: var(--bs-warning-text-emphasis);
+	--bs-table-active-bg: rgba(255, 193, 7, 0.2);
+	--bs-table-active-color: var(--bs-warning-text-emphasis);
+	--bs-table-hover-bg: rgba(255, 193, 7, 0.18);
+	--bs-table-hover-color: var(--bs-warning-text-emphasis);
+}
+
+[data-bs-theme="dark"] .table-danger {
+	--bs-table-color: var(--bs-danger-text-emphasis);
+	--bs-table-bg: var(--bs-danger-bg-subtle);
+	--bs-table-border-color: var(--bs-danger-border-subtle);
+	--bs-table-striped-bg: rgba(220, 53, 69, 0.15);
+	--bs-table-striped-color: var(--bs-danger-text-emphasis);
+	--bs-table-active-bg: rgba(220, 53, 69, 0.2);
+	--bs-table-active-color: var(--bs-danger-text-emphasis);
+	--bs-table-hover-bg: rgba(220, 53, 69, 0.18);
+	--bs-table-hover-color: var(--bs-danger-text-emphasis);
+}
+
+[data-bs-theme="dark"] .table-success {
+	--bs-table-color: var(--bs-success-text-emphasis);
+	--bs-table-bg: var(--bs-success-bg-subtle);
+	--bs-table-border-color: var(--bs-success-border-subtle);
+	--bs-table-striped-bg: rgba(25, 135, 84, 0.15);
+	--bs-table-striped-color: var(--bs-success-text-emphasis);
+	--bs-table-active-bg: rgba(25, 135, 84, 0.2);
+	--bs-table-active-color: var(--bs-success-text-emphasis);
+	--bs-table-hover-bg: rgba(25, 135, 84, 0.18);
+	--bs-table-hover-color: var(--bs-success-text-emphasis);
+}
+
+[data-bs-theme="dark"] .table-info {
+	--bs-table-color: var(--bs-info-text-emphasis);
+	--bs-table-bg: var(--bs-info-bg-subtle);
+	--bs-table-border-color: var(--bs-info-border-subtle);
+	--bs-table-striped-bg: rgba(13, 202, 240, 0.15);
+	--bs-table-striped-color: var(--bs-info-text-emphasis);
+	--bs-table-active-bg: rgba(13, 202, 240, 0.2);
+	--bs-table-active-color: var(--bs-info-text-emphasis);
+	--bs-table-hover-bg: rgba(13, 202, 240, 0.18);
+	--bs-table-hover-color: var(--bs-info-text-emphasis);
+}
+
+[data-bs-theme="dark"] .table-light {
+	--bs-table-color: var(--bs-body-color);
+	--bs-table-bg: var(--bs-tertiary-bg);
+	--bs-table-border-color: var(--bs-border-color);
+}
+
+[data-bs-theme="dark"] .targets-table tbody tr {
+	border-color: var(--ui-card-border);
+}
+
+/* =============================================
+   4. RESPONSIVE: MOBILE (max-width: 768px)
+   ============================================= */
+
+@media (max-width: 767.98px) {
+
+	/* Buttons */
+	.btn-page-primary {
+		width: 100%;
+	}
+
+	/* Responsive tables: Card-Layout nur auf Mobile */
+	.rtable {
+		table-layout: auto;
+	}
+
+	.rtable colgroup,
+	.rtable thead {
+		display: none;
+	}
+
+	.rtable tbody tr {
+		display: block;
+		border: 1px solid var(--bs-border-color);
+		border-radius: 0.5rem;
+		padding: 0.75rem;
+		margin-bottom: 0.75rem;
+		background: var(--bs-body-bg);
+	}
+
+	.rtable tbody td {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		padding: 0.4rem 0;
+		border: none;
+		white-space: normal;
+		overflow: visible;
+		text-overflow: clip;
+	}
+
+	.rtable tbody td::before {
+		content: attr(data-label);
+		font-weight: 600;
+		color: var(--bs-secondary-color);
+		margin-right: 1rem;
+		flex-shrink: 0;
+	}
+
+	.rtable tbody td[data-label=""]::before,
+	.rtable tbody td[data-label="Actions"]::before {
+		display: none;
+	}
+
+	.rtable tbody td.actions-cell {
+		justify-content: flex-end;
+		width: 100% !important;
+		/* override desktop table sizing (prevents clipped action icons) */
+	}
+
+	/* Desktop table layout helper; breaks card-layout if not reset */
+	.actions-cell {
+		width: auto !important;
+	}
+
+	/* Mobile: make icons inside icon-box buttons a bit larger */
+	.rtable .btn-icon .material-icons,
+	.rtable .btn-icon i {
+		font-size: 22px;
+	}
+
+	/* Hide less important columns on mobile */
+	.targets-table td[data-label="Last Check"],
+	.targets-table td[data-label="Last Downtime"],
+	.targets-table td[data-label="HTTP"],
+	.targets-table td[data-label="Interval"] {
+		display: none;
+	}
+
+	/* Sticky Actions */
+	.sticky-actions {
+		position: -webkit-sticky;
+		position: sticky;
+		bottom: env(safe-area-inset-bottom, 0);
+		background: var(--bs-body-bg);
+		padding: 0.75rem;
+		border-top: 1px solid var(--bs-border-color);
+		z-index: 10;
+	}
+
+	/* Settings table */
+	.settings-table th {
+		width: auto;
+	}
+
+	/* Target header */
+	.target-header {
+		flex-direction: column;
+		align-items: flex-start;
+	}
+
+	.target-header-actions {
+		width: 100%;
+	}
+
+	.target-header-actions .btn {
+		flex: 1;
+	}
+
+	/* Actions alignment */
+	.target-actions,
+	.group-actions {
+		justify-content: flex-start;
+	}
+}
+
+/* =============================================
+   5. RESPONSIVE: MOBILE (max-width: 576px)
+   ============================================= */
+
+@media (max-width: 576px) {
+	:root {
+		--page-gutter: 0.5rem;
+	}
+
+	/* ─────────────────────────────────────────
+	   FIX #1: Bootstrap-Grid neutralisieren (scoped)
+	   ───────────────────────────────────────── */
+	.ui-page .row {
+		margin-left: 0 !important;
+		margin-right: 0 !important;
+		--bs-gutter-x: 0;
+	}
+
+	.ui-page [class^="col-"],
+	.ui-page [class*=" col-"] {
+		padding-left: 0 !important;
+		padding-right: 0 !important;
+	}
+
+	/* ─────────────────────────────────────────
+	   FIX #2: Ein einziger vertikaler Rhythmus
+	   ───────────────────────────────────────── */
+	.ui-section {
+		margin-bottom: 1.25rem;
+	}
+
+	.ui-section:last-child {
+		margin-bottom: 0;
+	}
+
+	/* ─────────────────────────────────────────
+	   FIX #3: Summary-Kacheln als echtes 2×2 Grid
+	   ───────────────────────────────────────── */
+	.summary-grid {
+		display: grid;
+		grid-template-columns: repeat(2, 1fr);
+		gap: 0.5rem;
+	}
+
+	/* Target detail info cards: 3 columns on mobile */
+	.info-cards-grid {
+		grid-template-columns: repeat(3, 1fr);
+		gap: 0.5rem;
+	}
+
+	.info-cards-grid .card-body {
+		padding: 0.6rem 0.4rem;
+	}
+
+	/* ─────────────────────────────────────────
+	   FIX #4: Dashboard-Row = vertikaler Stack
+	   ───────────────────────────────────────── */
+	.dashboard-row {
+		display: flex;
+		flex-direction: column;
+		gap: 0.75rem;
+	}
+
+	/* ─────────────────────────────────────────
+	   FIX #5: Cards = nur Innenabstand
+	   ───────────────────────────────────────── */
+	.card,
+	.ui-card {
+		margin: 0;
+		padding: 0.5rem;
+	}
+
+	/* Card-body: Reduziere Padding für optimale Breiten-Nutzung */
+	.card-body {
+		padding: 0.65rem 0.4rem;
+		/* Mehr vertikaler Abstand zum Header */
+	}
+
+	/* ─────────────────────────────────────────
+	   Basis-Layout
+	   ───────────────────────────────────────── */
+	/*
+	 * REMOVED: overflow-x: hidden on html/body
+	 * Reason: Masks layout bugs instead of fixing them,
+	 * prevents horizontal scroll on iOS Safari,
+	 * and can break position:sticky elements
+	 * Fix: Address root cause of overflow instead
+	 */
+
+	.ui-page {
+		padding-left: var(--page-gutter);
+		padding-right: var(--page-gutter);
+		padding-bottom: 1.25rem;
+		/* Note: Kept overflow-x here for content containment */
+		overflow-x: hidden;
+	}
+
+	/* Touch-friendly buttons (iOS/Android: 44px) */
+	.ui-page .btn:not(.btn-sm) {
+		min-height: 44px;
+	}
+
+	/* Page header */
+	.ui-page>.d-flex.mb-4 {
+		margin-bottom: 1.25rem !important;
+	}
+
+	/* ─────────────────────────────────────────
+	   Tables
+	   ───────────────────────────────────────── */
+	.ui-card .table {
+		margin-left: 0;
+		margin-right: 0;
+		width: 100%;
+	}
+
+	.table-responsive,
+	.table-responsive-md {
+		overflow-x: auto;
+		-webkit-overflow-scrolling: touch;
+	}
+
+	/* ─────────────────────────────────────────
+	   Components
+	   ───────────────────────────────────────── */
+	.ui-empty {
+		padding: 1.5rem 0.75rem;
+	}
+
+	/* Targets group accordion */
+	.targets-group,
+	.targets-group.accordion,
+	.targets-group.card {
+		padding: 0;
+		margin: 0;
+	}
+
+	.targets-group .ui-card {
+		padding-left: 0;
+		padding-right: 0;
+	}
+
+	.target-card,
+	.targets-group .target-card {
+		padding: 0.5rem;
+	}
+
+	/* On mobile, only the targets accordion goes edge-to-edge by default. */
+	.targets-group .accordion-body {
+		padding: 0;
+	}
+
+	.targets-group-header {
+		margin: 0;
+		border-radius: 0.5rem;
+	}
+
+	/* Footer */
+	.footer-break {
+		display: block;
+	}
+
+	footer .footer-text {
+		display: block;
+		text-align: center;
+		line-height: 1.4;
+	}
+
+	/* Modals */
+	.modal-dialog {
+		margin: 0.5rem;
+	}
+
+	.modal-content {
+		border-radius: 0.75rem;
+	}
+
+	.modal-footer {
+		display: grid;
+		gap: 0.5rem;
+	}
+
+	.modal-footer .btn {
+		width: 100%;
+	}
+
+	/* Button-Gruppen wrappen */
+	.ui-page .d-flex.gap-2 {
+		flex-wrap: wrap;
+	}
+
+	.ui-page .d-flex.gap-2>.btn {
+		flex: 1 1 100%;
+	}
+}
+
+/* =============================================
+   6. DESKTOP ENHANCEMENTS (min-width: 768px+)
+   ============================================= */
+
+@media (min-width: 768px) {
+	.ui-card {
+		padding: 1.25rem;
+	}
+
+	/* Tables stay within card boundaries - no edge-to-edge manipulation */
+	.ui-card .table {
+		margin-left: 0;
+		margin-right: 0;
+		width: 100%;
+	}
+
+	/* Cards clip overflowing content; use .table-responsive for controlled scrolling */
+	.card,
+	.ui-card,
+	.accordion {
+		overflow-x: hidden;
+	}
+
+	.kv-list {
+		grid-template-columns: 140px auto;
+	}
+
+	.target-actions,
+	.group-actions {
+		justify-content: flex-end;
+	}
+
+	/* Merge: Following media query could be consolidated with above
+	 * for better maintainability, but kept separate for logical grouping */
+}
+
+/* Targets Table: Hover and Truncation (Desktop) */
+@media (min-width: 768px) {
+	.targets-table .truncate {
+		max-width: 300px;
+	}
+
+	.targets-table tbody tr:hover {
+		background-color: var(--bs-table-hover-bg, rgba(0, 0, 0, 0.075));
+	}
+}
+
+/* =============================================
+   TARGETS TABLE - FIXED LAYOUT
+   Prevents column jumping by fixing table layout
+   and explicitly defining column widths
+   ============================================= */
+
+.targets-table {
+	width: 100%;
+}
+
+/* Desktop/Tablet: fixed layout for consistent column alignment across groups */
+@media (min-width: 768px) {
+
+	/*
+	 * Note: This min-width:768px block is intentionally separate from others
+	 * for logical organization (targets table layout vs responsive behavior)
+	 * Consider merging with similar media queries in future refactoring
+	 */
+	.targets-table {
+		table-layout: fixed;
+	}
+
+	/* Column widths - fixed percentages for consistent alignment across all groups */
+	.targets-table .col-status {
+		width: 3%;
+	}
+
+	.targets-table .col-name {
+		width: 22%;
+	}
+
+	.targets-table .col-checks {
+		width: 18%;
+	}
+
+	.targets-table .col-uptime {
+		width: 8%;
+	}
+
+	.targets-table .col-lastchk {
+		width: 11%;
+	}
+
+	.targets-table .col-lastdown {
+		width: 11%;
+	}
+
+	.targets-table .col-http {
+		width: 6%;
+	}
+
+	.targets-table .col-interval {
+		width: 7%;
+	}
+
+	.targets-table .col-actions {
+		width: 14%;
+	}
+}
+
+/* Tablet (768-991px): hide less important columns to give more space */
+@media (min-width: 768px) and (max-width: 991.98px) {
+
+	.targets-table .col-lastchk,
+	.targets-table .col-lastdown,
+	.targets-table .col-http,
+	.targets-table .col-interval {
+		display: none;
+	}
+}
+
+/* Text overflow control for long content */
+.targets-table td,
+.targets-table th {
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+/* Name column: allow tooltip on hover for long names */
+.targets-table td[data-label="Name"] {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	min-width: 240px;
+	/* guard so name doesn't collapse visually */
+}
+
+.targets-table td[data-label="Name"] a {
+	display: block;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	text-decoration: none;
+}
+
+/* Badges container - normalized display */
+.targets-table .checks-cell {
+	white-space: nowrap;
+	overflow: hidden;
+	/* Clip badges that overflow */
+}
+
+.targets-table .check-badges {
+	display: flex;
+	gap: 4px;
+	flex-wrap: nowrap;
+	align-items: center;
+	overflow: hidden;
+}
+
+.targets-table .check-badges .badge {
+	min-width: auto;
+	text-align: center;
+	white-space: nowrap;
+	flex-shrink: 0;
+	padding: 0.25em 0.5em;
+}
+
+/* Targets table: overflow handling */
+#targets-table .ui-card {
+	overflow-x: hidden;
+}
+
+/* =============================================
+   7. VERY NARROW DEVICES (max-width: 360px)
+   ============================================= */
+
+@media (max-width: 360px) {
+
+	/* Actions-Buttons: Wrapping erlauben auf sehr schmalen Geräten */
+	.targets-table td [class*="flex-nowrap"] {
+		flex-wrap: wrap;
+	}
+
+	/* Kleinere Icon-Buttons - still square */
+	.btn-icon {
+		width: 32px;
+		height: 32px;
+		min-width: 32px;
+		min-height: 32px;
+	}
+}
+
+/* =============================================
+   8. SIGNAL DEVICE SETUP WIZARD
+   ============================================= */
+
+/* Signal app icon box */
+.signal-app-icon {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 50px;
+	height: 50px;
+	background: #fff;
+	border-radius: 10px;
+	border: 1px solid rgba(0, 0, 0, 0.2);
+	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+[data-bs-theme="dark"] .signal-app-icon {
+	background: #fff;
+	border-color: transparent;
+}
+
+/* Step states for wizard-like flow */
+.signal-step {
+	transition: opacity 0.2s ease, border-color 0.2s ease;
+	padding-left: 0.75rem;
+	border-left: 3px solid transparent;
+	margin-bottom: 1rem;
+}
+
+.signal-step:last-of-type,
+.signal-step+.signal-danger-zone {
+	margin-top: 0;
+}
+
+.signal-step:last-of-type {
+	margin-bottom: 0;
+}
+
+.signal-step-disabled {
+	opacity: 0.5;
+	pointer-events: none;
+}
+
+.signal-step-disabled .signal-step-hint {
+	display: inline;
+}
+
+.signal-step-active {
+	border-left-color: var(--bs-primary);
+	opacity: 1;
+}
+
+.signal-step-complete .signal-step-badge {
+	background-color: var(--bs-success) !important;
+}
+
+.signal-step-complete .signal-step-title {
+	color: var(--bs-success);
+}
+
+.signal-step-hint {
+	display: none;
+	font-size: 0.75rem;
+	color: var(--bs-secondary);
+}
+
+/* Consistent button width in signal steps */
+.signal-step .input-group .btn {
+	min-width: 6.5rem;
+}
+
+/* 6-digit verification code input boxes */
+.signal-code-box {
+	width: 3rem;
+	height: 3.5rem;
+	font-size: 1.5rem;
+	font-weight: 600;
+	padding: 0.25rem;
+	border-radius: 0.5rem;
+	caret-color: transparent;
+}
+
+.signal-code-box:focus {
+	border-color: var(--bs-primary);
+	box-shadow: 0 0 0 0.2rem rgba(var(--bs-primary-rgb), 0.25);
+}
+
+.signal-code-box.is-invalid {
+	border-color: var(--bs-danger);
+	animation: shake 0.3s ease-in-out;
+}
+
+.signal-code-box:disabled {
+	background-color: var(--bs-secondary-bg);
+	opacity: 0.6;
+}
+
+@keyframes shake {
+
+	0%,
+	100% {
+		transform: translateX(0);
+	}
+
+	25% {
+		transform: translateX(-4px);
+	}
+
+	50% {
+		transform: translateX(4px);
+	}
+
+	75% {
+		transform: translateX(-4px);
+	}
+}
+
+/* Easter egg: Logo wiggle animation on hover */
+.navbar-brand:hover {
+	animation: wiggle 0.6s ease-in-out;
+}
+
+@keyframes wiggle {
+
+	0%,
+	100% {
+		transform: rotate(0deg);
+	}
+
+	10% {
+		transform: rotate(-12deg);
+	}
+
+	20% {
+		transform: rotate(10deg);
+	}
+
+	30% {
+		transform: rotate(-10deg);
+	}
+
+	40% {
+		transform: rotate(8deg);
+	}
+
+	50% {
+		transform: rotate(-6deg);
+	}
+
+	60% {
+		transform: rotate(4deg);
+	}
+
+	70% {
+		transform: rotate(-2deg);
+	}
+
+	80% {
+		transform: rotate(1deg);
+	}
+
+	90% {
+		transform: rotate(0deg);
+	}
+}
+
+/* Danger zone styling - subtler appearance */
+.signal-danger-zone {
+	background: var(--ui-muted-bg);
+	border-radius: 0.375rem;
+	padding: 0.75rem;
+	margin-top: 1rem;
+}
+
+/* Mobile: hide disabled steps completely for cleaner flow */
+@media (max-width: 576px) {
+	.signal-step-disabled {
+		display: none;
+	}
+
+	.signal-step {
+		border-left: none;
+		padding-left: 0;
+	}
+}
+
+/* =============================================
+   SETTINGS PAGE TABS
+   ============================================= */
+
+/* Placeholder collapse toggle icon rotation */
+[data-bs-toggle="collapse"] .material-icons {
+	transition: transform 0.2s ease;
+}
+
+[data-bs-toggle="collapse"]:not(.collapsed) .material-icons {
+	transform: rotate(180deg);
+}
+
+#settingsTabs .nav-link {
+	color: var(--bs-body-color);
+	border-color: transparent;
+	border-bottom: 2px solid transparent;
+	transition: all 0.2s ease;
+	display: flex;
+	align-items: center;
+	gap: 0.25rem;
+	padding: 0.75rem 1rem;
+}
+
+#settingsTabs .nav-link:hover {
+	border-color: transparent;
+	border-bottom-color: var(--bs-primary);
+	background-color: var(--ui-muted-bg);
+}
+
+#settingsTabs .nav-link.active {
+	color: var(--bs-primary);
+	background-color: transparent;
+	border-color: transparent;
+	border-bottom-color: var(--bs-primary);
+	font-weight: 500;
+}
+
+#settingsTabs .nav-link .material-icons {
+	font-size: 18px;
+}
+
+/* Desktop: active tab slightly bolder */
+#settingsTabs .nav-link.active {
+	font-weight: 600;
+}
+
+/* =============================================
+   SETTINGS MOBILE NAVIGATION
+   ============================================= */
+
+/* Mobile settings list-group (< md) */
+#settingsMobileNav {
+	border-bottom: 1px solid var(--bs-border-color);
+	margin-bottom: 0.75rem;
+}
+
+#settingsMobileNav .list-group-item {
+	padding: 14px 16px;
+	font-size: 15px;
+	border-left: 3px solid transparent;
+}
+
+#settingsMobileNav .list-group-item .material-icons {
+	font-size: 20px;
+}
+
+#settingsMobileNav .list-group-item.active {
+	background-color: var(--bs-primary);
+	border-color: var(--bs-primary);
+	border-left-color: var(--bs-primary);
+	color: #fff;
+}
+
+#settingsMobileNav .list-group-item:not(.active):hover {
+	border-left-color: var(--bs-primary);
+	background-color: var(--ui-muted-bg);
+}
+
+/* Dark mode adjustments */
+[data-bs-theme="dark"] #settingsMobileNav .list-group-item:not(.active) {
+	background-color: var(--ui-card-bg);
+	border-color: var(--ui-card-border);
+	color: var(--bs-body-color);
+}
+
+[data-bs-theme="dark"] #settingsMobileNav .list-group-item:not(.active):hover {
+	background-color: var(--ui-muted-bg);
+}
+
+/* =============================================
+   SIGNAL TEMPLATE iOS PREVIEW
+   ============================================= */
+
+.smtp-tiles {
+	align-items: stretch;
+}
+
+.smtp-tile {
+	display: flex;
+	flex-direction: column;
+	min-height: 0;
+}
+
+@media (min-width: 992px) {
+
+	/* Fill the viewport height on desktop and keep all 3 tiles equal height. */
+	.smtp-tiles {
+		/* Subtract fixed footer (60px) to avoid unnecessary scroll. */
+		min-height: calc(100vh - 240px - 60px);
+	}
+
+	.smtp-tile .card-body {
+		flex: 1 1 auto;
+		min-height: 0;
+		overflow: auto;
+	}
+}
+
+.smtp-placeholders-scroll {
+	max-height: none;
+	overflow: auto;
+	-webkit-overflow-scrolling: touch;
+}
+
+.placeholders-table .placeholders-thead th {
+	background-color: var(--ui-muted-bg);
+	color: var(--bs-body-color);
+	border-color: var(--bs-border-color);
+}
+
+.placeholders-table .placeholders-section td {
+	background-color: var(--ui-muted-bg);
+	color: var(--bs-body-color);
+	font-weight: 600;
+}
+
+.smtp-template-body {
+	min-height: 0;
+}
+
+.smtp-template-editor {
+	min-height: 0;
+}
+
+.smtp-template-editor-pane {
+	min-height: 0;
+}
+
+/* Fill remaining tile space with the editor on desktop. */
+@media (min-width: 992px) {
+	.smtp-template-editor-pane textarea {
+		flex: 1 1 auto;
+		min-height: 0;
+		height: 100%;
+	}
+
+	.smtp-template-body .tox-tinymce {
+		height: 100% !important;
+	}
+}
+
+.signal-templates-grid {
+	display: grid;
+	grid-template-columns: 1fr;
+	gap: 1rem;
+	max-width: 100%;
+}
+
+.signal-templates-grid>* {
+	min-width: 0;
+}
+
+.signal-templates-grid textarea {
+	max-width: 100%;
+}
+
+@media (min-width: 992px) {
+	.signal-templates-grid {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 1.25rem;
+		align-items: start;
+	}
+
+	.signal-templates-placeholders {
+		grid-column: 1 / -1;
+	}
+}
+
+@media (min-width: 1200px) {
+	.signal-templates-grid {
+		grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 2fr);
+		gap: 1.5rem;
+	}
+
+	.signal-templates-placeholders {
+		grid-column: auto;
+	}
+}
+
+.signal-templates-placeholders .table-responsive {
+	max-width: 100%;
+}
+
+@media (max-width: 576px) {
+
+	.signal-templates-placeholders th,
+	.signal-templates-placeholders td,
+	.signal-templates-placeholders code {
+		white-space: normal;
+		word-break: break-word;
+	}
+}
+
+.ios-preview {
+	border: 1px solid var(--bs-border-color);
+	border-radius: 18px;
+	overflow: hidden;
+	background: var(--bs-body-bg);
+	box-shadow: 0 10px 26px rgba(0, 0, 0, 0.12);
+}
+
+.ios-preview-statusbar {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	padding: 6px 10px;
+	font-size: 12px;
+	color: var(--bs-secondary-color);
+	background: var(--ui-muted-bg);
+	border-bottom: 1px solid var(--bs-border-color);
+}
+
+.ios-preview-icons {
+	display: inline-flex;
+	gap: 4px;
+	align-items: center;
+}
+
+.ios-dot {
+	width: 6px;
+	height: 6px;
+	border-radius: 999px;
+	background: var(--bs-secondary-color);
+	opacity: 0.75;
+}
+
+.ios-preview-body {
+	min-height: 160px;
+	padding: 12px;
+	background: linear-gradient(180deg, rgba(255, 255, 255, 0.6), rgba(255, 255, 255, 0));
+}
+
+[data-bs-theme="dark"] .ios-preview-body {
+	background: linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0));
+}
+
+.ios-chat {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+
+.ios-chat-row {
+	display: flex;
+}
+
+.ios-chat-bubble,
+.ios-preview-bubble {
+	max-width: 100%;
+	background: rgba(255, 255, 255, 0.92);
+	border: 1px solid rgba(0, 0, 0, 0.06);
+	border-radius: 16px;
+	padding: 10px 12px;
+	box-shadow: 0 10px 20px rgba(0, 0, 0, 0.12);
+	position: relative;
+}
+
+[data-bs-theme="dark"] .ios-chat-bubble,
+[data-bs-theme="dark"] .ios-preview-bubble {
+	background: rgba(31, 41, 55, 0.82);
+	border-color: rgba(255, 255, 255, 0.06);
+}
+
+.ios-chat-bubble-left {
+	--ios-bubble-bg: rgba(255, 255, 255, 0.92);
+	--ios-bubble-border: rgba(0, 0, 0, 0.06);
+}
+
+[data-bs-theme="dark"] .ios-chat-bubble-left {
+	--ios-bubble-bg: rgba(31, 41, 55, 0.82);
+	--ios-bubble-border: rgba(255, 255, 255, 0.06);
+}
+
+.ios-chat-bubble-left {
+	background: var(--ios-bubble-bg);
+	border-color: var(--ios-bubble-border);
+}
+
+.ios-chat-bubble-left::before {
+	content: "";
+	position: absolute;
+	left: -8px;
+	top: 14px;
+	border: 8px solid transparent;
+	border-right-color: var(--ios-bubble-bg);
+}
+
+.ios-chat-bubble-left::after {
+	content: "";
+	position: absolute;
+	left: -9px;
+	top: 14px;
+	border: 9px solid transparent;
+	border-right-color: var(--ios-bubble-border);
+	z-index: -1;
+}
+
+.ios-chat-bubble-right {
+	--signal-bubble-bg: #3a76f0;
+	--signal-bubble-border: rgba(0, 0, 0, 0.08);
+
+	margin-left: auto;
+	background: var(--signal-bubble-bg);
+	color: #fff;
+	border-color: var(--signal-bubble-border);
+	z-index: 0;
+}
+
+/* small, flat Signal-style pointer */
+/* No pointer/tail for preview bubble (clean iOS-style card bubble) */
+.ios-chat-bubble-right::before,
+.ios-chat-bubble-right::after {
+	content: none;
+	display: none;
+}
+
+[data-bs-theme="dark"] .ios-chat-bubble-right {
+	--signal-bubble-bg: #4f8cff;
+	--signal-bubble-border: rgba(255, 255, 255, 0.08);
+}
+
+.ios-preview-text {
+	white-space: pre-wrap;
+	word-break: break-word;
+	font-size: 13px;
+	line-height: 1.35;
+	color: inherit;
+}
+
+/* =============================================
+   ONBOARDING: Pulse Animation
+   ============================================= */
+
+@keyframes nav-pulse {
+	0% {
+		box-shadow: 0 0 0 0 rgba(13, 110, 253, 0.7);
+	}
+
+	70% {
+		box-shadow: 0 0 0 10px rgba(13, 110, 253, 0);
+	}
+
+	100% {
+		box-shadow: 0 0 0 0 rgba(13, 110, 253, 0);
+	}
+}
+
+.nav-link-pulse {
+	animation: nav-pulse 2s ease-out;
+	animation-iteration-count: 3;
+	border-radius: 4px;
+}

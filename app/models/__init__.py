@@ -4,3 +4,5 @@
 # Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 #
 
+"""Pydantic models for API request/response schemas."""
+

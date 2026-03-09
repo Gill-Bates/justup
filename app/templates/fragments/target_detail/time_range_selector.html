@@ -1,0 +1,42 @@
+{# Time Range Selector #}
+<div class="card shadow-sm mb-4">
+	<div class="card-body">
+		<div class="row g-3 align-items-end">
+			<div class="col-12 col-md-auto">
+				<label class="form-label mb-1"><i class="material-icons me-1">event</i>From</label>
+				<input type="datetime-local" class="form-control w-100" id="range-from">
+			</div>
+			<div class="col-12 col-md-auto">
+				<label class="form-label mb-1"><i class="material-icons me-1">event</i>To</label>
+				<input type="datetime-local" class="form-control w-100" id="range-to">
+			</div>
+			<div class="col-12 col-md-auto">
+				<label class="form-label mb-1">Quick Select</label>
+				<select class="form-select w-100" id="quick-range">
+					<option value="">Custom</option>
+					<option value="1h">Last 1 Hour</option>
+					<option value="6h">Last 6 Hours</option>
+					<option value="24h" selected>Last 24 Hours</option>
+					<option value="today">Today</option>
+					<option value="7d">Last 7 Days</option>
+					<option value="month">This Month</option>
+					<option value="quarter">Last Quarter</option>
+					<option value="year">This Year</option>
+				</select>
+			</div>
+			<div class="col-12 col-md-auto">
+				<div class="d-flex gap-2">
+					<button class="btn btn-primary flex-fill" id="load-range-btn">
+						<i class="material-icons">refresh</i> Load
+					</button>
+					<button class="btn btn-outline-secondary flex-fill" id="reset-zoom-btn" title="Reset Zoom">
+						<i class="material-icons">zoom_out</i> Reset Zoom
+					</button>
+				</div>
+			</div>
+		</div>
+		<small class="text-muted mt-2 d-block">
+			<i class="material-icons">info</i> Drag to select a time range in any chart to zoom in
+		</small>
+	</div>
+</div>

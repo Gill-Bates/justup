@@ -1,0 +1,32 @@
+services:
+  justup:
+    image: docker.cirrio.de/justup:latest
+    container_name: justup
+    restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      PUID: 1000
+      PGID: 1000
+      LOG_LEVEL: DEBUG
+      UPMON_QUALITY_TARGETS: 1.1.1.1,8.8.8.8,9.9.9.9,www.de-cix.net,cloudflare.com
+      UPMON_ENCRYPTION_KEY: ""
+    volumes:
+      - /opt/docker/justup:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      cloudnet:
+        ipv4_address: 10.30.0.14
+networks:
+  cloudnet:
+    external: true

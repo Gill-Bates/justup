@@ -1,0 +1,132 @@
+#!/usr/bin/env python3
+#
+# justup-cli
+# Copyright (C) 2025-2026 Gill-Bates http://github.com/Gill-Bates
+#
+
+"""
+justUp! Command Line Interface
+
+Usage:
+    justup-cli reset password admin
+    justup-cli reset password <username>
+
+Replaces: python /app/scripts/reset_admin_password.py
+"""
+
+import secrets
+import sqlite3
+import string
+import sys
+from pathlib import Path
+
+# Add parent directory to path so we can import app modules
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from app.db import sqlite as sqlite_db
+from app.models.users import hash_password
+from app.utils.config import DB_PATH
+
+
+def generate_password(length: int = 16) -> str:
+    """Generate a secure random password."""
+    alphabet = string.ascii_letters + string.digits
+    return "".join(secrets.choice(alphabet) for _ in range(length))
+
+
+def reset_password(username: str | None = None) -> int:
+    """Reset password for a user (or all admins if username is 'admin' or None)."""
+    if not DB_PATH.exists():
+        print(f"[ERROR] Database not found: {DB_PATH}", file=sys.stderr)
+        return 1
+
+    conn = sqlite_db.connect(DB_PATH)
+    # Ensure dict-style access to rows
+    conn.row_factory = sqlite3.Row
+    
+    try:
+        # Normalize username (strip whitespace only, preserve case)
+        normalized_username = username.strip() if username else None
+        
+        # If username is 'admin' (case-insensitive) or None, reset all admin users
+        if normalized_username is None or normalized_username.lower() == "admin":
+            cursor = conn.execute(
+                "SELECT id, username FROM users WHERE is_admin = 1"
+            )
+            users = cursor.fetchall()
+            if not users:
+                print("[ERROR] No admin users found in database.", file=sys.stderr)
+                return 1
+        else:
+            # Reset specific user
+            user = sqlite_db.get_user_by_username(conn, normalized_username)
+            if not user:
+                print(f"[ERROR] User not found: {normalized_username}", file=sys.stderr)
+                return 1
+            users = [user]
+
+        # Use connection context manager for atomic transaction
+        # Avoid calling library functions that manage their own transactions
+        with conn:
+            for user in users:
+                # Generate unique password per user (security best practice)
+                new_password = generate_password()
+                password_hash = hash_password(new_password)
+                
+                # Update password and revoke tokens using raw SQL
+                conn.execute(
+                    "UPDATE users SET password_hash = ? WHERE id = ?",
+                    (password_hash, user["id"])
+                )
+                conn.execute(
+                    "DELETE FROM tokens WHERE user_id = ?",
+                    (user["id"],)
+                )
+                
+                print(f"✓ Password updated for user: {user['username']}")
+                print(f"  New password: {new_password}")
+                print()
+
+    finally:
+        conn.close()
+
+    return 0
+
+
+def show_usage():
+    """Show CLI usage information."""
+    print("justUp! Command Line Interface")
+    print()
+    print("USAGE:")
+    print("  justup-cli reset password admin          Reset all admin passwords")
+    print("  justup-cli reset password <username>     Reset password for specific user")
+    print()
+    print("EXAMPLES:")
+    print("  docker exec -it justup justup-cli reset password admin")
+    print("  docker exec -it justup justup-cli reset password alice")
+
+
+def main() -> int:
+    """Main CLI entry point."""
+    args = sys.argv[1:]
+
+    # No args or help
+    if not args or args[0] in ("-h", "--help", "help"):
+        show_usage()
+        return 0
+
+    # Parse command: reset password <username>
+    if len(args) >= 2 and args[0] == "reset" and args[1] == "password":
+        # Get username (default to 'admin' if not provided)
+        username = args[2] if len(args) > 2 else "admin"
+        return reset_password(username)
+
+    # Unknown command
+    print(f"[ERROR] Unknown command: {' '.join(args)}", file=sys.stderr)
+    print()
+    show_usage()
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

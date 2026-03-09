@@ -1,0 +1,10 @@
+{# Target Status Icon Fragment (HTMX) #}
+{% if status == 'up' %}
+<span class="material-icons fs-5 text-success" title="Online" aria-label="Status: Online" role="img">check_circle</span>
+{% elif status == 'down' %}
+<span class="material-icons fs-5 text-danger" title="Offline" aria-label="Status: Offline" role="img">cancel</span>
+{% elif status == 'disabled' %}
+<span class="material-icons fs-5 text-secondary" title="Disabled" aria-label="Status: Disabled" role="img">pause_circle</span>
+{% else %}
+<span class="material-icons fs-5 text-secondary" title="Unknown" aria-label="Status: Unknown" role="img">help</span>
+{% endif %}

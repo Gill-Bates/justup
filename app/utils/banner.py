@@ -4,66 +4,59 @@
 # Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 #
 
-"""Startup banner for justUp."""
+"""  
+Banner Module.
+Displays the application header/logo.
+"""
 
 from __future__ import annotations
 
-import os
 import sys
-import tempfile
 
-from .version import VERSION, BUILD_INFO
-
-_BANNER_LOCK_FILE = os.path.join(tempfile.gettempdir(), "justup_banner.lock")
+from .version import VERSION as _DEFAULT_VERSION, get_build_info
 
 
-def print_banner() -> None:
-	build_short = BUILD_INFO[:7] if BUILD_INFO else "dev"
-
-	ascii_art = r"""
+def print_banner(version: str | None = None) -> None:
+    if version is None:
+        version = _DEFAULT_VERSION
+    """
+    Prints the ASCII banner to stdout and automatically centers the text below it
+    based on the banner's maximum line width.
+    """
+    # Get build info (short hash)
+    build_info = get_build_info()
+    if build_info and build_info != "dev":
+        build_info = build_info[:7]  # Short hash
+    
+    # Check if we have color support
+    is_tty = sys.stdout.isatty()
+    
+    if is_tty:
+        CYAN = "\033[96m"
+        WHITE = "\033[97m"
+        GRAY = "\033[90m"
+        YELLOW = "\033[93m"
+        RESET = "\033[0m"
+        BOLD = "\033[1m"
+    else:
+        CYAN = WHITE = GRAY = YELLOW = RESET = BOLD = ""
+    
+    banner = r"""
    _           _     _   _       _ 
   (_)_   _ ___| |_  | | | |_ __ | |
   | | | | / __| __| | | | | '_ \| |
   | | |_| \__ \ |_  | |_| | |_) |_|
  _/ |\__,_|___/\__|  \___/| .__/(_)
-|__/                      |_|        
-""".strip("\n")
+|__/                      |_|      
+    """
 
-	text_lines = [
-		f"Uptime Monitor  v{VERSION} ({build_short})",
-		"(C) 2026 by Gill-Bates (https://github.com/Gill-Bates/justup)",
-	]
+    lines = [line for line in banner.split("\n") if line]
+    banner_width = max((len(line) for line in lines), default=40)
 
-	ascii_lines = ascii_art.splitlines()
-	ascii_width = max((len(l) for l in ascii_lines), default=0)
-	text_width = max((len(t) for t in text_lines), default=0)
-	master_width = max(ascii_width, text_width)
+    title_text = ">>> Uptime Monitor - done right! <<<"
+    version_text = f"v{version} ({build_info}) | by Gill-Bates"
 
-	left_pad = max((master_width - ascii_width) // 2, 0)
-	pad = " " * left_pad
-	ascii_centered = "\n".join(pad + line for line in ascii_lines)
-	text_centered = [t.center(master_width) for t in text_lines]
-	banner = "\n" + "\n".join([ascii_centered, *text_centered]) + "\n"
-
-	if sys.stdout.isatty():
-		green = "\033[92m"
-		reset = "\033[0m"
-		sys.stdout.write(green + banner + reset + "\n")
-	else:
-		sys.stdout.write(banner + "\n")
-
-
-def print_banner_once() -> None:
-	try:
-		import fcntl
-
-		fd = os.open(_BANNER_LOCK_FILE, os.O_CREAT | os.O_RDWR)
-		try:
-			fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-			print_banner()
-		except BlockingIOError:
-			pass
-		finally:
-			os.close(fd)
-	except (ImportError, OSError):
-		print_banner()
+    print(f"{CYAN}{BOLD}{banner}{RESET}")
+    print(f"{WHITE}{title_text.center(banner_width)}{RESET}")
+    print(f"{GRAY}{version_text.center(banner_width)}{RESET}")
+    print()
