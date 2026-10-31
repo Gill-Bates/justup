@@ -1,0 +1,227 @@
+{# MTR network diagnostics fragment: route overview, KPI row, hop table and Leaflet route map. #}
+{# All values are rendered through Jinja autoescape; nothing here is marked |safe. #}
+{% macro country_flag(country_code, title_text='') %}
+{% if country_code and country_code|length == 2 %}
+<span class="country-flag-wrap" title="{{ title_text or country_code|upper }}">
+    <img class="country-flag-svg" src="https://cdn.jsdelivr.net/npm/flag-icons@7.3.2/flags/4x3/{{ country_code|lower }}.svg"
+        alt="" loading="lazy" decoding="async"
+        onerror="this.style.display='none'; this.nextElementSibling.style.display='inline';">
+    <span class="country-flag-fallback" style="display:none;">{{ country_code|upper }}</span>
+</span>
+{% endif %}
+{% endmacro %}
+
+{% macro status_badge(h) %}
+{% set status = h.status_display or h.status %}
+{% if h._collapsed or status == 'interpolated' or status == 'n/a' %}
+<span class="badge tr-badge tr-badge--na" title="ICMP blocked: values are interpolated, not measured">N/A</span>
+{% elif status == 'ok' %}
+<span class="badge tr-badge tr-badge--ok">OK</span>
+{% elif h._synthetic_destination %}
+<span class="badge tr-badge tr-badge--warn" title="The destination did not answer the probes">No reply</span>
+{% elif status == 'partial' %}
+<span class="badge tr-badge tr-badge--warn" title="Some probes were lost">Partial</span>
+{% else %}
+<span class="badge tr-badge tr-badge--bad" title="No answer to the probes">Timeout</span>
+{% endif %}
+{% endmacro %}
+
+{% if hops %}
+{% set total_hops = kpis.hop_count if kpis else (hops|length) %}
+<div class="traceroute-diagnostics">
+
+    {# 1. Route overview: Start -> hop sequence -> Destination #}
+    <section class="tr-panel traceroute-route-overview" aria-labelledby="tr-route-title">
+        <header class="tr-panel-head">
+            <h2 class="tr-panel-title" id="tr-route-title">Route overview</h2>
+        </header>
+        <div class="tr-route-flow" role="group" aria-label="Route endpoints">
+            <div class="traceroute-route-endpoint traceroute-route-endpoint--start">
+                <span class="traceroute-route-endpoint-badge" aria-hidden="true">S</span>
+                <div class="traceroute-route-endpoint-copy">
+                    <strong>Start</strong>
+                    <code class="tr-ip">{{ route_start_ip or 'Unknown' }}</code>
+                    {% if route_start_host %}<span class="tr-host">{{ route_start_host }}</span>{% endif %}
+                </div>
+            </div>
+            <ol class="traceroute-hop-sequence" aria-label="Route hop sequence">
+                {% for step in route_sequence %}
+                {% if not loop.first %}<li class="traceroute-hop-sequence-arrow" aria-hidden="true"></li>{% endif %}
+                <li class="traceroute-hop-sequence-step traceroute-hop-sequence-step--{{ step.kind }}"
+                    data-state="{{ step.state or 'normal' }}" aria-label="{{ step.aria_label }}">
+                    {% if step.kind == 'start' %}
+                    <span class="material-icons traceroute-hop-sequence-icon" aria-hidden="true">play_circle</span><span class="traceroute-hop-sequence-word">Start</span><small>{{ step.label }}</small>
+                    {% elif step.kind == 'destination' %}
+                    <span class="material-icons traceroute-hop-sequence-icon" aria-hidden="true">flag_circle</span><span class="traceroute-hop-sequence-word">Destination</span><small>{{ step.label }}</small>
+                    {% elif step.kind == 'both' %}
+                    <span class="traceroute-hop-sequence-word">Start / Destination</span><span class="material-icons traceroute-hop-sequence-icon" aria-hidden="true">swap_horiz</span><small>{{ step.label }}</small>
+                    {% else %}
+                    <span class="traceroute-hop-sequence-marker">{{ step.label }}</span>
+                    {% endif %}
+                    {% if step.country %}{{ country_flag(step.country, step.country|upper) }}{% endif %}
+                </li>
+                {% endfor %}
+            </ol>
+            <div class="traceroute-route-endpoint traceroute-route-endpoint--destination">
+                <span class="traceroute-route-endpoint-badge" aria-hidden="true">Z</span>
+                <div class="traceroute-route-endpoint-copy">
+                    <strong>Destination</strong>
+                    <span class="tr-host tr-host--primary">{{ route_destination_host or 'Target' }}</span>
+                    <code class="tr-ip">{{ route_destination_ip or 'Unknown' }}</code>
+                </div>
+            </div>
+        </div>
+        <footer class="tr-route-foot">
+            <ul class="tr-sequence-legend" aria-label="Hop sequence legend">
+                <li><span class="tr-legend-pill tr-legend-pill--mapped" aria-hidden="true"></span>Located on map</li>
+                <li><span class="tr-legend-pill tr-legend-pill--unmapped" aria-hidden="true"></span>No map location</li>
+                {% if route_sequence|selectattr('state', 'equalto', 'unreachable')|list %}
+                <li><span class="tr-legend-pill tr-legend-pill--unreachable" aria-hidden="true"></span>No reply</li>
+                {% endif %}
+                {% if route_sequence|selectattr('state', 'equalto', 'collapsed')|list or route_sequence|selectattr('state', 'equalto', 'interpolated')|list %}
+                <li><span class="tr-legend-pill tr-legend-pill--collapsed" aria-hidden="true"></span>ICMP blocked (interpolated)</li>
+                {% endif %}
+            </ul>
+            <p class="traceroute-route-sequence-note">Map markers follow hop order; arrows point toward the destination.{% if geo_points and not route_start_is_mapped %} The map starts at hop {{ first_mapped_hop }} because the earlier hops have no location.{% elif not geo_points %} No hops have a usable map location.{% endif %}</p>
+        </footer>
+    </section>
+
+    {# 2. KPI row: derived from measured data in the backend; missing values stay a dash #}
+    {% if kpis %}
+    <dl class="tr-kpis" aria-label="Route summary">
+        <div class="tr-kpi">
+            <span class="material-icons tr-kpi-icon" aria-hidden="true">route</span>
+            <dt class="tr-kpi-label">hops from source to destination</dt>
+            <dd class="tr-kpi-value">{{ kpis.hop_count }}</dd>
+        </div>
+        <div class="tr-kpi" data-known="{{ 'true' if kpis.latency_display else 'false' }}">
+            <span class="material-icons tr-kpi-icon" aria-hidden="true">speed</span>
+            <dt class="tr-kpi-label">average latency to destination{% if not kpis.latency_display %} (not measured){% endif %}</dt>
+            <dd class="tr-kpi-value">{{ kpis.latency_display or '—' }}</dd>
+        </div>
+        <div class="tr-kpi" data-known="{{ 'true' if kpis.loss_display else 'false' }}"
+            data-loss="{{ 'some' if kpis.loss_pct else 'none' }}">
+            <span class="material-icons tr-kpi-icon" aria-hidden="true">swap_vert</span>
+            <dt class="tr-kpi-label">packet loss at destination{% if not kpis.loss_display %} (not measured){% endif %}</dt>
+            <dd class="tr-kpi-value">{{ kpis.loss_display or '—' }}</dd>
+        </div>
+        <div class="tr-kpi">
+            <span class="material-icons tr-kpi-icon" aria-hidden="true">place</span>
+            <dt class="tr-kpi-label">destination location</dt>
+            <dd class="tr-kpi-value tr-kpi-value--text">
+                {% if kpis.city or kpis.country %}
+                {% if kpis.country %}{{ country_flag(kpis.country, kpis.country) }}{% endif %}
+                {{ [kpis.city, kpis.country|upper if kpis.country else none]|select|join(', ') }}
+                {% else %}Unknown{% endif %}
+            </dd>
+        </div>
+    </dl>
+    {% endif %}
+
+    {# 3. Hop table and route map #}
+    <div class="traceroute-fragment{% if geo_points %} traceroute-fragment--split{% endif %}">
+
+        <section class="tr-panel tr-hops-panel" aria-labelledby="tr-hops-title">
+            <header class="tr-panel-head">
+                <h2 class="tr-panel-title" id="tr-hops-title">Traceroute hops <span class="tr-panel-count">({{ total_hops }})</span></h2>
+            </header>
+            <div class="table-responsive tr-table-scroll" tabindex="0" role="region" aria-labelledby="tr-hops-title">
+                <table class="table align-middle mb-0 hop-table" aria-label="Traceroute hops from the start to the destination">
+                    <thead>
+                        <tr>
+                            <th scope="col">Hop</th>
+                            <th scope="col">IP address</th>
+                            <th scope="col">Hostname</th>
+                            <th scope="col">Location</th>
+                            <th scope="col" class="text-end">Latency</th>
+                            <th scope="col" class="text-end">Loss</th>
+                            <th scope="col" class="text-end">Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for h in hops %}
+                        {% set blocked = h._collapsed or h.status == 'interpolated' %}
+                        {% set first_hop = h._raw_hops[0].hop if (h._raw_hops and h._raw_hops|length) else h.hop %}
+                        {% set last_hop = h._raw_hops[-1].hop if (h._raw_hops and h._raw_hops|length) else h.hop %}
+                        <tr class="tr-hop-row{% if blocked %} tr-hop-row--blocked{% elif h.status == 'timeout' %} tr-hop-row--timeout{% endif %}"
+                            data-hop-first="{{ first_hop }}" data-hop-last="{{ last_hop }}">
+                            <th scope="row" class="tr-hop-num">{{ h.hop_display or h.hop }}</th>
+                            {% if blocked %}
+                            <td colspan="3" class="tr-blocked-cell">
+                                <span class="tr-blocked-title">ICMP blocked</span>
+                                {% if h._raw_hops and h._raw_hops|length > 1 %}<span class="tr-host">{{ h._raw_hops|length }} hops interpolated, not measured</span>{% endif %}
+                            </td>
+                            {% else %}
+                            <td class="tr-ip-cell">
+                                {% if h.ip_full and h.ip_full != '—' and h.ip_full != '*' %}
+                                <span class="tr-ip{% if h.is_ipv6 %} tr-ip--v6{% endif %}">{{ h.ip_full }}</span>
+                                {% else %}<span class="tr-muted">—</span>{% endif %}
+                            </td>
+                            <td class="tr-host-cell">
+                                {% set host_full = h.hostname if (h.hostname and h.hostname != '—' and h.hostname != '-') else '' %}
+                                {% if host_full %}<span class="tr-host">{{ host_full }}</span>
+                                {% elif h.hostname_display and h.hostname_display != '—' and h.hostname_display != '-' %}<span class="tr-host">{{ h.hostname_display }}</span>
+                                {% else %}<span class="tr-muted">—</span>{% endif %}
+                            </td>
+                            <td class="tr-loc-cell">
+                                {% if h.city %}
+                                {% if h.country %}{{ country_flag(h.country, h.country) }}{% endif %}<span>{{ h.city }}{% if h.country %} <span class="tr-muted">{{ h.country|upper }}</span>{% endif %}</span>
+                                {% elif h.country %}
+                                {{ country_flag(h.country, h.country) }}<span class="tr-muted">{{ h.country|upper }}</span>
+                                {% else %}<span class="tr-muted">—</span>{% endif %}
+                            </td>
+                            {% endif %}
+                            <td class="text-end tr-num">{{ (h.latency_display or '–') if not blocked else '–' }}</td>
+                            <td class="text-end tr-num">{{ (h.loss_display or '–') if not blocked else '–' }}</td>
+                            <td class="text-end">{{ status_badge(h) }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% if geo_unavailable_reason %}
+            <p class="tr-panel-note">
+                <span class="material-icons" aria-hidden="true">info</span>
+                {{ geo_unavailable_reason }}
+            </p>
+            {% endif %}
+        </section>
+
+        {% if geo_points %}
+        <section class="tr-panel tr-map-panel" aria-labelledby="tr-map-title">
+            <header class="tr-panel-head tr-panel-head--split">
+                <div>
+                    <h2 class="tr-panel-title" id="tr-map-title">Route map</h2>
+                    <p class="tr-panel-sub">Geolocated route for {{ mapped_hop_count }} of {{ total_hops }} hops</p>
+                </div>
+                <span class="badge tr-badge tr-badge--na">{{ total_hops }} hops total</span>
+            </header>
+            {% set map_id = map_id | default('traceroute-map') %}
+            <div class="tr-map-frame">
+                <div id="{{ map_id }}" class="traceroute-map-container" role="region"
+                    aria-label="Interactive route map for {{ route_destination_host or 'the target' }}"
+                    data-geo-points='{{ geo_points | tojson | replace("'", " &#39;") }}' data-map-id="{{ map_id }}"
+                    data-route-start-hop="{{ route_start_hop or '' }}"
+                    data-route-start-is-mapped="{{ 'true' if route_start_is_mapped else 'false' }}"
+                    data-route-destination-host="{{ route_destination_host or '' }}"
+                    data-route-destination-ip="{{ route_destination_ip or '' }}"></div>
+                <ul class="tr-map-legend" aria-label="Map legend">
+                    <li class="tr-map-legend-title">Route showing {{ mapped_hop_count }} of {{ total_hops }} hops</li>
+                    {% if route_start_is_mapped %}<li><span class="tr-legend-dot tr-legend-dot--start" aria-hidden="true"></span>Start</li>{% endif %}
+                    <li><span class="tr-legend-dot tr-legend-dot--hop" aria-hidden="true"></span>Hop</li>
+                    <li><span class="tr-legend-dot tr-legend-dot--destination" aria-hidden="true"></span>Destination</li>
+                    {% if has_interpolation %}<li><span class="tr-legend-dash" aria-hidden="true"></span>Interpolated</li>{% endif %}
+                </ul>
+            </div>
+        </section>
+        {% endif %}
+
+    </div>
+</div>
+
+{% else %}
+<div class="text-center text-body-secondary small py-3">
+    <span class="material-icons fs-4 d-block mb-1 opacity-50" aria-hidden="true">account_tree</span>
+    {{ unavailable_reason or 'Network path data unavailable' }}
+</div>
+{% endif %}

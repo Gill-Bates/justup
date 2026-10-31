@@ -1,0 +1,985 @@
+/**
+ * Traceroute / Network diagnostics fragment styles.
+ * Panels (route overview, KPI row, hop table, route map) and the Leaflet map skin.
+ * Every selector is scoped to traceroute-* / tr-* classes or the traceroute map container.
+ */
+
+/* ============================================================================
+   Layout: stacked panels; table and map split once the diagnostics area is wide enough
+   ============================================================================ */
+.traceroute-diagnostics {
+    --tr-radius: var(--td-radius, 0.625rem);
+    --tr-gap: 1.25rem;
+    --tr-line: var(--ju-panel-line, var(--bs-border-color));
+    --tr-surface: var(--ju-panel-bg, var(--bs-body-bg));
+    --tr-inset: color-mix(in srgb, var(--bs-body-color) 5%, transparent);
+    --tr-muted: var(--bs-secondary-color);
+    --tr-start: var(--td-ok, #16815c);
+    --tr-end: var(--td-bad, #c43427);
+
+    display: grid;
+    gap: var(--tr-gap);
+    min-width: 0;
+    container-type: inline-size;
+}
+
+.traceroute-fragment {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--tr-gap);
+    min-width: 0;
+}
+
+@container (min-width: 1040px) {
+    .traceroute-fragment--split {
+        grid-template-columns: minmax(0, 52fr) minmax(0, 48fr);
+        align-items: stretch;
+    }
+}
+
+.tr-panel {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    border: 1px solid var(--tr-line);
+    border-radius: var(--tr-radius);
+    background: var(--tr-surface);
+    box-shadow: var(--td-shadow, none);
+}
+
+.tr-panel-head {
+    padding: 1rem 1.25rem 0.75rem;
+}
+
+.tr-panel-head--split {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+}
+
+.tr-panel-title {
+    margin: 0;
+    color: var(--ju-title, var(--bs-body-color));
+    font-size: 1rem;
+    font-weight: 600;
+    line-height: 1.3;
+}
+
+.tr-panel-count {
+    color: var(--tr-muted);
+    font-weight: 500;
+}
+
+.tr-panel-sub {
+    margin: 0.15rem 0 0;
+    color: var(--tr-muted);
+    font-size: 0.8125rem;
+}
+
+.tr-panel-note {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin: 0;
+    padding: 0.75rem 1.25rem;
+    border-top: 1px solid var(--tr-line);
+    color: var(--tr-muted);
+    font-size: 0.8125rem;
+}
+
+.tr-panel-note .material-icons {
+    font-size: 1.125rem;
+}
+
+.tr-ip,
+.tr-host,
+.tr-muted {
+    min-width: 0;
+}
+
+.tr-muted {
+    color: var(--tr-muted);
+}
+
+code.tr-ip {
+    padding: 0;
+    color: inherit;
+    font-family: inherit;
+    font-size: inherit;
+}
+
+.tr-ip {
+    font-variant-numeric: tabular-nums;
+    overflow-wrap: anywhere;
+}
+
+.tr-host {
+    color: var(--tr-muted);
+    overflow-wrap: anywhere;
+}
+
+/* ============================================================================
+   Route overview: Start -> hop sequence -> Destination
+   ============================================================================ */
+.tr-route-flow {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-areas:
+        "start dest"
+        "seq seq";
+    align-items: center;
+    gap: 1.25rem 1.5rem;
+    padding: 0.5rem 1.25rem 1.5rem;
+}
+
+.tr-route-flow > .traceroute-route-endpoint--start {
+    grid-area: start;
+}
+
+.tr-route-flow > .traceroute-route-endpoint--destination {
+    grid-area: dest;
+}
+
+.tr-route-flow > .traceroute-hop-sequence {
+    grid-area: seq;
+}
+
+/* Phones: start, sequence and destination stack, so addresses keep their full width */
+@container (max-width: 560px) {
+    .tr-route-flow {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-areas:
+            "start"
+            "seq"
+            "dest";
+    }
+
+    .tr-route-flow > .traceroute-route-endpoint--destination {
+        justify-content: flex-start;
+        text-align: start;
+        flex-direction: row;
+    }
+}
+
+@container (min-width: 900px) {
+    .tr-route-flow {
+        /* fit-content caps long hostnames so they cannot starve the hop sequence */
+        grid-template-columns: fit-content(28cqi) minmax(0, 1fr) fit-content(28cqi);
+        grid-template-areas: "start seq dest";
+        column-gap: 2rem;
+    }
+}
+
+.traceroute-route-endpoint {
+    display: flex;
+    align-items: center;
+    gap: 0.85rem;
+    min-width: 0;
+}
+
+.traceroute-route-endpoint--destination {
+    justify-content: flex-end;
+    text-align: end;
+    flex-direction: row-reverse;
+}
+
+.traceroute-route-endpoint-badge {
+    display: grid;
+    flex: 0 0 2.75rem;
+    width: 2.75rem;
+    height: 2.75rem;
+    place-items: center;
+    border-radius: 50%;
+    color: #fff;
+    font-size: 1rem;
+    font-weight: 700;
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--badge-color) 22%, transparent);
+}
+
+.traceroute-route-endpoint--start .traceroute-route-endpoint-badge {
+    --badge-color: var(--tr-start);
+
+    background: var(--tr-start);
+}
+
+.traceroute-route-endpoint--destination .traceroute-route-endpoint-badge {
+    --badge-color: var(--tr-end);
+
+    background: var(--tr-end);
+}
+
+.traceroute-route-endpoint-copy {
+    display: grid;
+    min-width: 0;
+    gap: 0.1rem;
+    font-size: 0.8125rem;
+    line-height: 1.35;
+}
+
+.traceroute-route-endpoint-copy > strong {
+    color: var(--ju-title, var(--bs-body-color));
+    font-size: 0.9375rem;
+    font-weight: 600;
+}
+
+.tr-host--primary {
+    color: var(--bs-body-color);
+    font-weight: 500;
+}
+
+/* Hop sequence: pills joined by connectors that stretch across the free width,
+   so the route reads as one track from start to destination */
+.traceroute-hop-sequence {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    justify-content: center;
+    row-gap: 0.75rem;
+    min-width: 0;
+    margin: 0;
+    padding: 0.75rem 1rem;
+    border-radius: var(--tr-radius);
+    background: var(--tr-inset);
+    list-style: none;
+}
+
+.traceroute-hop-sequence-step {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 0.3rem;
+    min-width: 2.25rem;
+    min-height: 2.25rem;
+    justify-content: center;
+    padding: 0.2rem 0.7rem;
+    border: 1px solid var(--bs-primary-border-subtle);
+    border-radius: 999px;
+    background: var(--bs-primary-bg-subtle);
+    color: var(--bs-primary-text-emphasis);
+    font-size: 0.8125rem;
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+    line-height: 1.2;
+}
+
+/* Connector line with an arrowhead pointing toward the destination. The width follows
+   the container, not the free space, so wrapped rows keep the same arrow length. */
+.traceroute-hop-sequence-arrow {
+    position: relative;
+    flex: 0 0 auto;
+    width: clamp(0.75rem, 1.6cqi, 3rem);
+    height: 2px;
+    margin-inline: 0.3rem;
+    background: color-mix(in srgb, var(--tr-muted) 55%, transparent);
+}
+
+.traceroute-hop-sequence-arrow::after {
+    content: "";
+    position: absolute;
+    inset-inline-end: -1px;
+    top: 50%;
+    width: 0.4rem;
+    height: 0.4rem;
+    border-top: 2px solid color-mix(in srgb, var(--tr-muted) 55%, transparent);
+    border-inline-end: 2px solid color-mix(in srgb, var(--tr-muted) 55%, transparent);
+    transform: translateY(-50%) rotate(45deg);
+}
+
+[dir="rtl"] .traceroute-hop-sequence-arrow::after {
+    transform: translateY(-50%) rotate(-135deg);
+}
+
+.traceroute-hop-sequence-icon {
+    display: none;
+    font-size: 1.1rem;
+}
+
+/* Narrow containers: endpoints shrink to an icon, the number and flag stay */
+@container (max-width: 560px) {
+    .traceroute-hop-sequence-word {
+        display: none;
+    }
+
+    .traceroute-hop-sequence-icon {
+        display: inline-block;
+    }
+}
+
+.traceroute-hop-sequence-step > small {
+    font-size: 0.68rem;
+    font-weight: 500;
+}
+
+.traceroute-hop-sequence-step--start {
+    border-color: var(--tr-start);
+    background: var(--tr-start);
+    color: #fff;
+}
+
+.traceroute-hop-sequence-step--destination {
+    border-color: var(--tr-end);
+    background: var(--tr-end);
+    color: #fff;
+}
+
+.traceroute-hop-sequence-step--both {
+    border-color: var(--bs-primary);
+    background: linear-gradient(110deg, var(--tr-start) 0 48%, var(--tr-end) 52% 100%);
+    color: #fff;
+}
+
+/* No map location */
+.traceroute-hop-sequence-step--unmapped {
+    border-style: dashed;
+    border-color: var(--bs-border-color);
+    background: transparent;
+    color: var(--tr-muted);
+}
+
+/* Probe never answered */
+.traceroute-hop-sequence-step[data-state="unreachable"]:not(.traceroute-hop-sequence-step--start, .traceroute-hop-sequence-step--destination) {
+    border-style: solid;
+    border-color: var(--bs-warning-border-subtle);
+    background: var(--bs-warning-bg-subtle);
+    color: var(--bs-warning-text-emphasis);
+}
+
+/* ICMP blocked / interpolated / collapsed range */
+.traceroute-hop-sequence-step[data-state="collapsed"],
+.traceroute-hop-sequence-step[data-state="interpolated"] {
+    border-style: dotted;
+    border-width: 2px;
+    border-color: var(--tr-muted);
+    background: repeating-linear-gradient(135deg, transparent 0 4px, var(--tr-inset) 4px 8px);
+    color: var(--tr-muted);
+}
+
+/* Footer: legend and explanatory note, separated from the route itself */
+.tr-route-foot {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem 2rem;
+    padding: 0.75rem 1.25rem;
+    border-top: 1px solid var(--tr-line);
+    color: var(--tr-muted);
+    font-size: 0.8125rem;
+}
+
+.tr-sequence-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem 1.25rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.tr-sequence-legend li {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.tr-legend-pill {
+    display: inline-block;
+    width: 1.1rem;
+    height: 0.65rem;
+    border: 1px solid var(--bs-primary-border-subtle);
+    border-radius: 999px;
+    background: var(--bs-primary-bg-subtle);
+}
+
+.tr-legend-pill--unmapped {
+    border-style: dashed;
+    border-color: var(--bs-border-color);
+    background: transparent;
+}
+
+.tr-legend-pill--unreachable {
+    border-color: var(--bs-warning-border-subtle);
+    background: var(--bs-warning-bg-subtle);
+}
+
+.tr-legend-pill--collapsed {
+    border: 2px dotted var(--tr-muted);
+    background: transparent;
+}
+
+.traceroute-route-sequence-note {
+    flex: 1 1 22rem;
+    margin: 0;
+    text-align: end;
+}
+
+@container (max-width: 900px) {
+    .traceroute-route-sequence-note {
+        text-align: start;
+    }
+}
+
+/* ============================================================================
+   KPI row
+   ============================================================================ */
+.tr-kpis {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    margin: 0;
+    border: 1px solid var(--tr-line);
+    border-radius: var(--tr-radius);
+    background: var(--tr-surface);
+    box-shadow: var(--td-shadow, none);
+}
+
+@container (min-width: 480px) {
+    .tr-kpis {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+@container (min-width: 1000px) {
+    .tr-kpis {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+}
+
+.tr-kpi {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-rows: auto auto;
+    column-gap: 0.9rem;
+    align-items: center;
+    padding: 1rem 1.25rem;
+    border-top: 1px solid var(--tr-line);
+}
+
+.tr-kpi:first-child {
+    border-top: 0;
+}
+
+@container (min-width: 480px) {
+    .tr-kpi:nth-child(2) {
+        border-top: 0;
+    }
+
+    .tr-kpi:nth-child(even) {
+        border-inline-start: 1px solid var(--tr-line);
+    }
+}
+
+@container (min-width: 1000px) {
+    .tr-kpi {
+        border-top: 0;
+    }
+
+    .tr-kpi + .tr-kpi {
+        border-inline-start: 1px solid var(--tr-line);
+    }
+}
+
+.tr-kpi-icon {
+    grid-row: 1 / span 2;
+    display: grid;
+    width: 2.75rem;
+    height: 2.75rem;
+    place-items: center;
+    border-radius: 0.75rem;
+    background: var(--bs-primary-bg-subtle);
+    color: var(--bs-primary-text-emphasis);
+    font-size: 1.5rem;
+}
+
+.tr-kpi-value {
+    grid-column: 2;
+    grid-row: 1;
+    margin: 0;
+    color: var(--ju-title, var(--bs-body-color));
+    font-size: 1.5rem;
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+    line-height: 1.2;
+}
+
+.tr-kpi-value--text {
+    font-size: 1.0625rem;
+    overflow-wrap: anywhere;
+}
+
+.tr-kpi-label {
+    grid-column: 2;
+    grid-row: 2;
+    color: var(--tr-muted);
+    font-size: 0.8125rem;
+    font-weight: 400;
+    line-height: 1.3;
+}
+
+.tr-kpi[data-known="false"] .tr-kpi-value {
+    color: var(--tr-muted);
+}
+
+.tr-kpi[data-loss="some"] .tr-kpi-value {
+    color: var(--bs-warning-text-emphasis);
+}
+
+/* ============================================================================
+   Hop table
+   ============================================================================ */
+.tr-table-scroll {
+    max-height: min(40rem, 75vh);
+    overflow: auto;
+    scrollbar-width: thin;
+}
+
+.tr-table-scroll:focus-visible {
+    outline: 2px solid var(--bs-primary);
+    outline-offset: -2px;
+}
+
+.traceroute-fragment table.hop-table {
+    --bs-table-bg: transparent;
+
+    width: 100%;
+    min-width: 30rem;
+    border-collapse: separate;
+    border-spacing: 0;
+    font-size: 0.8125rem;
+}
+
+.traceroute-fragment table.hop-table > :not(caption) > * > * {
+    padding: 0.75rem 0.55rem;
+    border: 0;
+    border-bottom: 1px solid var(--tr-line);
+    background: transparent;
+    box-shadow: none;
+    line-height: 1.35;
+    vertical-align: middle;
+}
+
+.traceroute-fragment table.hop-table > :not(caption) > * > :first-child {
+    padding-inline-start: 1rem;
+}
+
+.traceroute-fragment table.hop-table > :not(caption) > * > :last-child {
+    padding-inline-end: 1rem;
+}
+
+.traceroute-fragment table.hop-table thead th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--tr-surface);
+    border-top: 1px solid var(--tr-line);
+    color: var(--tr-muted);
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+}
+
+.traceroute-fragment table.hop-table tbody tr:last-child > * {
+    border-bottom: 0;
+}
+
+.traceroute-fragment table.hop-table tbody .tr-hop-row:hover > *,
+.traceroute-fragment table.hop-table tbody .tr-hop-row.is-linked > * {
+    background: var(--tr-inset);
+}
+
+.tr-hop-num {
+    color: var(--tr-muted);
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.tr-ip-cell {
+    min-width: 7.5rem;
+}
+
+/* Keeps long hostnames readable; the table scrolls inside .tr-table-scroll instead of wrapping per character */
+.tr-host-cell {
+    min-width: 12rem;
+}
+
+.tr-loc-cell {
+    min-width: 6.5rem;
+}
+
+.tr-num {
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.tr-hop-row--blocked .tr-num,
+.tr-hop-row--timeout .tr-num {
+    color: var(--tr-muted);
+}
+
+.tr-blocked-cell {
+    color: var(--tr-muted);
+}
+
+.tr-blocked-title {
+    display: block;
+    font-weight: 600;
+}
+
+.tr-badge {
+    min-width: 3.25rem;
+    padding: 0.35em 0.65em;
+    border: 1px solid transparent;
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+.tr-badge--ok {
+    border-color: var(--bs-success-border-subtle);
+    background: var(--bs-success-bg-subtle);
+    color: var(--bs-success-text-emphasis);
+}
+
+.tr-badge--warn {
+    border-color: var(--bs-warning-border-subtle);
+    background: var(--bs-warning-bg-subtle);
+    color: var(--bs-warning-text-emphasis);
+}
+
+.tr-badge--bad {
+    border-color: var(--bs-danger-border-subtle);
+    background: var(--bs-danger-bg-subtle);
+    color: var(--bs-danger-text-emphasis);
+}
+
+.tr-badge--na {
+    border-color: var(--bs-border-color);
+    background: var(--tr-inset);
+    color: var(--tr-muted);
+}
+
+.traceroute-diagnostics .country-flag-svg {
+    width: 1.1rem;
+    height: 0.78rem;
+    margin-inline-end: 0.4rem;
+    vertical-align: -0.08rem;
+    border-radius: 0.12rem;
+    box-shadow: inset 0 0 0 1px rgb(0 0 0 / 8%);
+}
+
+.traceroute-diagnostics .country-flag-fallback {
+    margin-inline-end: 0.3rem;
+    color: var(--tr-muted);
+    font-size: 0.72rem;
+}
+
+/* ============================================================================
+   Route map panel
+   ============================================================================ */
+.tr-map-panel {
+    overflow: hidden;
+}
+
+.tr-map-frame {
+    position: relative;
+    flex: 1 1 auto;
+    min-height: 30rem;
+    border-top: 1px solid var(--tr-line);
+}
+
+@container (max-width: 560px) {
+    .tr-map-frame {
+        min-height: 24rem;
+    }
+}
+
+.tr-map-frame > .traceroute-map-container {
+    position: absolute;
+    inset: 0;
+}
+
+.tr-map-legend {
+    position: absolute;
+    inset-block-end: 0.75rem;
+    inset-inline-start: 0.75rem;
+    z-index: 800;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.25rem 0.9rem;
+    max-width: calc(100% - 1.5rem);
+    margin: 0;
+    padding: 0.4rem 0.7rem;
+    border: 1px solid var(--tr-line);
+    border-radius: 0.5rem;
+    background: color-mix(in srgb, var(--tr-surface) 88%, transparent);
+    color: var(--bs-body-color);
+    font-size: 0.75rem;
+    list-style: none;
+}
+
+.tr-map-legend li {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.tr-map-legend-title {
+    color: var(--tr-muted);
+}
+
+.tr-legend-dot {
+    display: inline-block;
+    width: 0.7rem;
+    height: 0.7rem;
+    border-radius: 50%;
+    background: var(--bs-primary);
+}
+
+.tr-legend-dot--start {
+    background: var(--tr-start);
+}
+
+.tr-legend-dot--destination {
+    background: var(--tr-end);
+}
+
+.tr-legend-dash {
+    display: inline-block;
+    width: 1.1rem;
+    border-top: 2px dashed var(--tr-route-dashed, var(--tr-muted));
+}
+
+/* ============================================================================
+   Leaflet map skin
+   ============================================================================ */
+.traceroute-map-container {
+    --tr-route-color: #0d6efd;
+    --tr-route-dashed: #6c757d;
+    --tr-label-color: #6c757d;
+    --tr-label-strong: #343a40;
+    --tr-label-halo: #eef3f8;
+
+    background-color: #dbe8f4;
+}
+
+[data-bs-theme="dark"] .traceroute-map-container {
+    --tr-route-color: #4da3ff;
+    --tr-route-dashed: #8fb8f0;
+    --tr-label-color: #7f93aa;
+    --tr-label-strong: #c4d2e2;
+    --tr-label-halo: #0b1a2c;
+
+    background-color: #0b1a2c;
+}
+
+.traceroute-map-container .leaflet-control-zoom {
+    border: 1px solid var(--tr-line, var(--bs-border-color));
+    box-shadow: none;
+}
+
+.traceroute-map-container .leaflet-control-zoom a {
+    background-color: color-mix(in srgb, var(--bs-body-bg) 88%, transparent);
+    border-color: var(--bs-border-color);
+    color: var(--bs-body-color);
+}
+
+.traceroute-map-container .leaflet-control-zoom a:hover {
+    background-color: var(--bs-tertiary-bg);
+}
+
+.traceroute-map-container .leaflet-control-zoom a:focus-visible {
+    outline: 2px solid var(--bs-primary);
+    outline-offset: -2px;
+}
+
+.traceroute-map-container .leaflet-popup-content-wrapper,
+.traceroute-map-container .leaflet-popup-tip {
+    background: var(--bs-body-bg);
+    color: var(--bs-body-color);
+}
+
+.traceroute-map-container .leaflet-popup-content code {
+    color: inherit;
+}
+
+.traceroute-map-container .traceroute-hop-popup-list {
+    display: grid;
+    gap: 0.2rem;
+    max-height: 10rem;
+    margin: 0.5rem 0 0;
+    padding-inline-start: 1.25rem;
+    overflow-y: auto;
+    font-size: 0.8125rem;
+}
+
+.traceroute-hop-marker-icon,
+.traceroute-direction-icon {
+    border: 0;
+    background: transparent;
+}
+
+.traceroute-hop-marker {
+    display: grid;
+    width: 2rem;
+    height: 2rem;
+    place-items: center;
+    border: 2px solid rgb(255 255 255 / 90%);
+    border-radius: 50%;
+    background: #2f7df6;
+    box-shadow: 0 1px 6px rgb(0 0 0 / 45%);
+    color: #fff;
+    font-size: 0.75rem;
+    font-variant-numeric: tabular-nums;
+    font-weight: 700;
+    line-height: 1;
+    white-space: nowrap;
+    transition: transform 0.12s ease;
+}
+
+.traceroute-hop-marker--start {
+    background: #1f9d6b;
+}
+
+.traceroute-hop-marker--first-mapped {
+    background: #2f7df6;
+}
+
+.traceroute-hop-marker--destination {
+    background: #e0453a;
+}
+
+.traceroute-hop-marker--both {
+    width: 2.6rem;
+    border-radius: 1rem;
+    background: linear-gradient(110deg, #1f9d6b 0 48%, #e0453a 52% 100%);
+}
+
+.traceroute-hop-marker--cluster {
+    width: auto;
+    min-width: 2rem;
+    padding-inline: 0.35rem;
+    border-radius: 1rem;
+}
+
+.traceroute-hop-marker-icon.is-linked .traceroute-hop-marker {
+    transform: scale(1.22);
+    box-shadow: 0 0 0 4px rgb(77 163 255 / 45%), 0 1px 6px rgb(0 0 0 / 45%);
+}
+
+.traceroute-hop-marker-icon:focus-visible .traceroute-hop-marker {
+    outline: 3px solid var(--bs-warning);
+    outline-offset: 2px;
+}
+
+.traceroute-direction-arrow {
+    display: block;
+    color: var(--tr-route-color);
+    font-size: 1.15rem;
+    line-height: 1;
+    text-shadow: 0 0 3px var(--tr-label-halo);
+}
+
+.traceroute-direction-arrow--dashed {
+    color: var(--tr-route-dashed);
+    opacity: 0.85;
+}
+
+/* "Show entire route" reset; shown only while a segment is selected. Sits above
+   the Leaflet panes (route pane is 400) and keeps a comfortable touch target. */
+.traceroute-map-reset {
+    position: absolute;
+    inset-block-start: 0.5rem;
+    inset-inline-end: 0.5rem;
+    z-index: 500;
+    min-block-size: 2.25rem;
+}
+
+.leaflet-tooltip.traceroute-hop-tooltip {
+    border-color: var(--bs-border-color);
+    background: var(--bs-body-bg);
+    color: var(--bs-body-color);
+    font-size: 0.72rem;
+    font-weight: 600;
+}
+
+/* ============================================================================
+   Map labels (countries and cities, see createLabelLayer() in traceroute-map.js)
+   ============================================================================ */
+.tr-label {
+    position: absolute;
+    white-space: nowrap;
+    pointer-events: none;
+    font-size: 11px;
+    line-height: 14px;
+    text-shadow:
+        -1px -1px 0 var(--tr-label-halo),
+        1px -1px 0 var(--tr-label-halo),
+        -1px 1px 0 var(--tr-label-halo),
+        1px 1px 0 var(--tr-label-halo);
+}
+
+.tr-label-country {
+    color: var(--tr-label-color);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    opacity: 0.7;
+}
+
+.tr-label-country .tr-label-text {
+    display: block;
+    transform: translate(-50%, -50%);
+}
+
+.tr-label-city {
+    color: var(--tr-label-strong);
+}
+
+.tr-label-city .tr-label-dot {
+    position: absolute;
+    left: -2px;
+    top: -2px;
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: var(--tr-label-strong);
+}
+
+.tr-label-capital .tr-label-dot {
+    background: transparent;
+    border: 1px solid var(--tr-label-strong);
+    left: -3px;
+    top: -3px;
+}
+
+.tr-label-city .tr-label-text {
+    position: absolute;
+    left: 6px;
+    top: -7px;
+}
+
+/* Route cities sit beside a 2rem hop marker: keep the name clear of it */
+.tr-label-route .tr-label-dot {
+    display: none;
+}
+
+.tr-label-route .tr-label-text {
+    left: 22px;
+    color: var(--bs-body-color);
+    font-weight: 600;
+}
+
+@media (forced-colors: active) {
+    .tr-panel,
+    .tr-kpis,
+    .tr-badge {
+        border: 1px solid CanvasText;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .traceroute-hop-marker {
+        transition: none;
+    }
+}

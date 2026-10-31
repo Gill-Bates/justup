@@ -1,0 +1,283 @@
+#
+# .github/workflows/ci.yml
+# Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
+#
+# The PR gate. docker-build.yml only runs on release tags and docs-build.yml is
+# filtered to docs/**, so before this workflow existed nothing stood between a
+# broken commit and main - a failure first surfaced during the release itself,
+# the one run where it is most expensive. Gates on pytest, the correctness half
+# of ruff, the container entrypoint and Dockerfile, and the single-manifest
+# invariant. Also callable (workflow_call) so docker-build.yml can gate a
+# release on the same checks for the tagged commit.
+#
+
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      # The v1.0.0 line is gated on every push, not only once a PR targets main.
+      - feature/v1.0.0
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+  # The release workflow calls this as its gate; the triggers above are
+  # unchanged, so the PR gate behaves exactly as before.
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: Ruff + pytest
+    # Every job here names its image instead of following ubuntu-latest, which
+    # moves x64 runners to Ubuntu 26.04 in a gradual rollout from 2026-10-19 to
+    # 2026-11-19 (actions/runner-images#14748) - weeks in which two runs of one
+    # commit could disagree about the OS. Taking 26.04 now rather than being
+    # taken there keeps the image a reviewable line instead of a date.
+    #
+    # Nothing here depends on the host's pre-cached toolchains: Python comes
+    # from setup-python, which publishes 26.04 builds.
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          # Matches requires-python in pyproject.toml and the python:3.13-slim
+          # stages in docker/Dockerfile.
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            docker/requirements.lock
+
+      # The tests import app/, so the runtime stack has to be present too. It is
+      # installed exactly like the Docker image: the complete hash-pinned
+      # docker/requirements.lock, wheels only (no sdist build, no build backend
+      # download), with the vendored SSLyze wheel from docker/vendor/wheels/ found
+      # through --find-links and verified by its lock hash. The runner's own pip
+      # (setup-python) is used as is; it is only the installer.
+      #
+      # The project itself is not installed; pytest imports app/ from the
+      # checkout root, so these gates exercise the checked-out source.
+      - name: Install runtime dependencies (locked)
+        run: |
+          set -euo pipefail
+          pip install --require-hashes --only-binary=:all: \
+            --find-links docker/vendor/wheels -r docker/requirements.lock
+
+      # Dev tools are a separate, deliberate step: pyproject.toml pins them with
+      # == (tools/pyproject-deps.py keeps that list in one place). Wheels only, so
+      # none of them builds from source. The runtime set above is not touched.
+      - name: Install dev tools (pinned)
+        run: |
+          set -euo pipefail
+          python tools/pyproject-deps.py dev > "$RUNNER_TEMP/requirements-dev.txt"
+          cat "$RUNNER_TEMP/requirements-dev.txt"
+          pip install --only-binary=:all: -r "$RUNNER_TEMP/requirements-dev.txt"
+          pip check
+
+      # The image builds for both architectures from this one lock. Resolve every
+      # locked file for linux/arm64 and linux/amd64 (hash-checked, no deps, no
+      # build) so a missing wheel or a wrong hash fails here, not in the release.
+      - name: Locked wheels exist for amd64 and arm64
+        run: |
+          set -euo pipefail
+          for arch in x86_64 aarch64; do
+            pip download --quiet --dest "$RUNNER_TEMP/wheels-${arch}" --no-deps --require-hashes \
+              --only-binary=:all: --find-links docker/vendor/wheels \
+              --python-version 3.13 --implementation cp --abi cp313 --abi abi3 --abi none \
+              --platform "manylinux_2_28_${arch}" --platform "manylinux_2_17_${arch}" \
+              --platform "manylinux2014_${arch}" --platform any \
+              -r docker/requirements.lock
+            echo "${arch}: $(find "$RUNNER_TEMP/wheels-${arch}" -name '*.whl' | wc -l) wheels"
+          done
+
+      # pyproject.toml <-> lock <-> vendored wheel metadata, SHA-256 and the
+      # forbidden-source rules live in tests/test_dependency_lock.py; run first so
+      # a supply-chain drift is named before the broad suite starts.
+      - name: Dependency lock consistency
+        run: pytest tests/test_dependency_lock.py -q
+
+      # The full rule set configured in pyproject.toml, blocking. The tree was
+      # brought to zero findings before this became a gate; the deliberate
+      # exemptions live in pyproject.toml with the reasoning next to each one
+      # (probe subprocesses and typographic punctuation),
+      # and narrower cases carry a per-line `# noqa` naming the reason.
+      #
+      # Prefer fixing over exempting. If a new finding really does not apply,
+      # annotate the line rather than widening the ignore list, so the next
+      # reader can tell a decision from a blanket.
+      - name: Ruff
+        run: ruff check --output-format=github .
+
+      # The tree is formatted with `ruff format` (space indent, see pyproject.toml);
+      # keep it that way.
+      - name: Ruff format
+        run: ruff format --check --diff .
+
+      # Unit tests set their own environment; no production encryption key is
+      # supplied to the PR gate.
+      - name: pytest
+        run: pytest
+
+  container:
+    name: Dockerfile + entrypoint
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      # The image is only ever built from a release tag, so without these two
+      # steps a broken entrypoint or Dockerfile stays invisible until the
+      # release itself. The full multi-arch build is far too slow for a PR;
+      # these are the cheap half that still catches a typo.
+      #
+      # The entrypoint uses Bash syntax. -n parses without executing it.
+      - name: Entrypoint shell syntax
+        run: |
+          bash -n docker/entrypoint.sh
+
+      - name: Entrypoint shellcheck
+        run: shellcheck docker/entrypoint.sh
+
+      # BuildKit checks the justUp image stages and COPY targets without
+      # running the build.
+      - name: Dockerfile check
+        run: docker build --check -f docker/Dockerfile .
+
+  frontend:
+    name: ESLint + Stylelint + node:test
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 'lts/*'
+          cache: npm
+
+      - name: Install tooling
+        run: npm ci --ignore-scripts
+
+      - name: Lint (ESLint, Stylelint)
+        run: npm run lint
+
+      - name: node:test
+        run: npm test
+
+  manifest:
+    name: pyproject.toml is the only manifest
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      # VERSION, requirements.txt and docs/requirements-docs.txt were folded
+      # into pyproject.toml (see the comment at the top of it). Reintroducing
+      # any of them would give the release workflow, the running container and
+      # the docs build two versions to disagree about.
+      - name: Reject reintroduced manifests
+        run: |
+          set -euo pipefail
+          failed=0
+          for stale in VERSION requirements.txt docs/requirements-docs.txt; do
+            if [ -e "$stale" ]; then
+              echo "ERROR: $stale is back - pyproject.toml is the single manifest"
+              failed=1
+            fi
+          done
+          [ "$failed" -eq 0 ]
+
+      # docker-build.yml rejects a version this check would not accept, but it
+      # only runs once the tag is already pushed - and a tag is not retractable
+      # in the same way a commit is. Same regex as the release workflow's, kept
+      # strict to X.Y.Z with an optional prerelease suffix.
+      - name: Version is release-shaped
+        run: |
+          set -euo pipefail
+          VERSION="$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          echo "pyproject.toml version: ${VERSION}"
+          echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
+
+  workflows:
+    name: Workflow lint (actionlint + shellcheck)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      # actionlint runs shellcheck over every inline `run:` block when the
+      # binary is on PATH, and silently skips it otherwise. Failing here keeps
+      # that half of the gate from disappearing unnoticed with a runner image.
+      - name: shellcheck is available
+        run: command -v shellcheck && shellcheck --version
+
+      # Exact release plus its published sha256 keeps workflow lint repeatable.
+      - name: Install actionlint
+        env:
+          ACTIONLINT_VERSION: '1.7.12'
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          set -euo pipefail
+          archive="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -fsSL --proto '=https' --tlsv1.2 -o "$archive" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${archive}"
+          echo "${ACTIONLINT_SHA256}  ${archive}" | sha256sum --check --strict
+          tar -xzf "$archive" actionlint
+          ./actionlint -version
+
+      - name: actionlint
+        run: ./actionlint -color
+
+  source-scan:
+    name: Source secrets + misconfiguration
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      # The release image scan owns vulnerabilities. Scan our checked-out
+      # source here for secrets and infrastructure misconfiguration.
+      - name: Trivy source scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          cache: 'false'
+          scan-type: 'fs'
+          scan-ref: '.'
+          scanners: 'secret,misconfig'
+          # Local caches and vendored assets are not authored in this repository.
+          skip-dirs: '.git,.venv,venv,__pycache__,data,site,app/static/vendor'
+          format: 'table'
+          exit-code: '1'
+          ignore-unfixed: true
+          severity: 'CRITICAL,HIGH'
+          timeout: '5m'
+          trivyignores: '.trivyignore.yaml'

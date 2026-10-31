@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% block title %}Notifications – justUp!{% endblock %}
+{% block topbar_title %}Notifications{% endblock %}
+
+{% block content %}
+<div class="ui-page" id="notifications-page" data-category="{{ category }}">
+
+   <div class="ui-page-header">
+      <div class="ui-page-heading">
+         <p class="ui-page-eyebrow">Activity</p>
+         <div class="ju-notif-page-title">
+            <h1>Notifications</h1>
+            {% if unread_total %}<span class="badge bg-danger">{{ unread_total }} unread</span>{% endif %}
+         </div>
+         <p class="ui-page-lead">Events from your monitors, reports and account.</p>
+      </div>
+      <div class="ju-notif-page-actions">
+         <button type="button" class="btn btn-outline-secondary btn-sm" id="np-read-all"
+            {% if not unread_total %}disabled{% endif %}>
+            <span class="material-icons" aria-hidden="true">done_all</span>Mark all as read
+         </button>
+      </div>
+   </div>
+
+   <ul class="nav nav-pills ju-notif-tabs" aria-label="Notification categories">
+      {% for key, label, icon in tabs %}
+      <li class="nav-item">
+         <a class="nav-link {% if key == category %}active{% endif %}" href="/ui/notifications?category={{ key }}"
+            {% if key == category %}aria-current="page"{% endif %}>
+            <span class="material-icons" aria-hidden="true">{{ icon }}</span>{{ label }}
+         </a>
+      </li>
+      {% endfor %}
+   </ul>
+
+   {% if category == 'monitoring' %}
+   {% include "notifications/_alerts_panel.html" %}
+   {% else %}
+   <div class="card shadow-sm">
+      {% if items %}
+      <ul class="list-group list-group-flush ju-notif-list" id="np-list">
+         {% for n in items %}
+         <li class="list-group-item ju-notif-item ju-notif-{{ n.severity }}{% if not n.is_read %} is-unread{% endif %}"
+            data-id="{{ n.id }}">
+            <span class="material-icons ju-notif-icon" aria-hidden="true">{{ {'monitoring':'monitor_heart','reports':'picture_as_pdf','delivery':'forward_to_inbox','security':'shield','activity':'history'}.get(n.category, 'notifications') }}</span>
+            <div class="ju-notif-main">
+               <div class="ju-notif-title">
+                  {% if not n.is_read %}<span class="ju-unread-dot" aria-hidden="true"></span><span class="visually-hidden">Unread: </span>{% endif %}
+                  <span class="ju-notif-title-text" title="{{ n.title }}">{{ n.title }}</span>
+                  <span class="badge text-bg-{{ 'danger' if n.severity == 'error' else ('warning' if n.severity == 'warning' else ('success' if n.severity == 'success' else 'secondary')) }}">{{ n.severity }}</span>
+               </div>
+               <div class="ju-notif-body text-body-secondary">
+                  {% set context = n.body or n.actor or '' %}{% if context %}<span class="ju-notif-context" title="{{ context }}">{{ context }}</span> · {% endif %}<small class="local-time" data-utc="{{ n.created_at }}">{{ n.created_at }}</small>
+               </div>
+            </div>
+            <div class="ju-notif-actions">
+               {% if n.action and n.action.type == 'download' %}
+               <button type="button" class="btn btn-sm btn-outline-primary np-download" data-url="{{ n.action.url }}"
+                  data-id="{{ n.id }}">{{ n.action.label }}</button>
+               {% elif n.action and n.action.type == 'link' %}
+               <a class="btn btn-sm btn-outline-primary np-open" href="{{ n.action.url }}" data-id="{{ n.id }}">{{ n.action.label }}</a>
+               {% elif n.action %}
+               <small class="text-body-secondary">{{ n.action.label }}</small>
+               {% endif %}
+               {% if not n.is_read %}
+               <button type="button" class="btn btn-sm btn-outline-secondary np-mark" data-id="{{ n.id }}"
+                  aria-label="Mark as read: {{ n.title }}">Mark read</button>
+               {% endif %}
+            </div>
+         </li>
+         {% endfor %}
+      </ul>
+      {% else %}
+      <div class="ui-empty text-center text-body-secondary">
+         <span class="material-icons fs-1 mb-2" aria-hidden="true">notifications_off</span>
+         <p class="mb-0">{% if category == 'unread' %}You are all caught up.{% else %}No notifications yet.{% endif %}</p>
+      </div>
+      {% endif %}
+   </div>
+
+   {% if total_pages > 1 %}
+   <nav aria-label="Notification pages">
+      <ul class="pagination justify-content-center mb-0">
+         {% if page == 1 %}
+         <li class="page-item disabled"><span class="page-link" aria-label="Previous page" aria-disabled="true">«</span></li>
+         {% else %}
+         <li class="page-item"><a class="page-link" href="?page={{ page - 1 }}&{{ query_string }}" aria-label="Previous page">«</a></li>
+         {% endif %}
+         <li class="page-item disabled"><span class="page-link">{{ page }} / {{ total_pages }}</span></li>
+         {% if page == total_pages %}
+         <li class="page-item disabled"><span class="page-link" aria-label="Next page" aria-disabled="true">»</span></li>
+         {% else %}
+         <li class="page-item"><a class="page-link" href="?page={{ page + 1 }}&{{ query_string }}" aria-label="Next page">»</a></li>
+         {% endif %}
+      </ul>
+   </nav>
+   {% endif %}
+   {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/notifications-page.js"></script>
+{% endblock %}

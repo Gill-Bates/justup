@@ -1,0 +1,15 @@
+{# Target Status Fragment (HTMX). `labelled` renders a text pill for the detail header. #}
+{% if labelled %}
+{% set state = {'up': ('up', 'Online', 'check_circle'), 'down': ('down', 'Offline', 'cancel'), 'disabled': ('disabled', 'Disabled', 'pause_circle')}.get(status, ('unknown', 'Unknown', 'help')) %}
+<span class="target-status-pill target-status-pill--{{ state[0] }}">
+	<i class="material-icons" aria-hidden="true">{{ state[2] }}</i><span>{{ state[1] }}</span>
+</span>
+{% elif status == 'up' %}
+<span class="material-icons fs-5 text-success" title="Online" aria-label="Status: Online" role="img">check_circle</span>
+{% elif status == 'down' %}
+<span class="material-icons fs-5 text-danger" title="Offline" aria-label="Status: Offline" role="img">cancel</span>
+{% elif status == 'disabled' %}
+<span class="material-icons fs-5 text-body-secondary" title="Disabled" aria-label="Status: Disabled" role="img">pause_circle</span>
+{% else %}
+<span class="material-icons fs-5 text-body-secondary" title="Unknown" aria-label="Status: Unknown" role="img">help</span>
+{% endif %}

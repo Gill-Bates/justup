@@ -1,0 +1,90 @@
+{# Right toolbar group: recipients popover and auto-close. #}
+{% set recs = alert_recipients or [] %}
+{% macro recipient_tile(r) %}
+<div class="alert-recipient-tile">
+	<div class="alert-recipient-name-row">
+		<div class="alert-recipient-name" title="{{ r.name }}">
+			<span class="material-icons" aria-hidden="true">person</span>
+			<span class="alert-recipient-name-text">{{ r.name }}</span>
+		</div>
+		<div class="alert-recipient-status">
+			{% if r.is_enabled %}
+				<span class="badge bg-success">Active</span>
+			{% else %}
+				<span class="badge bg-secondary">Disabled</span>
+			{% endif %}
+		</div>
+	</div>
+	<div class="alert-recipient-channels">
+		{% if r.phone %}
+			<span class="alert-recipient-channel" title="{{ r.phone }}">
+				<span class="material-icons" aria-hidden="true">sms</span>
+				<span class="alert-recipient-channel-text">{{ r.phone }}</span>
+			</span>
+		{% endif %}
+		{% if r.email %}
+			<span class="alert-recipient-channel" title="{{ r.email }}">
+				<span class="material-icons" aria-hidden="true">email</span>
+				<span class="alert-recipient-channel-text">{{ r.email }}</span>
+			</span>
+		{% endif %}
+		{% if not r.phone and not r.email %}
+			<span class="text-body-secondary">No channels</span>
+		{% endif %}
+	</div>
+</div>
+{% endmacro %}
+<div class="target-toolbar-group target-toolbar-group--alerts target-alert-card" role="group" aria-label="Alert notifications">
+	<div class="target-alert-inner">
+		{% if recs | length > 0 %}
+		<details class="target-recipients-details">
+			<summary class="target-recipients-summary">
+				<i class="material-icons" aria-hidden="true">notifications_active</i>
+				<span>Recipients <strong>{{ recs | length }}</strong></span>
+				<i class="material-icons target-details-chevron" aria-hidden="true">expand_more</i>
+			</summary>
+			<div class="target-recipients-expanded">
+			{% set head = recs[:8] %}
+				<div class="alert-recipients-grid">
+					{% for r in head %}
+						{{ recipient_tile(r) }}
+					{% endfor %}
+				</div>
+
+				{% if recs | length > (head | length) %}
+					<div class="collapse mt-2" id="alert-recipients-more">
+						<div class="alert-recipients-grid mt-2">
+							{% for r in recs[8:] %}
+								{{ recipient_tile(r) }}
+							{% endfor %}
+						</div>
+					</div>
+					<div class="mt-2">
+						<button class="btn btn-sm btn-outline-secondary" type="button"
+							data-bs-toggle="collapse" data-bs-target="#alert-recipients-more"
+							aria-expanded="false" aria-controls="alert-recipients-more">
+							Show all ({{ recs | length }})
+						</button>
+					</div>
+				{% endif %}
+			</div>
+		</details>
+		{% else %}
+		<div class="target-recipients-empty">
+			<i class="material-icons" aria-hidden="true">notifications_none</i>
+			<span>No recipients</span>
+			{% if user and user.is_admin %}
+			<a href="/ui/targets/{{ target.id }}/edit" class="btn btn-outline-secondary btn-sm target-recipients-add">
+				<i class="material-icons" aria-hidden="true">add</i> Add
+			</a>
+			{% endif %}
+		</div>
+		{% endif %}
+		<div class="form-check form-switch target-autoclose-switch" title="{{ 'Automatically close alerts when target recovers' if (user and user.is_admin) else 'Only administrators can change this setting' }}">
+			<input class="form-check-input" type="checkbox" role="switch" id="auto-close-alert-toggle"
+				{{ 'checked' if target.auto_close_alert else '' }}
+				{{ '' if (user and user.is_admin) else 'disabled' }}>
+			<label class="form-check-label" for="auto-close-alert-toggle">Auto-Close</label>
+		</div>
+	</div>
+</div>

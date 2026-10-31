@@ -1,0 +1,175 @@
+site_name: justUp! Documentation
+site_description: Documentation for the self-hosted justUp! uptime monitor
+site_author: Gill-Bates
+site_url: https://gill-bates.github.io/justup/
+repo_name: Gill-Bates/justup
+repo_url: https://github.com/Gill-Bates/justup
+edit_uri: edit/main/docs/
+
+# Documentation files sit beside this configuration; the generated site is written
+# one directory above docs/.
+docs_dir: .
+site_dir: ../site
+use_directory_urls: true
+
+# AGENTS.md files are repository guidance for agents, not published documentation.
+# The historical specification remains available under spec/; current contracts
+# are documented on feature and API pages.
+exclude_docs: |
+  AGENTS.md
+  **/AGENTS.md
+
+# Strict builds report missing navigation targets and broken links.
+validation:
+  nav:
+    omitted_files: warn
+    absolute_links: warn
+  links:
+    anchors: warn
+    absolute_links: warn
+    unrecognized_links: warn
+
+theme:
+  name: material
+  language: en
+  logo: assets/justup-logo.svg
+  favicon: assets/justup-logo.svg
+  palette:
+    # Automatic — follows the system preference on first visit.
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/brightness-auto
+        name: Switch to light mode
+    # Light
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    # Dark
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to system theme
+  # Disable Material's Google Fonts requests; IBM Plex Sans is self-hosted below.
+  font: false
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - navigation.prune
+    - search.suggest
+    - search.highlight
+    - search.share
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+  icon:
+    repo: fontawesome/brands/github
+    edit: material/pencil
+    view: material/eye
+
+# Search only: minify and git-revision-date-localized are not in the docs extra
+# in pyproject.toml and would make the build fail.
+plugins:
+  - search:
+      lang: en
+
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - toc:
+      permalink: true
+      toc_depth: 3
+  - pymdownx.betterem:
+      smart_enable: all
+  - pymdownx.caret
+  - pymdownx.details
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.keys
+  - pymdownx.mark
+  - pymdownx.smartsymbols
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.tilde
+
+extra:
+  homepage: https://gill-bates.github.io/justup/
+  generator: false
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/Gill-Bates
+    - icon: fontawesome/brands/docker
+      link: https://hub.docker.com/r/giiibates/justup
+
+extra_css:
+  - stylesheets/extra.css
+
+# Material loads the Mermaid renderer through the superfences custom fence; no
+# extra_javascript entry is required.
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - Quick start: getting-started/quick-start.md
+      - Installation: getting-started/installation.md
+      - First steps: getting-started/first-steps.md
+      - Docker: getting-started/docker.md
+  - Features:
+      - Monitoring & Checks: features/monitoring.md
+      - Monitoring alerts: features/alerts.md
+      - Notifications: features/notifications.md
+      - PDF reports: features/reports.md
+      - Traceroute & maps: features/traceroute.md
+      - Quality gate: features/quality-gate.md
+      - Users & roles: features/users.md
+      - Backup & restore: features/backup.md
+  - Configuration:
+      - Environment variables: configuration/environment.md
+      - Settings: configuration/settings.md
+      - Reverse proxy: configuration/reverse-proxy.md
+      - Storage & retention: configuration/storage.md
+  - Security:
+      - Overview: security/overview.md
+      - Authentication: security/authentication.md
+      - Rate limiting: security/rate-limiting.md
+      - Best Practices: security/best-practices.md
+  - API reference:
+      - Overview: api/overview.md
+      - Authentication: api/authentication.md
+      - Endpoints: api/endpoints.md
+  - Development:
+      - Setup: development/setup.md
+      - Architecture: development/architecture.md
+      - Database maintenance: development/database-maintenance.md
+      - Contributing: development/contributing.md
+      - Historical specification: spec/justup-spec.md
+  - Troubleshooting: troubleshooting.md
+
+copyright: Copyright &copy; 2026 Gill-Bates | Licensed under MIT

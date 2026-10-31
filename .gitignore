@@ -1,0 +1,67 @@
+# ─── Python ───
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# ─── Node (lint/test tooling only) ───
+node_modules/
+npm-debug.log*
+
+# ─── Runtime data & secrets ───
+/data/
+.env
+.env.*
+!.env.example
+*.log
+*.tmp
+*.bak
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# ─── Vendored wheels (fetched at build time) ───
+docker/vendor/wheels/
+
+# ─── Archives & dumps ───
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.rar
+*.7z
+full_codebase_*.txt
+Architektur.txt
+
+# ─── Windows/WSL metadata ───
+*:Zone.Identifier
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# ─── IDE, editor & agent tooling ───
+.idea/
+.vscode/*
+!.vscode/settings.json
+*.swp
+*.swo
+.agents/
+.claude/settings.local.json
+.omc/
+.omx/
+.worktrees/
+
+# ─── MkDocs build output ───
+/site/

@@ -1,0 +1,41 @@
+services:
+  justup:
+    image: ${JUSTUP_IMAGE:-giiibates/justup:latest}
+    container_name: justup
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    environment:
+      PUID: 1000
+      PGID: 1000
+      LOG_LEVEL: INFO
+      SECRET_KEY: ${SECRET_KEY:?Set a persistent key for justUp} # head -c 32 /dev/urandom | base64
+    volumes:
+      - ./:/app/data
+    tmpfs:
+      - /app/data/pdf_reports:size=256m,mode=0700,uid=1000,gid=1000
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - "import os,urllib.request as u; u.urlopen('http://127.0.0.1:%s/healthz' % os.environ.get('JUSTUP_PORT', 8000), timeout=3)"
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN # chown /app/data and the home directory after a PUID/PGID remap
+      - FOWNER # usermod/groupmod rewrite /etc/passwd and /etc/group
+      - SETUID # gosu drops to the service user
+      - SETGID
+      - NET_RAW # ping and mtr carry file capabilities that must lie within the bounding set
+    security_opt:
+      - no-new-privileges:true

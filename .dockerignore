@@ -1,0 +1,68 @@
+# ================================================
+# STRICT WHITELIST-BASED .dockerignore
+# ================================================
+# Security: Block EVERYTHING, then explicitly allow only what's needed.
+# This prevents accidental leaks of sensitive files into Docker images.
+
+# Block everything by default (also covers .git/, .gitignore, data/, docs/, tests/)
+**
+
+# ─── ALLOW: Application files ───
+!app/**
+
+# ─── ALLOW: Build inputs read by docker/Dockerfile ───
+!docker/entrypoint.sh
+!docker/libsignal-pins.txt
+!docker/requirements.lock
+!docker/vendor/wheels/
+!pyproject.toml
+
+# ─── ALLOW: Documentation for About page ───
+!LICENSE
+!CHANGELOG.md
+
+# ─── BLOCK: Python bytecode & caches ───
+**/__pycache__/
+**/*.py[cod]
+**/*.so
+
+# ─── BLOCK: IDE, editor & agent tooling ───
+**/.vscode/
+**/.idea/
+**/.omc/
+**/.omx/
+**/.claude/
+**/.agents/
+**/.worktrees/
+**/*.swp
+**/*.swo
+
+# ─── BLOCK: Test & coverage ───
+**/.pytest_cache/
+**/.coverage
+**/.ruff_cache/
+**/.mypy_cache/
+**/htmlcov/
+
+# ─── BLOCK: Sensitive & temporary files ───
+**/.env
+**/.env.*
+**/*.log
+**/*.tmp
+**/*.bak
+**/*:Zone.Identifier
+**/.DS_Store
+**/node_modules/
+**/.venv/
+
+# ─── BLOCK: Archives (CRITICAL - prevent repo leaks) ───
+**/*.zip
+**/*.tar
+**/*.tar.gz
+**/*.tgz
+**/*.rar
+**/*.7z
+
+# ─── BLOCK: Full codebase dumps ───
+**/full_codebase_*.txt
+**/Architektur.txt

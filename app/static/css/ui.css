@@ -1,0 +1,2816 @@
+/**
+ * justUp UI - Global Styles
+ * Copyright (C) 2026 Gill-Bates
+ *
+ * Structure:
+ * 1. CSS Custom Properties (Theme Variables)
+ * 2. Base Layout
+ * 3. Components (Cards, Buttons, Tables, etc.)
+ * 4. Responsive: Tablet (max-width: 768px)
+ * 5. Responsive: Mobile (max-width: 576px)
+ * 6. Desktop Enhancements (min-width: 768px+)
+ */
+
+/* =============================================
+   FONTS
+   ============================================= */
+
+/* =============================================
+   1. CSS CUSTOM PROPERTIES
+   ============================================= */
+
+:root {
+	/* IBM Plex Sans font stack and palette live in gentelella-layout.css. */
+	--bs-body-font-family: var(--bs-font-sans-serif);
+
+	/* Spacing scale: the single source for page, header, tile and card spacing. */
+	--page-gutter: clamp(1rem, 2.5vw, 2.5rem);
+	--ui-space-tile: 1.25rem;
+	--ui-space-tile-compact: 0.5rem;
+	--ui-space-header: 2.25rem;
+	--ui-card-padding: 1.25rem;
+	--ui-stat-gap: 0.25rem;
+
+	/* App-specific colors (light mode) */
+	--ui-muted-bg: #f1f3f5;
+	--ui-muted-color: #495057;
+	--ui-muted-border: #dee2e6;
+	--ui-card-bg: var(--ju-panel-bg, #fff);
+	--ui-card-border: var(--ju-panel-line, #dee2e6);
+	--ui-shadow-subtle: 0 1px 3px rgb(0 0 0 / 15%);
+
+	/* Table row sizing - central control */
+	--table-row-padding-y: 0.75rem;
+	--table-row-padding-x: 0.9rem;
+	--table-row-line-height: 1.35;
+
+	/* Range slider geometry */
+	--range-thumb-size: 1rem;
+
+	/* must match actual thumb size */
+}
+
+@media (width <= 576px) {
+	:root {
+		--page-gutter: 0.875rem;
+		--ui-space-tile: 1rem;
+		--ui-space-header: 1.5rem;
+		--ui-card-padding: 1rem;
+	}
+}
+
+[data-bs-theme="dark"] {
+	--ui-muted-bg: #2b2d31;
+	--ui-muted-color: #cfd3da;
+	--ui-muted-border: #3a3d43;
+	--ui-shadow-subtle: 0 1px 3px rgb(0 0 0 / 30%);
+
+	/* Improved icon contrast in dark mode */
+	--ui-icon-secondary: #a8adb5;
+	--ui-icon-muted: #8b9099;
+}
+
+/* =============================================
+   2. BASE LAYOUT
+   ============================================= */
+
+body {
+	font-family: var(--bs-body-font-family);
+}
+
+/* Main app layout uses full width. Direct children are spaced by the tile gap only,
+   so no page part needs its own bottom margin. */
+.ui-page {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr);
+	align-content: start;
+	gap: var(--ui-space-tile);
+	width: 100%;
+	max-width: 90rem;
+	margin-inline: auto;
+	padding: var(--ui-space-header) var(--page-gutter);
+	overflow-x: hidden;
+}
+
+/* Page header (hero): title left, actions right. It sits one header step above the content;
+   the grid gap already contributes one tile step. */
+.ui-page-header {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--ui-space-tile);
+	margin-block-end: calc(var(--ui-space-header) - var(--ui-space-tile));
+}
+
+.ui-page-header > :is(h1, h2) {
+	margin: 0;
+}
+
+.ui-page-heading {
+	display: grid;
+	flex: 1 1 28rem;
+	gap: 0.35rem;
+	min-width: 0;
+}
+
+.ui-page-heading h1 {
+	margin: 0;
+	color: var(--ju-title);
+	font-size: var(--ju-page-title-size);
+	font-weight: 700;
+	letter-spacing: -0.025em;
+}
+
+.ui-page-eyebrow {
+	margin: 0;
+	color: var(--bs-primary);
+	font-size: 0.75rem;
+	font-weight: 700;
+	letter-spacing: 0.09em;
+	text-transform: uppercase;
+}
+
+.ui-page-lead {
+	max-width: 65ch;
+	margin: 0.3rem 0 0;
+	color: var(--bs-secondary-color);
+	font-size: 0.95rem;
+	line-height: 1.55;
+}
+
+/* Breadcrumb trail above a page header; spacing comes from the page grid. */
+.ui-page .breadcrumb {
+	--bs-breadcrumb-margin-bottom: 0;
+}
+
+/* Tile layouts: one gap for all sibling cards. A bare .ui-grid / .ui-stack is a single column. */
+.ui-grid,
+.ui-stack {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr);
+	gap: var(--ui-space-tile);
+}
+
+/* Settings cards form balanced desktop columns and collapse into document flow on narrow screens. */
+.settings-general-layout {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr);
+	align-items: start;
+	gap: var(--ui-space-tile);
+}
+
+.settings-general-column,
+.settings-general-column > form {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr);
+	align-content: start;
+	gap: var(--ui-space-tile);
+	min-width: 0;
+}
+
+.settings-card {
+	min-width: 0;
+}
+
+/* Editor panes grow with the viewport instead of a fixed 550px. */
+.smtp-editor-frame {
+	height: clamp(16rem, 50vh, 34rem);
+	border: 0;
+}
+
+textarea.smtp-editor-frame {
+	border: 1px solid var(--bs-border-color);
+}
+
+#wysiwyg-container .btn .material-icons {
+	font-size: 1rem;
+}
+
+.settings-stack {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr);
+	gap: var(--ui-space-tile);
+	min-width: 0;
+}
+
+.settings-stack > form {
+	min-width: 0;
+}
+
+.settings-network-form {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr);
+	align-items: start;
+	gap: var(--ui-space-tile);
+}
+
+@media (width >= 900px) {
+	.settings-network-form {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+}
+
+/* Compact vertical rhythm inside settings cards. */
+.settings-compact {
+	display: grid;
+	gap: 0.75rem;
+}
+
+.settings-compact .form-label {
+	margin-bottom: 0.25rem;
+}
+
+.settings-editor .card-body {
+	padding: 0.875rem;
+}
+
+.settings-editor .form-label {
+	margin-bottom: 0.25rem;
+}
+
+.settings-queue .card-status {
+	padding: 0.75rem;
+}
+
+.settings-field-row {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr);
+	gap: 0.75rem;
+}
+
+@media (width >= 576px) {
+	.settings-field-row {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+}
+
+/* Touch devices: larger switch rows and buttons inside settings cards. */
+@media (pointer: coarse) {
+	.settings-card .form-switch {
+		display: flex;
+		align-items: center;
+		min-height: 2.75rem;
+	}
+
+	.settings-card .btn {
+		min-height: 2.5rem;
+	}
+}
+
+.settings-details > summary {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	cursor: pointer;
+	list-style: none;
+}
+
+.settings-details > summary::-webkit-details-marker {
+	display: none;
+}
+
+.settings-details > summary::after {
+	content: "";
+	flex: none;
+	width: 0.5rem;
+	height: 0.5rem;
+	margin-bottom: 0.2rem;
+	border: solid currentcolor;
+	border-width: 0 2px 2px 0;
+	transform: rotate(45deg);
+	transition: transform 0.15s;
+}
+
+.settings-details[open] > summary::after {
+	transform: rotate(225deg);
+	margin-bottom: -0.2rem;
+}
+
+.settings-details > summary:focus-visible {
+	outline: 2px solid var(--bs-primary);
+	outline-offset: -2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.settings-details > summary::after {
+		transition: none;
+	}
+}
+
+.settings-card .form-text {
+	max-width: 72ch;
+}
+
+.ui-grid > *,
+.ui-stack > * {
+	min-width: 0;
+	margin: 0;
+}
+
+/* Stat tiles: four across, two on phones. */
+.ui-grid--quad {
+	grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+/* Stat tiles that fill the row by their content. */
+.ui-grid--fit {
+	grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr));
+}
+
+@media (width <= 576px) {
+	.ui-grid--quad {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+
+	.ui-grid--fit {
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+	}
+}
+
+@media (width >= 992px) {
+	.settings-general-layout {
+		grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+	}
+
+	.ui-grid--split {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+
+	.ui-grid--thirds {
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+	}
+
+	.ui-grid--sidebar {
+		grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+	}
+}
+
+/* Button icon sizing - make icons proportional to button size */
+.btn-sm .material-icons {
+	font-size: 1.25rem;
+	vertical-align: middle;
+}
+
+/* Material icons in buttons should inherit button color */
+.btn .material-icons {
+	color: inherit !important;
+}
+
+/* Dashboard Summary Cards - larger typography (layout: .ui-grid--quad) */
+.summary-grid .card-status .fs-3,
+.dashboard-hero .fs-3 {
+	font-size: 2.5rem !important;
+	line-height: 1;
+}
+
+.summary-grid .card-status .fs-5,
+.dashboard-hero .fs-5 {
+	font-size: 2rem !important;
+}
+
+.summary-grid .card-status .small,
+.dashboard-hero .small {
+	font-size: 0.9rem !important;
+}
+
+/* Target Detail Info Cards - matching typography (layout: .ui-grid--fit) */
+.info-cards-grid .card-body .small {
+	font-size: 0.75rem !important;
+	font-weight: 400 !important;
+}
+
+/* Compact stat strip: tiles hug their content instead of stretching to a fixed card height. */
+.info-cards-grid {
+	grid-template-columns: repeat(auto-fit, minmax(6rem, auto));
+}
+
+.info-cards-grid .card-body {
+	padding: 0.5rem 1rem;
+}
+
+.info-cards-grid .card-body p {
+	margin-block-end: 0.125rem;
+}
+
+.info-cards-grid .card-body .fs-4 {
+	font-size: 1.15rem !important;
+}
+
+/* Slim card: a single header row, no body (e.g. empty alert recipients). */
+.card-slim .card-header {
+	border-bottom: 0;
+}
+
+/* =============================================
+   3. COMPONENTS
+   ============================================= */
+
+/* ----- Cards ----- */
+
+/* Every card, header and body takes its padding from the same token. */
+.card {
+	--bs-card-spacer-x: var(--ui-card-padding);
+	--bs-card-spacer-y: var(--ui-card-padding);
+	--bs-card-cap-padding-x: var(--ui-card-padding);
+	--bs-card-cap-padding-y: calc(var(--ui-card-padding) * 0.72);
+}
+
+.ui-card {
+	padding: var(--ui-card-padding);
+	display: flex;
+	flex-direction: column;
+	gap: var(--ui-space-tile-compact);
+	background-color: var(--ui-card-bg);
+	border-color: var(--ui-card-border);
+}
+
+.ui-card>.card-body {
+	padding: 0;
+}
+
+/* Stat tile: value and label sit tight; after .ui-card so its gap wins by source order. */
+.card-status {
+	gap: var(--ui-stat-gap);
+}
+
+.info-cards-grid .card-body p {
+	margin-block-end: var(--ui-stat-gap);
+}
+
+/* Innere ui-card ohne Extra-Padding/Borders */
+.ui-card .ui-card {
+	padding: 0;
+	border: 0;
+	background: transparent;
+}
+
+.ui-card table {
+	margin-bottom: 0;
+}
+
+.ui-page .nav-tabs {
+	gap: 0.35rem;
+	border-bottom-color: var(--ju-panel-line);
+}
+
+.ui-page .nav-tabs .nav-link {
+	padding: 0.7rem 1rem;
+	border-radius: var(--bs-border-radius) var(--bs-border-radius) 0 0;
+	color: var(--bs-secondary-color);
+	font-weight: 600;
+}
+
+.ui-page .nav-tabs .nav-link.active {
+	border-color: var(--ju-panel-line) var(--ju-panel-line) var(--ju-panel-bg);
+	background: var(--ju-panel-bg);
+	color: var(--ju-title);
+}
+
+.ui-page .nav-pills {
+	gap: 0.4rem;
+}
+
+.ui-page .nav-pills .nav-link {
+	border-radius: var(--bs-border-radius);
+	font-weight: 600;
+}
+
+/* Table negative margins only on desktop - see media queries below */
+
+/* Toast containers - consistent styling across all pages */
+.ui-toast-container {
+	z-index: 1080;
+}
+
+/* Mobile: center toast with consistent width and rounded corners */
+@media (width <= 576px) {
+	.ui-toast-container {
+		left: 50% !important;
+		right: auto !important;
+		transform: translateX(-50%);
+		width: calc(100% - 2rem);
+		max-width: 360px;
+		padding: 1rem !important;
+	}
+
+	.ui-toast-container .toast {
+		width: 100%;
+		border-radius: 0.5rem;
+	}
+}
+
+/* Tick positions follow equal grid gaps, with the final tick pinned to the
+   final end line. This keeps labels from changing the measured stop positions. */
+.range-wrapper {
+	--range-steps: 6;
+
+	position: relative;
+}
+
+.range-wrapper[data-range-positions="10"] {
+	--range-steps: 9;
+}
+
+.range-wrapper .form-range {
+	position: relative;
+	z-index: 1;
+	height: 2.75rem;
+	margin: var(--ui-space-tile-compact) 0 0;
+	padding: 0;
+	accent-color: var(--bs-primary);
+	cursor: pointer;
+}
+
+.form-range::-webkit-slider-thumb {
+	width: var(--range-thumb-size);
+	height: var(--range-thumb-size);
+}
+
+.form-range::-moz-range-thumb {
+	width: var(--range-thumb-size);
+	height: var(--range-thumb-size);
+}
+
+/* Ticks sit on the range's actual stop lines. Half-thumb padding matches the
+   browser's native range track inset at both ends. */
+.range-ticks {
+	position: absolute;
+	inset: 0;
+	display: grid;
+	grid-template-columns: repeat(var(--range-steps), minmax(0, 1fr));
+	align-items: start;
+	padding-inline: calc(var(--range-thumb-size) / 2);
+	pointer-events: none;
+	z-index: 2;
+}
+
+.range-ticks .tick {
+	position: relative;
+	grid-row: 1;
+	justify-self: start;
+	width: 0;
+	height: 0;
+	margin-top: calc(var(--ui-space-tile-compact) + 1.375rem);
+}
+
+.range-ticks .tick-label {
+	position: absolute;
+	left: 0;
+	bottom: 1rem;
+	transform: translateX(-50%);
+	white-space: nowrap;
+	font-size: 0.75rem;
+	color: var(--bs-secondary-color);
+	user-select: none;
+	line-height: 1;
+}
+
+.range-ticks .tick-mark {
+	position: absolute;
+	left: 0;
+	bottom: 0.375rem;
+	transform: translateX(-50%);
+	width: 1px;
+	height: 0.375rem;
+	background-color: var(--bs-secondary-color);
+	opacity: 0.5;
+}
+
+.range-ticks .tick:nth-child(1) { grid-column: 1; }
+.range-ticks .tick:nth-child(2) { grid-column: 2; }
+.range-ticks .tick:nth-child(3) { grid-column: 3; }
+.range-ticks .tick:nth-child(4) { grid-column: 4; }
+.range-ticks .tick:nth-child(5) { grid-column: 5; }
+.range-ticks .tick:nth-child(6) { grid-column: 6; }
+.range-ticks .tick:nth-child(7) { grid-column: 7; }
+.range-ticks .tick:nth-child(8) { grid-column: 8; }
+.range-ticks .tick:nth-child(9) { grid-column: 9; }
+
+.range-ticks .tick:last-child {
+	grid-column: var(--range-steps);
+	justify-self: end;
+}
+
+.range-wrapper[data-active-index="0"] .tick:nth-child(1) .tick-mark,
+.range-wrapper[data-active-index="1"] .tick:nth-child(2) .tick-mark,
+.range-wrapper[data-active-index="2"] .tick:nth-child(3) .tick-mark,
+.range-wrapper[data-active-index="3"] .tick:nth-child(4) .tick-mark,
+.range-wrapper[data-active-index="4"] .tick:nth-child(5) .tick-mark,
+.range-wrapper[data-active-index="5"] .tick:nth-child(6) .tick-mark,
+.range-wrapper[data-active-index="6"] .tick:nth-child(7) .tick-mark,
+.range-wrapper[data-active-index="7"] .tick:nth-child(8) .tick-mark,
+.range-wrapper[data-active-index="8"] .tick:nth-child(9) .tick-mark,
+.range-wrapper[data-active-index="9"] .tick:nth-child(10) .tick-mark {
+	visibility: hidden;
+}
+
+/* Column widths */
+.ui-col-status {
+	width: 50px;
+	text-align: center;
+}
+
+.ui-col-actions {
+	width: 1%;
+	white-space: nowrap;
+}
+
+/* ----- Buttons ----- */
+
+.ui-page .btn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 0.4rem;
+}
+
+.ui-page .btn:not(.btn-sm, .btn-icon) {
+	min-height: 2.6rem;
+}
+
+.btn-icon {
+	width: 36px;
+	height: 36px;
+	min-width: 36px;
+	min-height: 36px;
+	padding: 0;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	line-height: 1;
+	flex: 0 0 auto;
+
+	/* Minimal look: no visible "frame" around icon buttons */
+	border: 0 !important;
+
+	--bs-btn-border-width: 0;
+	--bs-btn-border-color: transparent;
+	--bs-btn-hover-border-color: transparent;
+	--bs-btn-active-border-color: transparent;
+
+	background-color: transparent;
+	box-shadow: var(--ui-shadow-subtle);
+	text-decoration: none !important;
+	transition: background-color 0.15s ease, box-shadow 0.15s ease;
+
+	/* Prevent Bootstrap focus ring from looking like a border frame */
+	--bs-btn-focus-box-shadow: none;
+}
+
+.btn-icon:hover {
+	border: 0 !important;
+	background-color: rgb(var(--bs-secondary-rgb), 0.12);
+	text-decoration: none !important;
+	box-shadow: var(--bs-box-shadow-sm);
+}
+
+.btn-icon:active {
+	border: 0 !important;
+}
+
+.btn-icon:focus,
+.btn-icon:focus-visible {
+	border: 0 !important;
+	text-decoration: none !important;
+	box-shadow: var(--bs-box-shadow-sm);
+}
+
+.btn-icon:focus-visible {
+	outline: 2px solid var(--ju-focus-ring);
+	outline-offset: 2px;
+}
+
+/* Keep variant colors, but use subtle hover backgrounds instead of outline frames */
+.btn-icon.btn-outline-primary:hover {
+	background-color: rgb(var(--bs-primary-rgb), 0.12);
+}
+
+.btn-icon.btn-outline-secondary:hover {
+	background-color: rgb(var(--bs-secondary-rgb), 0.12);
+}
+
+.btn-icon.btn-outline-info:hover {
+	background-color: rgb(var(--bs-info-rgb), 0.12);
+}
+
+.btn-icon.btn-outline-warning:hover {
+	background-color: rgb(var(--bs-warning-rgb), 0.12);
+}
+
+.btn-icon.btn-outline-danger:hover {
+	background-color: rgb(var(--bs-danger-rgb), 0.12);
+}
+
+.btn-icon.btn-outline-primary:active {
+	background-color: rgb(var(--bs-primary-rgb), 0.18);
+}
+
+.btn-icon.btn-outline-secondary:active {
+	background-color: rgb(var(--bs-secondary-rgb), 0.18);
+}
+
+.btn-icon.btn-outline-info:active {
+	background-color: rgb(var(--bs-info-rgb), 0.18);
+}
+
+.btn-icon.btn-outline-warning:active {
+	background-color: rgb(var(--bs-warning-rgb), 0.18);
+}
+
+.btn-icon.btn-outline-danger:active {
+	background-color: rgb(var(--bs-danger-rgb), 0.18);
+}
+
+/* Icons inside buttons - prevent line-height stretch */
+.btn-icon .material-icons,
+.btn-icon i {
+	font-size: 22px;
+	line-height: 1;
+}
+
+/* FIX: force square icon buttons inside tables */
+.table .btn-icon {
+	width: 32px;
+	height: 32px;
+	min-width: 32px;
+	min-height: 32px;
+	padding: 0;
+	line-height: 1;
+	box-sizing: border-box;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	flex: 0 0 32px;
+	border: 0 !important;
+	box-shadow: var(--ui-shadow-subtle);
+}
+
+/* Material Icons: neutralize internal line-height */
+.table .btn-icon .material-icons {
+	font-size: 18px;
+	line-height: 1;
+	display: block;
+}
+
+.btn-page-primary {
+	height: 36px;
+	padding: 0 1rem;
+	font-weight: 500;
+	white-space: nowrap;
+}
+
+/* ----- Empty States ----- */
+
+.ui-empty {
+	border: 1px dashed var(--bs-border-color);
+	border-radius: 0.75rem;
+	padding: 2rem 1rem;
+}
+
+/* ----- Responsive Data Table (.rtable) ----- */
+
+/* .rtable marks tables that reflow into a card layout on mobile (see media query below). */
+.rtable {
+	width: 100%;
+}
+
+/* DESKTOP: echte Tabelle, kein Card-Reflow */
+@media (width >= 768px) {
+	.targets-table td::before {
+		content: none !important;
+		display: none !important;
+	}
+
+	.targets-table tr {
+		display: table-row;
+	}
+
+	.targets-table td,
+	.targets-table th {
+		display: table-cell;
+	}
+}
+
+/* Global table row sizing - uses central CSS variables */
+.ui-page .table>:not(caption)>*>*,
+.ui-page .rtable>:not(caption)>*>*,
+.ui-page .table-sm>:not(caption)>*>* {
+	padding: var(--table-row-padding-y) var(--table-row-padding-x);
+	line-height: var(--table-row-line-height);
+}
+
+.ui-page .table > thead > tr > th {
+	padding-block: 0.85rem;
+	background: var(--ju-panel-bg);
+	color: var(--bs-secondary-color);
+	font-size: 0.75rem;
+	font-weight: 700;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+}
+
+.ui-page .table:not(.rtable) > tbody > tr:last-child > * {
+	border-bottom-width: 0;
+}
+
+.ui-page .table-bordered > :not(caption) > * > * {
+	border-width: 0 0 1px;
+}
+
+/* Opt-in compact class for denser tables */
+
+/* ----- Alerts ----- */
+
+/* When an alert is acknowledged, render the whole row in a muted/closed state. */
+.alert-row-acked,
+.alert-row-acked a {
+	color: var(--bs-secondary-color) !important;
+}
+
+.alert-row-acked .material-icons,
+.alert-row-acked .text-danger,
+.alert-row-acked .text-success,
+.alert-row-acked .text-primary,
+.alert-row-acked .text-body-secondary {
+	color: var(--bs-secondary-color) !important;
+}
+
+.alert-row-acked .badge {
+	background-color: transparent !important;
+	border: 1px solid var(--bs-border-color) !important;
+	color: var(--bs-secondary-color) !important;
+}
+
+/* ----- Accordion / Group Header ----- */
+
+.targets-group {
+	--bs-accordion-bg: var(--ju-panel-bg);
+	--bs-accordion-btn-bg: var(--ju-panel-bg);
+	--bs-accordion-btn-color: var(--ju-title);
+	--bs-accordion-active-bg: var(--ju-panel-bg);
+	--bs-accordion-active-color: var(--ju-title);
+	--bs-accordion-border-color: var(--ju-panel-line);
+
+	display: grid;
+	gap: 0.9rem;
+}
+
+.ui-page .accordion-button {
+	padding-left: var(--page-gutter);
+	padding-right: var(--page-gutter);
+}
+
+.ui-page .accordion-button>i {
+	margin-right: 0.5rem;
+	flex-shrink: 0;
+}
+
+/* Keep accordion content aligned with the page gutter.
+	   Specific accordions can override via Bootstrap spacing utilities (e.g. p-0, px-3). */
+.ui-page .accordion-body {
+	padding-left: var(--page-gutter);
+	padding-right: var(--page-gutter);
+}
+
+.targets-group-header {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+}
+
+.targets-group-header .group-icon {
+	display: inline-grid;
+	place-items: center;
+	flex: 0 0 2.5rem;
+	width: 2.5rem;
+	height: 2.5rem;
+	border-radius: var(--bs-border-radius);
+	background: rgb(var(--bs-primary-rgb) / 12%);
+	color: var(--bs-primary);
+}
+
+/* Ensure accordion header aligns with card/table inner width
+   so header doesn't create a wider container than the table. */
+.targets-group .accordion-body>.ui-card {
+	width: 100%;
+}
+
+.targets-group .accordion-header {
+	padding: 0;
+}
+
+/* Accordion Header exakt wie Card/Table */
+.targets-group .accordion-button {
+	padding-left: 1rem;
+	padding-right: 1rem;
+	border-bottom: 1px solid var(--bs-border-color);
+	font-weight: 650;
+}
+
+/* Optional: visually contain header to card edge */
+.targets-group-header {
+	margin: 0;
+}
+
+.targets-group .accordion-item {
+	overflow: hidden;
+	border: 1px solid var(--ju-panel-line);
+	border-radius: var(--ju-radius-tile);
+}
+
+/* ----- Settings List Tables (Users, Recipients) ----- */
+
+/* Ensures even column distribution in card-body tables */
+#users-list .table,
+#recipients-list .table {
+	table-layout: fixed;
+	width: 100%;
+}
+
+#users-list .table th,
+#recipients-list .table th,
+#users-list .table td:last-child,
+#recipients-list .table td:last-child {
+	white-space: nowrap;
+}
+
+/* Data cells wrap long unbreakable values (e-mail, IPv6) instead of being clipped or widening the table. */
+#users-list .table td,
+#recipients-list .table td {
+	overflow-wrap: anywhere;
+}
+
+/* Equal width for all columns - table-layout:fixed distributes evenly */
+#users-list .table th,
+#users-list .table td {
+	width: auto;
+
+	/* Let table-layout: fixed handle equal distribution */
+}
+
+#recipients-list .table th,
+#recipients-list .table td {
+	width: auto;
+
+	/* Let table-layout: fixed handle equal distribution */
+}
+
+/* ----- Mobile Responsive: Settings Tables (Users, Recipients) ----- */
+@media (width <= 991.98px) {
+	#users-list .table,
+	#recipients-list .table {
+		table-layout: auto;
+	}
+
+	/* Make tables horizontally scrollable on tablets */
+	#users-list,
+	#recipients-list {
+		overflow-x: auto;
+		-webkit-overflow-scrolling: touch;
+	}
+
+	#users-list .table,
+	#recipients-list .table {
+		min-width: 700px;
+	}
+}
+
+@media (width <= 767.98px) {
+	/* Stack tables as cards on mobile */
+	#users-list .table,
+	#recipients-list .table {
+		table-layout: auto;
+		min-width: auto;
+	}
+
+	#users-list .table thead,
+	#recipients-list .table thead {
+		display: none;
+	}
+
+	#users-list .table tbody tr,
+	#recipients-list .table tbody tr {
+		display: block;
+		margin-bottom: var(--ui-space-tile);
+		border: 1px solid var(--bs-border-color);
+		border-radius: 0.5rem;
+		padding: var(--ui-card-padding);
+		background: var(--bs-body-bg);
+	}
+
+	#users-list .table tbody td,
+	#recipients-list .table tbody td {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		padding: 0.4rem 0;
+		border: none;
+	}
+
+	#users-list .table tbody td::before,
+	#recipients-list .table tbody td::before {
+		content: attr(data-label);
+		font-weight: 600;
+		color: var(--bs-secondary-color);
+		margin-right: 0.5rem;
+		flex-shrink: 0;
+	}
+
+	/* Actions row - full width */
+	#users-list .table tbody td:last-child,
+	#recipients-list .table tbody td:last-child {
+		justify-content: flex-end;
+		padding-top: 0.75rem;
+		margin-top: 0.5rem;
+		border-top: 1px solid var(--bs-border-color);
+	}
+
+	#users-list .table tbody td:last-child::before,
+	#recipients-list .table tbody td:last-child::before {
+		display: none;
+	}
+
+	/* Action buttons larger touch targets on mobile */
+	#users-list .action-buttons .btn,
+	#recipients-list .action-buttons .btn {
+		padding: 0.5rem;
+	}
+
+	#users-list .action-buttons .material-icons,
+	#recipients-list .action-buttons .material-icons {
+		font-size: 24px;
+	}
+}
+
+/* ----- Spooler Notification Log ----- */
+.spooler-log td {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.spooler-log td[data-label="Time"],
+.spooler-log td[data-label="Channel"] {
+	overflow: visible;
+	text-overflow: clip;
+}
+
+.spooler-log td[data-label="Target"],
+.spooler-log td[data-label="Recipient"],
+.spooler-log td[data-label="Error"] {
+	overflow: visible;
+	text-overflow: clip;
+	white-space: normal;
+	word-break: break-word;
+}
+
+.spooler-log td[data-label="Error"] {
+	font-size: 0.875rem;
+	line-height: 1.3;
+}
+
+/* ----- Mobile Responsive: Spooler Notification Log ----- */
+@media (width <= 767.98px) {
+	/* Hide low-priority columns on mobile */
+	.spooler-log th:nth-child(3),
+	/* Target */
+	.spooler-log td[data-label="Target"],
+	.spooler-log th:nth-child(5),
+	/* Type */
+	.spooler-log td[data-label="Type"],
+	.spooler-log th:nth-child(7),
+	/* Retries */
+	.spooler-log td[data-label="Retries"],
+	.spooler-log th:nth-child(8),
+	/* Error */
+	.spooler-log td[data-label="Error"] {
+		display: none;
+	}
+
+	/* Compact font size */
+	.spooler-log {
+		font-size: 0.78rem;
+	}
+
+	/* Tighter cell padding */
+	.spooler-log th,
+	.spooler-log td {
+		padding: 0.3rem 0.4rem;
+	}
+
+	/* Time column: narrower */
+	.spooler-log th:nth-child(1),
+	.spooler-log td[data-label="Time"] {
+		white-space: nowrap;
+		font-size: 0.72rem;
+	}
+
+	/* Channel: icon only (hide text) */
+	.spooler-log td[data-label="Channel"] .material-icons {
+		margin-right: 0 !important;
+	}
+}
+
+@media (width >= 768px) {
+	.storage-danger-actions {
+		width: auto !important;
+	}
+
+	.storage-danger-text {
+		white-space: nowrap;
+	}
+}
+
+/* ----- Badges (scoped to app) ----- */
+
+.badge {
+	--bs-badge-border-radius: 0.5rem;
+	--bs-badge-padding-x: 0.5em;
+	--bs-badge-padding-y: 0.25em;
+	--bs-badge-font-size: 0.75rem;
+
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	line-height: 1.1;
+}
+
+.badge .material-icons {
+	font-size: 16px;
+	line-height: 1;
+}
+
+/* Compact badges in tables */
+.table .badge {
+	font-size: 0.7rem;
+}
+
+.badge.badge-muted {
+	background-color: var(--ui-muted-bg);
+	color: var(--ui-muted-color);
+	border: 1px solid var(--ui-muted-border);
+	font-weight: 500;
+}
+
+/* ----- Tag input (generic chip list, see js/utils/tag-input.js) ----- */
+
+.tag-input__field {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0.375rem;
+	height: auto;
+	cursor: text;
+}
+
+.tag-input__field:focus-within {
+	outline: 2px solid var(--ju-focus-ring);
+	outline-offset: 2px;
+}
+
+.tag-input.has-error .tag-input__field {
+	border-color: var(--bs-danger);
+}
+
+.tag-input__list {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.375rem;
+	min-width: 0;
+	max-width: 100%;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.tag-input__item {
+	display: inline-flex;
+	align-items: center;
+	min-width: 0;
+	max-width: 100%;
+	padding-inline-start: 0.625rem;
+	border: 1px solid var(--ui-muted-border);
+	border-radius: 999px;
+	background: var(--ui-muted-bg);
+	color: var(--ui-muted-color);
+	font-size: 0.875rem;
+}
+
+.tag-input__item.is-invalid {
+	border-color: var(--bs-danger);
+	background: var(--bs-danger-bg-subtle);
+	color: var(--bs-danger-text-emphasis);
+}
+
+.tag-input__item.is-pending-removal {
+	outline: 2px solid var(--ju-focus-ring);
+	outline-offset: 1px;
+}
+
+.tag-input__text {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.tag-input__remove {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-width: 1.75rem;
+	min-height: 1.75rem;
+	padding: 0;
+	border: 0;
+	border-radius: 999px;
+	background: transparent;
+	color: inherit;
+	font-size: 1.125rem;
+	line-height: 1;
+	cursor: pointer;
+}
+
+.tag-input__remove:hover {
+	background: var(--ui-muted-border);
+}
+
+.tag-input__entry {
+	flex: 1 1 10rem;
+	min-width: 8rem;
+	min-height: 1.75rem;
+	padding: 0;
+	border: 0;
+	background: transparent;
+	color: inherit;
+	font: inherit;
+}
+
+/* The field shows the focus ring; the bare input needs none of its own. */
+.tag-input__entry:focus,
+.tag-input__entry:focus-visible {
+	outline: 0;
+	box-shadow: none;
+}
+
+.tag-input__error {
+	margin-top: 0.25rem;
+	color: var(--bs-danger-text-emphasis);
+	font-size: 0.875rem;
+}
+
+.tag-input__reset {
+	min-height: 1.75rem;
+}
+
+@media (pointer: coarse), (width <= 576px) {
+	.tag-input__remove {
+		min-width: 2.75rem;
+		min-height: 2.75rem;
+	}
+
+	.tag-input__entry,
+	.tag-input__reset {
+		min-height: 2.75rem;
+	}
+}
+
+@media (prefers-reduced-motion: no-preference) {
+	.tag-input__remove {
+		transition: background-color 0.15s ease-in-out;
+	}
+}
+
+/* ----- Unified Table Typography ----- */
+
+/* Tables: unified font + tabular numbers for alignment */
+.ui-page table {
+	font-size: 0.9rem;
+	font-variant-numeric: tabular-nums;
+}
+
+/* HTTP & Interval: neutral badge styling (no semantic colors) */
+.badge-http,
+.badge-interval {
+	background-color: var(--ui-muted-bg) !important;
+	color: var(--ui-muted-color) !important;
+	border: 1px solid var(--ui-muted-border);
+	font-weight: 500;
+}
+
+/* Uptime: semantic colors without badge (lighter visual weight) */
+.uptime-value {
+	font-weight: 600;
+}
+
+.uptime-ok {
+	color: var(--bs-success);
+}
+
+.uptime-warn {
+	color: var(--bs-warning);
+}
+
+.uptime-bad {
+	color: var(--bs-danger);
+}
+
+/* Check badges: consistent neutral styling */
+.check-badges .badge {
+	font-weight: 500;
+	box-shadow: var(--ui-shadow-subtle);
+}
+
+/* Secondary badges: slightly darker grey (global) */
+.badge.bg-secondary {
+	--bs-secondary-rgb: 73, 80, 87;
+}
+
+[data-bs-theme="dark"] .badge.bg-secondary {
+	--bs-secondary-rgb: 58, 61, 67;
+}
+
+/* ----- Alert Recipients (Target Form + Details) ----- */
+
+.alert-recipients-picker {
+	border: 1px solid var(--bs-border-color);
+	border-radius: 0.75rem;
+	padding: var(--ui-space-tile);
+	background: var(--bs-body-bg);
+	box-shadow: var(--ui-shadow-subtle);
+	max-height: 260px;
+	overflow: auto;
+	scrollbar-gutter: stable both-edges;
+}
+
+.alert-recipients-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+	gap: var(--ui-space-tile-compact);
+}
+
+.alert-recipient-tile {
+	border: 1px solid var(--bs-border-color);
+	border-radius: 0.6rem;
+	padding: var(--ui-space-tile-compact);
+	background: var(--ui-card-bg, var(--bs-body-bg));
+}
+
+.alert-recipient-label {
+	display: flex;
+	gap: 0.6rem;
+	align-items: flex-start;
+	cursor: pointer;
+	width: 100%;
+	margin: 0;
+}
+
+.alert-recipient-label .form-check-input {
+	margin-top: 0.25rem;
+	flex: 0 0 auto;
+}
+
+.alert-recipient-body {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+.alert-recipient-name-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 0.5rem;
+}
+
+.alert-recipient-name {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.35rem;
+	font-weight: 600;
+	min-width: 0;
+}
+
+.alert-recipient-name .material-icons {
+	font-size: 18px;
+	line-height: 1;
+	color: var(--bs-secondary-color);
+}
+
+.alert-recipient-name-text {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.alert-recipient-status {
+	flex: 0 0 auto;
+}
+
+.alert-recipient-channels {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.35rem 0.5rem;
+	margin-top: 0.25rem;
+	color: var(--bs-secondary-color);
+	font-size: 0.85rem;
+}
+
+.alert-recipient-channel {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.25rem;
+	min-width: 0;
+}
+
+.alert-recipient-channel .material-icons {
+	font-size: 16px;
+	line-height: 1;
+}
+
+.alert-recipient-channel .alert-recipient-channel-text {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	max-width: 220px;
+}
+
+@media (width <= 576px) {
+	.alert-recipients-picker {
+		max-height: 320px;
+	}
+
+	.alert-recipients-grid {
+		grid-template-columns: repeat(2, 1fr);
+	}
+
+	.alert-recipient-channel .alert-recipient-channel-text {
+		max-width: 100%;
+	}
+}
+
+.target-status {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 40px;
+	height: 40px;
+	font-size: 2rem;
+}
+
+/* ----- Action Buttons (Inline in Tables) ----- */
+
+.actions-cell {
+	width: 1%;
+	white-space: nowrap;
+	text-align: right !important;
+	overflow: visible;
+}
+
+.action-buttons {
+	display: inline-flex;
+	gap: 0.25rem;
+	align-items: center;
+	justify-content: flex-end;
+	flex-wrap: nowrap;
+}
+
+.action-buttons>* {
+	flex: 0 0 auto;
+}
+
+.action-buttons .material-icons {
+	font-size: 18px;
+	vertical-align: middle;
+}
+
+/* PDF export button icon readability */
+#export-pdf-btn .material-icons {
+	font-size: 20px;
+	line-height: 1;
+	vertical-align: middle;
+}
+
+#export-pdf-btn #pdf-icon {
+	color: var(--bs-secondary);
+}
+
+/* ----- Dark Mode (scoped overrides) ----- */
+
+[data-bs-theme="dark"] .ui-card {
+	background-color: var(--ui-card-bg);
+	border-color: var(--ui-card-border);
+}
+
+[data-bs-theme="dark"] .ui-page .table {
+	--bs-table-bg: transparent;
+}
+
+/* Dark mode table variants - Bootstrap's defaults are too bright */
+[data-bs-theme="dark"] .table-warning {
+	--bs-table-color: var(--bs-warning-text-emphasis);
+	--bs-table-bg: var(--bs-warning-bg-subtle);
+	--bs-table-border-color: var(--bs-warning-border-subtle);
+	--bs-table-striped-bg: rgb(255 193 7 / 15%);
+	--bs-table-striped-color: var(--bs-warning-text-emphasis);
+	--bs-table-active-bg: rgb(255 193 7 / 20%);
+	--bs-table-active-color: var(--bs-warning-text-emphasis);
+	--bs-table-hover-bg: rgb(255 193 7 / 18%);
+	--bs-table-hover-color: var(--bs-warning-text-emphasis);
+}
+
+[data-bs-theme="dark"] .table-danger {
+	--bs-table-color: var(--bs-danger-text-emphasis);
+	--bs-table-bg: var(--bs-danger-bg-subtle);
+	--bs-table-border-color: var(--bs-danger-border-subtle);
+	--bs-table-striped-bg: rgb(220 53 69 / 15%);
+	--bs-table-striped-color: var(--bs-danger-text-emphasis);
+	--bs-table-active-bg: rgb(220 53 69 / 20%);
+	--bs-table-active-color: var(--bs-danger-text-emphasis);
+	--bs-table-hover-bg: rgb(220 53 69 / 18%);
+	--bs-table-hover-color: var(--bs-danger-text-emphasis);
+}
+
+[data-bs-theme="dark"] .table-success {
+	--bs-table-color: var(--bs-success-text-emphasis);
+	--bs-table-bg: var(--bs-success-bg-subtle);
+	--bs-table-border-color: var(--bs-success-border-subtle);
+	--bs-table-striped-bg: rgb(25 135 84 / 15%);
+	--bs-table-striped-color: var(--bs-success-text-emphasis);
+	--bs-table-active-bg: rgb(25 135 84 / 20%);
+	--bs-table-active-color: var(--bs-success-text-emphasis);
+	--bs-table-hover-bg: rgb(25 135 84 / 18%);
+	--bs-table-hover-color: var(--bs-success-text-emphasis);
+}
+
+[data-bs-theme="dark"] .table-info {
+	--bs-table-color: var(--bs-info-text-emphasis);
+	--bs-table-bg: var(--bs-info-bg-subtle);
+	--bs-table-border-color: var(--bs-info-border-subtle);
+	--bs-table-striped-bg: rgb(13 202 240 / 15%);
+	--bs-table-striped-color: var(--bs-info-text-emphasis);
+	--bs-table-active-bg: rgb(13 202 240 / 20%);
+	--bs-table-active-color: var(--bs-info-text-emphasis);
+	--bs-table-hover-bg: rgb(13 202 240 / 18%);
+	--bs-table-hover-color: var(--bs-info-text-emphasis);
+}
+
+[data-bs-theme="dark"] .table-light {
+	--bs-table-color: var(--bs-body-color);
+	--bs-table-bg: var(--bs-tertiary-bg);
+	--bs-table-border-color: var(--bs-border-color);
+}
+
+[data-bs-theme="dark"] .targets-table tbody tr {
+	border-color: var(--ui-card-border);
+}
+
+/* =============================================
+   4. RESPONSIVE: MOBILE (max-width: 768px)
+   ============================================= */
+
+@media (width <= 767.98px) {
+	/* Buttons */
+	.btn-page-primary {
+		width: 100%;
+	}
+
+	/* Responsive tables: Card-Layout nur auf Mobile */
+	.rtable {
+		table-layout: auto;
+	}
+
+	.rtable colgroup,
+	.rtable thead {
+		display: none;
+	}
+
+	.rtable tbody tr {
+		display: block;
+		border: 1px solid var(--bs-border-color);
+		border-radius: var(--ju-radius-tile);
+		padding: var(--ui-card-padding);
+		margin-bottom: var(--ui-space-tile);
+		background: var(--bs-body-bg);
+	}
+
+	.rtable tbody td {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		padding: 0.4rem 0;
+		border: none;
+		white-space: normal;
+		overflow: visible;
+		text-overflow: clip;
+	}
+
+	.rtable tbody td::before {
+		content: attr(data-label);
+		font-weight: 600;
+		color: var(--bs-secondary-color);
+		margin-right: 1rem;
+		flex-shrink: 0;
+	}
+
+	.rtable tbody td[data-label=""]::before,
+	.rtable tbody td[data-label="Actions"]::before {
+		display: none;
+	}
+
+	.rtable tbody td.actions-cell {
+		justify-content: flex-end;
+		width: 100% !important;
+
+		/* override desktop table sizing (prevents clipped action icons) */
+	}
+
+	/* Desktop table layout helper; breaks card-layout if not reset */
+	.actions-cell {
+		width: auto !important;
+	}
+
+	/* Mobile: make icons inside icon-box buttons a bit larger */
+	.rtable .btn-icon .material-icons,
+	.rtable .btn-icon i {
+		font-size: 22px;
+	}
+
+	/* Hide less important columns on mobile */
+	.targets-table td[data-label="Last Check"],
+	.targets-table td[data-label="Last Downtime"],
+	.targets-table td[data-label="HTTP"],
+	.targets-table td[data-label="Interval"] {
+		display: none;
+	}
+
+	/* Sticky Actions */
+	.sticky-actions {
+		position: sticky;
+		bottom: env(safe-area-inset-bottom, 0);
+		background: var(--bs-body-bg);
+		padding: 0.75rem;
+		border-top: 1px solid var(--bs-border-color);
+		z-index: 10;
+	}
+}
+
+/* =============================================
+   5. RESPONSIVE: MOBILE (max-width: 576px)
+   ============================================= */
+
+@media (width <= 576px) {
+	/*
+	 * REMOVED: overflow-x: hidden on html/body
+	 * Reason: Masks layout bugs instead of fixing them,
+	 * prevents horizontal scroll on iOS Safari,
+	 * and can break position:sticky elements
+	 * Fix: Address root cause of overflow instead
+	 */
+
+	/* Touch-friendly buttons (iOS/Android: 44px) */
+	.ui-page .btn:not(.btn-sm) {
+		min-height: 44px;
+	}
+
+	/* ─────────────────────────────────────────
+	   Tables
+	   ───────────────────────────────────────── */
+	.ui-card .table {
+		margin-left: 0;
+		margin-right: 0;
+		width: 100%;
+	}
+
+	.table-responsive,
+	.table-responsive-md {
+		overflow-x: auto;
+		-webkit-overflow-scrolling: touch;
+	}
+
+	/* ─────────────────────────────────────────
+	   Components
+	   ───────────────────────────────────────── */
+	.ui-empty {
+		padding: 1.5rem 0.75rem;
+	}
+
+	/* Targets group accordion */
+	.targets-group,
+	.targets-group.accordion,
+	.targets-group.card {
+		padding: 0;
+		margin: 0;
+	}
+
+	.targets-group .ui-card {
+		padding-left: 0;
+		padding-right: 0;
+	}
+
+	/* On mobile, only the targets accordion goes edge-to-edge by default. */
+	.targets-group .accordion-body {
+		padding: 0;
+	}
+
+	.targets-group-header {
+		margin: 0;
+		border-radius: 0.5rem;
+	}
+
+	/* Modals */
+	.modal {
+		--bs-modal-margin: 0.5rem;
+	}
+
+	.modal-content {
+		border-radius: var(--bs-border-radius-lg);
+	}
+
+	.modal-footer {
+		display: grid;
+		gap: 0.5rem;
+	}
+
+	.modal-footer .btn {
+		width: 100%;
+	}
+
+	/* Button-Gruppen wrappen */
+	.ui-page .d-flex.gap-2 {
+		flex-wrap: wrap;
+	}
+
+	.ui-page .d-flex.gap-2>.btn {
+		flex: 1 1 100%;
+	}
+}
+
+/* =============================================
+   6. DESKTOP ENHANCEMENTS (min-width: 768px+)
+   ============================================= */
+
+@media (width >= 768px) {
+	/* Tables stay within card boundaries - no edge-to-edge manipulation */
+	.ui-card .table {
+		margin-left: 0;
+		margin-right: 0;
+		width: 100%;
+	}
+
+	/* Keep table semantics while giving each data row the wizard's inset-card shape. */
+	.ui-page .rtable {
+		border-collapse: separate;
+		border-spacing: 0 0.4rem;
+	}
+
+	.ui-page .rtable > tbody > tr > * {
+		--bs-table-bg: var(--bs-body-bg);
+
+		border-block: 1px solid var(--ju-panel-line);
+	}
+
+	.ui-page .rtable > tbody > tr > :first-child {
+		border-left: 1px solid var(--ju-panel-line);
+		border-radius: var(--ju-radius-tile) 0 0 var(--ju-radius-tile);
+	}
+
+	.ui-page .rtable > tbody > tr > :last-child {
+		border-right: 1px solid var(--ju-panel-line);
+		border-radius: 0 var(--ju-radius-tile) var(--ju-radius-tile) 0;
+	}
+
+	/* Cards clip overflowing content; use .table-responsive for controlled scrolling */
+	.card,
+	.ui-card,
+	.accordion {
+		overflow-x: hidden;
+	}
+
+	/* Merge: Following media query could be consolidated with above
+	 * for better maintainability, but kept separate for logical grouping */
+}
+
+/* Targets Table: Hover and Truncation (Desktop) */
+@media (width >= 768px) {
+	.targets-table .truncate {
+		max-width: 300px;
+	}
+
+	.targets-table tbody tr:hover {
+		background-color: var(--bs-table-hover-bg, rgb(0 0 0 / 7.5%));
+	}
+}
+
+/* =============================================
+   TARGETS TABLE - FIXED LAYOUT
+   Prevents column jumping by fixing table layout
+   and explicitly defining column widths
+   ============================================= */
+
+.targets-table {
+	width: 100%;
+}
+
+/* Desktop/Tablet: fixed layout for consistent column alignment across groups */
+@media (width >= 768px) {
+	/*
+	 * Note: This min-width:768px block is intentionally separate from others
+	 * for logical organization (targets table layout vs responsive behavior)
+	 * Consider merging with similar media queries in future refactoring
+	 */
+	.targets-table {
+		table-layout: fixed;
+	}
+
+	/* Column widths - fixed percentages for consistent alignment across all groups */
+	.targets-table .col-status {
+		width: 3%;
+	}
+
+	.targets-table .col-name {
+		width: 22%;
+	}
+
+	.targets-table .col-checks {
+		width: 18%;
+	}
+
+	.targets-table .col-uptime {
+		width: 8%;
+	}
+
+	.targets-table .col-lastchk {
+		width: 11%;
+	}
+
+	.targets-table .col-lastdown {
+		width: 11%;
+	}
+
+	.targets-table .col-http {
+		width: 6%;
+	}
+
+	.targets-table .col-interval {
+		width: 7%;
+	}
+
+	.targets-table .col-actions {
+		width: 14%;
+	}
+}
+
+/* Tablet (768-991px): hide less important columns to give more space */
+@media (width >= 768px) and (width <= 991.98px) {
+	.targets-table .col-lastchk,
+	.targets-table .col-lastdown,
+	.targets-table .col-http,
+	.targets-table .col-interval {
+		display: none;
+	}
+}
+
+/* Text overflow control for long content */
+.targets-table td,
+.targets-table th {
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+/* Name column: allow tooltip on hover for long names */
+.targets-table td[data-label="Name"] {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	min-width: 240px;
+
+	/* guard so name doesn't collapse visually */
+}
+
+.targets-table td[data-label="Name"] a {
+	display: block;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	text-decoration: none;
+}
+
+/* Badges container - normalized display */
+.targets-table .checks-cell {
+	white-space: nowrap;
+	overflow: hidden;
+
+	/* Clip badges that overflow */
+}
+
+.targets-table .check-badges {
+	display: flex;
+	gap: 4px;
+	flex-wrap: nowrap;
+	align-items: center;
+	overflow: hidden;
+}
+
+.targets-table .check-badges .badge {
+	min-width: auto;
+	text-align: center;
+	white-space: nowrap;
+	flex-shrink: 0;
+	padding: 0.25em 0.5em;
+}
+
+/* Targets table: overflow handling */
+#targets-table .ui-card {
+	overflow-x: hidden;
+}
+
+/* =============================================
+   7. VERY NARROW DEVICES (max-width: 360px)
+   ============================================= */
+
+@media (width <= 360px) {
+	/* Actions-Buttons: Wrapping erlauben auf sehr schmalen Geräten */
+	.targets-table td [class*="flex-nowrap"] {
+		flex-wrap: wrap;
+	}
+
+	/* Kleinere Icon-Buttons - still square */
+	.btn-icon {
+		width: 32px;
+		height: 32px;
+		min-width: 32px;
+		min-height: 32px;
+	}
+}
+
+/* =============================================
+   8. SIGNAL DEVICE SETUP WIZARD
+   ============================================= */
+
+/* Signal app icon box */
+.signal-app-icon {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 50px;
+	height: 50px;
+	background: #fff;
+	border-radius: 10px;
+	border: 1px solid rgb(0 0 0 / 20%);
+	box-shadow: 0 1px 3px rgb(0 0 0 / 8%);
+}
+
+[data-bs-theme="dark"] .signal-app-icon {
+	background: #fff;
+	border-color: transparent;
+}
+
+/* Step states for wizard-like flow */
+.signal-step {
+	transition: opacity 0.2s ease, border-color 0.2s ease;
+	padding-left: 0.75rem;
+	border-left: 3px solid transparent;
+	margin-bottom: 1rem;
+}
+
+.signal-step:last-of-type {
+	margin-top: 0;
+}
+
+.signal-step:last-of-type {
+	margin-bottom: 0;
+}
+
+.signal-step-disabled {
+	opacity: 0.5;
+	pointer-events: none;
+}
+
+.signal-step-active {
+	border-left-color: var(--bs-primary);
+	opacity: 1;
+}
+
+/* Consistent button width in signal steps */
+.signal-step .input-group .btn {
+	min-width: 6.5rem;
+}
+
+/* 6-digit verification code input boxes */
+.signal-code-box {
+	width: 3rem;
+	height: 3.5rem;
+	font-size: 1.5rem;
+	font-weight: 600;
+	padding: 0.25rem;
+	border-radius: 0.5rem;
+	caret-color: transparent;
+}
+
+.signal-code-box:focus {
+	border-color: var(--bs-primary);
+	box-shadow: 0 0 0 0.2rem rgb(var(--bs-primary-rgb), 0.25);
+}
+
+.signal-code-box.is-invalid {
+	border-color: var(--bs-danger);
+	animation: shake 0.3s ease-in-out;
+}
+
+.signal-code-box:disabled {
+	background-color: var(--bs-secondary-bg);
+	opacity: 0.6;
+}
+
+@keyframes shake {
+	0%,
+	100% {
+		transform: translateX(0);
+	}
+
+	25% {
+		transform: translateX(-4px);
+	}
+
+	50% {
+		transform: translateX(4px);
+	}
+
+	75% {
+		transform: translateX(-4px);
+	}
+}
+
+/* Easter egg: Logo wiggle animation on hover */
+.navbar-brand:hover {
+	animation: wiggle 0.6s ease-in-out;
+}
+
+@keyframes wiggle {
+	0%,
+	100% {
+		transform: rotate(0deg);
+	}
+
+	10% {
+		transform: rotate(-12deg);
+	}
+
+	20% {
+		transform: rotate(10deg);
+	}
+
+	30% {
+		transform: rotate(-10deg);
+	}
+
+	40% {
+		transform: rotate(8deg);
+	}
+
+	50% {
+		transform: rotate(-6deg);
+	}
+
+	60% {
+		transform: rotate(4deg);
+	}
+
+	70% {
+		transform: rotate(-2deg);
+	}
+
+	80% {
+		transform: rotate(1deg);
+	}
+
+	90% {
+		transform: rotate(0deg);
+	}
+}
+
+/* Danger zone styling - subtler appearance */
+
+/* Mobile: hide disabled steps completely for cleaner flow */
+@media (width <= 576px) {
+	.signal-step-disabled {
+		display: none;
+	}
+
+	.signal-step {
+		border-left: none;
+		padding-left: 0;
+	}
+}
+
+/* =============================================
+   SETTINGS PAGE TABS
+   ============================================= */
+
+/* Placeholder collapse toggle icon rotation */
+[data-bs-toggle="collapse"] .material-icons {
+	transition: transform 0.2s ease;
+}
+
+[data-bs-toggle="collapse"]:not(.collapsed) .material-icons {
+	transform: rotate(180deg);
+}
+
+#settingsTabs .nav-link {
+	color: var(--bs-body-color);
+	border-color: transparent;
+	border-bottom: 2px solid transparent;
+	transition: all 0.2s ease;
+	display: flex;
+	align-items: center;
+	gap: 0.25rem;
+	padding: 0.75rem 1rem;
+}
+
+#settingsTabs .nav-link:hover {
+	border-color: transparent;
+	border-bottom-color: var(--bs-primary);
+	background-color: var(--ui-muted-bg);
+}
+
+#settingsTabs .nav-link.active {
+	color: var(--bs-primary);
+	background-color: transparent;
+	border-color: transparent;
+	border-bottom-color: var(--bs-primary);
+	font-weight: 500;
+}
+
+#settingsTabs .nav-link .material-icons {
+	font-size: 18px;
+}
+
+/* Desktop: active tab slightly bolder */
+#settingsTabs .nav-link.active {
+	font-weight: 600;
+}
+
+/* Settings tab strip: single row, swipe/scroll horizontally when it does not fit */
+.settings-tabs {
+	flex-wrap: nowrap;
+	overflow: auto hidden;
+	overscroll-behavior-x: contain;
+	scrollbar-width: none;
+	-webkit-overflow-scrolling: touch;
+	scroll-padding-inline: 1rem;
+	padding-inline: env(safe-area-inset-left) env(safe-area-inset-right);
+}
+
+.settings-tabs::-webkit-scrollbar {
+	display: none;
+}
+
+.settings-tabs .nav-item {
+	flex: 0 0 auto;
+}
+
+.settings-tabs .nav-link {
+	white-space: nowrap;
+	margin-bottom: 0;
+	min-height: 44px;
+}
+
+#settingsTabs .nav-link:focus-visible {
+	outline: 2px solid var(--bs-primary);
+	outline-offset: -2px;
+}
+
+/* Fade both edges while more tabs are reachable; JS drops the fade at a reached edge */
+@media (width < 992px) {
+	.settings-tabs {
+		mask-image: linear-gradient(to right, transparent, #000 20px, #000 calc(100% - 20px), transparent);
+	}
+
+	.settings-tabs.is-at-start {
+		mask-image: linear-gradient(to right, #000, #000 calc(100% - 20px), transparent);
+	}
+
+	.settings-tabs.is-at-end {
+		mask-image: linear-gradient(to right, transparent, #000 20px, #000);
+	}
+
+	.settings-tabs.is-at-start.is-at-end {
+		mask-image: none;
+	}
+}
+
+/* =============================================
+   SIGNAL TEMPLATE iOS PREVIEW
+   ============================================= */
+
+.smtp-tiles {
+	align-items: stretch;
+}
+
+.smtp-tile {
+	display: flex;
+	flex-direction: column;
+	min-height: 0;
+}
+
+@media (width >= 992px) {
+	/* Fill the viewport height on desktop and keep all 3 tiles equal height. */
+	.smtp-tiles {
+		/* Subtract fixed footer (60px) to avoid unnecessary scroll. */
+		min-height: calc(100vh - 240px - 60px);
+	}
+
+	.smtp-tile .card-body {
+		flex: 1 1 auto;
+		min-height: 0;
+		overflow: auto;
+	}
+}
+
+.placeholders-table .placeholders-thead th {
+	background-color: var(--ui-muted-bg);
+	color: var(--bs-body-color);
+	border-color: var(--bs-border-color);
+}
+
+/* Fill remaining tile space with the editor on desktop. */
+
+.signal-templates-grid {
+	display: grid;
+	grid-template-columns: 1fr;
+	gap: var(--ui-space-tile);
+	max-width: 100%;
+}
+
+.signal-templates-grid>* {
+	min-width: 0;
+}
+
+.signal-templates-grid textarea {
+	max-width: 100%;
+}
+
+@media (width >= 992px) {
+	.signal-templates-grid {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		align-items: start;
+	}
+
+	.signal-templates-placeholders {
+		grid-column: 1 / -1;
+	}
+}
+
+@media (width >= 1200px) {
+	.signal-templates-grid {
+		grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 2fr);
+	}
+
+	.signal-templates-placeholders {
+		grid-column: auto;
+	}
+}
+
+.signal-templates-placeholders .table-responsive {
+	max-width: 100%;
+}
+
+@media (width <= 576px) {
+	.signal-templates-placeholders th,
+	.signal-templates-placeholders td,
+	.signal-templates-placeholders code {
+		white-space: normal;
+		word-break: break-word;
+	}
+}
+
+.ios-preview {
+	border: 1px solid var(--bs-border-color);
+	border-radius: 18px;
+	overflow: hidden;
+	background: var(--bs-body-bg);
+	box-shadow: 0 10px 26px rgb(0 0 0 / 12%);
+}
+
+.ios-preview-statusbar {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	padding: 6px 10px;
+	font-size: 12px;
+	color: var(--bs-secondary-color);
+	background: var(--ui-muted-bg);
+	border-bottom: 1px solid var(--bs-border-color);
+}
+
+.ios-preview-icons {
+	display: inline-flex;
+	gap: 4px;
+	align-items: center;
+}
+
+.ios-dot {
+	width: 6px;
+	height: 6px;
+	border-radius: 999px;
+	background: var(--bs-secondary-color);
+	opacity: 0.75;
+}
+
+.ios-preview-body {
+	min-height: 160px;
+	padding: 12px;
+	background: linear-gradient(180deg, rgb(255 255 255 / 60%), rgb(255 255 255 / 0%));
+}
+
+[data-bs-theme="dark"] .ios-preview-body {
+	background: linear-gradient(180deg, rgb(255 255 255 / 6%), rgb(255 255 255 / 0%));
+}
+
+.ios-chat {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+
+.ios-chat-row {
+	display: flex;
+}
+
+.ios-chat-bubble {
+	max-width: 100%;
+	background: rgb(255 255 255 / 92%);
+	border: 1px solid rgb(0 0 0 / 6%);
+	border-radius: 16px;
+	padding: 10px 12px;
+	box-shadow: 0 10px 20px rgb(0 0 0 / 12%);
+	position: relative;
+}
+
+[data-bs-theme="dark"] .ios-chat-bubble {
+	background: rgb(31 41 55 / 82%);
+	border-color: rgb(255 255 255 / 6%);
+}
+
+.ios-chat-bubble-right {
+	--signal-bubble-bg: #3a76f0;
+	--signal-bubble-border: rgb(0 0 0 / 8%);
+
+	margin-left: auto;
+	background: var(--signal-bubble-bg);
+	color: #fff;
+	border-color: var(--signal-bubble-border);
+	z-index: 0;
+}
+
+/* No pointer/tail for preview bubble (clean iOS-style card bubble) */
+.ios-chat-bubble-right::before,
+.ios-chat-bubble-right::after {
+	content: none;
+	display: none;
+}
+
+[data-bs-theme="dark"] .ios-chat-bubble-right {
+	--signal-bubble-bg: #4f8cff;
+	--signal-bubble-border: rgb(255 255 255 / 8%);
+}
+
+.ios-preview-text {
+	white-space: pre-wrap;
+	word-break: break-word;
+	font-size: 13px;
+	line-height: 1.35;
+	color: inherit;
+}
+
+/* =============================================
+   ONBOARDING: Pulse Animation
+   ============================================= */
+
+@keyframes nav-pulse {
+	0% {
+		box-shadow: 0 0 0 0 rgb(13 110 253 / 70%);
+	}
+
+	70% {
+		box-shadow: 0 0 0 10px rgb(13 110 253 / 0%);
+	}
+
+	100% {
+		box-shadow: 0 0 0 0 rgb(13 110 253 / 0%);
+	}
+}
+
+.nav-link-pulse {
+	animation: nav-pulse 2s ease-out;
+	animation-iteration-count: 3;
+	border-radius: 4px;
+}
+
+/* =============================================
+   7. APP SHELL, STATUS COLORS, OFFLINE OVERLAY
+   (moved from the former inline <style> in base.html)
+   ============================================= */
+
+/* Dark palette comes from gentelella-layout.css; modals follow the panel color. */
+[data-bs-theme="dark"] .modal {
+	--bs-modal-bg: var(--ju-panel-bg);
+}
+
+:root {
+	--status-up: var(--bs-success);
+	--status-down: var(--bs-danger);
+	--status-degraded: var(--bs-orange);
+	--status-warning: #d4a006;
+	--status-unknown: var(--bs-secondary-color);
+	--status-disabled: var(--bs-tertiary-color);
+	--footer-height: calc(48px + env(safe-area-inset-bottom, 0px));
+}
+
+.ju-logo {
+	height: auto;
+}
+
+/* The SVG is black; inverted wherever an ancestor selects the dark theme. */
+[data-bs-theme="dark"] .ju-logo {
+	filter: invert(1);
+}
+
+.status-up { color: var(--status-up); }
+.status-down { color: var(--status-down); }
+.status-degraded { color: var(--status-degraded); }
+.status-warning { color: var(--status-warning); }
+.status-unknown { color: var(--status-unknown); }
+.status-disabled { color: var(--status-disabled); }
+
+.card-status {
+	transition: all 0.3s ease;
+}
+
+.htmx-request {
+	opacity: 0.5;
+}
+
+.htmx-indicator {
+	opacity: 0;
+	transition: opacity 0.2s ease-in-out;
+	pointer-events: none;
+}
+
+.htmx-request .htmx-indicator,
+.htmx-request.htmx-indicator {
+	opacity: 1;
+	pointer-events: auto;
+}
+
+.fade-in {
+	animation: fadeIn 0.3s ease-in;
+}
+
+@keyframes fadeIn {
+	from { opacity: 0; }
+	to { opacity: 1; }
+}
+
+.table-clickable tbody tr {
+	cursor: pointer;
+}
+
+/* Server offline overlay (Bootstrap offers no blurred full-screen scrim) */
+#app-shell {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	transition: filter 0.2s ease;
+}
+
+body.server-offline #app-shell {
+	filter: blur(8px);
+	pointer-events: none;
+	user-select: none;
+}
+
+#server-offline-overlay {
+	display: none;
+	position: fixed;
+	inset: 0;
+	z-index: 2000;
+	background: rgb(0 0 0 / 45%);
+	backdrop-filter: blur(10px) saturate(140%);
+}
+
+body.server-offline #server-offline-overlay {
+	display: flex;
+}
+
+#server-offline-overlay .card {
+	--bs-card-bg: rgb(var(--bs-body-bg-rgb) / 72%);
+
+	width: min(820px, calc(100vw - 2rem));
+	backdrop-filter: blur(14px) saturate(160%);
+}
+
+#server-offline-overlay .card-body {
+	padding: 3rem;
+}
+
+#server-offline-overlay h2 {
+	font-size: 2.25rem;
+}
+
+#server-offline-overlay p {
+	font-size: 1.25rem;
+}
+
+#server-offline-overlay .spinner-border {
+	width: 2.25rem;
+	height: 2.25rem;
+}
+
+/* Footer sits at the bottom of the content column (see .ju-content). */
+.ju-footer {
+	display: flex;
+	box-sizing: border-box;
+	min-height: var(--footer-height);
+	align-items: center;
+	justify-content: center;
+	padding: 0.75rem calc(1.5rem + env(safe-area-inset-right, 0px)) calc(0.75rem + env(safe-area-inset-bottom, 0px)) calc(1.5rem + env(safe-area-inset-left, 0px));
+	text-align: center;
+	font-size: 0.75rem;
+	line-height: 1.25;
+	color: var(--bs-secondary-color);
+	border-top: 1px solid var(--ju-panel-line);
+}
+
+.ju-footer-content {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	flex-wrap: wrap;
+	gap: 0.15rem 0;
+}
+
+.ju-footer-link {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.3rem;
+	color: inherit;
+	line-height: inherit;
+}
+
+.ju-footer-link:hover,
+.ju-footer-link:focus,
+.ju-footer-link:active,
+.ju-footer-link:visited {
+	color: inherit;
+}
+
+.ju-footer-link-icon {
+	display: block;
+	flex: 0 0 14px;
+}
+
+@media (width <= 991.98px) {
+	.btn-sm {
+		min-height: 44px;
+		min-width: 44px;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.fade-in {
+		animation: none;
+	}
+
+	.card-status,
+	#app-shell {
+		transition: none;
+	}
+}
+
+/* =============================================
+   8. ACCESSIBILITY (WCAG 2.2 AA)
+   Focus indicators, modal viewport geometry, status contrast,
+   reduced motion and forced-colors support.
+   ============================================= */
+:root {
+	--ju-focus-ring: #0b4bd1;
+}
+
+[data-bs-theme="dark"] {
+	--ju-focus-ring: #8fb4ff;
+}
+
+/* Light theme: the Bootstrap orange/amber tints fall below 3:1 on white. */
+:root:not([data-bs-theme="dark"]) {
+	--status-degraded: #b34a00;
+	--status-warning: #8a6500;
+}
+
+a:focus-visible,
+button:focus-visible,
+summary:focus-visible,
+[tabindex]:focus-visible,
+.form-control:focus-visible,
+.form-select:focus-visible,
+.form-check-input:focus-visible,
+.btn:focus-visible,
+.btn-close:focus-visible,
+.page-link:focus-visible,
+.accordion-button:focus-visible,
+.nav-link:focus-visible {
+	outline: 2px solid var(--ju-focus-ring);
+	outline-offset: 2px;
+}
+
+/* Bootstrap's amber text is 1.5:1 on the light warning tint. */
+:root:not([data-bs-theme="dark"]) .text-warning {
+	color: var(--status-warning) !important;
+}
+
+/* Programmatic skip-link target; not a control, so no ring. */
+main:focus {
+	outline: none;
+}
+
+/* Modals: stay centered inside the dynamic viewport and clear device cutouts. */
+.modal {
+	height: 100vh;
+	height: 100dvh;
+	padding: env(safe-area-inset-top, 0) env(safe-area-inset-right, 0) env(safe-area-inset-bottom, 0) env(safe-area-inset-left, 0);
+}
+
+.modal-content {
+	min-width: 0;
+}
+
+.modal-body {
+	overflow-wrap: anywhere;
+}
+
+.modal-footer {
+	flex-wrap: wrap;
+}
+
+/* Fixed overlay must stay reachable on short or narrow screens. */
+#server-offline-overlay {
+	outline: none;
+	overflow-y: auto;
+	padding: env(safe-area-inset-top, 0) env(safe-area-inset-right, 0) env(safe-area-inset-bottom, 0) env(safe-area-inset-left, 0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		animation-duration: 0.01ms !important;
+		animation-iteration-count: 1 !important;
+		scroll-behavior: auto !important;
+		transition-duration: 0.01ms !important;
+	}
+}
+
+@media (forced-colors: active) {
+	.modal-content,
+	.card,
+	.toast {
+		border: 1px solid CanvasText;
+	}
+
+	.btn-icon,
+	.badge {
+		border: 1px solid ButtonText !important;
+	}
+
+	a:focus-visible,
+	button:focus-visible,
+	[tabindex]:focus-visible,
+	.form-control:focus-visible,
+	.form-select:focus-visible,
+	.form-check-input:focus-visible,
+	.btn:focus-visible {
+		outline: 2px solid Highlight;
+	}
+
+	#server-offline-overlay {
+		background: Canvas;
+		backdrop-filter: none;
+	}
+}
+
+/* Compact target cards on phones while keeping every primary field and action visible. */
+@media (width <= 767.98px) {
+	.targets-table tbody tr {
+		display: grid;
+		grid-template-columns: 1.5rem minmax(0, 1fr) auto;
+		grid-template-areas:
+			"status name name"
+			"checks checks uptime"
+			"actions actions actions";
+		align-items: center;
+		gap: 0.25rem 0.5rem;
+		padding: 0.75rem;
+	}
+
+	.ui-page .targets-table tbody td {
+		min-width: 0;
+		padding: 0;
+	}
+
+	.targets-table td[data-label="Status"] {
+		grid-area: status;
+		justify-content: center;
+	}
+
+	.targets-table td[data-label="Status"]::before,
+	.targets-table td[data-label="Name"]::before,
+	.targets-table td[data-label="Actions"]::before {
+		display: none;
+	}
+
+	.targets-table td[data-label="Name"] {
+		grid-area: name;
+		min-width: 0;
+	}
+
+	.targets-table td[data-label="Checks"] {
+		grid-area: checks;
+		justify-content: flex-start;
+		gap: 0.5rem;
+	}
+
+	.targets-table td[data-label="Uptime"] {
+		grid-area: uptime;
+		justify-content: flex-end;
+		gap: 0.35rem;
+	}
+
+	.targets-table .checks-cell,
+	.targets-table .check-badges {
+		overflow: visible;
+	}
+
+	.targets-table .check-badges {
+		flex-wrap: wrap;
+	}
+
+	.targets-table td.actions-cell {
+		grid-area: actions;
+		justify-content: flex-end;
+		width: auto !important;
+	}
+}
+
+@media (width <= 767.98px) {
+	.groups-list-card {
+		padding: 0.5rem;
+	}
+
+	#groups-table tbody tr {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) auto;
+		grid-template-areas:
+			"name name"
+			"description description"
+			"targets targets";
+		align-items: center;
+		gap: 0.375rem 0.5rem;
+		padding: 0.75rem;
+		margin-bottom: 0.5rem;
+	}
+
+	#groups-table.groups-table-admin tbody tr {
+		grid-template-areas:
+			"name name"
+			"description description"
+			"targets actions";
+	}
+
+	.ui-page #groups-table tbody td {
+		min-width: 0;
+		padding: 0;
+		justify-content: flex-start;
+		gap: 0.75rem;
+		overflow-wrap: anywhere;
+	}
+
+	#groups-table tbody td::before {
+		flex: 0 0 5.5rem;
+		margin-right: 0;
+	}
+
+	#groups-table td[data-label="Name"] {
+		grid-area: name;
+	}
+
+	#groups-table td[data-label="Description"] {
+		grid-area: description;
+	}
+
+	#groups-table td[data-label="Targets"] {
+		grid-area: targets;
+	}
+
+	#groups-table td.actions-cell {
+		grid-area: actions;
+		justify-content: flex-end;
+		width: auto !important;
+	}
+}

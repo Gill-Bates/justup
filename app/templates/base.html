@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="light"
+	data-user-theme="{{ user.get('theme', 'system') if user else 'system' }}"
+	data-use-utc="{{ 'true' if use_utc else 'false' }}">
+
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>{% block title %}justUp!{% endblock %}</title>
+	<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+	<!-- Bootstrap 5 (local) -->
+	<link href="/static/css/bootstrap.min.css" rel="stylesheet">
+	<!-- Material Icons (local) -->
+	<link href="/static/css/material-icons.css" rel="stylesheet">
+	<!-- justUp UI -->
+	<link href="/static/css/gentelella-layout.css" rel="stylesheet">
+	<link href="/static/css/ui.css" rel="stylesheet">
+	<link href="/static/css/notifications.css" rel="stylesheet">
+	<!-- Leaflet Map Library (local) -->
+	<link href="/static/css/leaflet.css" rel="stylesheet">
+	<!-- Traceroute Map Fragment Styles -->
+	<link href="/static/css/traceroute-map.css" rel="stylesheet">
+	<!-- HTMX (local) -->
+	<script src="/static/js/htmx.min.js"></script>
+	<!-- Chart.js (local) -->
+	<script src="/static/js/chart.umd.min.js"></script>
+	<!-- Theme & Chart Defaults (CSP-compliant external script) -->
+	<script src="/static/js/theme-init.js"></script>
+
+	{% block styles %}{% endblock %}
+	{% block head %}{% endblock %}
+</head>
+
+<body>
+	<a href="#main-content"
+		class="visually-hidden-focusable position-absolute top-0 start-0 m-2 p-2 bg-body border rounded z-3">
+		Skip to main content
+	</a>
+	{# Layout mode: ju-shell--fit (viewport-bound) or ju-shell--fit-lg (from 992px); empty = normal page flow #}
+	<div id="app-shell" class="ju-shell {% block shell_class %}{% endblock %}">
+		<div class="ju-content">
+			<header class="ju-topbar">
+				<button class="btn ju-topbar-button" type="button" id="sidebar-toggle" aria-controls="app-sidebar"
+					aria-expanded="true" aria-label="Toggle navigation">
+					<span class="material-icons" aria-hidden="true">menu</span>
+				</button>
+				<div class="ju-topbar-title">{% block topbar_title %}justUp!{% endblock %}</div>
+				<div class="ju-topbar-actions">
+					<div class="ju-bell-wrap">
+						<button type="button" class="btn ju-topbar-button ju-bell" id="notif-bell"
+							aria-haspopup="dialog" aria-expanded="false" aria-controls="notif-popover"
+							aria-label="Notifications" title="Notifications">
+							<span class="material-icons" aria-hidden="true">notifications</span>
+							<span class="ju-bell-badge" id="notif-badge" hidden aria-hidden="true"></span>
+						</button>
+						<div class="ju-notif-popover" id="notif-popover" role="dialog" aria-labelledby="notif-pop-title" hidden>
+							<div class="ju-notif-pop-head">
+								<strong id="notif-pop-title">Notifications</strong>
+								<span class="text-body-secondary small" id="notif-pop-count"></span>
+							</div>
+							<ul class="ju-notif-pop-list" id="notif-pop-list"></ul>
+							<div class="ju-notif-pop-foot">
+								<button type="button" class="btn btn-sm btn-outline-secondary" id="notif-read-all">Mark all as read</button>
+								<a class="btn btn-sm btn-primary" href="/ui/notifications">View all notifications</a>
+							</div>
+						</div>
+						<span class="visually-hidden" id="notif-live" role="status" aria-live="polite"></span>
+					</div>
+					<span class="ju-topbar-divider" aria-hidden="true"></span>
+					<div class="ju-user-info" id="user-info" hx-get="/ui/fragments/user-info"
+						hx-trigger="load" hx-swap="innerHTML"></div>
+					<button type="button" class="btn btn-sm ju-topbar-button" id="theme-toggle"
+						title="Toggle Dark Mode" aria-label="Toggle theme">
+						<span class="material-icons" id="theme-icon" aria-hidden="true">dark_mode</span>
+					</button>
+					<button type="button" class="btn btn-sm ju-topbar-button" id="logout-btn" hx-post="/logout" hx-swap="none"
+						hx-headers='{"X-CSRF-Token": {{ request.state.csrf_token | tojson }} }'
+						data-success-redirect="/ui/login" aria-label="Logout">
+						<span class="material-icons" aria-hidden="true">logout</span><span class="d-none d-lg-inline">Logout</span>
+					</button>
+				</div>
+			</header>
+
+			<nav class="ju-sidebar" id="app-sidebar" aria-label="Main navigation">
+				<div class="ju-sidebar-header">
+				<a class="ju-sidebar-brand" href="/" aria-label="justUp! home">
+					<img src="/static/img/justup_1c.svg" class="ju-logo" alt="justUp!" width="100" height="37">
+					<span class="ju-brand-mark" aria-hidden="true">J</span>
+				</a>
+				<button type="button" class="ju-sidebar-close" id="sidebar-close" aria-label="Close navigation">
+					<span class="material-icons" aria-hidden="true">close</span>
+				</button>
+				</div>
+				<ul class="ju-nav">
+							<li>
+								<a class="ju-nav-link {% if active_page == 'dashboard' %}active{% endif %}" href="/"{% if active_page == 'dashboard' %} aria-current="page"{% endif %}>
+									<span class="material-icons" aria-hidden="true">speed</span><span class="ju-nav-text">Dashboard</span>
+								</a>
+							</li>
+							<li>
+								<button type="button" class="ju-nav-link ju-nav-group-toggle" aria-expanded="true"
+									aria-controls="nav-group-manage">
+									<span class="material-icons" aria-hidden="true">dns</span><span class="ju-nav-text">Manage</span>
+									<span class="material-icons ju-nav-chevron" aria-hidden="true">expand_more</span>
+								</button>
+								<ul class="ju-nav-sub" id="nav-group-manage">
+									<li>
+								<a class="ju-nav-link {% if active_page == 'targets' %}active{% endif %}" href="/ui/targets"{% if active_page == 'targets' %} aria-current="page"{% endif %} id="nav-targets">
+									<span class="material-icons" aria-hidden="true">gps_fixed</span><span class="ju-nav-text">Targets</span>
+								</a>
+							</li>
+									<li>
+								<a class="ju-nav-link {% if active_page == 'notifications' %}active{% endif %}" href="/ui/notifications"{% if active_page == 'notifications' %} aria-current="page"{% endif %}>
+									<span class="material-icons" aria-hidden="true">notifications</span><span class="ju-nav-text">Notifications</span>
+								</a>
+							</li>
+									<li>
+								<a class="ju-nav-link {% if active_page == 'groups' %}active{% endif %}" href="/ui/groups"{% if active_page == 'groups' %} aria-current="page"{% endif %}>
+									<span class="material-icons" aria-hidden="true">folder</span><span class="ju-nav-text">Groups</span>
+								</a>
+							</li>
+								</ul>
+				<div class="ju-profile">
+					<img src="/static/avatar.png" class="ju-profile-avatar" alt="" width="48" height="48">
+					<div class="ju-profile-text">
+						<span class="ju-profile-label">Signed in as</span>
+						<span class="ju-profile-name" title="{{ user.username if user else '' }}">{{ user.username if user else '' }}</span>
+					</div>
+				</div>
+			</nav>
+			<div class="ju-sidebar-backdrop" id="sidebar-backdrop" aria-hidden="true"></div>
+
+		<main id="main-content" tabindex="-1">
+			{% block content %}{% endblock %}
+		</main>
+
+		<!-- Global Toast (reusable across pages) -->
+		<div class="toast-container position-fixed top-0 end-0 p-3 ui-toast-container">
+			<div id="global-toast" class="toast align-items-center text-bg-success border-0" role="alert"
+				aria-live="assertive" aria-atomic="true">
+				<div class="d-flex">
+					<div class="toast-body" id="global-toast-body"></div>
+					<button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"
+						aria-label="Close"></button>
+				</div>
+			</div>
+		</div>
+
+		<footer class="ju-footer">
+			<span class="ju-footer-content">
+				<strong>justUp!</strong>&nbsp;<span id="app-version">{{ version | e }}</span>{% if build_info and build_info != 'dev' %}&nbsp;(<span class="font-monospace">{{ build_info[:7] | e }}</span>){% endif %}
+				&middot; &copy;&nbsp;{{ now().year | e }}&nbsp;Gill-Bates
+				&middot;&nbsp;
+				<a href="https://github.com/Gill-Bates/justUp" target="_blank" rel="noopener noreferrer"
+					class="text-decoration-none ju-footer-link">
+					<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" class="ju-footer-link-icon"
+						aria-hidden="true">
+						<path fill-rule="evenodd"
+							d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" />
+					</svg>
+					GitHub
+					<span class="visually-hidden">(opens in new tab)</span>
+				</a>
+			</span>
+		</footer>
+		</div>
+	</div>
+
+	<div id="live-status" class="visually-hidden" role="status" aria-live="polite"></div>
+
+	<!-- Server Offline Overlay -->
+	<div id="server-offline-overlay" class="align-items-center justify-content-center" role="alertdialog" aria-modal="true"
+		aria-labelledby="server-offline-title" aria-describedby="server-offline-desc">
+		<div class="card shadow-lg border-0">
+			<div class="card-body p-4 text-center">
+				<div class="mb-2">
+					<span class="material-icons text-warning" style="font-size: 4rem;" aria-hidden="true">wifi_off</span>
+				</div>
+				<h2 class="h4 mb-2" id="server-offline-title">Server offline</h2>
+				<p class="text-body-secondary mb-3" id="server-offline-desc">Trying to reconnect…</p>
+				<div class="d-flex align-items-center justify-content-center gap-2">
+					<div class="spinner-border text-primary" role="status" aria-label="Reconnecting"></div>
+					<small class="text-body-secondary" id="server-offline-hint">Next retry in a moment</small>
+				</div>
+			</div>
+		</div>
+	</div>
+
+	<script src="/static/js/bootstrap.bundle.min.js"></script>
+	<script src="/static/js/live-events.js"></script>
+	<script src="/static/js/app.js"></script>
+	<script src="/static/js/pdf-jobs.js"></script>
+	<script src="/static/js/sidebar.js"></script>
+	<script src="/static/js/notifications.js"></script>
+
+	<!-- Onboarding: Pulse Targets nav if no targets exist -->
+	<script>
+		(function () {
+			const navTargets = document.getElementById('nav-targets');
+			if (!navTargets || navTargets.classList.contains('active')) return;
+
+			// Use apiFetch for centralized auth/error handling
+			if (typeof window.apiFetch === 'function') {
+				window.apiFetch('/targets')
+					.then(r => r.ok ? r.json() : null)
+					.then(data => {
+						if (data && Array.isArray(data) && data.length === 0) {
+							navTargets.classList.add('nav-link-pulse');
+						}
+					})
+					.catch(() => { });
+			}
+		})();
+	</script>
+
+	<!-- HTMX: Global error handling to prevent retry storms on 5xx errors -->
+	<script>
+		(function () {
+			// Track consecutive failures per element to implement exponential backoff
+			document.body.addEventListener('htmx:responseError', function (evt) {
+				const elt = evt.detail.elt;
+				const xhr = evt.detail.xhr;
+
+				// Only handle 5xx errors (server issues) - let 4xx through (auth, validation)
+				if (xhr.status < 500) return;
+
+				const retryCount = parseInt(elt.dataset.htmxRetryCount || '0');
+				const MAX_RETRIES = 3;
+
+				if (retryCount >= MAX_RETRIES) {
+					// Stop polling after 3 consecutive failures
+					const originalTrigger = elt.getAttribute('hx-trigger');
+					if (originalTrigger) {
+						// Save original trigger so it can be restored on page reload
+						elt.dataset.htmxOriginalTrigger = originalTrigger;
+						elt.removeAttribute('hx-trigger');
+						console.warn('HTMX polling stopped after', MAX_RETRIES, 'failures:',
+							evt.detail.pathInfo.requestPath);
+					}
+					return;
+				}
+
+				// Increment retry counter
+				elt.dataset.htmxRetryCount = (retryCount + 1).toString();
+			});
+
+			// Reset retry count on successful request
+			document.body.addEventListener('htmx:afterRequest', function (evt) {
+				if (evt.detail.successful) {
+					const elt = evt.detail.elt;
+					if (elt.dataset.htmxRetryCount) {
+						delete elt.dataset.htmxRetryCount;
+					}
+					// Restore trigger if it was disabled by retry limit
+					if (elt.dataset.htmxOriginalTrigger && !elt.getAttribute('hx-trigger')) {
+						elt.setAttribute('hx-trigger', elt.dataset.htmxOriginalTrigger);
+						delete elt.dataset.htmxOriginalTrigger;
+						// Re-process to activate restored trigger
+						if (typeof htmx !== 'undefined' && htmx.process) {
+							htmx.process(elt);
+						}
+					}
+				}
+			});
+		})();
+	</script>
+
+	{% block scripts %}{% endblock %}
+</body>
+
+</html>

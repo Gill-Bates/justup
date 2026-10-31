@@ -1,0 +1,349 @@
+/* app/static/css/notifications.css - bell badge, shake animation, popover and notification list */
+
+.ju-bell-wrap {
+	position: relative;
+	display: inline-flex;
+}
+
+.ju-bell {
+	position: relative;
+}
+
+.ju-bell-badge {
+	position: absolute;
+	top: 0.2rem;
+	right: 0.1rem;
+	min-width: 1.1rem;
+	height: 1.1rem;
+	padding: 0 0.25rem;
+	border-radius: 0.55rem;
+	background: #c0283a;
+	color: #fff;
+	font-size: 0.65rem;
+	font-weight: 600;
+	line-height: 1.1rem;
+	text-align: center;
+	pointer-events: none;
+}
+
+.ju-bell-badge[hidden] {
+	display: none;
+}
+
+.ju-bell.is-shaking .material-icons {
+	transform-origin: 50% 10%;
+	animation: ju-bell-shake 0.8s ease-in-out 1;
+}
+
+@keyframes ju-bell-shake {
+	0%,
+	100% {
+		transform: rotate(0);
+	}
+
+	20% {
+		transform: rotate(16deg);
+	}
+
+	45% {
+		transform: rotate(-14deg);
+	}
+
+	70% {
+		transform: rotate(8deg);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.ju-bell.is-shaking .material-icons {
+		animation: none;
+	}
+}
+
+.ju-notif-popover {
+	position: absolute;
+	top: calc(100% + 0.4rem);
+	right: 0;
+	z-index: 1060;
+	width: min(22rem, calc(100vw - 1rem));
+	border: 1px solid var(--ju-panel-line);
+	border-radius: 0.5rem;
+	background: var(--ju-panel-bg);
+	box-shadow: 0 0.5rem 1.5rem rgb(0 0 0 / 20%);
+	color: var(--bs-body-color);
+}
+
+.ju-notif-popover[hidden] {
+	display: none;
+}
+
+@media (width <= 576px) {
+	.ju-notif-popover {
+		position: fixed;
+		top: calc(var(--ju-topbar-h) + 0.25rem);
+		right: 0.5rem;
+		left: 0.5rem;
+		width: auto;
+	}
+}
+
+.ju-notif-pop-head,
+.ju-notif-pop-foot {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 0.5rem;
+	padding: 0.6rem 0.75rem;
+}
+
+.ju-notif-pop-list {
+	max-height: 60vh;
+	margin: 0;
+	padding: 0;
+	overflow-y: auto;
+	border-top: 1px solid var(--ju-panel-line);
+	border-bottom: 1px solid var(--ju-panel-line);
+	list-style: none;
+}
+
+.ju-notif-pop-empty {
+	padding: 1rem;
+	text-align: center;
+}
+
+.ju-notif-pop-btn {
+	display: flex;
+	align-items: flex-start;
+	gap: 0.6rem;
+	width: 100%;
+	padding: 0.5rem 0.75rem 0.5rem 1rem;
+	border: 0;
+	border-left: 3px solid transparent;
+	background: transparent;
+	color: inherit;
+	text-align: left;
+}
+
+.ju-notif-pop-icon {
+	flex: 0 0 auto;
+	margin-top: 0.1rem;
+	font-size: 1.15rem;
+	color: var(--ju-secondary, var(--bs-secondary-color));
+}
+
+.ju-notif-pop-main {
+	display: flex;
+	flex: 1 1 auto;
+	flex-direction: column;
+	min-width: 0;
+}
+
+.ju-notif-pop-title,
+.ju-notif-pop-detail {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.ju-notif-pop-btn:hover,
+.ju-notif-pop-btn:focus-visible {
+	background: var(--ju-sidebar-hover, rgb(127 127 127 / 12%));
+}
+
+.is-unread > .ju-notif-pop-btn {
+	border-left-color: var(--bs-primary);
+	font-weight: 600;
+}
+
+.ju-notif-error.is-unread > .ju-notif-pop-btn {
+	border-left-color: #c0283a;
+}
+
+.ju-notif-page-title {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0.75rem;
+}
+
+.ju-notif-page-actions {
+	display: flex;
+	justify-content: flex-end;
+	margin-inline-start: auto;
+}
+
+.ju-notif-page-actions .btn {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.5rem;
+	min-height: 2.75rem;
+	padding-inline: 1rem;
+}
+
+.ju-notif-tabs {
+	flex-wrap: wrap;
+	gap: 0.5rem;
+}
+
+.ju-notif-tabs .nav-link {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.375rem;
+	min-height: 2.5rem;
+	padding: 0.5rem 0.875rem;
+}
+
+.ju-notif-tabs .material-icons {
+	font-size: 1.25rem;
+}
+
+@media (width <= 767.98px) {
+	.ju-notif-tabs {
+		flex-wrap: nowrap;
+		max-width: 100%;
+		overflow-x: auto;
+		padding-block-end: 0.5rem;
+		padding-inline-end: 1.25rem;
+		scroll-padding-inline: 1.25rem;
+		scrollbar-width: thin;
+		overscroll-behavior-x: contain;
+		-webkit-overflow-scrolling: touch;
+		scroll-snap-type: x proximity;
+	}
+
+	.ju-notif-tabs .nav-item {
+		flex: 0 0 auto;
+		scroll-snap-align: start;
+	}
+
+	.ju-notif-tabs .nav-link {
+		min-height: 2.75rem;
+		white-space: nowrap;
+	}
+}
+
+.ju-notif-item {
+	display: flex;
+	align-items: center;
+	gap: 1rem;
+	padding: 1rem var(--ui-space-header);
+	border-left: 3px solid transparent;
+}
+
+.ju-notif-icon {
+	flex: 0 0 auto;
+	font-size: 1.5rem;
+	color: var(--bs-secondary-color);
+}
+
+.ju-notif-item.is-unread {
+	border-left-color: var(--bs-primary);
+}
+
+.ju-notif-item.ju-notif-error {
+	border-left-color: #c0283a;
+	background: rgb(192 40 58 / 8%);
+}
+
+.ju-notif-main {
+	display: flex;
+	flex: 1 1 0;
+	flex-direction: column;
+	gap: 0.25rem;
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.ju-notif-title {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.375rem;
+	align-items: center;
+	font-weight: 600;
+}
+
+.ju-notif-actions {
+	display: flex;
+	flex: 0 0 auto;
+	flex-wrap: wrap;
+	gap: 0.5rem;
+	align-items: center;
+	justify-content: flex-end;
+}
+
+@media (width <= 576px) {
+	.ju-notif-item {
+		flex-wrap: wrap;
+		padding: 0.875rem var(--page-gutter);
+	}
+
+	.ju-notif-actions {
+		flex-basis: 100%;
+		justify-content: flex-start;
+	}
+}
+
+/* The topbar forces its own link/button colour; restore the primary button contrast inside the popover. */
+.ju-topbar .ju-notif-popover .btn-primary,
+.ju-topbar .ju-notif-popover .btn-primary:hover {
+	color: var(--ju-primary-contrast);
+}
+
+.ju-topbar .ju-notif-popover .btn-outline-secondary {
+	color: var(--bs-body-color);
+}
+
+.ju-unread-dot {
+	display: inline-block;
+	width: 0.55rem;
+	height: 0.55rem;
+	margin-right: 0.4rem;
+	border-radius: 50%;
+	background: var(--bs-primary);
+}
+
+.ju-notif-title,
+.ju-notif-body {
+	display: flex;
+	align-items: center;
+	min-width: 0;
+}
+
+.ju-notif-title-text,
+.ju-notif-context {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.ju-notif-title-text {
+	font-weight: 600;
+}
+
+.ju-notif-body {
+	gap: 0.3rem;
+}
+
+.ju-notif-body .local-time {
+	flex: 0 0 auto;
+	white-space: nowrap;
+}
+
+.ju-notif-title {
+	flex-wrap: nowrap;
+	gap: 0.4rem;
+}
+
+.ju-notif-title .ju-unread-dot {
+	flex: 0 0 auto;
+	margin-right: 0;
+}
+
+.ju-notif-title .badge {
+	flex: 0 0 auto;
+}
+
+.ju-notif-title-text {
+	flex: 0 1 auto;
+	min-width: 0;
+}

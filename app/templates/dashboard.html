@@ -1,0 +1,200 @@
+{% extends "base.html" %}
+{% block title %}Dashboard – justUp!{% endblock %}
+{% block topbar_title %}Dashboard{% endblock %}
+
+{% block styles %}
+<link href="/static/css/gridstack.min.css" rel="stylesheet">
+<link href="/static/css/dashboard.css" rel="stylesheet">
+{% endblock %}
+
+{% block content %}
+<div class="ui-page">
+	<div class="ui-page-header">
+		<div class="ui-page-heading">
+			<p class="ui-page-eyebrow">Overview</p>
+			<h1>Dashboard</h1>
+			<p class="ui-page-lead">Monitor health, connection quality and recent downtime at a glance.</p>
+		</div>
+		<div class="d-flex flex-wrap align-items-center gap-2">
+			<div class="d-none d-lg-flex align-items-center gap-2" id="dashboard-edit-toolbar" role="group" aria-label="Dashboard layout">
+				<button type="button" class="btn btn-sm btn-outline-secondary" id="dashboard-edit-toggle" disabled>
+					<span class="material-icons me-1" aria-hidden="true">tune</span>Edit dashboard
+				</button>
+				<button type="button" class="btn btn-sm btn-outline-secondary" id="dashboard-edit-widgets" hidden
+					data-bs-toggle="modal" data-bs-target="#dashboard-widgets-modal">
+					<span class="material-icons me-1" aria-hidden="true">widgets</span>Edit widgets
+				</button>
+				<button type="button" class="btn btn-sm btn-outline-secondary" id="dashboard-reset-layout" hidden>
+					<span class="material-icons me-1" aria-hidden="true">restart_alt</span>Reset layout
+				</button>
+				<button type="button" class="btn btn-sm btn-primary" id="dashboard-edit-done" hidden>
+					<span class="material-icons me-1" aria-hidden="true">check</span>Done
+				</button>
+			</div>
+			<button type="button" class="btn btn-sm btn-icon btn-outline-secondary" id="dashboard-refresh-btn" title="Refresh" aria-label="Refresh">
+				<span class="material-icons" aria-hidden="true">refresh</span>
+			</button>
+		</div>
+	</div>
+	<p class="visually-hidden" id="dashboard-grid-status" role="status" aria-live="polite"></p>
+
+	<div class="grid-stack dashboard-grid dashboard-grid--loading" id="dashboard-grid">
+
+		<!-- Four independently movable status heroes. -->
+		<div class="grid-stack-item" gs-id="status-online" gs-x="0" gs-y="0" gs-w="3" gs-h="2" gs-min-w="1" gs-min-h="2" data-widget-id="status-online">
+			<div class="grid-stack-item-content">
+				<button type="button" class="dashboard-widget-header" hidden
+					aria-label="Move or resize widget: Online. Arrow keys move it, Shift with arrow keys resizes it.">
+					<span class="material-icons" aria-hidden="true">drag_indicator</span>
+				</button>
+				<div class="card ui-card card-status dashboard-hero" id="dashboard-status-online" data-status="online">
+					<div class="d-flex justify-content-center align-items-center gap-2">
+						<span class="material-icons text-success fs-5" aria-hidden="true">check_circle</span>
+						<span class="fs-3 fw-bold text-body-secondary">–</span>
+					</div>
+					<div class="text-body-secondary small text-uppercase">Online</div>
+				</div>
+			</div>
+		</div>
+		<div class="grid-stack-item" gs-id="status-offline" gs-x="3" gs-y="0" gs-w="3" gs-h="2" gs-min-w="1" gs-min-h="2" data-widget-id="status-offline">
+			<div class="grid-stack-item-content">
+				<button type="button" class="dashboard-widget-header" hidden
+					aria-label="Move or resize widget: Offline. Arrow keys move it, Shift with arrow keys resizes it.">
+					<span class="material-icons" aria-hidden="true">drag_indicator</span>
+				</button>
+				<div class="card ui-card card-status dashboard-hero" id="dashboard-status-offline" data-status="offline">
+					<div class="d-flex justify-content-center align-items-center gap-2">
+						<span class="material-icons text-body-secondary fs-5" aria-hidden="true">cancel</span>
+						<span class="fs-3 fw-bold text-body-secondary">–</span>
+					</div>
+					<div class="text-body-secondary small text-uppercase">Offline</div>
+				</div>
+			</div>
+		</div>
+		<div class="grid-stack-item" gs-id="status-disabled" gs-x="6" gs-y="0" gs-w="3" gs-h="2" gs-min-w="1" gs-min-h="2" data-widget-id="status-disabled">
+			<div class="grid-stack-item-content">
+				<button type="button" class="dashboard-widget-header" hidden
+					aria-label="Move or resize widget: Disabled. Arrow keys move it, Shift with arrow keys resizes it.">
+					<span class="material-icons" aria-hidden="true">drag_indicator</span>
+				</button>
+				<div class="card ui-card card-status dashboard-hero" id="dashboard-status-disabled" data-status="disabled">
+					<div class="d-flex justify-content-center align-items-center gap-2">
+						<span class="material-icons text-body-secondary fs-5" aria-hidden="true">pause_circle</span>
+						<span class="fs-3 fw-bold text-body-secondary">–</span>
+					</div>
+					<div class="text-body-secondary small text-uppercase">Disabled</div>
+				</div>
+			</div>
+		</div>
+		<div class="grid-stack-item" gs-id="status-total" gs-x="9" gs-y="0" gs-w="3" gs-h="2" gs-min-w="1" gs-min-h="2" data-widget-id="status-total">
+			<div class="grid-stack-item-content">
+				<button type="button" class="dashboard-widget-header" hidden
+					aria-label="Move or resize widget: Total. Arrow keys move it, Shift with arrow keys resizes it.">
+					<span class="material-icons" aria-hidden="true">drag_indicator</span>
+				</button>
+				<div class="card ui-card card-status dashboard-hero" id="dashboard-status-total" data-status="total">
+					<div class="d-flex justify-content-center align-items-center gap-2">
+						<span class="material-icons text-body-secondary fs-5" aria-hidden="true">gps_fixed</span>
+						<span class="fs-3 fw-bold text-body-secondary">–</span>
+					</div>
+					<div class="text-body-secondary small text-uppercase">Total</div>
+				</div>
+			</div>
+		</div>
+
+		<!-- quality -->
+		<div class="grid-stack-item" gs-id="quality" gs-x="0" gs-y="2" gs-w="3" gs-h="4" gs-min-w="2" gs-min-h="2" data-widget-id="quality">
+			<div class="grid-stack-item-content">
+				<button type="button" class="dashboard-widget-header" hidden aria-label="Move or resize widget: Monitor quality. Arrow keys move it, Shift with arrow keys resizes it.">
+					<span class="material-icons" aria-hidden="true">drag_indicator</span>
+				</button>
+							{% include "fragments/quality_widget.html" %}
+			</div>
+		</div>
+
+		<!-- downtime -->
+		<div class="grid-stack-item" gs-id="downtime" gs-x="3" gs-y="2" gs-w="6" gs-h="4" gs-min-w="3" gs-min-h="3" data-widget-id="downtime">
+			<div class="grid-stack-item-content">
+				<button type="button" class="dashboard-widget-header" hidden aria-label="Move or resize widget: Downtime overview. Arrow keys move it, Shift with arrow keys resizes it.">
+					<span class="material-icons" aria-hidden="true">drag_indicator</span>
+				</button>
+					<div class="card shadow-sm h-100">
+						<div class="card-header d-flex justify-content-between align-items-center">
+							<span><span class="material-icons me-1" aria-hidden="true">warning</span> Downtime Overview (24h)</span>
+							<span class="badge bg-danger d-none" id="downtime-count-badge"></span>
+						</div>
+						<div class="card-body p-0" id="downtime-content">
+							<!-- Downtime Table -->
+							<div id="downtime-table-container" class="d-none" tabindex="0" role="region" aria-label="Downtime overview table"
+								style="max-height: 220px; overflow-y: auto; overflow-x: auto;">
+								<table class="table table-sm table-hover align-middle mb-0 table-clickable">
+									<thead class="table-light sticky-top">
+										<tr>
+											<th scope="col">Target</th>
+											<th scope="col" class="text-end">HTTP</th>
+											<th scope="col" class="text-end">Ping</th>
+											<th scope="col" class="text-end">TCP</th>
+										</tr>
+									</thead>
+									<tbody id="downtime-table-body">
+									</tbody>
+								</table>
+							</div>
+							<!-- Empty State: All systems operational -->
+							<div id="downtime-success" class="text-center text-success py-5 d-none">
+								<span class="material-icons fs-1 d-block mb-2" aria-hidden="true">check_circle</span>
+								<p class="mb-0">All systems operational</p>
+								<small class="text-body-secondary">No downtime in the last 24 hours.</small>
+							</div>
+							<!-- Empty State: No metrics -->
+							<div id="downtime-empty" class="text-center text-body-secondary py-5 d-none">
+								<span class="material-icons fs-1 d-block mb-2" aria-hidden="true">trending_down</span>
+								<p class="mb-0">No metrics available yet.</p>
+								<small>Data will appear once monitoring starts collecting metrics.</small>
+							</div>
+							<!-- Error State: request failed -->
+							<div id="downtime-error" class="text-center text-danger py-5 d-none" role="alert">
+								<span class="material-icons fs-1 d-block mb-2" aria-hidden="true">error_outline</span>
+								<p class="mb-0">Downtime data could not be loaded.</p>
+								<small class="text-body-secondary">The next refresh retries automatically.</small>
+							</div>
+							<!-- Loading State -->
+							<div id="downtime-loading" class="text-center text-body-secondary py-5">
+								<div class="spinner-border spinner-border-sm text-body-secondary" role="status">
+									<span class="visually-hidden">Loading...</span>
+								</div>
+							</div>
+						</div>
+					</div>
+			</div>
+		</div>
+
+	</div>
+	<div class="d-none" id="status-summary-poller" hx-get="/ui/fragments/status-summary"
+		hx-trigger="load, justup-status-summary from:body throttle:5s, justup-live-sync from:body throttle:5s" hx-swap="none" aria-hidden="true"></div>
+</div>
+
+<div id="dashboard-widgets-modal" class="modal fade" tabindex="-1" aria-labelledby="dashboard-widgets-title" aria-hidden="true">
+	<div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
+		<div class="modal-content">
+			<div class="modal-header">
+				<h2 id="dashboard-widgets-title" class="modal-title h5">Edit widgets</h2>
+				<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+			</div>
+			<div class="modal-body">
+				<ul id="dashboard-widgets-list" class="list-group"></ul>
+			</div>
+			<div class="modal-footer">
+				<button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Close</button>
+			</div>
+		</div>
+	</div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/gridstack-all.min.js"></script>
+<script src="/static/js/dashboard.js"></script>
+<script src="/static/js/dashboard-widgets.js"></script>
+<script src="/static/js/dashboard-grid.js"></script>
+{% endblock %}

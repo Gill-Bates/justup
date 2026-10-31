@@ -1,0 +1,51 @@
+{# Settings: General Tab Content (display, alerting timeout, connection quality, network & geo) #}
+<div class="settings-general-layout">
+	<div class="settings-general-column">
+		<form id="general-settings-form" autocomplete="off">
+			<section class="card shadow-sm settings-card">
+				<div class="card-header">
+					<h2 class="h6 mb-0">Display</h2>
+				</div>
+				<div class="card-body settings-compact">
+					<div class="form-check form-switch">
+						<input type="checkbox" class="form-check-input" role="switch" name="use_utc_dashboard"
+							id="use_utc_dashboard" {% if settings.use_utc_dashboard %}checked{% endif %}>
+						<label class="form-check-label" for="use_utc_dashboard">Show dashboard times in UTC</label>
+					</div>
+					<div>
+						<label class="form-label" for="pdf_page_size">PDF Paper Size</label>
+						<select class="form-select" id="pdf_page_size" name="pdf_page_size">
+							<option value="a4" {% if settings.pdf_page_size=='a4' %}selected{% endif %}>A4 (210 x 297 mm)</option>
+							<option value="letter" {% if settings.pdf_page_size=='letter' %}selected{% endif %}>US Letter (216 x 279 mm)</option>
+						</select>
+					</div>
+				</div>
+			</section>
+
+			<section class="card shadow-sm settings-card">
+				<div class="card-header">
+					<h2 class="h6 mb-0">Alerting</h2>
+				</div>
+				<div class="card-body settings-compact">
+					<div>
+						<label for="metrics_timeout_minutes" class="form-label">
+							Down Alert Delay: <span class="badge badge-interval" id="metrics_timeout_value">{{ settings.metrics_timeout_minutes }} min</span>
+						</label>
+						{% set timeout_min = 1 %}
+						{% set timeout_max = 10 %}
+						<div class="range-wrapper" data-range-positions="10" data-active-index="{{ settings.metrics_timeout_minutes - timeout_min }}">
+							<input type="range" class="form-range" name="metrics_timeout_minutes" id="metrics_timeout_minutes"
+								min="{{ timeout_min }}" max="{{ timeout_max }}" step="1" value="{{ settings.metrics_timeout_minutes }}"
+								aria-describedby="metrics_timeout_hint">
+							<div class="range-ticks" aria-hidden="true">
+								{% for i in range(timeout_min, timeout_max + 1) %}<div class="tick"><span class="tick-label">{{ i }}</span><span class="tick-mark"></span></div>{% endfor %}
+							</div>
+						</div>
+						<div class="form-text" id="metrics_timeout_hint">Minutes a service must stay down before a DOWN alert fires.</div>
+					</div>
+				</div>
+			</section>
+		</form>
+	</div>
+
+</div>

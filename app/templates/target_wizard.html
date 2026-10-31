@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+{% block title %}New Target – justUp!{% endblock %}
+{% block topbar_title %}New Target{% endblock %}
+
+{% block shell_class %}ju-shell--fit{% endblock %}
+{% block styles %}
+<link href="/static/css/target-wizard.css" rel="stylesheet">
+{% endblock %}
+
+{% block content %}
+<div class="ui-page target-wizard-page">
+  <nav aria-label="breadcrumb"><ol class="breadcrumb">
+    <li class="breadcrumb-item"><a href="/ui/targets">Targets</a></li>
+    <li class="breadcrumb-item active" aria-current="page">New Target</li>
+  </ol></nav>
+  <div class="ui-page-heading">
+    <p class="ui-page-eyebrow">New monitor</p>
+    <h1>New Monitoring Target</h1>
+    <p class="ui-page-lead">Choose what matters. We will suggest the right checks, and you can review everything before monitoring starts.</p>
+  </div>
+  <div class="card ui-card target-wizard-panel"><div class="card-body">
+    <ol class="wizard-progress" aria-label="Wizard progress" id="wizard-progress">
+      <li class="wizard-step-marker is-current" aria-current="step"><span class="wizard-progress-index">1</span><span class="wizard-progress-label">Type</span></li>
+      <li class="wizard-step-marker"><span class="wizard-progress-index">2</span><span class="wizard-progress-label">Address</span></li>
+      <li class="wizard-step-marker"><span class="wizard-progress-index">3</span><span class="wizard-progress-label">Checks</span></li>
+      <li class="wizard-step-marker"><span class="wizard-progress-index">4</span><span class="wizard-progress-label">Review</span></li>
+    </ol>
+    <div id="wizard-error" class="alert alert-danger d-none" role="alert" tabindex="-1"></div>
+    <form id="target-wizard-form" novalidate>
+      <section class="target-wizard-step" data-step="0" aria-labelledby="step-type-title">
+        <div class="wizard-step-intro">
+          <h2 id="step-type-title" tabindex="-1">What would you like to monitor?</h2>
+          <p>Start with a purpose. The next steps will tailor the checks to your target.</p>
+        </div>
+        <div class="target-type-grid">
+          {% for kind, title, description, icon in [
+            ('website', 'Website', 'Availability, response time and TLS certificate expiry.', 'language'),
+            ('api', 'API / health endpoint', 'A specific HTTP endpoint and its expected status.', 'api'),
+            ('server', 'Server / host', 'Reachability through ICMP ping.', 'dns'),
+            ('tcp', 'TCP service', 'Connectivity to ports that you choose.', 'settings_ethernet'),
+            ('custom', 'Custom', 'Combine checks and fine-tune every setting.', 'tune')
+          ] %}
+          <label class="target-type-card {{ 'target-type-card--custom' if kind == 'custom' else '' }}">
+            <input class="target-type-radio" type="radio" name="profile" value="{{ kind }}" {% if kind == 'website' %}checked{% endif %}>
+            <span class="target-type-icon material-icons" aria-hidden="true">{{ icon }}</span>
+            <span class="target-type-copy"><strong>{{ title }}</strong><span>{{ description }}</span></span>
+            <span class="target-type-selected material-icons" aria-hidden="true">check_circle</span>
+          </label>
+          {% endfor %}
+        </div>
+      </section>
+
+      <section class="target-wizard-step" data-step="1" aria-labelledby="step-address-title" hidden>
+        <div class="wizard-step-intro"><h2 id="step-address-title" tabindex="-1">Where is the target?</h2><p>Enter the address you want us to check. You can add a familiar name and group.</p></div>
+        <div class="row g-3">
+          <div class="col-12 col-lg-7">
+            <label for="wizard-address" class="form-label" id="wizard-address-label">Full URL or domain *</label>
+            <input id="wizard-address" name="address" class="form-control" type="text" required maxlength="2048" autocomplete="url" aria-describedby="wizard-address-help wizard-address-error">
+            <div id="wizard-address-help" class="form-text">A domain without a scheme suggests HTTPS. Enter http:// explicitly to keep HTTP.</div>
+            <div id="wizard-address-error" class="invalid-feedback" role="alert"></div>
+          </div>
+          <div class="col-12 col-lg-5 wizard-kind" data-kinds="tcp custom" hidden>
+            <label for="wizard-ports" class="form-label">TCP ports <span class="wizard-kind" data-kinds="tcp" hidden>*</span></label>
+            <input id="wizard-ports" name="tcp_ports" class="form-control" type="text" maxlength="200" placeholder="e.g. 22,443" aria-describedby="wizard-ports-help wizard-ports-error">
+            <div id="wizard-ports-help" class="form-text">Choose ports explicitly; no port is assumed.</div>
+            <div id="wizard-ports-error" class="invalid-feedback" role="alert"></div>
+          </div>
+          <div class="col-12 col-lg-7"><label for="wizard-name" class="form-label">Name</label>
+            <input id="wizard-name" name="name" class="form-control" type="text" maxlength="200" autocomplete="off" placeholder="Suggested from address">
+          </div>
+          <div class="col-12 col-lg-5"><label for="wizard-group" class="form-label">Group</label>
+            <select id="wizard-group" name="group" class="form-select"><option value="">Ungrouped</option>
+              {% for group in groups %}<option value="{{ group.name }}">{{ group.name }}</option>{% endfor %}
+            </select>
+          </div>
+        </div>
+      </section>
+
+      <section class="target-wizard-step" data-step="2" aria-labelledby="step-checks-title" hidden>
+        <div class="wizard-step-intro"><h2 id="step-checks-title" tabindex="-1">Monitoring checks</h2><p>These are suggested starting values. Adjust them now or later in the full editor.</p></div>
+        <div class="wizard-check-grid">
+          <div class="wizard-check-option"><div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="wizard-http" name="enable_http_check"><label class="form-check-label" for="wizard-http">HTTP check</label></div></div>
+          <div class="wizard-check-option"><div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="wizard-ping" name="enable_ping"><label class="form-check-label" for="wizard-ping">ICMP ping</label></div></div>
+          <div class="wizard-check-option"><div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="wizard-tcp" name="enable_tcp_connect"><label class="form-check-label" for="wizard-tcp">TCP connection</label></div></div>
+          <div class="wizard-check-option"><div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="wizard-cert" name="enable_cert_expiration"><label class="form-check-label" for="wizard-cert">Monitor certificate expiry</label></div></div>
+        </div>
+        <details class="wizard-advanced" id="wizard-advanced"><summary><span class="material-icons" aria-hidden="true">tune</span>Advanced settings</summary>
+          <div class="row g-3 mt-1">
+            <div class="col-12 col-md-6" id="wizard-extra-ports-wrap" hidden><label for="wizard-extra-ports" class="form-label">TCP ports *</label><input id="wizard-extra-ports" class="form-control" type="text" maxlength="200" placeholder="e.g. 22,443"><div class="form-text">Choose every TCP port explicitly.</div></div>
+            <div class="col-12 col-md-6"><label for="wizard-http-url" class="form-label">Full HTTP URL</label><input id="wizard-http-url" name="http_url" class="form-control" type="url" maxlength="2048"></div>
+            <div class="col-12 col-md-3"><label for="wizard-method" class="form-label">HTTP method</label><select id="wizard-method" name="http_method" class="form-select"><option value="GET">GET</option><option value="HEAD">HEAD</option></select></div>
+            <div class="col-12 col-md-3"><label for="wizard-codes" class="form-label">Success codes</label><input id="wizard-codes" name="http_success_codes" class="form-control" type="text" maxlength="200" placeholder="200-399"></div>
+            <div class="col-12 col-md-4"><label for="wizard-interval" class="form-label">Interval (seconds)</label><input id="wizard-interval" name="interval_seconds" class="form-control" type="number" min="{{ limits.interval_seconds.min }}" max="{{ limits.interval_seconds.max }}" required></div>
+            <div class="col-12 col-md-4"><label for="wizard-retries" class="form-label">Retries</label><input id="wizard-retries" name="max_retries" class="form-control" type="number" min="{{ limits.max_retries.min }}" max="{{ limits.max_retries.max }}" required></div>
+            <div class="col-12 col-md-4"><label for="wizard-retention" class="form-label">Retention (days)</label><input id="wizard-retention" name="retention_days" class="form-control" type="number" min="{{ limits.retention_days.min }}" max="{{ limits.retention_days.max }}" required></div>
+            <div class="col-12 col-md-6"><div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="wizard-auto-close" name="auto_close_alert"><label class="form-check-label" for="wizard-auto-close">Close alerts automatically after recovery</label></div></div>
+            <div class="col-12 col-md-6"><div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="wizard-ignore-cert" name="ignore_cert_errors"><label class="form-check-label" for="wizard-ignore-cert">Ignore TLS certificate errors</label></div><div class="form-text">Disables certificate validation for the HTTP request.</div></div>
+          </div>
+        </details>
+        <fieldset class="wizard-recipients"><legend class="h5">Alert recipients</legend><div id="wizard-recipients" class="row g-2" aria-live="polite">Loading recipients…</div></fieldset>
+      </section>
+
+      <section class="target-wizard-step" data-step="3" aria-labelledby="step-review-title" hidden>
+        <div class="wizard-step-intro"><h2 id="step-review-title" tabindex="-1">Review and start monitoring</h2><p>Check the details below. Nothing is saved until you start monitoring.</p></div>
+        <div id="wizard-summary" class="wizard-summary" aria-live="polite"></div>
+        <div id="wizard-conflicts" class="mt-3" aria-live="polite"></div>
+      </section>
+
+      <div class="wizard-actions">
+        <button type="button" id="wizard-back" class="btn btn-outline-secondary" hidden>Back</button>
+        <a href="/ui/targets" id="wizard-cancel" class="btn btn-outline-secondary">Cancel</a>
+        <button type="button" id="wizard-next" class="btn btn-primary ms-auto">Continue</button>
+        <button type="submit" id="wizard-save" class="btn btn-primary ms-auto" hidden>Start monitoring</button>
+      </div>
+    </form>
+  </div></div>
+</div>
+{% endblock %}
+
+{% block scripts %}<script src="/static/js/target-wizard.js" defer></script>{% endblock %}

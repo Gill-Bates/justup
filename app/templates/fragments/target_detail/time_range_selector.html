@@ -1,0 +1,38 @@
+{# Left toolbar group: time range and zoom. JS hooks (ids) stay unchanged. #}
+<div class="target-toolbar-group target-toolbar-group--range" role="group" aria-label="Time range">
+	<div class="target-toolbar-field">
+		<label for="quick-range" class="target-toolbar-label">Range</label>
+		<select class="form-select" id="quick-range">
+			<option value="">Custom</option>
+			<option value="1h">Last 1 Hour</option>
+			<option value="6h">Last 6 Hours</option>
+			<option value="24h" selected>Last 24 Hours</option>
+			<option value="today">Today</option>
+			<option value="7d">Last 7 Days</option>
+			<option value="month">This Month</option>
+			<option value="quarter">Last Quarter</option>
+			<option value="year">This Year</option>
+		</select>
+	</div>
+	<details class="target-custom-range" id="target-custom-range">
+		<summary class="btn btn-outline-secondary" aria-label="Choose custom date range">
+			<i class="material-icons" aria-hidden="true">event</i> Dates
+		</summary>
+		<div class="target-custom-range-fields">
+			<div>
+				<label for="range-from" class="form-label mb-1">From</label>
+				<input type="datetime-local" class="form-control" id="range-from">
+			</div>
+			<div>
+				<label for="range-to" class="form-label mb-1">To</label>
+				<input type="datetime-local" class="form-control" id="range-to">
+			</div>
+			<button type="button" class="btn btn-primary" id="load-range-btn">
+				<i class="material-icons" aria-hidden="true">refresh</i> Load
+			</button>
+		</div>
+	</details>
+	<button type="button" class="btn btn-outline-secondary" id="reset-zoom-btn" title="Reset chart zoom" aria-label="Reset chart zoom">
+		<i class="material-icons" aria-hidden="true">zoom_out</i> <span class="target-action-label">Reset zoom</span>
+	</button>
+</div>

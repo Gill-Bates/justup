@@ -1,0 +1,176 @@
+{% extends "base.html" %}
+{% block title %}Groups – justUp!{% endblock %}
+{% block content %}
+
+<div class="ui-page">
+	<div class="ui-page-header">
+		<div class="ui-page-heading">
+			<p class="ui-page-eyebrow">Organization</p>
+			<h1>Groups</h1>
+			<p class="ui-page-lead">Keep related targets together and find them quickly.</p>
+		</div>
+		{% if user and user.is_admin %}
+		<button type="button" class="btn btn-primary btn-page-primary" id="newGroupButton" data-bs-toggle="modal" data-bs-target="#groupModal">
+			<span class="material-icons me-2" aria-hidden="true">add_circle</span>New Group
+		</button>
+		{% endif %}
+	</div>
+
+	<div class="card ui-card{% if groups %} groups-list-card{% endif %}">
+		{% if groups %}
+		<div class="table-responsive-md">
+			<table class="table table-hover align-middle rtable mb-0{% if user and user.is_admin %} groups-table-admin{% endif %}" id="groups-table">
+				<thead>
+					<tr>
+						<th scope="col">Name</th>
+						<th scope="col">Description</th>
+						<th scope="col">Targets</th>
+						{% if user and user.is_admin %}<th scope="col" class="ui-col-actions"><span class="visually-hidden">Actions</span></th>{% endif %}
+					</tr>
+				</thead>
+				<tbody>
+					{% for group in groups %}
+					<tr data-group-id="{{ group.id }}" data-group-name="{{ group.name }}" data-group-description="{{ group.description or '' }}">
+						<td data-label="Name">{{ group.name }}</td>
+						<td data-label="Description" class="truncate">{{ group.description or '–' }}</td>
+						<td data-label="Targets">
+							<span class="badge badge-muted">{{ group.target_count }}</span>
+						</td>
+						{% if user and user.is_admin %}
+						<td data-label="" class="actions-cell">
+							<div class="action-buttons">
+								<button type="button" class="btn btn-sm btn-icon btn-outline-secondary js-edit-group" data-bs-toggle="modal"
+									data-bs-target="#groupModal" title="Edit" aria-label="Edit group">
+									<span class="material-icons" aria-hidden="true">edit</span>
+								</button>
+								<button type="button" class="btn btn-sm btn-icon btn-outline-danger js-delete-group"
+									title="{% if group.target_count > 0 %}Group has targets{% else %}Delete{% endif %}" aria-label="Delete group"
+									{% if group.target_count> 0 %}disabled{% endif %}>
+									<span class="material-icons" aria-hidden="true">delete</span>
+								</button>
+							</div>
+						</td>
+						{% endif %}
+					</tr>
+					{% endfor %}
+				</tbody>
+			</table>
+		</div>
+		{% else %}
+		<div class="ui-empty text-center text-body-secondary">
+			<span class="material-icons fs-1 mb-2" aria-hidden="true">folder</span>
+			<p class="mb-0">No groups yet.</p>
+		</div>
+		{% endif %}
+	</div>
+
+	<!-- Group Modal -->
+	<div class="modal fade" id="groupModal" tabindex="-1" aria-labelledby="groupModalTitle" aria-hidden="true">
+		<div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
+			<div class="modal-content">
+				<div class="modal-header">
+					<h5 class="modal-title" id="groupModalTitle">New Group</h5>
+					<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+				</div>
+				<div class="modal-body">
+					<form id="groupForm">
+						<input type="hidden" id="groupId" value="">
+						<div class="mb-3">
+							<label for="groupName" class="form-label">Name *</label>
+							<input type="text" class="form-control" id="groupName" required maxlength="100">
+						</div>
+						<div class="mb-3">
+							<label for="groupDescription" class="form-label">Description</label>
+							<textarea class="form-control" id="groupDescription" rows="3" maxlength="500"></textarea>
+						</div>
+					</form>
+				</div>
+				<div class="modal-footer">
+					<button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+					<button type="submit" class="btn btn-primary" id="saveGroupButton" form="groupForm">Save</button>
+				</div>
+			</div>
+		</div>
+	</div>
+
+	<script>
+		document.getElementById('newGroupButton')?.addEventListener('click', () => openGroupModal());
+		document.getElementById('groupForm')?.addEventListener('submit', (event) => {
+			event.preventDefault();
+			saveGroup();
+		});
+		document.getElementById('groups-table')?.addEventListener('click', (event) => {
+			const row = event.target.closest('tr[data-group-id]');
+			if (!row) return;
+			if (event.target.closest('.js-edit-group')) {
+				openGroupModal(row.dataset.groupId, row.dataset.groupName, row.dataset.groupDescription);
+			} else if (event.target.closest('.js-delete-group')) {
+				const name = row.dataset.groupName;
+				if (window.confirm(`Delete group '${name}'?`)) deleteGroup(row.dataset.groupId);
+			}
+		});
+
+		function openGroupModal(id = null, name = '', description = '') {
+			document.getElementById('groupId').value = id || '';
+			document.getElementById('groupName').value = name;
+			document.getElementById('groupDescription').value = description;
+			document.getElementById('groupModalTitle').textContent = id ? 'Edit Group' : 'New Group';
+		}
+
+		async function saveGroup() {
+			const saveButton = document.getElementById('saveGroupButton');
+			if (saveButton?.disabled) return;
+			const id = document.getElementById('groupId').value;
+			const name = document.getElementById('groupName').value.trim();
+			const description = document.getElementById('groupDescription').value.trim();
+
+			if (!name) {
+				window.justUpToast?.error?.('Name is required');
+				return;
+			}
+
+			const method = id ? 'PATCH' : 'POST';
+			const url = id ? `/groups/${id}` : '/groups';
+
+			if (saveButton) saveButton.disabled = true;
+			try {
+				const res = await apiFetch(url, {
+					method: method,
+					headers: {
+						'Content-Type': 'application/json'
+					},
+					body: JSON.stringify({ name, description: description || null })
+				});
+
+				if (!res.ok) {
+					const err = await res.json();
+					window.justUpToast?.error?.(err.detail || 'Failed to save group');
+					return;
+				}
+
+				location.reload();
+			} catch (e) {
+				window.justUpToast?.error?.('Error saving group: ' + e.message);
+			} finally {
+				if (saveButton) saveButton.disabled = false;
+			}
+		}
+
+		async function deleteGroup(id) {
+			try {
+				const res = await apiFetch(`/groups/${id}`, {
+					method: 'DELETE',
+				});
+				if (!res.ok) {
+					const err = await res.json();
+					window.justUpToast?.error?.(err.detail || 'Failed to delete group');
+					return;
+				}
+				location.reload();
+			} catch (e) {
+				window.justUpToast?.error?.('Error deleting group: ' + e.message);
+			}
+		}
+	</script>
+</div>
+{% endblock %}

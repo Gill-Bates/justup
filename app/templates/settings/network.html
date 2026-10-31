@@ -1,0 +1,78 @@
+{# Settings: Network Tab Content #}
+<div class="settings-stack">
+	<form class="settings-network-form" id="advanced-settings-form" data-settings-autosave autocomplete="off">
+			<details class="card shadow-sm settings-card settings-details">
+				<summary class="card-header"><h2 class="h6 mb-0">Connection Quality</h2></summary>
+				<div class="card-body settings-compact">
+					<div>
+						<label for="quality_targets_entry" class="form-label">Probe Targets</label>
+						<div class="tag-input" data-tag-input data-tag-input-defaults="{{ quality_default_targets | tojson | forceescape }}" data-tag-input-min="{{ quality_min_targets }}" data-tag-input-pattern="{{ quality_target_pattern }}" data-tag-input-max-length="{{ quality_target_max_length }}" data-tag-input-max-total="2000">
+							<div class="tag-input__field form-control" data-tag-input-field>
+								{% set initial_quality_targets = settings.quality_targets.split(',') if settings.quality_targets else quality_default_targets %}
+								<ul class="tag-input__list" data-tag-input-list aria-label="Quality probe targets">
+									{% for target in initial_quality_targets %}
+									<li class="tag-input__item"><span class="tag-input__text">{{ target | trim }}</span></li>
+									{% endfor %}
+								</ul>
+								<input type="text" class="tag-input__entry" id="quality_targets_entry" data-tag-input-entry autocomplete="off" autocapitalize="off" spellcheck="false" inputmode="url" enterkeyhint="done" placeholder="Add host or URL" aria-describedby="quality_targets_hint quality_targets_error">
+							</div>
+							<input type="hidden" name="quality_targets" id="quality_targets" value="{{ settings.quality_targets }}" data-tag-input-value>
+							<div class="tag-input__error" id="quality_targets_error" data-tag-input-error hidden></div>
+							<div class="visually-hidden" role="status" aria-live="polite" data-tag-input-status></div>
+							<button type="button" class="btn btn-link btn-sm tag-input__reset px-0" data-tag-input-reset>Reset to defaults</button>
+						</div>
+						<div class="form-text" id="quality_targets_hint">At least {{ quality_min_targets }} targets; separate with comma, Tab or Enter.</div>
+					</div>
+					<div class="settings-field-row">
+						<div>
+							<label for="quality_min_score" class="form-label">Minimum Score (0&ndash;100)</label>
+							<input type="number" class="form-control" name="quality_min_score" id="quality_min_score" min="0" max="100" step="1" value="{{ settings.quality_min_score }}" inputmode="numeric" placeholder="e.g. 60">
+						</div>
+						<div>
+							<label for="quality_rtt_threshold_ms" class="form-label">RTT Threshold (ms)</label>
+							<input type="number" class="form-control" name="quality_rtt_threshold_ms" id="quality_rtt_threshold_ms" min="1" max="10000" step="1" value="{{ settings.quality_rtt_threshold_ms }}" inputmode="numeric" placeholder="e.g. 250">
+						</div>
+					</div>
+				</div>
+			</details>
+
+			<details class="card shadow-sm settings-card settings-details" open>
+				<summary class="card-header"><h2 class="h6 mb-0">Provider Lookup</h2></summary>
+				<div class="card-body settings-compact">
+					<div class="form-check form-switch">
+						<input type="checkbox" class="form-check-input" role="switch" name="provider_lookup_enabled" id="provider_lookup_enabled" {% if settings.provider_lookup_enabled %}checked{% endif %}>
+						<label class="form-check-label" for="provider_lookup_enabled">Provider Lookup</label>
+					</div>
+					<div class="form-text">Looks up public target IPs over HTTPS. With an ip-api Pro key, ipwho.is is the fallback.</div>
+					<div>
+						<label for="provider_lookup_cache_ttl_seconds" class="form-label">Lookup Cache TTL (seconds)</label>
+						<input type="number" class="form-control" name="provider_lookup_cache_ttl_seconds" id="provider_lookup_cache_ttl_seconds" min="60" max="86400" step="1" value="{{ settings.provider_lookup_cache_ttl_seconds }}" inputmode="numeric" placeholder="60&ndash;86400" data-humanized-output="provider_lookup_cache_ttl_humanized" aria-describedby="provider_lookup_cache_ttl_humanized">
+						<div class="form-text">= <output id="provider_lookup_cache_ttl_humanized" aria-live="polite"></output></div>
+					</div>
+					<div>
+						<label for="ip_api_key" class="form-label">ip-api Pro Key {% if settings.ip_api_key_set %}<span class="badge text-bg-success">stored</span>{% endif %}</label>
+						<input type="password" class="form-control" name="ip_api_key" id="ip_api_key" autocomplete="new-password" placeholder="{{ 'Stored — enter a new key to replace' if settings.ip_api_key_set else 'Optional API key' }}">
+						{% if settings.ip_api_key_set %}<button type="button" class="btn btn-outline-secondary btn-sm mt-2" id="clear-ip-api-key">Remove stored key</button>{% endif %}
+					</div>
+				</div>
+			</details>
+
+			<details class="card shadow-sm settings-card settings-details" open>
+				<summary class="card-header"><h2 class="h6 mb-0">Geolocation</h2></summary>
+				<div class="card-body settings-compact">
+					<div>
+						<div class="form-check form-switch">
+							<input type="checkbox" class="form-check-input" role="switch" name="online_geo_enabled" id="online_geo_enabled" {% if settings.online_geo_enabled %}checked{% endif %} aria-describedby="online_geo_enabled_hint">
+							<label class="form-check-label" for="online_geo_enabled">Online Geo Lookup</label>
+						</div>
+						<div class="form-text text-warning-emphasis" id="online_geo_enabled_hint">Sends public hop IP addresses to an external geolocation provider over HTTPS.</div>
+					</div>
+					<hr class="my-1">
+					<div class="form-check form-switch">
+						<input type="checkbox" class="form-check-input" role="switch" name="geoip_auto_update" id="geoip_auto_update" {% if settings.geoip_auto_update %}checked{% endif %}>
+						<label class="form-check-label" for="geoip_auto_update">GeoLite DB auto-update on start</label>
+					</div>
+				</div>
+			</details>
+		</form>
+</div>

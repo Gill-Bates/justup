@@ -1,0 +1,95 @@
+<div class="target-detail-heading-top">
+{# Desktop: full breadcrumb. Below 576 px it is hidden and the compact back link takes over. #}
+<nav class="target-detail-breadcrumb" aria-label="breadcrumb">
+	<ol class="breadcrumb">
+		<li class="breadcrumb-item"><a href="/">Dashboard</a></li>
+		<li class="breadcrumb-item"><a href="/ui/targets">Targets</a></li>
+		{% if target.group %}<li class="breadcrumb-item">{{ target.group }}</li>{% endif %}
+		<li class="breadcrumb-item active text-break" aria-current="page">{{ target.name }}</li>
+	</ol>
+</nav>
+<nav class="target-detail-back" aria-label="Back navigation">
+	<a href="/ui/targets" class="target-detail-back-link" aria-label="Back to Targets">
+		<i class="material-icons" aria-hidden="true">arrow_back</i><span>Targets</span>
+	</a>
+	{% if target.group %}<span class="target-detail-back-group text-break">{{ target.group }}</span>{% endif %}
+</nav>
+
+	<div class="ui-page-header target-detail-titlebar">
+		<div class="target-detail-identity">
+			<div class="ui-page-heading">
+				<p class="ui-page-eyebrow target-detail-eyebrow">Monitor</p>
+				<div class="target-detail-title-row">
+					<h1 class="target-detail-title text-break">{{ target.name }}</h1>
+					<span id="target-status" class="target-detail-status"
+						hx-get="/ui/fragments/target-status/{{ target.id }}?labelled=1" hx-trigger="load, justup-target-{{ target.id }} from:body throttle:1s, justup-live-sync from:body throttle:1s" hx-swap="innerHTML">
+						<span class="target-status-pill target-status-pill--unknown">
+							<i class="material-icons" aria-hidden="true">help</i><span>Unknown</span>
+						</span>
+					</span>
+				</div>
+				<p class="ui-page-lead target-detail-lead">Status, history and network path for this target.</p>
+			</div>
+		</div>
+
+		<div class="target-detail-actions" role="group" aria-label="Target actions">
+			<p class="target-run-again-status" id="traceroute-refresh-status" role="status" aria-live="polite" hidden></p>
+			<button type="button" class="btn btn-outline-primary target-run-again" id="traceroute-run-again" hidden
+				aria-controls="traceroute-container" title="Run a new network measurement" aria-label="Run network diagnostics again">
+				<i class="material-icons" id="traceroute-run-again-icon" aria-hidden="true">refresh</i>
+				<span class="spinner-border spinner-border-sm d-none" id="traceroute-run-again-spinner" aria-hidden="true"></span>
+				<span class="target-run-again-label">Run again</span>
+			</button>
+			{% if user and user.is_admin %}
+			<a href="/ui/targets/{{ target.id }}/edit" class="btn btn-outline-secondary btn-icon" title="Edit target" aria-label="Edit target">
+				<i class="material-icons" aria-hidden="true">edit</i>
+			</a>
+			{% endif %}
+			<button type="button" class="btn btn-outline-secondary btn-icon" id="export-pdf-btn" title="Export PDF report" aria-label="Export PDF report">
+				<i class="material-icons" id="pdf-icon" aria-hidden="true">picture_as_pdf</i>
+				<span class="spinner-border spinner-border-sm d-none" id="pdf-spinner"></span>
+			</button>
+			{% if user and user.is_admin %}
+			<button type="button" class="btn btn-outline-info btn-icon" id="test-alert-btn"
+				{% if not has_recipients %}disabled{% endif %}
+				title="{% if has_recipients %}Send test alert to all configured recipients{% else %}No recipients configured - add recipients in target settings{% endif %}" aria-label="{% if has_recipients %}Send test alert to all configured recipients{% else %}No recipients configured - add recipients in target settings{% endif %}">
+				<i class="material-icons" id="test-alert-icon" aria-hidden="true">notifications_active</i>
+				<span class="spinner-border spinner-border-sm d-none" id="test-alert-spinner"></span>
+			</button>
+			<span class="target-detail-actions-sep" aria-hidden="true"></span>
+			{# One element set: a "More" dropdown below 576 px, the inline icon buttons from 576 px up. #}
+			<div class="dropdown target-detail-more">
+				<button type="button" class="btn btn-outline-secondary btn-icon target-detail-more-toggle" id="target-more-toggle"
+					data-bs-toggle="dropdown" aria-expanded="false" title="More actions" aria-label="More actions">
+					<i class="material-icons" aria-hidden="true">more_vert</i>
+				</button>
+				<ul class="dropdown-menu dropdown-menu-end target-detail-more-menu" aria-labelledby="target-more-toggle">
+					<li>
+						<button type="button" class="dropdown-item target-detail-more-item target-detail-more-item--warning" hx-post="/targets/{{ target.id }}/reset"
+							hx-confirm="Reset all metrics for {{ target.name }}?"
+							hx-swap="none"
+							data-success-toast="Metrics reset"
+							data-success-reload="1"
+							title="Reset metrics" aria-label="Reset metrics">
+							<i class="material-icons" aria-hidden="true">recycling</i>
+							<span class="target-detail-more-label">Reset metrics</span>
+						</button>
+					</li>
+					<li><hr class="dropdown-divider"></li>
+					<li>
+						<button type="button" class="dropdown-item target-detail-more-item target-detail-more-item--danger" hx-delete="/targets/{{ target.id }}"
+							hx-confirm="Really delete this target? All metrics will be removed." hx-swap="none"
+							data-success-toast="Target deleted"
+							data-success-redirect="/ui/targets"
+							data-success-delay="500"
+							title="Delete target" aria-label="Delete target">
+							<i class="material-icons" aria-hidden="true">delete</i>
+							<span class="target-detail-more-label">Delete target</span>
+						</button>
+					</li>
+				</ul>
+			</div>
+			{% endif %}
+		</div>
+	</div>
+</div>

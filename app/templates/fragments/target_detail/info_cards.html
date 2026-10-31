@@ -1,0 +1,140 @@
+{# KPI summary: health signals first, check configuration second. #}
+<section class="target-kpi-row" aria-label="Target summary">
+
+	<div class="target-kpi-group target-kpi-group--health">
+
+		{# Uptime #}
+		<div class="card target-kpi-card target-kpi-card--wide" id="uptime-card">
+			<div class="card-body">
+				<div class="target-kpi-pair">
+					<div>
+						<p class="target-kpi-label">Uptime 24h</p>
+						<p id="uptime-percent" class="target-kpi-value
+{% if target.uptime_percent is not none %}
+{% if target.uptime_percent >= 99 %}text-success
+{% elif target.uptime_percent >= 95 %}text-warning
+{% else %}text-danger{% endif %}
+{% else %}text-body-secondary{% endif %}">{{ target.uptime_percent_display }}</p>
+					</div>
+					<div>
+						<p class="target-kpi-label">Uptime 30d</p>
+						<p id="uptime-percent-30d" class="target-kpi-value
+{% if target.uptime_percent_30d is defined and target.uptime_percent_30d is not none %}
+{% if target.uptime_percent_30d >= 99 %}text-success
+{% elif target.uptime_percent_30d >= 95 %}text-warning
+{% else %}text-danger{% endif %}
+{% else %}text-body-secondary{% endif %}">{{ target.uptime_percent_30d_display|default('–') }}</p>
+					</div>
+				</div>
+			</div>
+		</div>
+
+		{# Checks #}
+		<div class="card target-kpi-card target-kpi-card--checks">
+			<div class="card-body">
+				<p class="target-kpi-label">Checks</p>
+				<div class="target-kpi-badges">
+					{% if target.enable_http_check %}
+					<span class="badge
+{% if target.http_status == 'up' %}bg-success
+{% elif target.http_status == 'down' %}bg-danger
+{% else %}bg-secondary{% endif %}">
+						HTTP<span class="visually-hidden">: {{ target.http_status or 'unknown' }}</span>
+					</span>
+					{% endif %}
+					{% if target.enable_ping %}
+					<span class="badge
+{% if target.ping_status == 'up' %}bg-success
+{% elif target.ping_status == 'down' %}bg-danger
+{% else %}bg-secondary{% endif %}">
+						PING<span class="visually-hidden">: {{ target.ping_status or 'unknown' }}</span>
+					</span>
+					{% endif %}
+					{% if target.enable_cert_expiration %}
+					<span class="badge
+{% if target.cert_status == 'ok' %}bg-success
+{% elif target.cert_status == 'warning' %}bg-warning text-dark
+{% elif target.cert_status in ('critical', 'expired') %}bg-danger
+{% else %}bg-secondary{% endif %}">
+						CERT<span class="visually-hidden">: {{ target.cert_status or 'unknown' }}</span>
+					</span>
+					{% endif %}
+					{% if target.enable_tcp_connect %}
+					{% set port_status = target.tcp_port_status or {} %}
+					{% set ports = (target.tcp_ports or '80').split(',') %}
+					{% if ports | length == 1 %}
+					{# Single port: show simple TCP badge #}
+					<span class="badge
+{% if target.tcp_status == 'up' %}bg-success
+{% elif target.tcp_status == 'down' %}bg-danger
+{% else %}bg-secondary{% endif %}">
+						TCP:{{ ports[0] }}<span class="visually-hidden">: {{ target.tcp_status or 'unknown' }}</span>
+					</span>
+					{% else %}
+					{# Multiple ports: show individual port badges with status colors #}
+					{% for port in ports %}
+					{% set ps = port_status.get(port | trim, 'unknown') %}
+					<span class="badge
+{% if ps == 'up' %}bg-success
+{% elif ps == 'down' %}bg-danger
+{% else %}bg-secondary{% endif %}">
+						TCP:{{ port | trim }}<span class="visually-hidden">: {{ ps }}</span>
+					</span>
+					{% endfor %}
+					{% endif %}
+					{% endif %}
+					{% if not (target.enable_http_check or target.enable_ping or target.enable_cert_expiration or target.enable_tcp_connect) %}
+					<span class="target-kpi-hint">No checks enabled</span>
+					{% endif %}
+				</div>
+			</div>
+		</div>
+
+		{# Cert Expiry #}
+		{% if target.enable_cert_expiration %}
+		<div class="card target-kpi-card" id="cert-days-card">
+			<div class="card-body">
+				<p class="target-kpi-label">Cert expiry</p>
+				<p id="cert-days-value" class="target-kpi-value
+{% if target.cert_status == 'ok' %}text-success
+{% elif target.cert_status == 'warning' %}text-warning
+{% elif target.cert_status in ('critical', 'expired') %}text-danger
+{% else %}text-body-secondary{% endif %}">--</p>
+				<p id="cert-days-hint" class="target-kpi-hint">No certificate data yet</p>
+			</div>
+		</div>
+		{% endif %}
+
+	</div>
+
+	<div class="target-kpi-group target-kpi-group--config">
+
+		{# Interval #}
+		<div class="card target-kpi-card target-kpi-card--config">
+			<div class="card-body">
+				<p class="target-kpi-label">Interval</p>
+				<p class="target-kpi-value">{{ target.interval_seconds }}s</p>
+			</div>
+		</div>
+
+		{# Retries #}
+		<div class="card target-kpi-card target-kpi-card--config">
+			<div class="card-body">
+				<p class="target-kpi-label">Retries</p>
+				<p class="target-kpi-value">{{ target.max_retries }}</p>
+			</div>
+		</div>
+
+		{# Retention #}
+		<div class="card target-kpi-card target-kpi-card--config">
+			<div class="card-body">
+				<p class="target-kpi-label">Retention</p>
+				<p class="target-kpi-value">{{ target.retention_days }}d</p>
+			</div>
+		</div>
+
+	</div>
+
+</section>
+
+{# SLA Thresholds are displayed as yellow lines in the charts #}

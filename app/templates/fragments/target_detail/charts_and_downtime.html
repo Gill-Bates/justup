@@ -1,0 +1,106 @@
+{# Hero panel: combined response time + HTTP status + downtime chart (primary performance view) #}
+{% if target.enable_http_check or target.enable_ping or target.enable_tcp_connect %}
+<div class="card target-panel target-combined-card" id="combined-card">
+	<div class="card-header target-panel-header">
+		<div class="target-panel-heading">
+			<span class="target-panel-title"><i class="material-icons" aria-hidden="true">show_chart</i> Response time &amp; status</span>
+			<span class="target-panel-sub">Latency, HTTP status codes and outages in the selected range. Drag to zoom, double-click to reset.</span>
+		</div>
+	</div>
+	<div class="card-body">
+		<div class="combined-layout{% if target.enable_http_check %} combined-layout--donut{% endif %}">
+			<div class="combined-main">
+				<div id="combined-legend" class="combined-legend" role="group" aria-label="Show or hide series"></div>
+				<div id="combined-plot" class="target-combined-plot">
+					<canvas id="chart-combined" role="img" aria-label="Response time and HTTP status over time. Loading data."></canvas>
+				</div>
+				<div id="combined-empty" class="combined-empty" role="status" hidden>
+					<i class="material-icons" aria-hidden="true">query_stats</i>
+					<span data-role="message"></span>
+				</div>
+				<div class="combined-footer">
+					<div id="combined-status-key" class="combined-status-key" aria-label="Status code markers"></div>
+				<details id="combined-data-details" class="combined-data">
+					<summary>Data summary as table</summary>
+					<div class="table-responsive" role="region" aria-label="Chart data summary" tabindex="0">
+						<table class="table table-sm mb-0">
+							<caption class="visually-hidden">Summary of the response time, status codes and outages in the selected range</caption>
+							<thead><tr><th scope="col">Item</th><th scope="col">Value</th></tr></thead>
+							<tbody id="combined-table-body"></tbody>
+						</table>
+					</div>
+				</details>
+				</div>
+			</div>
+			{% if target.enable_http_check %}
+			<section class="combined-donut" aria-labelledby="status-donut-title">
+				<h3 id="status-donut-title" class="combined-donut-title">HTTP status codes</h3>
+				<p id="status-donut-total" class="combined-donut-total" hidden></p>
+				<div id="status-donut-plot" class="combined-donut-plot">
+					<canvas id="chart-status-code" role="img" aria-label="HTTP status code distribution. Loading data."></canvas>
+				</div>
+				<p id="status-donut-empty" class="combined-empty combined-empty--small" role="status" hidden></p>
+			</section>
+			{% endif %}
+		</div>
+		<p id="combined-status-note" class="combined-note"></p>
+		<p id="combined-summary" class="combined-note"></p>
+	</div>
+</div>
+{% else %}
+<div class="card target-panel target-combined-card" id="combined-card">
+	<div class="card-header target-panel-header">
+		<div class="target-panel-heading">
+			<span class="target-panel-title"><i class="material-icons" aria-hidden="true">show_chart</i> Response time &amp; status</span>
+		</div>
+	</div>
+	<div class="card-body">
+		<div class="combined-empty combined-empty--panel" role="status">
+			<i class="material-icons" aria-hidden="true">toggle_off</i>
+			<span>No checks are enabled for this target, so no response times or status codes are recorded.
+				<a href="/ui/targets/{{ target.id }}/edit">Enable HTTP, Ping or TCP checks in Edit</a>.</span>
+		</div>
+	</div>
+</div>
+{% endif %}
+{# Secondary row: availability and downtimes are equal-weight panels below the hero. #}
+<div class="target-overview-grid">
+	{# Availability timeline #}
+	<div class="card target-panel target-availability-card" id="availability-card">
+		<div class="card-header target-panel-header">
+			<div class="target-panel-heading">
+				<span class="target-panel-title"><i class="material-icons" aria-hidden="true">bar_chart</i> Availability (Up / Down)</span>
+				<span class="target-panel-sub">Per-check state over the selected range</span>
+			</div>
+		</div>
+		<div class="card-body">
+			<div class="target-availability-plot" id="availability-plot">
+				<canvas id="chart-uptime" role="img" aria-label="Availability per check over time. Loading data."></canvas>
+			</div>
+			<div id="availability-empty" class="combined-empty" role="status" hidden>
+				<i class="material-icons" aria-hidden="true">query_stats</i>
+				<span data-role="message"></span>
+			</div>
+		</div>
+	</div>
+	{# Downtime History #}
+	<div class="card target-panel target-downtime-card" id="downtime-history-card">
+		<div class="card-header target-panel-header">
+			<div class="target-panel-heading">
+				<span class="target-panel-title"><i class="material-icons" aria-hidden="true">history</i> <span id="downtime-header-label">Downtimes (30d)</span></span>
+				<span class="target-panel-sub">Outages detected in the selected range</span>
+			</div>
+		</div>
+		<div class="card-body">
+			<div id="downtime-history-body" aria-live="polite"
+				hx-get="/ui/fragments/downtime-history/{{ target.id }}" hx-trigger="load" hx-swap="innerHTML">
+				<div class="target-skeleton" role="status">
+					<span class="target-skeleton-line"></span>
+					<span class="target-skeleton-line"></span>
+					<span class="target-skeleton-line"></span>
+					<span class="visually-hidden">Loading downtimes…</span>
+				</div>
+			</div>
+		</div>
+	</div>
+</div>

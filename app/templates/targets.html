@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Targets – justUp!{% endblock %}
+
+{% block content %}
+
+<div class="ui-page">
+	<div class="ui-page-header">
+		<div class="ui-page-heading">
+			<p class="ui-page-eyebrow">Your monitors</p>
+			<h1>Targets</h1>
+			<p class="ui-page-lead">Availability and performance for every target you monitor.</p>
+		</div>
+		{% if user and user.is_admin %}
+		<a href="/ui/targets/new" class="btn btn-primary btn-page-primary">
+			<span class="material-icons me-2" aria-hidden="true">add_circle</span>New Target
+		</a>
+		{% endif %}
+	</div>
+
+	<div class="card ui-card">
+		{# Stable page carrier outside the swapped container; the fragment refreshes it out-of-band #}
+		<input type="hidden" id="targets-page-state" name="page" value="1">
+		<div id="targets-table" hx-get="/ui/fragments/targets-table" hx-trigger="load, refresh, justup-target-list from:body throttle:2s, justup-live-sync from:body throttle:2s"
+			hx-include="#targets-page-state" hx-swap="innerHTML">
+			<div class="text-center py-5">
+				<div class="spinner-border text-primary" role="status"></div>
+			</div>
+		</div>
+	</div>
+</div>
+{% endblock %}

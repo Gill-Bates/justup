@@ -1,0 +1,201 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "justup"
+version = "1.0.0"
+description = "justUp! - Lightweight Uptime Monitor"
+requires-python = ">=3.13"
+license = "MIT"
+# Dependency note: PyPI sslyze 6.3.1 caps cryptography<47 and so blocks the patched
+# cryptography 50.x. Upstream lifted the cap on its release branch (commit e064c2c8,
+# 6.3.1 plus one setup.py line) but has not tagged a release. justUp therefore ships
+# its own, once-built SSLyze wheel, version 6.3.1+justup.1, stored in
+# docker/vendor/wheels/ and pinned by SHA-256 in docker/requirements.lock. Docker and
+# CI install only that wheel (nothing is built from source); provenance, patch and the
+# controlled rebuild are in docker/vendor/. A local ("+justup.N") version never exists
+# on PyPI, so the pin cannot be satisfied by anything else. Move back to a PyPI
+# "sslyze>=" requirement once an official release allows cryptography>=50.
+dependencies = [
+    "cryptography==50.0.2",
+    "dnspython==2.9.1",
+    "email-validator==2.3.0",
+    "fastapi==0.162.0",
+    "geoip2==5.3.0",
+    "httpx==0.28.1",
+    "jinja2==3.1.6",
+    "markdown==3.11.2",
+    "matplotlib==3.11.2",
+    "Pillow==13.0.0",
+    "pydantic==2.14.2",
+    "python-multipart==0.0.32",
+    "qrcode==8.2",
+    "reportlab==5.1.0",
+    "slowapi==0.1.10",
+    "sslyze==6.3.1+justup.1",
+    "starlette==1.10.0",
+    "uvicorn==0.54.0",
+]
+
+[project.optional-dependencies]
+# Development toolchain. Pinned on purpose: none of it ships in an image, so
+# "latest is greatest" does not apply here - a ruff release that changes its
+# own rules must not fail CI on untouched code. Bumping these is a deliberate
+# commit, not a side effect of a release.
+dev = [
+    "pytest==9.2.0",
+    "pytest-asyncio==1.4.1",
+    "pytest-cov==7.1.0",
+    "ruff==0.17.3",
+]
+# Documentation toolchain (MkDocs + Material). Direct dependencies only and
+# intentionally unpinned: docs-build.yml resolves them, freezes the result with
+# `pip freeze --all`, and Trivy-scans that frozen set, so the lock lives in CI,
+# not here. Keep this list to direct deps; transitive ones come from the freeze.
+docs = [
+    "mkdocs==1.6.1",
+    "mkdocs-material==9.8.0",
+    "pymdown-extensions==12.3",
+]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+namespaces = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+asyncio_default_fixture_loop_scope = "function"
+
+# --------------------------------------------------------------------------- #
+# Ruff - lint + format for every Python file in the repo
+# --------------------------------------------------------------------------- #
+[tool.ruff]
+line-length = 120
+target-version = "py313"
+# node_modules, .venv, build/ and dist/ are already in ruff's default
+# excludes; these are the trees specific to this repo.
+extend-exclude = ["data", "app/static/vendor", ".worktrees"]
+
+[tool.ruff.lint]
+select = [
+    "A",     # flake8-builtins - shadowing open/id/type hides real bugs
+    "ARG",   # unused arguments
+    "ASYNC", # blocking calls inside async def - this app is ASGI end to end
+    "B",     # bugbear
+    "BLE",   # blind except: broad catches must be deliberate and justified
+    "C4",    # comprehensions
+    "DTZ",   # naive datetimes; job timestamps are UTC-aware on purpose
+    "E",     # pycodestyle errors
+    "EM",    # exception messages assigned to a name first
+    "ERA",   # commented-out code rots; git keeps the history
+    "F",     # pyflakes
+    "FLY",   # static str.join over an f-string
+    "FURB",  # refurb - modern stdlib idioms
+    "G",     # logging-format: %s args, never f-strings (lazy formatting)
+    "I",     # import sorting
+    "ICN",   # import conventions
+    "ISC",   # implicit string concat
+    "LOG",   # logging misuse
+    "N",     # pep8-naming
+    "PERF",  # obvious performance traps
+    "PIE",   # misc lints
+    "PL",    # pylint subset
+    "PTH",   # prefer pathlib
+    "Q",     # quote style, kept in step with the formatter
+    "RET",   # return simplifications
+    "RSE",   # raise cleanups
+    "RUF",   # ruff-specific
+    "S",     # bandit - this app parses untrusted URLs and shells out to subprocesses
+    "SIM",   # simplifications
+    "SLF",   # private member access across modules
+    "T20",   # stray print()
+    "TRY",   # exception antipatterns
+    "UP",    # pyupgrade
+    "W",     # pycodestyle warnings
+]
+ignore = [
+    # Formatter-owned; keeping this on fights `ruff format`.
+    "ISC001",
+    # The codebase documents *why* in prose comments above the code rather than
+    # forcing every message into a named variable first.
+    "EM101",
+    "EM102",
+    "TRY003",
+    # `except: logger.error(...)` is used where the traceback is noise and the
+    # message already carries the cause.
+    "TRY400",
+    # try/except around a raise is how the monitoring pipeline turns probe
+    # failures into check statuses; hoisting each into its own function would
+    # scatter logic that reads better in one place.
+    "TRY301",
+    # `return` inside `try` is idiomatic here and reads better than a
+    # trailing `else:` block.
+    "TRY300",
+    # Package-internal singletons (the scheduler, the DB handle) are rebound by
+    # lifespan hooks on purpose.
+    "PLW0603",
+    # Deliberate lazy imports: heavy optional deps cost seconds at import time
+    # and must not be paid by a request that never needs them.
+    "PLC0415",
+    # Thresholds and HTTP status codes read fine inline; naming every 200/404
+    # would add indirection without adding meaning.
+    "PLR2004",
+    # The monitoring/probe pipeline is genuinely branchy. Splitting it to
+    # satisfy a counter would hide the sequence it documents.
+    "PLR0911",
+    "PLR0912",
+    "PLR0913",
+    "PLR0915",
+    # ping/mtr/signal-cli/whatweb are resolved from PATH on purpose - the image
+    # provides them, and hardcoding /usr/bin would break local dev. Every call
+    # passes a list argv with a "--" option terminator; no shell is used.
+    "S603",
+    "S607",
+    # Docstrings and comments use en dashes and typographic quotes.
+    "RUF001",
+    "RUF002",
+    "RUF003",
+    # `timeout` as a keyword-only arg on async helpers mirrors httpx's own API.
+    "ASYNC109",
+    # These validators raise ValueError for both wrong type and wrong value on
+    # purpose: callers handle one exception, and the message says which it was.
+    "TRY004",
+    # Same reasoning as PLR0913 - the positional/keyword split is caller
+    # ergonomics, not a complexity signal.
+    "PLR0917",
+    # A ternary is not automatically clearer; several of these branches carry
+    # an explanatory comment that only fits in an if/else.
+    "SIM108",
+]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's DI markers in defaults are the framework contract, not mutable defaults.
+extend-immutable-calls = [
+    "fastapi.Depends",
+    "fastapi.Query",
+    "fastapi.File",
+    "fastapi.Form",
+    "fastapi.Security",
+    "fastapi.Header",
+    "fastapi.Cookie",
+    "fastapi.Body",
+    "fastapi.Path",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# app/justup-cli is a CLI entry point: printing to stdout is its job.
+"app/justup-cli" = ["T20"]
+# The startup banner writes to stdout, and its ASCII art is padded with
+# trailing spaces that keep the box aligned.
+"app/utils/banner.py" = ["T20", "W291"]
+# Assertions are the direct contract checks in pytest cases.
+"tests/*.py" = ["S101"]
+# Repo tooling: writing to stdout is the whole point of these scripts.
+"tools/*.py" = ["T20"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"

@@ -1,0 +1,812 @@
+/*
+ * app/static/css/gentelella-layout.css
+ *
+ * Gentelella look and feel (https://github.com/ColorlibHQ/gentelella, v4.2.0, MIT, see
+ * app/static/vendor/gentelella/LICENSE): dark left sidebar with brand and profile area,
+ * top navbar, "x_panel" cards, teal accent. Re-implemented on Bootstrap 5.3 variables;
+ * no Gentelella JavaScript or demo library is shipped. Colors are adjusted so text
+ * reaches 4.5:1 and UI components 3:1 in both themes (WCAG 2.2 AA).
+ */
+
+@font-face {
+	font-family: "IBM Plex Sans";
+	src: url("/static/fonts/IBM-Plex-Sans-Variable.woff2") format("woff2");
+	font-weight: 100 700;
+	font-style: normal;
+	font-display: swap;
+}
+
+@font-face {
+	font-family: "IBM Plex Sans";
+	src: url("/static/fonts/IBM-Plex-Sans-Variable-Italic.woff2") format("woff2");
+	font-weight: 100 700;
+	font-style: italic;
+	font-display: swap;
+}
+
+:root {
+	color-scheme: light;
+
+	--bs-font-sans-serif: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+	--bs-body-font-size: 1rem;
+	--bs-body-color: #3d4f61;
+	--bs-body-color-rgb: 61, 79, 97;
+	--bs-body-bg: #f7f7f7;
+	--bs-body-bg-rgb: 247, 247, 247;
+	--bs-secondary-color: #5f6f80;
+	--bs-border-color: #d9dee4;
+	--bs-border-radius: 0.65rem;
+	--bs-border-radius-lg: 0.9rem;
+	--ju-radius-tile: 0.75rem;
+	--ju-page-title-size: clamp(1.75rem, 2.2vw, 2.25rem);
+
+	/* Teal accent: #0e7a65 is 5.3:1 on white, white on it 5.3:1. */
+	--bs-primary: #0e7a65;
+	--bs-primary-rgb: 14, 122, 101;
+	--bs-link-color: #0e7a65;
+	--bs-link-color-rgb: 14, 122, 101;
+	--bs-link-hover-color: #0a5c4d;
+	--bs-link-hover-color-rgb: 10, 92, 77;
+	--bs-focus-ring-color: rgb(14 122 101 / 25%);
+	--ju-primary-contrast: #fff;
+	--ju-panel-bg: #fff;
+	--ju-panel-line: #e6e9ed;
+	--ju-title: #2a3f54;
+	--ju-topbar-bg: #ededed;
+	--ju-topbar-fg: #3d4f61;
+	--ju-sidebar-bg: #2a3f54;
+	--ju-sidebar-fg: #e7e7e7;
+	--ju-sidebar-muted: #aebfd1;
+	--ju-sidebar-hover: rgb(255 255 255 / 8%);
+	--ju-sidebar-active: rgb(255 255 255 / 14%);
+	--ju-sidebar-accent: #2fd0b0;
+	--ju-sidebar-ring: #fff;
+	--ju-sidebar-w: 15rem;
+	--ju-sidebar-w-rail: 4.5rem;
+	--ju-topbar-h: 3.75rem;
+	--ju-shadow: 0 1px 2px rgb(42 63 84 / 12%);
+	--bs-code-color: #a82a68;
+	--ju-secondary: #566170;
+	--ju-danger-text: #c0283a;
+	--ju-st-online: #16815c;
+	--ju-st-offline: #c43427;
+	--ju-st-disabled: #926e06;
+}
+
+[data-bs-theme="dark"] {
+	color-scheme: dark;
+
+	--bs-body-color: #e6ebf2;
+	--bs-body-color-rgb: 230, 235, 242;
+	--bs-body-bg: #0f1623;
+	--bs-body-bg-rgb: 15, 22, 35;
+	--bs-secondary-color: #a9b6c6;
+	--bs-border-color: #2d3a4d;
+	--bs-primary: #1fc7a6;
+	--bs-primary-rgb: 31, 199, 166;
+	--bs-link-color: #2fd0b0;
+	--bs-link-color-rgb: 47, 208, 176;
+	--bs-link-hover-color: #6be3cc;
+	--bs-link-hover-color-rgb: 107, 227, 204;
+	--bs-focus-ring-color: rgb(47 208 176 / 30%);
+	--ju-primary-contrast: #04201a;
+	--ju-panel-bg: #182231;
+	--ju-panel-line: #2b384b;
+	--ju-title: #e6ebf2;
+	--ju-topbar-bg: #141d2b;
+	--ju-topbar-fg: #c5d0dc;
+	--ju-sidebar-bg: #131c29;
+	--ju-sidebar-fg: #e7e7e7;
+	--ju-sidebar-muted: #9fb0c3;
+	--ju-sidebar-ring: #8fb4ff;
+	--ju-shadow: 0 1px 2px rgb(0 0 0 / 40%);
+	--bs-code-color: #f08cbb;
+	--ju-secondary: #a9b6c6;
+	--ju-danger-text: #ff7d89;
+	--ju-st-online: #3ddc97;
+	--ju-st-offline: #ff8a7a;
+	--ju-st-disabled: #f6c23e;
+}
+
+body {
+	background: var(--bs-body-bg);
+	color: var(--bs-body-color);
+	-webkit-font-smoothing: antialiased;
+}
+
+h1,
+.h1,
+h2,
+.h2,
+h3,
+.h3,
+h4,
+.h4,
+h5,
+.h5,
+h6,
+.h6 {
+	color: var(--ju-title);
+	font-weight: 650;
+	letter-spacing: -0.015em;
+}
+
+/* ===== Buttons ===== */
+.btn {
+	--bs-btn-border-radius: var(--bs-border-radius);
+	--bs-btn-font-weight: 600;
+}
+
+.btn-primary {
+	--bs-btn-color: var(--ju-primary-contrast);
+	--bs-btn-bg: var(--bs-primary);
+	--bs-btn-border-color: var(--bs-primary);
+	--bs-btn-hover-color: var(--ju-primary-contrast);
+	--bs-btn-hover-bg: var(--bs-link-hover-color);
+	--bs-btn-hover-border-color: var(--bs-link-hover-color);
+	--bs-btn-active-color: var(--ju-primary-contrast);
+	--bs-btn-active-bg: var(--bs-link-hover-color);
+	--bs-btn-active-border-color: var(--bs-link-hover-color);
+	--bs-btn-disabled-color: var(--ju-primary-contrast);
+	--bs-btn-disabled-bg: var(--bs-primary);
+	--bs-btn-disabled-border-color: var(--bs-primary);
+	--bs-btn-focus-shadow-rgb: var(--bs-primary-rgb);
+}
+
+.btn-outline-primary {
+	--bs-btn-color: var(--bs-link-color);
+	--bs-btn-border-color: var(--bs-link-color);
+	--bs-btn-hover-color: var(--ju-primary-contrast);
+	--bs-btn-hover-bg: var(--bs-primary);
+	--bs-btn-hover-border-color: var(--bs-primary);
+	--bs-btn-active-color: var(--ju-primary-contrast);
+	--bs-btn-active-bg: var(--bs-primary);
+	--bs-btn-active-border-color: var(--bs-primary);
+	--bs-btn-disabled-color: var(--bs-link-color);
+	--bs-btn-disabled-border-color: var(--bs-link-color);
+}
+
+.text-bg-primary,
+.bg-primary,
+.nav-pills .nav-link.active,
+.list-group-item.active,
+.page-item.active .page-link {
+	color: var(--ju-primary-contrast) !important;
+}
+
+.nav-pills {
+	--bs-nav-pills-link-active-color: var(--ju-primary-contrast);
+	--bs-nav-pills-link-active-bg: var(--bs-primary);
+}
+
+.list-group {
+	--bs-list-group-active-color: var(--ju-primary-contrast);
+	--bs-list-group-active-bg: var(--bs-primary);
+	--bs-list-group-active-border-color: var(--bs-primary);
+}
+
+.pagination {
+	--bs-pagination-active-color: var(--ju-primary-contrast);
+	--bs-pagination-active-bg: var(--bs-primary);
+	--bs-pagination-active-border-color: var(--bs-primary);
+	--bs-pagination-color: var(--bs-link-color);
+}
+
+/* Bootstrap's gray #6c757d falls below 4.5:1 on the page and dark panel colors. */
+.btn-outline-secondary {
+	--bs-btn-color: var(--ju-secondary);
+	--bs-btn-border-color: var(--ju-secondary);
+	--bs-btn-hover-color: var(--bs-body-bg);
+	--bs-btn-hover-bg: var(--ju-secondary);
+	--bs-btn-hover-border-color: var(--ju-secondary);
+	--bs-btn-active-color: var(--bs-body-bg);
+	--bs-btn-active-bg: var(--ju-secondary);
+	--bs-btn-active-border-color: var(--ju-secondary);
+	--bs-btn-disabled-color: var(--ju-secondary);
+	--bs-btn-disabled-border-color: var(--ju-secondary);
+}
+
+/* Bootstrap's #dc3545 is below 4.5:1 on the page tone and the dark panel. */
+.text-danger {
+	color: var(--ju-danger-text) !important;
+}
+
+/* ===== Forms ===== */
+.form-control,
+.form-select {
+	border-radius: var(--bs-border-radius);
+}
+
+.form-control:focus,
+.form-select:focus {
+	border-color: var(--bs-primary);
+	box-shadow: 0 0 0 0.2rem var(--bs-focus-ring-color);
+}
+
+.form-check-input:checked {
+	background-color: var(--bs-primary);
+	border-color: var(--bs-primary);
+}
+
+.form-label {
+	font-weight: 500;
+}
+
+/* ===== Shared card surface ===== */
+.card,
+.x_panel {
+	--bs-card-bg: var(--ju-panel-bg);
+	--bs-card-border-color: var(--ju-panel-line);
+	--bs-card-border-radius: var(--bs-border-radius-lg);
+	--bs-card-inner-border-radius: var(--ju-radius-tile);
+	--bs-card-cap-bg: transparent;
+
+	background-color: var(--ju-panel-bg);
+	border: 1px solid var(--ju-panel-line);
+	border-radius: var(--bs-border-radius-lg);
+	box-shadow: var(--ju-shadow);
+}
+
+.card-header,
+.x_title {
+	background: transparent;
+	border-bottom: 1px solid var(--ju-panel-line);
+	color: var(--ju-title);
+	font-weight: 650;
+}
+
+.card-header :is(h2, h3, h4, h5, h6),
+.x_title :is(h2, h3, h4, h5, h6) {
+	color: var(--ju-title);
+	font-weight: 650;
+}
+
+.card-header .material-icons {
+	color: var(--bs-link-color);
+}
+
+.card-footer {
+	background: transparent;
+	border-top: 1px solid var(--ju-panel-line);
+}
+
+/* ===== Tables ===== */
+.table {
+	--bs-table-hover-bg: rgb(var(--bs-primary-rgb) / 8%);
+	--bs-table-border-color: var(--ju-panel-line);
+}
+
+.table > thead > tr > th {
+	color: var(--bs-secondary-color);
+	font-weight: 650;
+	border-bottom: 1px solid var(--ju-panel-line);
+}
+
+/* ===== Skeleton of the page: sidebar | (topbar, main, footer) ===== */
+.ju-shell {
+	display: flex;
+	height: var(--ju-fit-height, auto);
+	min-height: 100vh;
+	min-height: 100dvh;
+}
+
+/* Layout modes: flow (default) lets the page scroll; fit bounds the shell to the dynamic viewport
+   so a page can scroll inside its own panel. Pages opt in via the shell_class block in base.html. */
+.ju-shell--fit {
+	--ju-fit-height: 100dvh;
+}
+
+@media (width >= 992px) {
+	.ju-shell--fit-lg {
+		--ju-fit-height: 100dvh;
+	}
+}
+
+.ju-sidebar {
+	position: fixed;
+	inset: 0 auto 0 0;
+	z-index: 1040;
+	display: flex;
+	flex-direction: column;
+	width: var(--ju-sidebar-w);
+	padding-left: env(safe-area-inset-left, 0);
+	background: var(--ju-sidebar-bg);
+	color: var(--ju-sidebar-fg);
+	overflow: hidden;
+	transition: width 0.2s ease, transform 0.2s ease, visibility 0.2s;
+}
+
+.ju-sidebar :focus-visible {
+	outline: 2px solid var(--ju-sidebar-ring);
+	outline-offset: -2px;
+}
+
+/* Three regions: brand header, scrollable navigation, account footer. */
+.ju-sidebar-header {
+	display: flex;
+	flex: 0 0 auto;
+	align-items: center;
+	min-height: var(--ju-topbar-h);
+	border-bottom: 1px solid rgb(255 255 255 / 10%);
+}
+
+.ju-sidebar-brand {
+	display: flex;
+	flex: 1 1 auto;
+	align-items: center;
+	justify-content: flex-start;
+	align-self: stretch;
+	min-width: 0;
+	padding: 0.5rem 1.4rem;
+	color: #fff;
+	text-decoration: none;
+}
+
+.ju-sidebar-close {
+	display: none;
+	align-items: center;
+	justify-content: center;
+	flex: 0 0 auto;
+	width: 2.75rem;
+	height: 2.75rem;
+	margin-inline-end: 0.5rem;
+	padding: 0;
+	border: 0;
+	border-radius: var(--bs-border-radius);
+	background: transparent;
+	color: var(--ju-sidebar-fg);
+	cursor: pointer;
+}
+
+.ju-sidebar-close:hover {
+	background: var(--ju-sidebar-hover);
+	color: #fff;
+}
+
+.ju-sidebar-brand .ju-logo {
+	max-width: 100%;
+	filter: invert(1);
+}
+
+.ju-brand-mark {
+	display: none;
+	align-items: center;
+	justify-content: center;
+	width: 2.25rem;
+	height: 2.25rem;
+	border-radius: var(--bs-border-radius);
+	background: var(--ju-sidebar-accent);
+	color: #04201a;
+	font-size: 1.1rem;
+	font-weight: 700;
+}
+
+.ju-profile {
+	display: flex;
+	flex: 0 0 auto;
+	align-items: center;
+	gap: 0.75rem;
+	padding: 0.75rem 1.4rem calc(0.75rem + env(safe-area-inset-bottom, 0));
+	border-top: 1px solid rgb(255 255 255 / 10%);
+}
+
+.ju-profile-avatar {
+	width: 2.5rem;
+	height: 2.5rem;
+	flex: 0 0 auto;
+	border: 2px solid rgb(255 255 255 / 25%);
+	border-radius: 50%;
+	object-fit: cover;
+}
+
+.ju-profile-text {
+	min-width: 0;
+	line-height: 1.3;
+}
+
+.ju-profile-label {
+	display: block;
+	color: var(--ju-sidebar-muted);
+	font-size: 0.75rem;
+}
+
+.ju-profile-name {
+	display: block;
+	overflow: hidden;
+	color: #fff;
+	font-size: 0.95rem;
+	font-weight: 500;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.ju-nav,
+.ju-nav-sub {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.ju-nav {
+	flex: 1 1 auto;
+	min-height: 0;
+	padding-block: 0.75rem;
+	overflow-y: auto;
+	overscroll-behavior: contain;
+}
+
+.ju-nav-link {
+	display: flex;
+	align-items: center;
+	gap: 0.75rem;
+	width: calc(100% - 1rem);
+	min-height: 2.75rem;
+	margin-inline: 0.5rem;
+	padding: 0.5rem 0.9rem;
+	border: 0;
+	border-radius: var(--bs-border-radius);
+	background: transparent;
+	color: var(--ju-sidebar-fg);
+	font: inherit;
+	font-size: 0.9rem;
+	text-align: start;
+	text-decoration: none;
+	cursor: pointer;
+}
+
+.ju-nav-link:hover {
+	background: var(--ju-sidebar-hover);
+	color: #fff;
+	text-decoration: none;
+}
+
+.ju-nav-link.active {
+	background: var(--ju-sidebar-active);
+	color: #fff;
+	font-weight: 650;
+}
+
+.ju-nav-link.active .material-icons {
+	color: var(--ju-sidebar-accent);
+	opacity: 1;
+}
+
+.ju-nav-link .material-icons {
+	flex: 0 0 auto;
+	font-size: 1.3rem;
+	opacity: 0.9;
+}
+
+.ju-nav-text {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+.ju-nav-chevron {
+	transition: transform 0.2s ease;
+}
+
+.ju-nav-group-toggle[aria-expanded="true"] .ju-nav-chevron {
+	transform: rotate(180deg);
+}
+
+.ju-nav-sub {
+	background: rgb(0 0 0 / 18%);
+}
+
+.ju-nav-sub .ju-nav-link {
+	padding-left: 2.75rem;
+}
+
+.ju-nav-sub[hidden] {
+	display: none;
+}
+
+.ju-sidebar-backdrop {
+	display: none;
+}
+
+/* ===== Content column ===== */
+.ju-content {
+	display: flex;
+	flex: 1 1 auto;
+	flex-direction: column;
+	min-width: 0;
+	margin-left: var(--ju-sidebar-w);
+	transition: margin-left 0.2s ease;
+}
+
+.ju-topbar {
+	position: sticky;
+	top: 0;
+	z-index: 1030;
+	display: flex;
+	align-items: center;
+	gap: 0.75rem;
+	min-height: var(--ju-topbar-h);
+	padding: 0.5rem calc(var(--page-gutter, 1.5rem) + env(safe-area-inset-right, 0)) 0.5rem calc(var(--page-gutter, 1.5rem) + env(safe-area-inset-left, 0));
+	border-bottom: 1px solid var(--ju-panel-line);
+	background: var(--ju-topbar-bg);
+	color: var(--ju-topbar-fg);
+}
+
+.ju-topbar .btn,
+.ju-topbar a:not(.btn) {
+	color: var(--ju-topbar-fg);
+}
+
+.ju-topbar .btn:hover,
+.ju-topbar a:not(.btn):hover {
+	color: var(--bs-link-color);
+}
+
+.ju-topbar-button {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 0.25rem;
+	min-width: 2.75rem;
+	min-height: 2.75rem;
+	border: 0;
+	background: transparent;
+}
+
+.ju-topbar-button:hover,
+.ju-topbar-button:focus-visible {
+	background: rgb(var(--bs-primary-rgb) / 9%);
+}
+
+.ju-topbar-title {
+	overflow: hidden;
+	font-size: 0.95rem;
+	font-weight: 500;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.ju-topbar-actions {
+	display: flex;
+	align-items: center;
+	gap: 0.25rem;
+	margin-left: auto;
+}
+
+.ju-topbar-actions .material-icons {
+	font-size: 1.35rem;
+	vertical-align: middle;
+}
+
+.ju-topbar-divider {
+	align-self: stretch;
+	margin: 0.5rem 0.25rem;
+	border-left: 1px solid var(--bs-border-color);
+}
+
+.ju-content > main {
+	flex: 1 1 auto;
+	min-width: 0;
+	min-height: 0;
+	padding-bottom: 0;
+}
+
+/* Sticky: the footer stays at the bottom edge of the viewport while the page scrolls above it.
+   It remains in the flow, so short pages still end with it and nothing is hidden behind it. */
+.ju-content .ju-footer {
+	position: sticky;
+	bottom: 0;
+	z-index: 1020;
+	margin-top: auto;
+	background: var(--bs-body-bg);
+}
+
+.ui-page-header :is(h1, h2) {
+	font-size: var(--ju-page-title-size);
+	font-weight: 700;
+	letter-spacing: -0.025em;
+}
+
+/* Status heroes use the same soft icon treatment as the monitor choices. */
+.dashboard-hero {
+	--ju-hero-accent: var(--bs-primary);
+
+	align-items: stretch;
+	justify-content: center;
+	min-height: 5.5rem;
+	text-align: left !important;
+}
+
+.dashboard-hero[data-status="online"] { --ju-hero-accent: var(--ju-st-online); }
+.dashboard-hero[data-status="offline"] { --ju-hero-accent: var(--ju-st-offline); }
+.dashboard-hero[data-status="disabled"] { --ju-hero-accent: var(--ju-st-disabled); }
+
+.dashboard-hero > .d-flex {
+	justify-content: space-between !important;
+	flex-direction: row-reverse;
+}
+
+.dashboard-hero .small {
+	order: -1;
+	font-size: 0.75rem !important;
+	font-weight: 600;
+	letter-spacing: 0.04em;
+}
+
+.dashboard-hero .material-icons {
+	display: grid;
+	place-items: center;
+	width: 2.5rem;
+	height: 2.5rem;
+	border-radius: var(--bs-border-radius);
+	background: color-mix(in srgb, var(--ju-hero-accent) 12%, transparent);
+}
+
+.dashboard-hero[data-status="online"] .small { color: var(--ju-st-online) !important; }
+.dashboard-hero[data-status="offline"] .small { color: var(--ju-st-offline) !important; }
+.dashboard-hero[data-status="disabled"] .small { color: var(--ju-st-disabled) !important; }
+.dashboard-hero[data-status="total"] .small { color: var(--bs-link-color) !important; }
+
+.dashboard-hero .fs-3 {
+	color: var(--ju-title) !important;
+}
+
+/* Teal top edge of the standalone password panel */
+.ju-auth-card {
+	border-top: 3px solid var(--bs-primary);
+}
+
+/* ===== Desktop rail mode (sidebar collapsed to icons) ===== */
+@media (width >= 992px) {
+	.ju-nav-sm .ju-sidebar {
+		width: var(--ju-sidebar-w-rail);
+	}
+
+	.ju-nav-sm .ju-content {
+		margin-left: var(--ju-sidebar-w-rail);
+	}
+
+	.ju-nav-sm .ju-sidebar-brand .ju-logo,
+	.ju-nav-sm .ju-nav-chevron {
+		display: none;
+	}
+
+	.ju-nav-sm .ju-sidebar-brand {
+		justify-content: center;
+		padding-inline: 0;
+	}
+
+	.ju-nav-sm .ju-brand-mark {
+		display: flex;
+	}
+
+	.ju-nav-sm .ju-profile {
+		justify-content: center;
+		padding-inline: 0;
+	}
+
+	/* Account name stays available to assistive technology. */
+	.ju-nav-sm .ju-profile-text {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		overflow: hidden;
+		clip-path: inset(50%);
+	}
+
+	.ju-nav-sm .ju-nav-link {
+		justify-content: center;
+		padding-inline: 0;
+	}
+
+	.ju-nav-sm .ju-nav-sub .ju-nav-link {
+		padding-left: 0;
+	}
+
+	/* Text stays in the accessibility tree and is only hidden visually. */
+	.ju-nav-sm .ju-nav-text {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		overflow: hidden;
+		clip-path: inset(50%);
+		white-space: nowrap;
+	}
+}
+
+/* ===== Mobile: off-canvas sidebar ===== */
+@media (width <= 991.98px) {
+	.ju-topbar > #sidebar-toggle {
+		flex: 0 0 3rem;
+		width: 3rem;
+		min-width: 3rem;
+		min-height: 3rem;
+		padding: 0;
+	}
+
+	#sidebar-toggle .material-icons {
+		font-size: 1.5rem;
+	}
+
+	.ju-sidebar-close {
+		display: inline-flex;
+	}
+
+	.ju-sidebar {
+		width: min(17rem, 85vw);
+		transition: transform 0.2s ease, visibility 0s linear 0.2s;
+		transform: translateX(-100%);
+		visibility: hidden;
+		box-shadow: none;
+	}
+
+	.ju-nav-open .ju-sidebar {
+		transition: transform 0.2s ease, visibility 0s;
+		transform: none;
+		visibility: visible;
+		box-shadow: 0 0 2rem rgb(0 0 0 / 40%);
+	}
+
+	.ju-content {
+		margin-left: 0;
+	}
+
+	.ju-nav-open .ju-sidebar-backdrop {
+		position: fixed;
+		inset: 0;
+		z-index: 1035;
+		display: block;
+		background: rgb(0 0 0 / 45%);
+	}
+
+	.ju-nav-open {
+		overflow: hidden;
+	}
+
+	.ju-user-info,
+	.ju-topbar-title {
+		display: none;
+	}
+
+	.ju-topbar {
+		gap: 0.25rem;
+	}
+}
+
+@media (width <= 576px) {
+	.ju-topbar-divider {
+		display: none;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.ju-sidebar,
+	.ju-nav-open .ju-sidebar,
+	.ju-content,
+	.ju-nav-chevron {
+		transition: none;
+	}
+}
+
+@media (forced-colors: active) {
+	.ju-sidebar {
+		border-right: 1px solid CanvasText;
+	}
+
+	.ju-nav-link.active {
+		forced-color-adjust: none;
+		background: Highlight;
+		color: HighlightText;
+	}
+
+	.ju-nav-link.active .material-icons {
+		color: HighlightText;
+	}
+
+	.ju-sidebar-header,
+	.ju-profile {
+		border-color: CanvasText;
+	}
+
+	.ju-topbar {
+		border-bottom: 1px solid CanvasText;
+	}
+}

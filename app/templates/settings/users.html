@@ -1,0 +1,61 @@
+{# Settings: Users Tab Content #}
+<div class="settings-stack settings-editor">
+<form id="access-settings-form" data-settings-autosave autocomplete="off">
+<section class="card shadow-sm settings-card">
+	<div class="card-header"><h2 class="h6 mb-0"><span class="material-icons me-1" style="font-size: 18px;" aria-hidden="true">lock</span>Access &amp; Sessions</h2></div>
+	<div class="card-body settings-compact">
+		<div>
+			<div class="form-check form-switch">
+				<input type="checkbox" class="form-check-input" role="switch" name="auth_disabled"
+					id="auth_disabled" {% if settings.auth_disabled %}checked{% endif %}
+					aria-describedby="auth_disabled_hint">
+				<label class="form-check-label" for="auth_disabled">Disable Authentication</label>
+			</div>
+			<div class="form-text text-warning-emphasis" id="auth_disabled_hint"><span class="material-icons align-middle" style="font-size: 16px;" aria-hidden="true">warning</span> Makes every page public. Password confirmation required.</div>
+		</div>
+		<div class="settings-field-row">
+			<div>
+				<label for="rate_limit_auth" class="form-label">Login Rate Limit</label>
+				<input type="text" class="form-control" name="rate_limit_auth" id="rate_limit_auth"
+					value="{{ settings.rate_limit_auth }}" placeholder="10/minute" pattern="[1-9][0-9]{0,5}/(second|minute|hour|day)" aria-describedby="rate_limit_auth_hint">
+				<div class="form-text" id="rate_limit_auth_hint">Per IP: N/second, minute, hour or day.</div>
+			</div>
+			<div>
+				<label for="session_max_days" class="form-label">
+					Session Lifetime: <span class="badge badge-interval" id="session_max_days_value">{{ settings.session_max_days }} {{ 'day' if settings.session_max_days == 1 else 'days' }}</span>
+				</label>
+				{% set session_min = 1 %}{% set session_max = 7 %}
+				<div class="range-wrapper" data-range-positions="7" data-active-index="{{ settings.session_max_days - session_min }}">
+					<input type="range" class="form-range" name="session_max_days" id="session_max_days"
+						min="{{ session_min }}" max="{{ session_max }}" step="1" value="{{ settings.session_max_days }}"
+						data-unit-singular="day" data-unit-plural="days"
+						aria-valuetext="{{ settings.session_max_days }} {{ 'day' if settings.session_max_days == 1 else 'days' }}" aria-describedby="session_max_days_hint">
+					<div class="range-ticks" aria-hidden="true">
+						{% for i in range(session_min, session_max + 1) %}<div class="tick"><span class="tick-label">{{ i }}</span><span class="tick-mark"></span></div>{% endfor %}
+					</div>
+				</div>
+				<div class="form-text" id="session_max_days_hint">Applies to new logins only.</div>
+			</div>
+		</div>
+	</div>
+</section>
+</form>
+<div class="card shadow-sm">
+	<div class="card-header d-flex justify-content-between align-items-center">
+		<h2 class="h6 mb-0"><span class="material-icons me-1" style="font-size: 18px;" aria-hidden="true">group</span>Users</h2>
+		<button type="button" class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#createUserModal">
+			<span class="material-icons me-1" style="font-size: 16px;" aria-hidden="true">person_add</span>New User
+		</button>
+	</div>
+	<div class="card-body p-0">
+		<div id="users-list">
+			{# Users loaded via JS - initial loading state #}
+			<div class="text-center text-body-secondary py-4">
+				<div class="spinner-border spinner-border-sm text-body-secondary" role="status">
+					<span class="visually-hidden">Loading...</span>
+				</div>
+			</div>
+		</div>
+	</div>
+</div>
+</div>
