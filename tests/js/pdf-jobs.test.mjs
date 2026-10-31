@@ -39,7 +39,7 @@ function harness({ storage = "ok", status = [], download = [] } = {}) {
   const document = {
     visibilityState: "visible",
     body: { appendChild() {}, removeChild() {} },
-    createElement: () => ({ click() { clicks.push(this.download); } }),
+    createElement: () => ({ style: {}, click() { clicks.push(this.download); } }),
   };
   vm.runInNewContext(src, {
     window, document, localStorage,

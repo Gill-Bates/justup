@@ -16,7 +16,8 @@ Visibility is derived from the row's audience at query time:
 * ``user``:   only ``recipient_user_id`` (private events such as PDF results; admins do not see them).
 * ``target``: admins and the users assigned to ``target_id`` (``target_alert_users``).
 
-Read state lives in ``notification_reads`` (a missing row means unread). Every writer here runs in
+Read state lives in ``notification_reads`` (a missing row means unread). A user hides a notification
+for themselves only through ``notification_dismissals``; other users keep seeing it. Every writer here runs in
 the caller's transaction, so an event is persisted atomically with the state change that caused it,
 and a failure to record an event never aborts that state change.
 """
@@ -172,6 +173,7 @@ def emit_delivery_sent(conn: sqlite3.Connection, channel: str, *, now: datetime 
                 # activity and must surface as unread again instead of staying silently read.
                 row = conn.execute("SELECT id FROM notifications WHERE idempotency_key = ?", (key,)).fetchone()
                 conn.execute("DELETE FROM notification_reads WHERE notification_id = ?", (row[0],))
+                conn.execute("DELETE FROM notification_dismissals WHERE notification_id = ?", (row[0],))
                 _publish_after_commit(conn, int(row[0]), "delivery", AUDIENCE_ADMINS, None, None)
                 return
         emit(
@@ -192,7 +194,7 @@ def emit_delivery_sent(conn: sqlite3.Connection, channel: str, *, now: datetime 
 
 # ─── Visibility ──────────────────────────────────────────────────────────────
 
-_VISIBLE = """(
+_AUDIENCE_VISIBLE = """(
     (n.audience = 'admins' AND :is_admin = 1)
     OR (n.audience = 'user' AND n.recipient_user_id = :uid)
     OR (n.audience = 'target' AND (
@@ -200,6 +202,11 @@ _VISIBLE = """(
         OR EXISTS (SELECT 1 FROM target_alert_users tau WHERE tau.target_id = n.target_id AND tau.user_id = :uid)
     ))
 ) AND n.event_type NOT IN ('security.login.success', 'report.requested', 'activity.release.superseded')"""
+# What the user may still see: audience rules plus "not dismissed by this user".
+_NOT_DISMISSED = (
+    "NOT EXISTS (SELECT 1 FROM notification_dismissals d WHERE d.notification_id = n.id AND d.user_id = :uid)"
+)
+_VISIBLE = _AUDIENCE_VISIBLE + " AND " + _NOT_DISMISSED
 _UNREAD = "NOT EXISTS (SELECT 1 FROM notification_reads r WHERE r.notification_id = n.id AND r.user_id = :uid)"
 
 _COLUMNS = """
@@ -357,6 +364,35 @@ def mark_all_read(conn: sqlite3.Connection, user: Mapping[str, Any], *, category
             params,
         )
         return int(cur.rowcount)
+
+
+# ─── Dismissal ───────────────────────────────────────────────────────────────
+
+
+def dismiss(conn: sqlite3.Connection, user: Mapping[str, Any], notification_id: int) -> bool:
+    """Hide one notification for *user* only. False when it is not addressed to them.
+
+    Dismissing twice succeeds (idempotent); an invisible or missing id behaves the same.
+    """
+    params = {**_scope(user), "nid": int(notification_id), "now": utcnow()}
+    with transaction(conn):
+        cur = conn.execute(
+            f"""
+            INSERT INTO notification_dismissals (notification_id, user_id, dismissed_at)
+            SELECT n.id, :uid, :now FROM notifications n WHERE n.id = :nid AND {_AUDIENCE_VISIBLE}
+            ON CONFLICT DO NOTHING
+            """,  # noqa: S608
+            params,
+        )
+        if cur.rowcount:
+            return True
+        return (
+            conn.execute(
+                f"SELECT 1 FROM notifications n WHERE n.id = :nid AND {_AUDIENCE_VISIBLE}",  # noqa: S608
+                {k: params[k] for k in ("uid", "is_admin", "nid")},
+            ).fetchone()
+            is not None
+        )
 
 
 # ─── Event helpers (one place per business event, shared by all writers) ─────

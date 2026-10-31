@@ -333,7 +333,7 @@ def test_target_identity_migration_backfills_old_schema_without_data_loss(db_pat
     conn.execute("PRAGMA user_version = 3")
     conn.commit()
     sqlite_db.init_schema(conn)
-    assert sqlite_db.get_schema_version(conn) == 4
+    assert sqlite_db.get_schema_version(conn) == sqlite_db.SCHEMA_VERSION
     assert [row[0] for row in conn.execute("SELECT id FROM targets ORDER BY id")] == ids
     assert all(row[0] for row in conn.execute("SELECT identity_signature FROM targets"))
     assert conn.execute("PRAGMA foreign_key_check").fetchall() == []

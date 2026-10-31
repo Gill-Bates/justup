@@ -40,32 +40,40 @@
       {% if items %}
       <ul class="list-group list-group-flush ju-notif-list" id="np-list">
          {% for n in items %}
-         <li class="list-group-item ju-notif-item ju-notif-{{ n.severity }}{% if not n.is_read %} is-unread{% endif %}"
+         <li class="list-group-item ju-notif-item ju-notif-swipe-item ju-notif-{{ n.severity }}{% if not n.is_read %} is-unread{% endif %}"
             data-id="{{ n.id }}">
-            <span class="material-icons ju-notif-icon" aria-hidden="true">{{ {'monitoring':'monitor_heart','reports':'picture_as_pdf','delivery':'forward_to_inbox','security':'shield','activity':'history'}.get(n.category, 'notifications') }}</span>
-            <div class="ju-notif-main">
-               <div class="ju-notif-title">
-                  {% if not n.is_read %}<span class="ju-unread-dot" aria-hidden="true"></span><span class="visually-hidden">Unread: </span>{% endif %}
-                  <span class="ju-notif-title-text" title="{{ n.title }}">{{ n.title }}</span>
-                  <span class="badge text-bg-{{ 'danger' if n.severity == 'error' else ('warning' if n.severity == 'warning' else ('success' if n.severity == 'success' else 'secondary')) }}">{{ n.severity }}</span>
+            <div class="ju-notif-swipe-content">
+               <span class="material-icons ju-notif-icon" aria-hidden="true">{{ {'monitoring':'monitor_heart','reports':'picture_as_pdf','delivery':'forward_to_inbox','security':'shield','activity':'history'}.get(n.category, 'notifications') }}</span>
+               <div class="ju-notif-main">
+                  <div class="ju-notif-title">
+                     {% if not n.is_read %}<span class="ju-unread-dot" aria-hidden="true"></span><span class="visually-hidden">Unread: </span>{% endif %}
+                     <span class="ju-notif-title-text" title="{{ n.title }}">{{ n.title }}</span>
+                     <span class="badge text-bg-{{ 'danger' if n.severity == 'error' else ('warning' if n.severity == 'warning' else ('success' if n.severity == 'success' else 'secondary')) }}">{{ n.severity }}</span>
+                  </div>
+                  <div class="ju-notif-body text-body-secondary">
+                     {% set context = n.body or n.actor or '' %}{% if context %}<span class="ju-notif-context" title="{{ context }}">{{ context }}</span> · {% endif %}<small class="local-time" data-utc="{{ n.created_at }}">{{ n.created_at }}</small>
+                  </div>
                </div>
-               <div class="ju-notif-body text-body-secondary">
-                  {% set context = n.body or n.actor or '' %}{% if context %}<span class="ju-notif-context" title="{{ context }}">{{ context }}</span> · {% endif %}<small class="local-time" data-utc="{{ n.created_at }}">{{ n.created_at }}</small>
+               <div class="ju-notif-actions">
+                  {% if n.action and n.action.type == 'download' %}
+                  <button type="button" class="btn btn-sm btn-outline-primary np-download" data-url="{{ n.action.url }}"
+                     data-id="{{ n.id }}">{{ n.action.label }}</button>
+                  {% elif n.action and n.action.type == 'link' %}
+                  <a class="btn btn-sm btn-outline-primary np-open" href="{{ n.action.url }}" data-id="{{ n.id }}">{{ n.action.label }}</a>
+                  {% elif n.action %}
+                  <small class="text-body-secondary">{{ n.action.label }}</small>
+                  {% endif %}
+                  {% if not n.is_read %}
+                  <button type="button" class="btn btn-sm btn-outline-secondary np-mark" data-id="{{ n.id }}"
+                     aria-label="Mark as read: {{ n.title }}">Mark read</button>
+                  {% endif %}
                </div>
             </div>
-            <div class="ju-notif-actions">
-               {% if n.action and n.action.type == 'download' %}
-               <button type="button" class="btn btn-sm btn-outline-primary np-download" data-url="{{ n.action.url }}"
-                  data-id="{{ n.id }}">{{ n.action.label }}</button>
-               {% elif n.action and n.action.type == 'link' %}
-               <a class="btn btn-sm btn-outline-primary np-open" href="{{ n.action.url }}" data-id="{{ n.id }}">{{ n.action.label }}</a>
-               {% elif n.action %}
-               <small class="text-body-secondary">{{ n.action.label }}</small>
-               {% endif %}
-               {% if not n.is_read %}
-               <button type="button" class="btn btn-sm btn-outline-secondary np-mark" data-id="{{ n.id }}"
-                  aria-label="Mark as read: {{ n.title }}">Mark read</button>
-               {% endif %}
+            <div class="ju-notif-dismiss-action">
+               <button type="button" class="ju-notif-dismiss-button" data-notification-id="{{ n.id }}"
+                  aria-label="Delete notification: {{ n.title }}" title="Delete notification">
+                  <span class="material-icons" aria-hidden="true">delete</span><span>Delete</span>
+               </button>
             </div>
          </li>
          {% endfor %}

@@ -194,7 +194,7 @@ def test_report_notifications_go_only_to_the_requester_and_are_not_duplicated(db
     sqlite_db.create_report_job(conn, "job2", tid, user_id=alice["id"])
     sqlite_db.update_report_job(conn, "job2", status="failed", error="Traceback secret", completed=True)
     items, total = inbox.list_notifications(conn, alice)
-    assert total == 4  # requested x2, completed, failed
+    assert total == 2  # completed, failed; the request itself raises no inbox event
     assert {i["event_type"] for i in items} >= {"report.completed", "report.failed"}
     assert "secret" not in repr(items)
     assert inbox.list_notifications(conn, admin)[1] == 0
@@ -340,7 +340,7 @@ def test_download_action_only_on_ready_report_notification(client):
     c, tokens = client
     items = c.get("/ui/notifications/items?category=reports", headers=_h(tokens, "alice")).json()["items"]
     actions = {i["event_type"]: i["action"] for i in items}
-    assert actions["report.requested"] is None
+    assert "report.requested" not in actions
     assert actions["report.completed"]["type"] == "download"
 
 
@@ -348,7 +348,7 @@ def test_summary_endpoint_is_private_and_scoped(client):
     c, tokens = client
     r = c.get("/ui/notifications/summary", headers=_h(tokens, "alice"))
     assert r.status_code == 200 and r.headers["cache-control"] == "private, no-store"
-    assert r.json()["unread"] == 2  # requested + completed
+    assert r.json()["unread"] == 1  # completed
     assert c.get("/ui/notifications/summary", headers=_h(tokens, "bob")).json()["unread"] == 0
     assert c.get("/ui/notifications/summary").status_code == 401
     assert c.post("/ui/notifications/1/read", headers=_h(tokens, "bob")).status_code in (403, 404)
@@ -501,6 +501,7 @@ def test_database_without_inbox_tables_is_upgraded_in_place(tmp_path: Path):
     path = tmp_path / "old.db"
     conn = sqlite_db.connect(path)
     sqlite_db.init_schema(conn)
+    conn.execute("DROP TABLE notification_dismissals")
     conn.execute("DROP TABLE notification_reads")
     conn.execute("DROP TABLE notifications")
     conn.execute("DROP INDEX idx_report_jobs_user")
@@ -512,6 +513,7 @@ def test_database_without_inbox_tables_is_upgraded_in_place(tmp_path: Path):
         assert sqlite_db.get_schema_version(conn) == sqlite_db.SCHEMA_VERSION
         assert "user_id" in {r[1] for r in conn.execute("PRAGMA table_info(report_jobs)")}
         conn.execute("SELECT COUNT(*) FROM notification_reads").fetchone()
+        conn.execute("SELECT COUNT(*) FROM notification_dismissals").fetchone()
     finally:
         sqlite_db.close_connection(conn)
 
@@ -728,7 +730,7 @@ def test_monitoring_report_and_delivery_events_carry_their_context(db, spooler):
     texts = {i["event_type"]: (i["title"], i["body"]) for i in inbox.list_notifications(conn, admin)[0]}
     assert texts["monitoring.alert.opened"] == ("Alert opened: T1", "Check: PING")
     assert texts["delivery.email.sent"][1].startswith("Channel: Email")
-    assert inbox.list_notifications(conn, alice)[0][0]["title"] == "PDF report requested: T1"
+    assert inbox.list_notifications(conn, alice)[1] == 0  # a pending report job raises no inbox event
 
 
 def test_deleted_target_keeps_its_name_and_offers_no_link(client):
@@ -947,3 +949,237 @@ def test_certificate_expiry_threshold_creates_inbox_warning(db, days_left, expec
     assert items[0]["title"].startswith(expected_title)
     assert items[0]["severity"] == "warning"
     sched._dispatch_alert.assert_awaited_once()  # noqa: SLF001
+
+
+# ─── Per-user dismissal ─────────────────────────────────────────────────────
+
+
+def _admin_event(conn, admin: dict, user_id: int = 500, name: str = "newbie") -> int:
+    inbox.notify_user_created(conn, user_id=user_id, username=name, actor=admin)
+    return int(
+        conn.execute(
+            "SELECT id FROM notifications WHERE idempotency_key = ?", (f"activity.user.created:{user_id}",)
+        ).fetchone()[0]
+    )
+
+
+def test_dismissal_hides_a_notification_for_that_user_only(db):
+    conn, _ = db
+    first, second = _user(conn, "root", admin=True), _user(conn, "root2", admin=True)
+    nid = _admin_event(conn, first)
+    assert inbox.dismiss(conn, first, nid) is True
+    assert inbox.list_notifications(conn, first) == ([], 0)
+    assert inbox.count_unread(conn, first) == 0
+    assert inbox.get_summary(conn, first)["items"] == []
+    assert inbox.get_notification(conn, first, nid) is None
+    assert [i["id"] for i in inbox.list_notifications(conn, second)[0]] == [nid]  # other admins keep it
+    assert inbox.count_unread(conn, second) == 1
+
+
+def test_dismissal_is_idempotent_and_stored_once(db):
+    conn, _ = db
+    admin = _user(conn, "root", admin=True)
+    nid = _admin_event(conn, admin)
+    assert inbox.dismiss(conn, admin, nid) is True
+    assert inbox.dismiss(conn, admin, nid) is True
+    assert conn.execute("SELECT COUNT(*) FROM notification_dismissals").fetchone()[0] == 1
+    assert inbox.mark_read(conn, admin, nid) is False  # a dismissed row is gone for this user
+
+
+def test_dismissal_refuses_rows_the_user_may_not_see(db):
+    conn, _ = db
+    admin = _user(conn, "root", admin=True)
+    alice, bob = _user(conn, "alice"), _user(conn, "bob")
+    tid = _target(conn)
+    sqlite_db.create_report_job(conn, "private", tid, user_id=alice["id"])
+    sqlite_db.update_report_job(conn, "private", status="completed", filename="f.pdf", completed=True)
+    alice_item = inbox.list_notifications(conn, alice)[0][0]["id"]
+    admin_only = _admin_event(conn, admin)
+    assert inbox.dismiss(conn, bob, alice_item) is False  # foreign private row
+    assert inbox.dismiss(conn, admin, alice_item) is False  # admins do not see private rows either
+    assert inbox.dismiss(conn, alice, admin_only) is False  # regular user vs admin audience
+    assert inbox.dismiss(conn, admin, 99999) is False
+    assert conn.execute("SELECT COUNT(*) FROM notification_dismissals").fetchone()[0] == 0
+    assert inbox.list_notifications(conn, alice)[1] == 1
+
+
+@pytest.mark.usefixtures("frozen_window")
+def test_new_grouped_delivery_resurfaces_after_dismissal(db, spooler):
+    conn, _ = db
+    admin = _user(conn, "root", admin=True)
+    spooler.mark_sent(_enqueue(spooler))
+    item = inbox.list_notifications(conn, admin)[0][0]
+    assert inbox.dismiss(conn, admin, item["id"]) is True
+    assert inbox.list_notifications(conn, admin)[1] == 0
+    spooler.mark_sent(_enqueue(spooler))  # same window: the grouped row is reused
+    again = inbox.list_notifications(conn, admin)[0]
+    assert [i["id"] for i in again] == [item["id"]] and again[0]["is_read"] is False
+
+
+def test_dismissals_are_removed_with_the_notification_and_the_user(db):
+    conn, _ = db
+    first, second = _user(conn, "root", admin=True), _user(conn, "root2", admin=True)
+    gone, kept = _admin_event(conn, first, 501, "a"), _admin_event(conn, first, 502, "b")
+    for user in (first, second):
+        inbox.dismiss(conn, user, gone)
+    inbox.dismiss(conn, second, kept)
+    conn.execute("DELETE FROM notifications WHERE id = ?", (gone,))
+    conn.execute("DELETE FROM users WHERE id = ?", (second["id"],))
+    conn.commit()
+    assert conn.execute("SELECT COUNT(*) FROM notification_dismissals").fetchone()[0] == 0
+
+
+def _bearer_with_csrf(c, tokens, name: str) -> dict[str, str]:
+    # The CSRF token rotates after each validated POST, so every request needs a fresh one.
+    return {**_h(tokens, name), "X-CSRF-Token": _csrf(c)}
+
+
+def _boss_event(c) -> int:
+    conn = sqlite_db.connect(c.app.state.db_path)
+    try:
+        boss = dict(sqlite_db.get_user_by_username(conn, "boss"))
+        return _admin_event(conn, boss, 600, "dismiss-me")
+    finally:
+        sqlite_db.close_connection(conn)
+
+
+def test_dismiss_endpoint_hides_the_row_for_the_caller_and_is_private(client):
+    c, tokens = client
+    nid = _boss_event(c)
+    r = c.post(f"/ui/notifications/{nid}/dismiss", headers=_bearer_with_csrf(c, tokens, "boss"))
+    assert r.status_code == 200 and r.headers["cache-control"] == "private, no-store"
+    assert r.json()["id"] == nid
+    items = c.get("/ui/notifications/items", headers=_h(tokens, "boss")).json()
+    assert nid not in {i["id"] for i in items["items"]}
+    summary = c.get("/ui/notifications/summary", headers=_h(tokens, "boss")).json()
+    assert nid not in {i["id"] for i in summary["items"]}
+    again = c.post(f"/ui/notifications/{nid}/dismiss", headers=_bearer_with_csrf(c, tokens, "boss"))
+    assert again.status_code == 200  # idempotent
+
+
+def test_dismiss_endpoint_does_not_hide_the_row_for_other_users(client):
+    c, tokens = client
+    conn = sqlite_db.connect(c.app.state.db_path)
+    uid = sqlite_db.create_user(conn, username="boss2", password_hash=hash_password("Passw0rd!x1"), is_admin=True)
+    token, expires, max_expires = new_token()
+    sqlite_db.issue_token(
+        conn, user_id=uid, token_hash=hash_token(token), expires_at=expires, max_expires_at=max_expires
+    )
+    sqlite_db.close_connection(conn)
+    tokens["boss2"] = token
+    nid = _boss_event(c)
+    assert c.post(f"/ui/notifications/{nid}/dismiss", headers=_bearer_with_csrf(c, tokens, "boss")).status_code == 200
+    seen = c.get("/ui/notifications/items", headers=_h(tokens, "boss2")).json()["items"]
+    assert nid in {i["id"] for i in seen}
+
+
+def test_dismiss_endpoint_requires_csrf_and_authentication(client):
+    c, tokens = client
+    nid = _boss_event(c)
+    url = f"/ui/notifications/{nid}/dismiss"
+    assert c.post(url, headers=_h(tokens, "boss")).status_code == 403  # no CSRF header
+    forged = {**_h(tokens, "boss"), "X-CSRF-Token": "forged"}
+    assert c.post(url, headers=forged).status_code == 403
+    cross_origin = {**_bearer_with_csrf(c, tokens, "boss"), "Origin": "https://evil.example"}
+    assert c.post(url, headers=cross_origin).status_code == 403
+    assert c.post(url, headers={"X-CSRF-Token": _csrf(c)}).status_code == 401  # CSRF alone is no login
+    still = c.get("/ui/notifications/items", headers=_h(tokens, "boss")).json()["items"]
+    assert nid in {i["id"] for i in still}  # none of the rejected requests dismissed anything
+
+
+def test_dismiss_endpoint_treats_foreign_and_unknown_ids_as_missing(client):
+    c, tokens = client
+    conn = sqlite_db.connect(c.app.state.db_path)
+    alice_item = inbox.list_notifications(conn, dict(sqlite_db.get_user_by_username(conn, "alice")))[0][0]["id"]
+    sqlite_db.close_connection(conn)
+    for name, nid in (("bob", alice_item), ("boss", alice_item), ("boss", 99999), ("boss", 0)):
+        r = c.post(f"/ui/notifications/{nid}/dismiss", headers=_bearer_with_csrf(c, tokens, name))
+        assert r.status_code == 404, (name, nid)
+    summary = c.get("/ui/notifications/summary", headers=_h(tokens, "alice")).json()
+    assert alice_item in {i["id"] for i in summary["items"]}
+
+
+def test_page_renders_swipe_markup_and_drops_dismissed_rows(client):
+    c, tokens = client
+    nid = _boss_event(c)
+    html = _admin_page(c, tokens, "activity")
+    assert 'class="list-group-item ju-notif-item ju-notif-swipe-item' in html
+    assert '<div class="ju-notif-swipe-content">' in html
+    assert f'class="ju-notif-dismiss-button" data-notification-id="{nid}"' in html
+    assert 'aria-label="Delete notification: User created: dismiss-me"' in html
+    assert c.post(f"/ui/notifications/{nid}/dismiss", headers=_bearer_with_csrf(c, tokens, "boss")).status_code == 200
+    assert "dismiss-me" not in _admin_page(c, tokens, "activity")
+
+
+# ─── Migration v5 on existing databases ─────────────────────────────────────
+
+
+def _downgrade_to_v4(conn) -> None:
+    conn.execute("DROP TABLE notification_dismissals")
+    conn.execute("PRAGMA user_version = 4")
+    conn.commit()
+
+
+def test_migration_to_v5_adds_dismissals_and_keeps_existing_rows(tmp_path: Path):
+    conn = sqlite_db.connect(tmp_path / "v4.db")
+    sqlite_db.init_schema(conn)
+    admin = _user(conn, "root", admin=True)
+    nid = _admin_event(conn, admin)
+    inbox.mark_read(conn, admin, nid)
+    _downgrade_to_v4(conn)
+    sqlite_db.init_schema(conn)
+    try:
+        assert sqlite_db.get_schema_version(conn) == 5 == sqlite_db.SCHEMA_VERSION
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(notification_dismissals)")]
+        assert cols == ["notification_id", "user_id", "dismissed_at"]
+        assert conn.execute("SELECT COUNT(*) FROM notification_reads").fetchone()[0] == 1
+        assert [i["id"] for i in inbox.list_notifications(conn, admin)[0]] == [nid]
+        assert inbox.dismiss(conn, admin, nid) is True
+        assert inbox.list_notifications(conn, admin)[1] == 0
+    finally:
+        sqlite_db.close_connection(conn)
+
+
+def test_migration_to_v5_registered_and_repeatable(tmp_path: Path):
+    assert [m.version for m in sqlite_db.MIGRATIONS][-1] == sqlite_db.SCHEMA_VERSION == 5
+    conn = sqlite_db.connect(tmp_path / "again.db")
+    sqlite_db.init_schema(conn)
+    admin = _user(conn, "root", admin=True)
+    nid = _admin_event(conn, admin)
+    inbox.dismiss(conn, admin, nid)
+    conn.execute("PRAGMA user_version = 4")  # table already present: the step must not fail or lose data
+    conn.commit()
+    sqlite_db.init_schema(conn)
+    try:
+        assert sqlite_db.get_schema_version(conn) == 5
+        assert conn.execute("SELECT COUNT(*) FROM notification_dismissals").fetchone()[0] == 1
+    finally:
+        sqlite_db.close_connection(conn)
+
+
+# ─── Frontend contract (route, template, JS, CSS) ───────────────────────────
+
+_ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_dismiss_contract_is_consistent_across_route_template_js_and_css():
+    import re
+
+    from app.api import notifications as notifications_api
+
+    js = (_ROOT / "app/static/js/notifications.js").read_text(encoding="utf-8")
+    page_js = (_ROOT / "app/static/js/notifications-page.js").read_text(encoding="utf-8")
+    template = (_ROOT / "app/templates/notifications.html").read_text(encoding="utf-8")
+    css = (_ROOT / "app/static/css/notifications.css").read_text(encoding="utf-8")
+
+    routes = {(m, r.path) for r in notifications_api.router.routes for m in getattr(r, "methods", ())}
+    assert ("POST", "/ui/notifications/{notification_id}/dismiss") in routes
+    for source in (js, page_js):
+        assert re.search(r"'/ui/notifications/' \+ encodeURIComponent\(.+\) \+ '/dismiss'", source)
+    assert "dismiss.dataset.notificationId" in page_js and "dismiss.dataset.notificationId" in js
+    for cls in ("ju-notif-swipe-item", "ju-notif-swipe-content", "ju-notif-dismiss-action", "ju-notif-dismiss-button"):
+        assert cls in template, cls
+        assert f".{cls}" in css, cls
+    assert "data-notification-id" in template
+    assert "is-dismiss-revealed" in js and ".is-dismiss-revealed" in css
+    assert "notifications.js" in (_ROOT / "app/templates/base.html").read_text(encoding="utf-8")

@@ -512,6 +512,16 @@ _NOTIFICATIONS_DDL = (
     ) WITHOUT ROWID
     """,
     "CREATE INDEX IF NOT EXISTS idx_notification_reads_user ON notification_reads (user_id, notification_id)",
+    # Per-user dismissal ("delete" in the UI): hides one notification for one user without touching others.
+    """
+    CREATE TABLE IF NOT EXISTS notification_dismissals (
+        notification_id INTEGER NOT NULL REFERENCES notifications(id) ON DELETE CASCADE,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        dismissed_at timestamp NOT NULL,
+        PRIMARY KEY (notification_id, user_id)
+    ) WITHOUT ROWID
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_notification_dismissals_user ON notification_dismissals (user_id, notification_id)",
 )
 
 
@@ -930,7 +940,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
 # fresh databases, so migrations only ever transform an existing older database.
 # Migrations must be non-destructive (no silent deletes or merges) and run inside init_schema's
 # transaction: any error rolls the schema AND user_version back. Take a backup before releasing one.
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 class Migration(NamedTuple):
@@ -977,6 +987,11 @@ def _migrate_to_v4(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_targets_identity_signature ON targets(identity_signature)")
 
 
+def _migrate_to_v5(conn: sqlite3.Connection) -> None:
+    """Add the per-user notification dismissals table; additive and idempotent."""
+    ensure_notifications_tables(conn)
+
+
 # Settings whose user switch was removed. Their rows are ignored by the application anyway; dropping them
 # keeps the settings table honest. ``downsample_enabled``: rollups now always run.
 _RETIRED_SETTING_KEYS = ("downsample_enabled",)
@@ -985,6 +1000,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(2, "report_jobs.user_id (report ownership) and the notification inbox tables", _migrate_to_v2),
     Migration(3, "remove obsolete POP refresh interval/initial-delay settings (now self-managed)", _migrate_to_v3),
     Migration(4, "backfill full identities; refuse pre-existing duplicates", _migrate_to_v4),
+    Migration(5, "per-user notification dismissals (notification_dismissals)", _migrate_to_v5),
 )
 
 

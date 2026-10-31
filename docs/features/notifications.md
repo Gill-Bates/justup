@@ -72,14 +72,14 @@ See [Environment Variables](../configuration/environment.md).
 
 The topbar bell and `Manage > Notifications` show a persistent inbox in the SQLite tables
 `notifications` (one row per event, unique `idempotency_key`) and `notification_reads`
-(`notification_id`, `user_id`, `read_at`; a missing row means unread). It is separate from the
+(`notification_id`, `user_id`, `read_at`; a missing row means unread). Deleting a notification in the UI (swipe left, hover or keyboard focus on the row, `POST /ui/notifications/{id}/dismiss`) stores a row in `notification_dismissals` and hides it for that user only; a new delivery in a grouped time window shows the group again. It is separate from the
 `alerts` table and from `notification_queue` (SMTP/Signal delivery). Reading never acknowledges an
 alert, and `open_total` stays the number of open monitoring alerts.
 
 | Event | Audience |
 | --- | --- |
 | `monitoring.alert.opened`, `monitoring.alert.resolved`, `monitoring.certificate.warning` | admins and users assigned to the target |
-| `report.requested`, `report.completed`, `report.failed` | the requesting user only |
+| `report.completed`, `report.failed` | the requesting user only |
 | `security.admin_password.changed`, `security.admin_password.reset`, `activity.user.created`, `activity.target.created` | admins |
 | `activity.release.available` | admins |
 | `delivery.email.sent`, `delivery.signal.sent` (grouped per channel and 10 minutes), `delivery.email.failed`, `delivery.signal.failed` | admins |

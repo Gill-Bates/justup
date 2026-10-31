@@ -202,9 +202,13 @@ class MiniElement {
   }
   setAttribute(name, value) { this.attrs = { ...this.attrs, [name]: String(value) }; }
   remove() { if (this.parentElement) this.parentElement.removeChild(this); }
+  closest(selector) {
+    for (let node = this; node; node = node.parentElement) if (node.matches(selector)) return node;
+    return null;
+  }
   contains(node) { return this === node || this.children.some(child => child.contains(node)); }
   matches(selector) {
-    return selector.startsWith(".") ? this.classList.contains(selector.slice(1)) : this.tagName === selector;
+    return selector.startsWith(".") ? this.classList.contains(selector.slice(1)) : this.tagName.toLowerCase() === selector;
   }
   querySelector(selector) {
     for (const child of this.children) {
@@ -297,4 +301,106 @@ test("preview rows show context, icon and a screen-reader-only unread marker; ma
   assert.equal(row(1).querySelector(".visually-hidden").hidden, true); // read rows carry no unread text
   assert.doesNotMatch(row(1).textContent, /null|undefined|None/);
   assert.equal(row(0).querySelector(".visually-hidden").textContent, "Unread: ");
+});
+
+test("every preview row carries a user-specific delete control wired to its notification id", () => {
+  const doc = previewDocument();
+  const list = doc.createElement("ul");
+  doc.roots.push(list);
+  const bell = doc.createElement("button");
+  const base = { severity: "info", category: "activity", created_at: "2026-01-01T00:00:00Z", is_read: false };
+  N.renderPreview(list, { items: [{ ...base, id: 7, title: "Seven" }, { ...base, id: 8, title: "Eight" }] }, doc, bell);
+  const rows = list.children;
+  assert.match(rows[0].className, /\bju-notif-swipe-item\b/);
+  assert.match(rows[0].querySelector(".ju-notif-pop-btn").className, /\bju-notif-swipe-content\b/);
+  const del = (i) => rows[i].querySelector(".ju-notif-dismiss-button");
+  assert.equal(del(0).dataset.notificationId, "7");
+  assert.equal(del(1).dataset.notificationId, "8");
+  assert.equal(del(0).attrs["aria-label"], "Delete notification: Seven");
+  assert.ok(rows[0].querySelector(".ju-notif-dismiss-action").contains(del(0)));
+  // A refresh keeps the same control (and its focus) and only updates the label.
+  N.renderPreview(list, { items: [{ ...base, id: 7, title: "Seven!" }, { ...base, id: 8, title: "Eight" }] }, doc, bell);
+  assert.equal(list.children[0].querySelector(".ju-notif-dismiss-button"), del(0));
+  assert.equal(del(0).attrs["aria-label"], "Delete notification: Seven!");
+});
+
+test("focus on a delete control that leaves the preview moves to a neighbouring row", () => {
+  const doc = previewDocument();
+  const list = doc.createElement("ul");
+  doc.roots.push(list);
+  const bell = doc.createElement("button");
+  const item = (id) => ({ id, title: "N" + id, severity: "info", category: "activity", is_read: false, created_at: "2026-01-01T00:00:00Z" });
+  N.renderPreview(list, { items: [item(1), item(2)] }, doc, bell);
+  list.children[0].querySelector(".ju-notif-dismiss-button").focus();
+  N.renderPreview(list, { items: [item(2)] }, doc, bell);
+  assert.equal(doc.activeElement, list.children[0].querySelector(".ju-notif-pop-btn"));
+});
+
+function swipeHarness() {
+  const handlers = {};
+  const clickHandlers = [];
+  const classes = new Set();
+  const dismissButton = {};
+  const item = {
+    classList: { add: (n) => classes.add(n), remove: (n) => classes.delete(n), contains: (n) => classes.has(n) },
+    contains: (n) => n === item || n === dismissButton,
+  };
+  const container = {
+    dataset: {},
+    addEventListener: (name, fn) => { handlers[name] = fn; },
+    contains: () => true,
+  };
+  const timers = [];
+  const doc = { addEventListener: (name, fn) => { if (name === "click") clickHandlers.push(fn); } };
+  const sandbox = { window: { document: doc, setTimeout: (fn) => { timers.push(fn); return timers.length; } } };
+  vm.runInNewContext(src, sandbox);
+  sandbox.window.JustUpNotifications.bindSwipeRows(container);
+  const target = { closest: (sel) => (sel === ".ju-notif-swipe-item" ? item : null) };
+  return { handlers, clickHandlers, classes, container, target, item, dismissButton, timers };
+}
+
+test("a left swipe reveals the delete action, a right swipe or outside click hides it", () => {
+  const h = swipeHarness();
+  const swipe = (from, to) => {
+    h.handlers.pointerdown({ target: h.target, clientX: from, clientY: 10, pointerId: 1 });
+    h.handlers.pointerup({ clientX: to, clientY: 12, pointerId: 1 });
+  };
+  swipe(200, 100);
+  assert.equal(h.classes.has("is-dismiss-revealed"), true);
+  swipe(100, 200);
+  assert.equal(h.classes.has("is-dismiss-revealed"), false);
+  swipe(200, 100);
+  h.clickHandlers[0]({ target: { closest: () => null }, preventDefault() {}, stopPropagation() {} });
+  assert.equal(h.classes.has("is-dismiss-revealed"), false);
+});
+
+test("short or mostly vertical gestures neither reveal nor swallow the click", () => {
+  const h = swipeHarness();
+  h.handlers.pointerdown({ target: h.target, clientX: 200, clientY: 10, pointerId: 1 });
+  h.handlers.pointerup({ clientX: 170, clientY: 10, pointerId: 1 });
+  h.handlers.pointerdown({ target: h.target, clientX: 200, clientY: 10, pointerId: 2 });
+  h.handlers.pointerup({ clientX: 120, clientY: 150, pointerId: 2 });
+  assert.equal(h.classes.has("is-dismiss-revealed"), false);
+  let prevented = false;
+  h.clickHandlers[0]({ target: { closest: (sel) => (sel === ".ju-notif-swipe-content" ? {} : null) }, preventDefault() { prevented = true; }, stopPropagation() {} });
+  assert.equal(prevented, false);
+});
+
+test("the click that ends a swipe is swallowed once", () => {
+  const h = swipeHarness();
+  h.handlers.pointerdown({ target: h.target, clientX: 200, clientY: 10, pointerId: 1 });
+  h.handlers.pointerup({ clientX: 100, clientY: 10, pointerId: 1 });
+  let prevented = 0;
+  const click = { target: { closest: (sel) => (sel === ".ju-notif-swipe-content" ? {} : null) }, preventDefault() { prevented++; }, stopPropagation() {} };
+  h.item.contains = () => true;
+  h.clickHandlers[0](click);
+  h.clickHandlers[0](click);
+  assert.equal(prevented, 1);
+});
+
+test("keyboard focus on the delete control reveals its row", () => {
+  const h = swipeHarness();
+  const dismiss = { closest: (sel) => (sel === ".ju-notif-dismiss-button" ? dismiss : sel === ".ju-notif-swipe-item" ? h.item : null) };
+  h.handlers.focusin({ target: dismiss });
+  assert.equal(h.classes.has("is-dismiss-revealed"), true);
 });

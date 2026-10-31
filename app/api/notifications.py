@@ -4,7 +4,7 @@
 # Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 #
 
-"""Notification inbox endpoints for the web UI (polling summary, list, read state).
+"""Notification inbox endpoints for the web UI (polling summary, list, read and dismiss state).
 
 They live under ``/ui/`` on purpose: that prefix already accepts the session cookie and is covered
 by the CSRF middleware, so no API route gains cookie authentication. Every response is
@@ -146,6 +146,21 @@ def read_one(
     """Mark one notification read for the caller only."""
     _no_store(response)
     if notification_id < 1 or not inbox.mark_read(conn, user, notification_id):
+        raise HTTPException(status_code=404, detail="Notification not found")
+    event_bus.publish("notification.changed", {"id": notification_id}, user_ids=[int(user["id"])])
+    return {"id": notification_id, "unread": inbox.count_unread(conn, user)}
+
+
+@router.post("/{notification_id}/dismiss")
+def dismiss_one(
+    notification_id: int,
+    response: Response,
+    conn: sqlite3.Connection = Depends(get_conn),
+    user: dict = Depends(get_current_user),
+):
+    """Hide one notification for the caller only; other users keep seeing it."""
+    _no_store(response)
+    if notification_id < 1 or not inbox.dismiss(conn, user, notification_id):
         raise HTTPException(status_code=404, detail="Notification not found")
     event_bus.publish("notification.changed", {"id": notification_id}, user_ids=[int(user["id"])])
     return {"id": notification_id, "unread": inbox.count_unread(conn, user)}
