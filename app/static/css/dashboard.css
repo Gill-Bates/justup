@@ -198,7 +198,6 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-
 	.dashboard-grid,
 	.dashboard-grid .grid-stack-item {
 		transition: none !important;

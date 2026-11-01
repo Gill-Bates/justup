@@ -276,7 +276,6 @@
 
 /* Short viewports: drop the page chrome so the step keeps usable room. */
 @media (height <=800px) {
-
 	.target-wizard-page .breadcrumb,
 	.target-wizard-page .ui-page-eyebrow,
 	.target-wizard-page .ui-page-lead {
@@ -315,7 +314,6 @@
 }
 
 @media (width <=700px) {
-
 	.target-type-grid,
 	.wizard-check-grid {
 		grid-template-columns: minmax(0, 1fr);

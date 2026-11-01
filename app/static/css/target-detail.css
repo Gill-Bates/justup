@@ -841,7 +841,6 @@ details[open]>summary .target-details-chevron {
 }
 
 @media (prefers-reduced-motion: reduce) {
-
 	.target-skeleton-line,
 	.target-panel[aria-busy="true"]>.card-body::before,
 	.target-details-chevron {
@@ -851,7 +850,6 @@ details[open]>summary .target-details-chevron {
 }
 
 @media (forced-colors: active) {
-
 	.target-status-pill,
 	.target-kpi-card,
 	.target-toolbar {
@@ -1235,7 +1233,6 @@ details[open]>summary .target-details-chevron {
    viewport (short screens, zoom, tablets, phones) keeps the normal scrolling layout above.
    Scoped with :has() to the active dashboard tab; Network diagnostics has its own rule in section 7. */
 @media (width >=1200px) and (height >=800px) {
-
 	/* Viewport-bound shell: the fit height itself is defined in gentelella-layout.css. */
 	.ju-shell:has(.target-detail-page #target-dashboard-pane.active) {
 		--ju-fit-height: 100dvh;
