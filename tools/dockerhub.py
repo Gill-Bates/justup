@@ -13,6 +13,7 @@ DOCKERHUB_REPOSITORY (default: justup); never from argv.
                                 polls until Docker Hub stops serving the tag.
 Which tags to keep is decided by the workflow, not here.
 """
+
 from __future__ import annotations
 
 import json

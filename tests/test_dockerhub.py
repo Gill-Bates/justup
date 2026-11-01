@@ -1,4 +1,5 @@
 """Docker Hub helper used by the release workflow, with HTTP mocked."""
+
 import importlib.util
 import json
 from pathlib import Path

@@ -11,6 +11,7 @@ A prerelease never moves 'latest'. Any parse problem fails closed (exit 1, no ou
 Usage: release-newest.py <published-tags-file> <version> <arch>...
 <arch>... are the built architectures; <version>-<arch> fragment tags are not releases.
 """
+
 from __future__ import annotations
 
 import re
@@ -73,8 +74,11 @@ def main(argv: list[str]) -> int:
     if moves_latest:
         print(f"{argv[2]} is the newest stable release; 'latest' moves.", file=sys.stderr)
     else:
-        print(f"{argv[2]} will be republished, but 'latest' stays put "
-              f"(newer stable: {', '.join(newer_stable) or 'none'}).", file=sys.stderr)
+        print(
+            f"{argv[2]} will be republished, but 'latest' stays put "
+            f"(newer stable: {', '.join(newer_stable) or 'none'}).",
+            file=sys.stderr,
+        )
     if not is_newest:
         print("A newer release exists; nothing is pruned.", file=sys.stderr)
     print(f"is_newest={str(is_newest).lower()}")
