@@ -3,6 +3,7 @@
 # app/services/pdf_route_map.py
 # Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 #
+
 """Offline geographic route map for the PDF report.
 
 The map draws vector geometry only: the Natural Earth country outlines the web map already ships

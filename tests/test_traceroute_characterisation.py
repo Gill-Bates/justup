@@ -3,6 +3,7 @@
 # tests/test_traceroute_characterisation.py
 # Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 #
+
 """Characterisation of the web and PDF traceroute pipelines (T8): pins today's behaviour.
 
 Covers the invariants that are shared today and not yet asserted in test_traceroute_pipeline.py:

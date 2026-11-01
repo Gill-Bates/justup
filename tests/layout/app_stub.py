@@ -1,7 +1,9 @@
+#!/usr/bin/env python3
 #
 # tests/layout/app_stub.py
 # Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 #
+
 """Layout-check launcher: starts the app with a deterministic, offline traceroute.
 
 The route model is fixed so the target page always renders the map, the route timeline and

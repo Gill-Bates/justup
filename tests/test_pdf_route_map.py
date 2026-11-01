@@ -3,6 +3,7 @@
 # tests/test_pdf_route_map.py
 # Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 #
+
 # ruff: noqa: SLF001
 """Offline PDF route map: shared plotted-hop decision, projection, clustering, dataset integrity."""
 

@@ -3,6 +3,7 @@
 # tests/test_group_target_atomicity.py
 # Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 #
+
 """Group check-and-write atomicity and target-delete failure ordering (OPEN-TASKS review residue)."""
 
 from __future__ import annotations
