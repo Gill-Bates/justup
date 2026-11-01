@@ -24,11 +24,11 @@ let _pausedPollingElements = new Map();
  * @returns {{btn: HTMLElement|null, icon: HTMLElement|null, spinner: HTMLElement|null}}
  */
 function _getPdfElements() {
-	return {
-		btn: document.getElementById('export-pdf-btn'),
-		icon: document.getElementById('pdf-icon'),
-		spinner: document.getElementById('pdf-spinner'),
-	};
+  return {
+    btn: document.getElementById("export-pdf-btn"),
+    icon: document.getElementById("pdf-icon"),
+    spinner: document.getElementById("pdf-spinner"),
+  };
 }
 
 /**
@@ -37,11 +37,11 @@ function _getPdfElements() {
  * @param {string} text
  */
 function _setPdfStatus(text) {
-	const el = document.getElementById('pdf-export-status');
-	if (!el) return;
-	el.textContent = text;
-	el.dataset.state = text ? 'error' : '';
-	el.hidden = !text;
+  const el = document.getElementById("pdf-export-status");
+  if (!el) return;
+  el.textContent = text;
+  el.dataset.state = text ? "error" : "";
+  el.hidden = !text;
 }
 /**
  * Pause HTMX polling to reduce server load during PDF generation.
@@ -49,24 +49,28 @@ function _setPdfStatus(text) {
  * @private
  */
 function _pauseHtmxPolling() {
-	_pausedPollingElements.clear();
-	const pollingElements = document.querySelectorAll('[hx-trigger*="every"]');
-	
-	pollingElements.forEach(el => {
-		const trigger = el.getAttribute('hx-trigger');
-		if (trigger) {
-			_pausedPollingElements.set(el, trigger);
-			el.removeAttribute('hx-trigger');
-			// Re-process element to stop HTMX polling
-			if (typeof htmx !== 'undefined' && htmx.process) {
-				htmx.process(el);
-			}
-		}
-	});
-	
-	if (_pausedPollingElements.size > 0) {
-		console.info('HTMX polling paused for', _pausedPollingElements.size, 'elements during PDF generation');
-	}
+  _pausedPollingElements.clear();
+  const pollingElements = document.querySelectorAll('[hx-trigger*="every"]');
+
+  pollingElements.forEach((el) => {
+    const trigger = el.getAttribute("hx-trigger");
+    if (trigger) {
+      _pausedPollingElements.set(el, trigger);
+      el.removeAttribute("hx-trigger");
+      // Re-process element to stop HTMX polling
+      if (typeof htmx !== "undefined" && htmx.process) {
+        htmx.process(el);
+      }
+    }
+  });
+
+  if (_pausedPollingElements.size > 0) {
+    console.info(
+      "HTMX polling paused for",
+      _pausedPollingElements.size,
+      "elements during PDF generation",
+    );
+  }
 }
 
 /**
@@ -75,39 +79,39 @@ function _pauseHtmxPolling() {
  * @private
  */
 function _resumeHtmxPolling() {
-	let resumed = 0;
-	
-	_pausedPollingElements.forEach((trigger, el) => {
-		// Only restore if element is still in DOM
-		if (el.isConnected) {
-			el.setAttribute('hx-trigger', trigger);
-			// Re-process to restart polling
-			if (typeof htmx !== 'undefined' && htmx.process) {
-				htmx.process(el);
-			}
-			resumed++;
-		}
-	});
-	
-	_pausedPollingElements.clear();
-	
-	if (resumed > 0) {
-		console.info('HTMX polling resumed for', resumed, 'elements');
-	}
+  let resumed = 0;
+
+  _pausedPollingElements.forEach((trigger, el) => {
+    // Only restore if element is still in DOM
+    if (el.isConnected) {
+      el.setAttribute("hx-trigger", trigger);
+      // Re-process to restart polling
+      if (typeof htmx !== "undefined" && htmx.process) {
+        htmx.process(el);
+      }
+      resumed++;
+    }
+  });
+
+  _pausedPollingElements.clear();
+
+  if (resumed > 0) {
+    console.info("HTMX polling resumed for", resumed, "elements");
+  }
 }
 
 /**
  * Reset the PDF export button to its idle state.
  */
 function resetPdfButton() {
-	_pdfRequestInFlight = false;
-	_resumeHtmxPolling();
-	
-	const { btn, icon, spinner } = _getPdfElements();
+  _pdfRequestInFlight = false;
+  _resumeHtmxPolling();
 
-	if (spinner) spinner.classList.add('d-none');
-	if (icon) icon.classList.remove('d-none');
-	if (btn) btn.disabled = false;
+  const { btn, icon, spinner } = _getPdfElements();
+
+  if (spinner) spinner.classList.add("d-none");
+  if (icon) icon.classList.remove("d-none");
+  if (btn) btn.disabled = false;
 }
 
 /**
@@ -115,11 +119,11 @@ function resetPdfButton() {
  * @private
  */
 function _setPdfButtonBusy() {
-	const { btn, icon, spinner } = _getPdfElements();
+  const { btn, icon, spinner } = _getPdfElements();
 
-	if (icon) icon.classList.add('d-none');
-	if (spinner) spinner.classList.remove('d-none');
-	if (btn) btn.disabled = true;
+  if (icon) icon.classList.add("d-none");
+  if (spinner) spinner.classList.remove("d-none");
+  if (btn) btn.disabled = true;
 }
 
 /**
@@ -134,79 +138,87 @@ function _setPdfButtonBusy() {
  * @returns {Promise<number|undefined>} Safety timeout handle, or undefined if request fails early
  */
 async function downloadPdfReport(targetId, pdfPageSize) {
-	if (!targetId || typeof targetId !== 'number') {
-		console.error('downloadPdfReport: invalid targetId', targetId);
-		return;
-	}
+  if (!targetId || typeof targetId !== "number") {
+    console.error("downloadPdfReport: invalid targetId", targetId);
+    return;
+  }
 
-	const validSizes = ['a4', 'letter'];
-	const size = validSizes.includes(pdfPageSize) ? pdfPageSize : 'a4';
+  const validSizes = ["a4", "letter"];
+  const size = validSizes.includes(pdfPageSize) ? pdfPageSize : "a4";
 
-	// Reentrancy guard (prevent double-click)
-	if (_pdfRequestInFlight) return;
-	_pdfRequestInFlight = true;
+  // Reentrancy guard (prevent double-click)
+  if (_pdfRequestInFlight) return;
+  _pdfRequestInFlight = true;
 
-	_setPdfStatus('');
-	_setPdfButtonBusy();
-	_pauseHtmxPolling();
+  _setPdfStatus("");
+  _setPdfButtonBusy();
+  _pauseHtmxPolling();
 
-	// Safety timeout: reset button if job completion event never arrives
-	const safetyTimeout = setTimeout(() => {
-		console.warn('PDF export: safety timeout reached (5min), resetting button');
-		resetPdfButton();
-	}, 5 * 60 * 1000); // 5 minutes
+  // Safety timeout: reset button if job completion event never arrives
+  const safetyTimeout = setTimeout(
+    () => {
+      console.warn(
+        "PDF export: safety timeout reached (5min), resetting button",
+      );
+      resetPdfButton();
+    },
+    5 * 60 * 1000,
+  ); // 5 minutes
 
-	try {
-		const since = appState.range.from ? appState.range.from.toISOString() : '';
-		const until = appState.range.to ? appState.range.to.toISOString() : '';
+  try {
+    const since = appState.range.from ? appState.range.from.toISOString() : "";
+    const until = appState.range.to ? appState.range.to.toISOString() : "";
 
-		const params = new URLSearchParams({ page_size: size });
-		if (since) params.set('since', since);
-		if (until) params.set('until', until);
+    const params = new URLSearchParams({ page_size: size });
+    if (since) params.set("since", since);
+    if (until) params.set("until", until);
 
-		const response = await apiFetch(
-			`/reports/targets/${targetId}/pdf/request?${params}`,
-			{ method: 'POST' }
-		);
+    const response = await apiFetch(
+      `/reports/targets/${targetId}/pdf/request?${params}`,
+      { method: "POST" },
+    );
 
-		if (!response.ok) {
-			let errorMsg = `Server error: ${response.status}`;
-			// A body can be read only once: take the text, then try it as JSON.
-			const text = await response.text().catch(() => '');
-			try {
-				const errData = JSON.parse(text);
-				if (typeof errData.detail === 'string') {
-					errorMsg = errData.detail;
-				} else if (Array.isArray(errData.detail)) {
-					errorMsg = errData.detail.map(e => e.msg || JSON.stringify(e)).join(', ');
-				}
-			} catch {
-				// Fallback: plaintext
-				if (text) errorMsg += ` – ${text.substring(0, 200)}`;
-			}
-			throw new Error(errorMsg);
-		}
+    if (!response.ok) {
+      let errorMsg = `Server error: ${response.status}`;
+      // A body can be read only once: take the text, then try it as JSON.
+      const text = await response.text().catch(() => "");
+      try {
+        const errData = JSON.parse(text);
+        if (typeof errData.detail === "string") {
+          errorMsg = errData.detail;
+        } else if (Array.isArray(errData.detail)) {
+          errorMsg = errData.detail
+            .map((e) => e.msg || JSON.stringify(e))
+            .join(", ");
+        }
+      } catch {
+        // Fallback: plaintext
+        if (text) errorMsg += ` – ${text.substring(0, 200)}`;
+      }
+      throw new Error(errorMsg);
+    }
 
-		const data = await response.json();
-		const jobId = data.job_id;
+    const data = await response.json();
+    const jobId = data.job_id;
 
-		// Register with global poller (survives navigation)
-		window.justUpPdfJobs?.add(jobId, targetId);
+    // Register with global poller (survives navigation)
+    window.justUpPdfJobs?.add(jobId, targetId);
 
-		// Warn if poller unavailable (button will reset via safety timeout)
-		if (!window.justUpPdfJobs) {
-			console.warn('PDF job poller not available, button will reset after timeout');
-		}
+    // Warn if poller unavailable (button will reset via safety timeout)
+    if (!window.justUpPdfJobs) {
+      console.warn(
+        "PDF job poller not available, button will reset after timeout",
+      );
+    }
 
-		return safetyTimeout;
-
-	} catch (err) {
-		clearTimeout(safetyTimeout);
-		_pdfRequestInFlight = false;
-		console.error('PDF request failed:', err);
-		_setPdfStatus('PDF failed: ' + err.message);
-		resetPdfButton(); // This also resumes HTMX polling
-	}
+    return safetyTimeout;
+  } catch (err) {
+    clearTimeout(safetyTimeout);
+    _pdfRequestInFlight = false;
+    console.error("PDF request failed:", err);
+    _setPdfStatus("PDF failed: " + err.message);
+    resetPdfButton(); // This also resumes HTMX polling
+  }
 }
 
 /**
@@ -217,26 +229,29 @@ async function downloadPdfReport(targetId, pdfPageSize) {
  * @returns {{cleanup: Function, setSafetyTimeout: Function}} Object with cleanup function and timeout setter
  */
 function initPdfJobListener(targetId) {
-	let safetyTimeout = null;
+  let safetyTimeout = null;
 
-	function onJobCompleted(e) {
-		if (Number(e.detail?.targetId) === Number(targetId)) {
-			if (safetyTimeout) clearTimeout(safetyTimeout);
-			resetPdfButton();
-			if (e.detail?.success === false) _setPdfStatus(e.detail.error || 'PDF failed');
-		}
-	}
+  function onJobCompleted(e) {
+    if (Number(e.detail?.targetId) === Number(targetId)) {
+      if (safetyTimeout) clearTimeout(safetyTimeout);
+      resetPdfButton();
+      if (e.detail?.success === false)
+        _setPdfStatus(e.detail.error || "PDF failed");
+    }
+  }
 
-	window.addEventListener('pdf-job-completed', onJobCompleted);
+  window.addEventListener("pdf-job-completed", onJobCompleted);
 
-	// Return cleanup object with timeout integration
-	return {
-		cleanup: () => {
-			window.removeEventListener('pdf-job-completed', onJobCompleted);
-			if (safetyTimeout) clearTimeout(safetyTimeout);
-		},
-		setSafetyTimeout: (t) => { safetyTimeout = t; },
-	};
+  // Return cleanup object with timeout integration
+  return {
+    cleanup: () => {
+      window.removeEventListener("pdf-job-completed", onJobCompleted);
+      if (safetyTimeout) clearTimeout(safetyTimeout);
+    },
+    setSafetyTimeout: (t) => {
+      safetyTimeout = t;
+    },
+  };
 }
 
 /**
@@ -246,13 +261,13 @@ function initPdfJobListener(targetId) {
  * @param {number} targetId
  */
 function checkPendingPdfJob(targetId) {
-	if (!targetId) return;
+  if (!targetId) return;
 
-	const pendingJobs = window.justUpPdfJobs?.getPending() || [];
-	const tid = Number(targetId);
-	const hasPending = pendingJobs.some(j => Number(j.targetId) === tid);
+  const pendingJobs = window.justUpPdfJobs?.getPending() || [];
+  const tid = Number(targetId);
+  const hasPending = pendingJobs.some((j) => Number(j.targetId) === tid);
 
-	if (hasPending) {
-		_setPdfButtonBusy();
-	}
+  if (hasPending) {
+    _setPdfButtonBusy();
+  }
 }

@@ -282,7 +282,7 @@ h6,
 	--bs-table-border-color: var(--ju-panel-line);
 }
 
-.table > thead > tr > th {
+.table>thead>tr>th {
 	color: var(--bs-secondary-color);
 	font-weight: 650;
 	border-bottom: 1px solid var(--ju-panel-line);
@@ -307,7 +307,7 @@ h6,
 	--ju-fit-overflow: auto;
 }
 
-@media (width >= 992px) {
+@media (width >=992px) {
 	.ju-shell--fit-lg {
 		--ju-fit-height: 100dvh;
 		--ju-fit-overflow: auto;
@@ -593,7 +593,7 @@ html {
 	border-left: 1px solid var(--bs-border-color);
 }
 
-.ju-content > main {
+.ju-content>main {
 	flex: 1 1 auto;
 	min-width: 0;
 	min-height: 0;
@@ -604,8 +604,7 @@ html {
 /* ===== Layout guard (global) =====
    The footer is a normal-flow row that margin-top:auto pushes to the bottom of the column. It
    must not be sticky/fixed: a sticky footer paints over the last viewport rows at every scroll
-   position except the very end, which cut off cards ("sticks out of the viewport"). The rules
-   below keep every page inside the content column without per-page patches. */
+   position except the very end and cuts off cards. */
 .ju-content .ju-footer {
 	flex: 0 0 auto;
 	margin-top: auto;
@@ -619,25 +618,25 @@ html {
 	overflow-x: clip;
 }
 
-.ju-content > main {
+.ju-content>main {
 	overflow-wrap: break-word;
 }
 
-.ju-content > main :is(img, svg, video, canvas, iframe) {
+.ju-content>main :is(img, svg, video, canvas, iframe) {
 	max-width: 100%;
 }
 
 /* Large embedded boxes stay bounded; they scroll inside instead of stretching their card. */
-.ju-content > main :is(pre, iframe) {
+.ju-content>main :is(pre, iframe) {
 	max-height: min(40rem, 75dvh);
 }
 
-.ju-content > main pre {
+.ju-content>main pre {
 	max-width: 100%;
 	overflow: auto;
 }
 
-.ju-content > main :is(.card, .card-body, .row > *, .tab-content, .tab-pane) {
+.ju-content>main :is(.card, .card-body, .row > *, .tab-content, .tab-pane) {
 	min-width: 0;
 }
 
@@ -647,7 +646,7 @@ html {
 	letter-spacing: -0.025em;
 }
 
-/* Status heroes use the same soft icon treatment as the monitor choices. */
+/* Status hero: icon on a tile tinted with the status color. */
 .dashboard-hero {
 	--ju-hero-accent: var(--bs-primary);
 
@@ -657,11 +656,19 @@ html {
 	text-align: left !important;
 }
 
-.dashboard-hero[data-status="online"] { --ju-hero-accent: var(--ju-st-online); }
-.dashboard-hero[data-status="offline"] { --ju-hero-accent: var(--ju-st-offline); }
-.dashboard-hero[data-status="disabled"] { --ju-hero-accent: var(--ju-st-disabled); }
+.dashboard-hero[data-status="online"] {
+	--ju-hero-accent: var(--ju-st-online);
+}
 
-.dashboard-hero > .d-flex {
+.dashboard-hero[data-status="offline"] {
+	--ju-hero-accent: var(--ju-st-offline);
+}
+
+.dashboard-hero[data-status="disabled"] {
+	--ju-hero-accent: var(--ju-st-disabled);
+}
+
+.dashboard-hero>.d-flex {
 	justify-content: space-between !important;
 	flex-direction: row-reverse;
 }
@@ -682,22 +689,32 @@ html {
 	background: color-mix(in srgb, var(--ju-hero-accent) 12%, transparent);
 }
 
-.dashboard-hero[data-status="online"] .small { color: var(--ju-st-online) !important; }
-.dashboard-hero[data-status="offline"] .small { color: var(--ju-st-offline) !important; }
-.dashboard-hero[data-status="disabled"] .small { color: var(--ju-st-disabled) !important; }
-.dashboard-hero[data-status="total"] .small { color: var(--bs-link-color) !important; }
+.dashboard-hero[data-status="online"] .small {
+	color: var(--ju-st-online) !important;
+}
+
+.dashboard-hero[data-status="offline"] .small {
+	color: var(--ju-st-offline) !important;
+}
+
+.dashboard-hero[data-status="disabled"] .small {
+	color: var(--ju-st-disabled) !important;
+}
+
+.dashboard-hero[data-status="total"] .small {
+	color: var(--bs-link-color) !important;
+}
 
 .dashboard-hero .fs-3 {
 	color: var(--ju-title) !important;
 }
 
-/* Teal top edge of the standalone password panel */
 .ju-auth-card {
 	border-top: 3px solid var(--bs-primary);
 }
 
 /* ===== Desktop rail mode (sidebar collapsed to icons) ===== */
-@media (width >= 992px) {
+@media (width >=992px) {
 	.ju-nav-sm .ju-sidebar {
 		width: var(--ju-sidebar-w-rail);
 	}
@@ -755,8 +772,8 @@ html {
 }
 
 /* ===== Mobile: off-canvas sidebar ===== */
-@media (width <= 991.98px) {
-	.ju-topbar > #sidebar-toggle {
+@media (width <=991.98px) {
+	.ju-topbar>#sidebar-toggle {
 		flex: 0 0 3rem;
 		width: 3rem;
 		min-width: 3rem;
@@ -812,13 +829,14 @@ html {
 	}
 }
 
-@media (width <= 576px) {
+@media (width <=576px) {
 	.ju-topbar-divider {
 		display: none;
 	}
 }
 
 @media (prefers-reduced-motion: reduce) {
+
 	.ju-sidebar,
 	.ju-nav-open .ju-sidebar,
 	.ju-content,

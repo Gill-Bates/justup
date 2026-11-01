@@ -9,6 +9,7 @@ Usage:
     pop_learned_cleanup.py /path/to/justup.db
     pop_learned_cleanup.py /path/to/justup.db --apply --ids 12,13 --backup /path/pre.db
 """
+
 from __future__ import annotations
 
 import argparse
@@ -24,9 +25,7 @@ def _ro(db: Path) -> sqlite3.Connection:
 def report(db: Path) -> int:
     con = _ro(db)
     print("source/retired counts:")
-    for row in con.execute(
-        "SELECT source, retired, COUNT(*) FROM pop_locations GROUP BY 1, 2 ORDER BY 1, 2"
-    ):
+    for row in con.execute("SELECT source, retired, COUNT(*) FROM pop_locations GROUP BY 1, 2 ORDER BY 1, 2"):
         print("  ", row)
     rows = con.execute(
         "SELECT id, alias_code, canonical_code, city, country, retired FROM pop_locations "
@@ -36,8 +35,7 @@ def report(db: Path) -> int:
     for r in rows:
         print("  ", r)
         for o in con.execute(
-            "SELECT id, canonical_code, city, source FROM pop_locations "
-            "WHERE alias_code = ? AND id <> ?",
+            "SELECT id, canonical_code, city, source FROM pop_locations WHERE alias_code = ? AND id <> ?",
             (r[1], r[0]),
         ):
             print("      same alias:", o)
@@ -62,7 +60,8 @@ def apply(db: Path, ids: list[int], backup: Path) -> int:
     marks = ",".join("?" * len(ids))
     src.execute("BEGIN IMMEDIATE")
     cur = src.execute(
-        f"DELETE FROM pop_locations WHERE source = 'learned' AND id IN ({marks})", ids
+        f"DELETE FROM pop_locations WHERE source = 'learned' AND id IN ({marks})",  # noqa: S608 - marks holds only "?" placeholders
+        ids,
     )
     if cur.rowcount != len(ids):
         src.execute("ROLLBACK")

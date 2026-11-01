@@ -17,20 +17,20 @@
  * @returns {Promise<void>}
  */
 async function saveAutoCloseAlert(toggle, targetId) {
-	if (toggle.disabled) return;
-	const wanted = toggle.checked;
-	try {
-		const res = await apiFetch(`/targets/${targetId}`, {
-			method: 'PATCH',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ auto_close_alert: wanted }),
-		});
-		if (!res.ok) {
-			toggle.checked = !wanted;
-			console.error('Failed to update auto_close_alert:', res.status);
-		}
-	} catch (err) {
-		toggle.checked = !wanted;
-		console.error('Failed to update auto_close_alert:', err);
-	}
+  if (toggle.disabled) return;
+  const wanted = toggle.checked;
+  try {
+    const res = await apiFetch(`/targets/${targetId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ auto_close_alert: wanted }),
+    });
+    if (!res.ok) {
+      toggle.checked = !wanted;
+      console.error("Failed to update auto_close_alert:", res.status);
+    }
+  } catch (err) {
+    toggle.checked = !wanted;
+    console.error("Failed to update auto_close_alert:", err);
+  }
 }

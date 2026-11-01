@@ -36,7 +36,7 @@
 	border-radius: var(--bs-border-radius-lg);
 }
 
-.dashboard-grid .grid-stack-item-content > :not(.dashboard-widget-header) {
+.dashboard-grid .grid-stack-item-content> :not(.dashboard-widget-header) {
 	width: 100%;
 	min-width: 0;
 }
@@ -90,8 +90,8 @@
 	display: none;
 }
 
-@media (width >= 992px) {
-	.dashboard-grid--editing > .dashboard-slots {
+@media (width >=992px) {
+	.dashboard-grid--editing>.dashboard-slots {
 		position: absolute;
 		inset: 0;
 		display: flex;
@@ -107,10 +107,7 @@
 	flex: 0 0 var(--gs-column-width);
 	height: var(--gs-cell-height);
 	padding:
-		var(--gs-item-margin-top, var(--ju-dash-gutter))
-		var(--gs-item-margin-right, var(--ju-dash-gutter))
-		var(--gs-item-margin-bottom, var(--ju-dash-gutter))
-		var(--gs-item-margin-left, var(--ju-dash-gutter));
+		var(--gs-item-margin-top, var(--ju-dash-gutter)) var(--gs-item-margin-right, var(--ju-dash-gutter)) var(--gs-item-margin-bottom, var(--ju-dash-gutter)) var(--gs-item-margin-left, var(--ju-dash-gutter));
 }
 
 .dashboard-slot::before {
@@ -138,7 +135,7 @@
 }
 
 /* Inset the corner grip from the tile's rounded edge and keep a 24px touch target. */
-.dashboard-grid--editing.dashboard-grid .grid-stack-item > .ui-resizable-se {
+.dashboard-grid--editing.dashboard-grid .grid-stack-item>.ui-resizable-se {
 	width: 24px;
 	height: 24px;
 	right: calc(var(--gs-item-margin-right, var(--ju-dash-gutter)) + 6px);
@@ -147,7 +144,7 @@
 	color: var(--bs-body-color);
 }
 
-.dashboard-grid--editing.dashboard-grid .grid-stack-item > .ui-resizable-se::after {
+.dashboard-grid--editing.dashboard-grid .grid-stack-item>.ui-resizable-se::after {
 	content: "";
 	position: absolute;
 	right: 0.25rem;
@@ -170,7 +167,7 @@
 /* Phone/tablet fallback. Keep 991.98px in sync with MOBILE_QUERY in dashboard-grid.js.
    The four status tiles form a 2×2 grid; the larger widgets span both columns. The edit toolbar
    is hidden by its Bootstrap d-lg-flex class, and the saved desktop layout stays untouched. */
-@media (width <= 991.98px) {
+@media (width <=991.98px) {
 	.dashboard-grid {
 		display: grid;
 		grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -180,19 +177,19 @@
 		margin-block-end: 0;
 	}
 
-	.dashboard-grid > .grid-stack-item[data-widget-id="quality"],
-	.dashboard-grid > .grid-stack-item[data-widget-id="downtime"] {
+	.dashboard-grid>.grid-stack-item[data-widget-id="quality"],
+	.dashboard-grid>.grid-stack-item[data-widget-id="downtime"] {
 		grid-column: 1 / -1;
 	}
 
-	.dashboard-grid > .grid-stack-item {
+	.dashboard-grid>.grid-stack-item {
 		position: static !important;
 		width: auto !important;
 		height: auto !important;
 		transform: none !important;
 	}
 
-	.dashboard-grid > .grid-stack-item > .grid-stack-item-content {
+	.dashboard-grid>.grid-stack-item>.grid-stack-item-content {
 		position: relative !important;
 		inset: auto;
 		margin: 0 !important;
@@ -201,6 +198,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+
 	.dashboard-grid,
 	.dashboard-grid .grid-stack-item {
 		transition: none !important;

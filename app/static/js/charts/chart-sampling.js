@@ -15,27 +15,27 @@ const MOBILE_BREAKPOINT = 768;
 
 // Decimation configuration
 var DECIMATION_CONFIG = {
-	mobile: {
-		widthMultiplier: 0.35,
-		minSamples: 80,
-		maxSamples: 600,
-		longRangeExtraFactor: 0.6,  // additional reduction for >1 day
-	},
-	desktop: {
-		widthMultiplier: 0.9,
-		minSamples: 200,
-		maxSamples: 3000,  // higher counts lag the browser
-	},
-	// rangeDays threshold -> factor (ordered, first match wins)
-	rangeBuckets: [
-		{ above: 180, factor: 0.35 },
-		{ above: 30,  factor: 0.45 },
-		{ above: 7,   factor: 0.55 },
-		{ above: 1,   factor: 0.70 },
-		{ above: 0.25, factor: 0.80 },
-		{ above: 1/24, factor: 1.05 },
-		{ above: 0,    factor: 1.35 },
-	]
+  mobile: {
+    widthMultiplier: 0.35,
+    minSamples: 80,
+    maxSamples: 600,
+    longRangeExtraFactor: 0.6, // additional reduction for >1 day
+  },
+  desktop: {
+    widthMultiplier: 0.9,
+    minSamples: 200,
+    maxSamples: 3000, // higher counts lag the browser
+  },
+  // rangeDays threshold -> factor (ordered, first match wins)
+  rangeBuckets: [
+    { above: 180, factor: 0.35 },
+    { above: 30, factor: 0.45 },
+    { above: 7, factor: 0.55 },
+    { above: 1, factor: 0.7 },
+    { above: 0.25, factor: 0.8 },
+    { above: 1 / 24, factor: 1.05 },
+    { above: 0, factor: 1.35 },
+  ],
 };
 
 /**
@@ -43,7 +43,7 @@ var DECIMATION_CONFIG = {
  * @returns {boolean}
  */
 function _isMobile() {
-	return window.innerWidth < MOBILE_BREAKPOINT;
+  return window.innerWidth < MOBILE_BREAKPOINT;
 }
 
 /**
@@ -53,27 +53,34 @@ function _isMobile() {
  * @returns {number} Range in ms (0 if unknown)
  */
 function _getVisibleRangeMs(chart) {
-	try {
-		const sx = chart?.scales?.x;
-		if (sx && typeof sx.min === 'number' && typeof sx.max === 'number' && sx.max > sx.min) {
-			return sx.max - sx.min;
-		}
-	} catch (e) { /* ignore */ }
+  try {
+    const sx = chart?.scales?.x;
+    if (
+      sx &&
+      typeof sx.min === "number" &&
+      typeof sx.max === "number" &&
+      sx.max > sx.min
+    ) {
+      return sx.max - sx.min;
+    }
+  } catch (e) {
+    /* ignore */
+  }
 
-	// Fallback to global appState (set by target-detail.js)
-	if (typeof appState !== 'undefined' && appState?.range) {
-		const from = appState.range.from;
-		const to = appState.range.to;
-		// appState.range.from/to are Date objects
-		if (from instanceof Date && to instanceof Date && to > from) {
-			return to.getTime() - from.getTime();
-		}
-		// Fallback for numeric timestamps (legacy compatibility)
-		if (typeof from === 'number' && typeof to === 'number' && to > from) {
-			return to - from;
-		}
-	}
-	return 0;
+  // Fallback to global appState (set by target-detail.js)
+  if (typeof appState !== "undefined" && appState?.range) {
+    const from = appState.range.from;
+    const to = appState.range.to;
+    // appState.range.from/to are Date objects
+    if (from instanceof Date && to instanceof Date && to > from) {
+      return to.getTime() - from.getTime();
+    }
+    // Fallback for numeric timestamps (legacy compatibility)
+    if (typeof from === "number" && typeof to === "number" && to > from) {
+      return to - from;
+    }
+  }
+  return 0;
 }
 
 /**
@@ -83,32 +90,35 @@ function _getVisibleRangeMs(chart) {
  * @returns {number} Target sample count (clamped per DECIMATION_CONFIG)
  */
 function _computeDecimationSamples(chart) {
-	var rangeMs = _getVisibleRangeMs(chart);
-	var rangeDays = rangeMs ? (rangeMs / (1000 * 60 * 60 * 24)) : 0;
-	var width = Math.max(300, Math.floor(chart?.chartArea?.width || chart?.width || 800));
-	var mobile = _isMobile();
-	var cfg = mobile ? DECIMATION_CONFIG.mobile : DECIMATION_CONFIG.desktop;
+  var rangeMs = _getVisibleRangeMs(chart);
+  var rangeDays = rangeMs ? rangeMs / (1000 * 60 * 60 * 24) : 0;
+  var width = Math.max(
+    300,
+    Math.floor(chart?.chartArea?.width || chart?.width || 800),
+  );
+  var mobile = _isMobile();
+  var cfg = mobile ? DECIMATION_CONFIG.mobile : DECIMATION_CONFIG.desktop;
 
-	// Base samples from chart width
-	var base = Math.round(width * cfg.widthMultiplier);
+  // Base samples from chart width
+  var base = Math.round(width * cfg.widthMultiplier);
 
-	// Time-range factor: wider range = more aggressive decimation
-	var factor = 1.0;
-	for (var i = 0; i < DECIMATION_CONFIG.rangeBuckets.length; i++) {
-		var bucket = DECIMATION_CONFIG.rangeBuckets[i];
-		if (rangeDays > bucket.above) {
-			factor = bucket.factor;
-			break;
-		}
-	}
+  // Time-range factor: wider range = more aggressive decimation
+  var factor = 1.0;
+  for (var i = 0; i < DECIMATION_CONFIG.rangeBuckets.length; i++) {
+    var bucket = DECIMATION_CONFIG.rangeBuckets[i];
+    if (rangeDays > bucket.above) {
+      factor = bucket.factor;
+      break;
+    }
+  }
 
-	// Extra reduction on mobile for longer time ranges
-	if (mobile && rangeDays > 1) {
-		factor *= cfg.longRangeExtraFactor;
-	}
+  // Extra reduction on mobile for longer time ranges
+  if (mobile && rangeDays > 1) {
+    factor *= cfg.longRangeExtraFactor;
+  }
 
-	var samples = Math.round(base * factor);
-	return Math.max(cfg.minSamples, Math.min(cfg.maxSamples, samples));
+  var samples = Math.round(base * factor);
+  return Math.max(cfg.minSamples, Math.min(cfg.maxSamples, samples));
 }
 
 /**
@@ -118,31 +128,38 @@ function _computeDecimationSamples(chart) {
  * @returns {boolean}
  */
 function _chartSupportsDecimation(chart) {
-	// Chart.js decimation requires:
-	// 1. Line chart (already checked by caller)
-	// 2. All datasets use {x, y} format
-	// 3. x-axis is linear or time scale
-	// 4. options.parsing === false with numeric, sorted x: Chart.js skips decimation otherwise.
-	// The stepped availability chart keeps default parsing on purpose; LTTB could drop short outages.
-	if (chart.options?.parsing !== false) return false;
-	var datasets = chart.data?.datasets;
-	if (!datasets || datasets.length === 0) return false;
+  // Chart.js decimation requires:
+  // 1. Line chart (already checked by caller)
+  // 2. All datasets use {x, y} format
+  // 3. x-axis is linear or time scale
+  // 4. options.parsing === false with numeric, sorted x: Chart.js skips decimation otherwise.
+  // The stepped availability chart keeps default parsing on purpose; LTTB could drop short outages.
+  if (chart.options?.parsing !== false) return false;
+  var datasets = chart.data?.datasets;
+  if (!datasets || datasets.length === 0) return false;
 
-	var scaleType = chart.options?.scales?.x?.type;
-	if (scaleType !== 'time' && scaleType !== 'linear' && scaleType !== 'timeseries') {
-		return false;
-	}
+  var scaleType = chart.options?.scales?.x?.type;
+  if (
+    scaleType !== "time" &&
+    scaleType !== "linear" &&
+    scaleType !== "timeseries"
+  ) {
+    return false;
+  }
 
-	// Verify ALL datasets are compatible with decimation
-	for (var i = 0; i < datasets.length; i++) {
-		var ds = datasets[i];
-		if (!ds.data || ds.data.length === 0) continue;
-		var firstPoint = ds.data[0];
-		var hasXY = firstPoint !== null && typeof firstPoint === 'object'
-			&& 'x' in firstPoint && 'y' in firstPoint;
-		if (!hasXY) return false;
-	}
-	return true;
+  // Verify ALL datasets are compatible with decimation
+  for (var i = 0; i < datasets.length; i++) {
+    var ds = datasets[i];
+    if (!ds.data || ds.data.length === 0) continue;
+    var firstPoint = ds.data[0];
+    var hasXY =
+      firstPoint !== null &&
+      typeof firstPoint === "object" &&
+      "x" in firstPoint &&
+      "y" in firstPoint;
+    if (!hasXY) return false;
+  }
+  return true;
 }
 
 /**
@@ -152,74 +169,77 @@ function _chartSupportsDecimation(chart) {
  * @param {Chart} chart - Chart.js instance
  */
 function updateChartSampling(chart) {
-	if (!chart) return;
-	if (chart.config?.type !== 'line') return;
-	if (chart._isUpdatingSampling || chart._skipSampling) return;
-	// Skip sampling updates during theme changes (theme only affects colors, not data density)
-	if (chart._isThemeUpdating) return;
-	// Guard: Canvas may be detached from DOM (page navigation, HTMX swap)
-	if (!chart.canvas || !chart.canvas.parentNode || !chart.canvas.isConnected) return;
+  if (!chart) return;
+  if (chart.config?.type !== "line") return;
+  if (chart._isUpdatingSampling || chart._skipSampling) return;
+  // Skip sampling updates during theme changes (theme only affects colors, not data density)
+  if (chart._isThemeUpdating) return;
+  // Guard: Canvas may be detached from DOM (page navigation, HTMX swap)
+  if (!chart.canvas || !chart.canvas.parentNode || !chart.canvas.isConnected)
+    return;
 
-	var mobile = _isMobile();
-	var samples = _computeDecimationSamples(chart);
-	
-	// Use maximum point count across all datasets
-	var points = 0;
-	var datasets = chart.data?.datasets || [];
-	for (var d = 0; d < datasets.length; d++) {
-		var len = datasets[d]?.data?.length || 0;
-		if (len > points) points = len;
-	}
-	
-	var shouldDecimate = points > samples && _chartSupportsDecimation(chart);
+  var mobile = _isMobile();
+  var samples = _computeDecimationSamples(chart);
 
-	// More aggressive point hiding on mobile
-	var hideThreshold = mobile
-		? Math.max(60, Math.round(samples * 0.5))
-		: Math.max(250, Math.round(samples * 0.8));
-	var hidePoints = points > hideThreshold;
+  // Use maximum point count across all datasets
+  var points = 0;
+  var datasets = chart.data?.datasets || [];
+  for (var d = 0; d < datasets.length; d++) {
+    var len = datasets[d]?.data?.length || 0;
+    if (len > points) points = len;
+  }
 
-	// Tight hit radius so the tooltip triggers on the point, not a wide x-axis band.
-	// Slightly larger on mobile for touch, but still matched to the visible point.
-	var targetRadius = hidePoints ? 0 : (mobile ? 3 : 2);
-	var targetHoverRadius = mobile ? 8 : 6;
-	var targetHitRadius = mobile ? 6 : 3;
+  var shouldDecimate = points > samples && _chartSupportsDecimation(chart);
 
-	// Only update if settings actually changed (all five properties)
-	var dec = chart.options.plugins?.decimation;
-	var currentPoint = chart.options.elements?.point;
+  // More aggressive point hiding on mobile
+  var hideThreshold = mobile
+    ? Math.max(60, Math.round(samples * 0.5))
+    : Math.max(250, Math.round(samples * 0.8));
+  var hidePoints = points > hideThreshold;
 
-	if (dec &&
-		dec.enabled === shouldDecimate &&
-		dec.samples === samples &&
-		currentPoint?.radius === targetRadius &&
-		currentPoint?.hoverRadius === targetHoverRadius &&
-		currentPoint?.hitRadius === targetHitRadius) {
-		return;
-	}
+  // Tight hit radius so the tooltip triggers on the point, not a wide x-axis band.
+  // Slightly larger on mobile for touch, but still matched to the visible point.
+  var targetRadius = hidePoints ? 0 : mobile ? 3 : 2;
+  var targetHoverRadius = mobile ? 8 : 6;
+  var targetHitRadius = mobile ? 6 : 3;
 
-	chart._isUpdatingSampling = true;
-	try {
-		if (!chart.options.plugins) chart.options.plugins = {};
-		chart.options.plugins.decimation = {
-			enabled: shouldDecimate,
-			algorithm: 'lttb',
-			samples: samples,
-		};
+  // Only update if settings actually changed (all five properties)
+  var dec = chart.options.plugins?.decimation;
+  var currentPoint = chart.options.elements?.point;
 
-		if (!chart.options.elements) chart.options.elements = {};
-		if (!chart.options.elements.point) chart.options.elements.point = {};
-		chart.options.elements.point.radius = targetRadius;
-		chart.options.elements.point.hoverRadius = targetHoverRadius;
-		chart.options.elements.point.hitRadius = targetHitRadius;
+  if (
+    dec &&
+    dec.enabled === shouldDecimate &&
+    dec.samples === samples &&
+    currentPoint?.radius === targetRadius &&
+    currentPoint?.hoverRadius === targetHoverRadius &&
+    currentPoint?.hitRadius === targetHitRadius
+  ) {
+    return;
+  }
 
-		// 'none' mode: synchronous update without animation.
-		// The _isUpdatingSampling flag guards against re-entry if
-		// Chart.js triggers plugin hooks synchronously during update().
-		chart.update('none');
-	} finally {
-		chart._isUpdatingSampling = false;
-	}
+  chart._isUpdatingSampling = true;
+  try {
+    if (!chart.options.plugins) chart.options.plugins = {};
+    chart.options.plugins.decimation = {
+      enabled: shouldDecimate,
+      algorithm: "lttb",
+      samples: samples,
+    };
+
+    if (!chart.options.elements) chart.options.elements = {};
+    if (!chart.options.elements.point) chart.options.elements.point = {};
+    chart.options.elements.point.radius = targetRadius;
+    chart.options.elements.point.hoverRadius = targetHoverRadius;
+    chart.options.elements.point.hitRadius = targetHitRadius;
+
+    // 'none' mode: synchronous update without animation.
+    // The _isUpdatingSampling flag guards against re-entry if
+    // Chart.js triggers plugin hooks synchronously during update().
+    chart.update("none");
+  } finally {
+    chart._isUpdatingSampling = false;
+  }
 }
 
 /**
@@ -230,53 +250,62 @@ var _resizeDebounce = null;
 var _resizeHandler = null;
 
 function _handleViewportResize() {
-	if (_resizeDebounce) clearTimeout(_resizeDebounce);
-	_resizeDebounce = setTimeout(function() {
-		if (typeof appState !== 'undefined' && appState.charts && typeof appState.charts.forEach === 'function') {
-			appState.charts.forEach(function(chart) {
-				// Guard: Check canvas is still connected before updating
-				if (chart && chart.config?.type === 'line' && chart.canvas?.isConnected) {
-					updateChartSampling(chart);
-				}
-			});
-		}
-	}, 200);
+  if (_resizeDebounce) clearTimeout(_resizeDebounce);
+  _resizeDebounce = setTimeout(function () {
+    if (
+      typeof appState !== "undefined" &&
+      appState.charts &&
+      typeof appState.charts.forEach === "function"
+    ) {
+      appState.charts.forEach(function (chart) {
+        // Guard: Check canvas is still connected before updating
+        if (
+          chart &&
+          chart.config?.type === "line" &&
+          chart.canvas?.isConnected
+        ) {
+          updateChartSampling(chart);
+        }
+      });
+    }
+  }, 200);
 }
 
 function registerResizeListener() {
-	if (_resizeHandler) return;
-	_resizeHandler = _handleViewportResize;
-	window.addEventListener('resize', _resizeHandler, { passive: true });
+  if (_resizeHandler) return;
+  _resizeHandler = _handleViewportResize;
+  window.addEventListener("resize", _resizeHandler, { passive: true });
 }
 
 function unregisterResizeListener() {
-	if (_resizeHandler) {
-		window.removeEventListener('resize', _resizeHandler);
-		_resizeHandler = null;
-	}
-	if (_resizeDebounce) {
-		clearTimeout(_resizeDebounce);
-		_resizeDebounce = null;
-	}
+  if (_resizeHandler) {
+    window.removeEventListener("resize", _resizeHandler);
+    _resizeHandler = null;
+  }
+  if (_resizeDebounce) {
+    clearTimeout(_resizeDebounce);
+    _resizeDebounce = null;
+  }
 }
 
 function fullCleanup() {
-	unregisterResizeListener();
-	delete window.updateChartSampling;
-	delete window._chartSamplingCleanup;
-	delete window._chartSamplingInit;
+  unregisterResizeListener();
+  delete window.updateChartSampling;
+  delete window._chartSamplingCleanup;
+  delete window._chartSamplingInit;
 }
 
 // Automatic cleanup on HTMX navigation to prevent resize handler leaks
-if (typeof document !== 'undefined' && document.body) {
-	document.body.addEventListener('htmx:beforeSwap', function(evt) {
-		// Fragment swaps (e.g. downtime history) must keep the sampling alive
-		const swapTarget = evt.detail?.target;
-		if (swapTarget !== document.body && swapTarget !== document.documentElement) return;
-		if (typeof window._chartSamplingCleanup === 'function') {
-			window._chartSamplingCleanup();
-		}
-	});
+if (typeof document !== "undefined" && document.body) {
+  document.body.addEventListener("htmx:beforeSwap", function (evt) {
+    // Fragment swaps (e.g. downtime history) must keep the sampling alive
+    const swapTarget = evt.detail?.target;
+    if (swapTarget !== document.body && swapTarget !== document.documentElement)
+      return;
+    if (typeof window._chartSamplingCleanup === "function") {
+      window._chartSamplingCleanup();
+    }
+  });
 }
 
 // Not auto-registered: chart pages call window._chartSamplingInit() on init

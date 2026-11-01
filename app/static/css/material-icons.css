@@ -27,12 +27,29 @@
 }
 
 /* Size variants */
-.material-icons.fs-1 { font-size: 2.5rem; }
-.material-icons.fs-2 { font-size: 2rem; }
-.material-icons.fs-3 { font-size: 1.75rem; }
-.material-icons.fs-4 { font-size: 1.5rem; }
-.material-icons.fs-5 { font-size: 1.25rem; }
-.material-icons.fs-6 { font-size: 1rem; }
+.material-icons.fs-1 {
+    font-size: 2.5rem;
+}
+
+.material-icons.fs-2 {
+    font-size: 2rem;
+}
+
+.material-icons.fs-3 {
+    font-size: 1.75rem;
+}
+
+.material-icons.fs-4 {
+    font-size: 1.5rem;
+}
+
+.material-icons.fs-5 {
+    font-size: 1.25rem;
+}
+
+.material-icons.fs-6 {
+    font-size: 1rem;
+}
 
 /* Icon wrapper for compatibility with Bootstrap spacing classes */
 .mi {

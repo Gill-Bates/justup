@@ -50,7 +50,7 @@
 	/* must match actual thumb size */
 }
 
-@media (width <= 576px) {
+@media (width <=576px) {
 	:root {
 		--page-gutter: 0.875rem;
 		--ui-space-tile: 1rem;
@@ -101,7 +101,7 @@ body {
 		--bs-gutter-y: 1rem;
 	}
 
-	.row:not(.modal *) > [class*="col-md-"] {
+	.row:not(.modal *)>[class*="col-md-"] {
 		flex: 0 0 auto;
 		width: 100%;
 	}
@@ -118,7 +118,7 @@ body {
 	margin-block-end: calc(var(--ui-space-header) - var(--ui-space-tile));
 }
 
-.ui-page-header > :is(h1, h2) {
+.ui-page-header> :is(h1, h2) {
 	margin: 0;
 }
 
@@ -177,7 +177,7 @@ body {
 	min-width: 0;
 }
 
-.ju-settings-grid > * {
+.ju-settings-grid>* {
 	min-width: 0;
 }
 
@@ -185,7 +185,7 @@ body {
 	grid-column: 1 / -1;
 }
 
-@container ju-page (width >= 40rem) {
+@container ju-page (width >=40rem) {
 	.ju-settings-grid {
 		grid-template-columns: repeat(2, minmax(0, 1fr));
 	}
@@ -234,13 +234,13 @@ textarea.smtp-editor-frame {
 /* Desktop fit mode for the SMTP editor: the shell is viewport-bound (gentelella-layout.css), both
    cards end at the footer and scroll inside their body. Below the media condition the normal
    scrolling layout above applies. */
-@media (width >= 992px) and (height >= 600px) {
+@media (width >=992px) and (height >=600px) {
 	.ju-shell:has(#smtp-pane.active .settings-editor--fill) {
 		--ju-fit-height: 100dvh;
 		--ju-fit-overflow: auto;
 	}
 
-	.ju-content:has(#smtp-pane.active .settings-editor--fill) > main {
+	.ju-content:has(#smtp-pane.active .settings-editor--fill)>main {
 		display: grid;
 		grid-template-rows: minmax(0, 1fr);
 	}
@@ -268,25 +268,25 @@ textarea.smtp-editor-frame {
 		min-height: 0;
 	}
 
-	.settings-editor--fill > .card {
+	.settings-editor--fill>.card {
 		display: flex;
 		flex-direction: column;
 		min-height: 0;
 	}
 
-	.settings-editor--fill > .card > .card-body {
+	.settings-editor--fill>.card>.card-body {
 		flex: 1 1 auto;
 		min-height: 0;
 		overflow-y: auto;
 	}
 
 	/* Template card: subject and actions keep their height, the active editor pane takes the rest. */
-	.settings-editor--fill > .card:last-child > .card-body {
+	.settings-editor--fill>.card:last-child>.card-body {
 		display: flex;
 		flex-direction: column;
 	}
 
-	.settings-editor--fill > .card:last-child > .card-body > * {
+	.settings-editor--fill>.card:last-child>.card-body>* {
 		flex: none;
 	}
 
@@ -300,7 +300,7 @@ textarea.smtp-editor-frame {
 		flex-direction: column;
 	}
 
-	.settings-editor--fill #wysiwyg-container > .border {
+	.settings-editor--fill #wysiwyg-container>.border {
 		display: flex;
 		flex: 1 1 0;
 		flex-direction: column;
@@ -324,7 +324,7 @@ textarea.smtp-editor-frame {
 	gap: 0.75rem;
 }
 
-@media (width >= 576px) {
+@media (width >=576px) {
 	.settings-field-row {
 		grid-template-columns: repeat(2, minmax(0, 1fr));
 	}
@@ -343,7 +343,7 @@ textarea.smtp-editor-frame {
 	}
 }
 
-.settings-details > summary {
+.settings-details>summary {
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
@@ -351,11 +351,11 @@ textarea.smtp-editor-frame {
 	list-style: none;
 }
 
-.settings-details > summary::-webkit-details-marker {
+.settings-details>summary::-webkit-details-marker {
 	display: none;
 }
 
-.settings-details > summary::after {
+.settings-details>summary::after {
 	content: "";
 	flex: none;
 	width: 0.5rem;
@@ -367,18 +367,18 @@ textarea.smtp-editor-frame {
 	transition: transform 0.15s;
 }
 
-.settings-details[open] > summary::after {
+.settings-details[open]>summary::after {
 	transform: rotate(225deg);
 	margin-bottom: -0.2rem;
 }
 
-.settings-details > summary:focus-visible {
+.settings-details>summary:focus-visible {
 	outline: 2px solid var(--bs-primary);
 	outline-offset: -2px;
 }
 
 @media (prefers-reduced-motion: reduce) {
-	.settings-details > summary::after {
+	.settings-details>summary::after {
 		transition: none;
 	}
 }
@@ -387,8 +387,8 @@ textarea.smtp-editor-frame {
 	max-width: 72ch;
 }
 
-.ui-grid > *,
-.ui-stack > * {
+.ui-grid>*,
+.ui-stack>* {
 	min-width: 0;
 	margin: 0;
 }
@@ -403,7 +403,7 @@ textarea.smtp-editor-frame {
 	grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr));
 }
 
-@media (width <= 576px) {
+@media (width <=576px) {
 	.ui-grid--quad {
 		grid-template-columns: repeat(2, minmax(0, 1fr));
 	}
@@ -413,7 +413,7 @@ textarea.smtp-editor-frame {
 	}
 }
 
-@container ju-page (width >= 60rem) {
+@container ju-page (width >=60rem) {
 	.ui-grid--thirds {
 		grid-template-columns: repeat(3, minmax(0, 1fr));
 	}
@@ -557,7 +557,7 @@ textarea.smtp-editor-frame {
 }
 
 /* Mobile: center toast with consistent width and rounded corners */
-@media (width <= 576px) {
+@media (width <=576px) {
 	.ui-toast-container {
 		left: 50% !important;
 		right: auto !important;
@@ -669,6 +669,7 @@ textarea.smtp-editor-frame {
 }
 
 @media (prefers-reduced-motion: reduce) {
+
 	.form-range::-webkit-slider-thumb,
 	.form-range::-moz-range-thumb {
 		transition: none;
@@ -676,6 +677,7 @@ textarea.smtp-editor-frame {
 }
 
 @media (forced-colors: active) {
+
 	.form-range::-webkit-slider-thumb,
 	.form-range::-moz-range-thumb {
 		background-color: Highlight;
@@ -727,15 +729,41 @@ textarea.smtp-editor-frame {
 	opacity: 0.5;
 }
 
-.range-ticks .tick:nth-child(1) { grid-column: 1; }
-.range-ticks .tick:nth-child(2) { grid-column: 2; }
-.range-ticks .tick:nth-child(3) { grid-column: 3; }
-.range-ticks .tick:nth-child(4) { grid-column: 4; }
-.range-ticks .tick:nth-child(5) { grid-column: 5; }
-.range-ticks .tick:nth-child(6) { grid-column: 6; }
-.range-ticks .tick:nth-child(7) { grid-column: 7; }
-.range-ticks .tick:nth-child(8) { grid-column: 8; }
-.range-ticks .tick:nth-child(9) { grid-column: 9; }
+.range-ticks .tick:nth-child(1) {
+	grid-column: 1;
+}
+
+.range-ticks .tick:nth-child(2) {
+	grid-column: 2;
+}
+
+.range-ticks .tick:nth-child(3) {
+	grid-column: 3;
+}
+
+.range-ticks .tick:nth-child(4) {
+	grid-column: 4;
+}
+
+.range-ticks .tick:nth-child(5) {
+	grid-column: 5;
+}
+
+.range-ticks .tick:nth-child(6) {
+	grid-column: 6;
+}
+
+.range-ticks .tick:nth-child(7) {
+	grid-column: 7;
+}
+
+.range-ticks .tick:nth-child(8) {
+	grid-column: 8;
+}
+
+.range-ticks .tick:nth-child(9) {
+	grid-column: 9;
+}
 
 .range-ticks .tick:last-child {
 	grid-column: var(--range-steps);
@@ -832,10 +860,12 @@ textarea.smtp-editor-frame {
 }
 
 /* Keep variant colors, but use subtle hover backgrounds instead of outline frames */
+
 /* Bootstrap's plain danger red is 4.2:1 on the page background; the emphasis tone passes 4.5:1. */
 .btn-outline-danger {
 	--bs-btn-color: var(--bs-danger-text-emphasis);
 }
+
 .btn-icon.btn-outline-primary:hover {
 	background-color: rgb(var(--bs-primary-rgb), 0.12);
 }
@@ -930,7 +960,7 @@ textarea.smtp-editor-frame {
 }
 
 /* Desktop: real table, no card reflow */
-@media (width >= 768px) {
+@media (width >=768px) {
 	.targets-table td::before {
 		content: none !important;
 		display: none !important;
@@ -954,7 +984,7 @@ textarea.smtp-editor-frame {
 	line-height: var(--table-row-line-height);
 }
 
-.ui-page .table > thead > tr > th {
+.ui-page .table>thead>tr>th {
 	padding-block: 0.85rem;
 	background: var(--ju-panel-bg);
 	color: var(--bs-secondary-color);
@@ -964,11 +994,11 @@ textarea.smtp-editor-frame {
 	text-transform: uppercase;
 }
 
-.ui-page .table:not(.rtable) > tbody > tr:last-child > * {
+.ui-page .table:not(.rtable)>tbody>tr:last-child>* {
 	border-bottom-width: 0;
 }
 
-.ui-page .table-bordered > :not(caption) > * > * {
+.ui-page .table-bordered> :not(caption)>*>* {
 	border-width: 0 0 1px;
 }
 
@@ -1097,7 +1127,8 @@ textarea.smtp-editor-frame {
 
 
 /* ----- Mobile Responsive: Settings Tables (Users, Recipients) ----- */
-@media (width <= 991.98px) {
+@media (width <=991.98px) {
+
 	#users-list .table,
 	#recipients-list .table {
 		table-layout: auto;
@@ -1116,7 +1147,8 @@ textarea.smtp-editor-frame {
 	}
 }
 
-@media (width <= 767.98px) {
+@media (width <=767.98px) {
+
 	/* Stack tables as cards on mobile */
 	#users-list .table,
 	#recipients-list .table {
@@ -1308,7 +1340,8 @@ textarea.smtp-editor-frame {
 }
 
 /* ----- Mobile Responsive: Spooler Notification Log ----- */
-@media (width <= 767.98px) {
+@media (width <=767.98px) {
+
 	/* Hide low-priority columns on mobile */
 	.spooler-log th:nth-child(3),
 	/* Target */
@@ -1346,7 +1379,7 @@ textarea.smtp-editor-frame {
 	}
 }
 
-@media (width >= 768px) {
+@media (width >=768px) {
 	.storage-danger-actions {
 		width: auto !important;
 	}
@@ -1491,7 +1524,9 @@ textarea.smtp-editor-frame {
 	min-height: 1.75rem;
 }
 
-@media (pointer: coarse), (width <= 576px) {
+@media (pointer: coarse),
+(width <=576px) {
+
 	.tag-input__entry,
 	.tag-input__reset {
 		min-height: 2.75rem;
@@ -1499,7 +1534,7 @@ textarea.smtp-editor-frame {
 }
 
 /* Compact chips on phones; the 44px touch target is a pseudo-element hit area. */
-@media (width <= 576px) {
+@media (width <=576px) {
 	.tag-input__field {
 		gap: 0.25rem;
 		padding: 0.375rem 0.5rem;
@@ -1546,7 +1581,7 @@ textarea.smtp-editor-frame {
 		text-align: start;
 	}
 
-	.tag-input + .form-text {
+	.tag-input+.form-text {
 		overflow-wrap: anywhere;
 	}
 }
@@ -1714,7 +1749,7 @@ textarea.smtp-editor-frame {
 	max-width: 220px;
 }
 
-@media (width <= 576px) {
+@media (width <=576px) {
 	.alert-recipients-picker {
 		max-height: 320px;
 	}
@@ -1848,7 +1883,8 @@ textarea.smtp-editor-frame {
    4. RESPONSIVE: MOBILE (max-width: 768px)
    ============================================= */
 
-@media (width <= 767.98px) {
+@media (width <=767.98px) {
+
 	/* Buttons */
 	.btn-page-primary {
 		width: 100%;
@@ -1938,7 +1974,7 @@ textarea.smtp-editor-frame {
    5. RESPONSIVE: MOBILE (max-width: 576px)
    ============================================= */
 
-@media (width <= 576px) {
+@media (width <=576px) {
 	/* No overflow-x: hidden on html/body: it masks layout bugs, blocks horizontal
 	 * scroll on iOS Safari and can break position: sticky. Fix the overflow source. */
 
@@ -2024,7 +2060,8 @@ textarea.smtp-editor-frame {
    6. DESKTOP ENHANCEMENTS (min-width: 768px+)
    ============================================= */
 
-@media (width >= 768px) {
+@media (width >=768px) {
+
 	/* Tables stay within card boundaries - no edge-to-edge manipulation */
 	.ui-card .table {
 		margin-left: 0;
@@ -2038,25 +2075,25 @@ textarea.smtp-editor-frame {
 		border-spacing: 0 0.4rem;
 	}
 
-	.ui-page .rtable > tbody > tr > * {
+	.ui-page .rtable>tbody>tr>* {
 		--bs-table-bg: var(--bs-body-bg);
 
 		border-block: 1px solid var(--ju-panel-line);
 	}
 
-	.ui-page .rtable > tbody > tr > :first-child {
+	.ui-page .rtable>tbody>tr> :first-child {
 		border-left: 1px solid var(--ju-panel-line);
 		border-radius: var(--ju-radius-tile) 0 0 var(--ju-radius-tile);
 	}
 
-	.ui-page .rtable > tbody > tr > :last-child {
+	.ui-page .rtable>tbody>tr> :last-child {
 		border-right: 1px solid var(--ju-panel-line);
 		border-radius: 0 var(--ju-radius-tile) var(--ju-radius-tile) 0;
 	}
 }
 
 /* Targets Table: Hover and Truncation (Desktop) */
-@media (width >= 768px) {
+@media (width >=768px) {
 	.targets-table .truncate {
 		max-width: 300px;
 	}
@@ -2077,7 +2114,7 @@ textarea.smtp-editor-frame {
 }
 
 /* Desktop/Tablet: fixed layout for consistent column alignment across groups */
-@media (width >= 768px) {
+@media (width >=768px) {
 	.targets-table {
 		table-layout: fixed;
 	}
@@ -2087,7 +2124,7 @@ textarea.smtp-editor-frame {
 		width: 2.5rem;
 	}
 
-		.targets-table .col-name {
+	.targets-table .col-name {
 		width: 20%;
 	}
 
@@ -2123,7 +2160,7 @@ textarea.smtp-editor-frame {
 
 /* Narrow page container (not window): hide the secondary columns (5 to 8: last check, last
    downtime, HTTP, interval) with their cells, so the fixed layout keeps room for the actions. */
-@media (width >= 768px) {
+@media (width >=768px) {
 	@container ju-page (width < 60rem) {
 		.targets-table :is(col, th, td):nth-child(n + 5):nth-child(-n + 8) {
 			display: none;
@@ -2157,7 +2194,8 @@ textarea.smtp-editor-frame {
 	text-overflow: clip;
 }
 
-@media (width >= 768px) {
+@media (width >=768px) {
+
 	.ui-page .targets-table td[data-label="Status"],
 	.ui-page .targets-table thead th:first-child {
 		padding-inline: 0.25rem;
@@ -2210,7 +2248,8 @@ textarea.smtp-editor-frame {
    7. VERY NARROW DEVICES (max-width: 360px)
    ============================================= */
 
-@media (width <= 360px) {
+@media (width <=360px) {
+
 	/* Action buttons may wrap on very narrow devices */
 	.targets-table td [class*="flex-nowrap"] {
 		flex-wrap: wrap;
@@ -2305,6 +2344,7 @@ textarea.smtp-editor-frame {
 }
 
 @keyframes shake {
+
 	0%,
 	100% {
 		transform: translateX(0);
@@ -2327,7 +2367,7 @@ textarea.smtp-editor-frame {
 /* Danger zone styling - subtler appearance */
 
 /* Mobile: hide disabled steps completely for cleaner flow */
-@media (width <= 576px) {
+@media (width <=576px) {
 	.signal-step-disabled {
 		display: none;
 	}
@@ -2461,7 +2501,7 @@ textarea.smtp-editor-frame {
 	max-width: 100%;
 }
 
-@media (width >= 992px) {
+@media (width >=992px) {
 	.signal-templates-grid {
 		grid-template-columns: repeat(2, minmax(0, 1fr));
 		align-items: start;
@@ -2472,7 +2512,7 @@ textarea.smtp-editor-frame {
 	}
 }
 
-@media (width >= 1200px) {
+@media (width >=1200px) {
 	.signal-templates-grid {
 		grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 2fr);
 	}
@@ -2486,7 +2526,8 @@ textarea.smtp-editor-frame {
 	max-width: 100%;
 }
 
-@media (width <= 576px) {
+@media (width <=576px) {
+
 	.signal-templates-placeholders th,
 	.signal-templates-placeholders td,
 	.signal-templates-placeholders code {
@@ -2646,12 +2687,29 @@ textarea.smtp-editor-frame {
 	filter: invert(1);
 }
 
-.status-up { color: var(--status-up); }
-.status-down { color: var(--status-down); }
-.status-degraded { color: var(--status-degraded); }
-.status-warning { color: var(--status-warning); }
-.status-unknown { color: var(--status-unknown); }
-.status-disabled { color: var(--status-disabled); }
+.status-up {
+	color: var(--status-up);
+}
+
+.status-down {
+	color: var(--status-down);
+}
+
+.status-degraded {
+	color: var(--status-degraded);
+}
+
+.status-warning {
+	color: var(--status-warning);
+}
+
+.status-unknown {
+	color: var(--status-unknown);
+}
+
+.status-disabled {
+	color: var(--status-disabled);
+}
 
 .card-status {
 	transition: all 0.3s ease;
@@ -2678,8 +2736,13 @@ textarea.smtp-editor-frame {
 }
 
 @keyframes fadeIn {
-	from { opacity: 0; }
-	to { opacity: 1; }
+	from {
+		opacity: 0;
+	}
+
+	to {
+		opacity: 1;
+	}
 }
 
 .table-clickable tbody tr {
@@ -2780,7 +2843,7 @@ body.server-offline #server-offline-overlay {
 	flex: 0 0 14px;
 }
 
-@media (width <= 991.98px) {
+@media (width <=991.98px) {
 	.btn-sm {
 		min-height: 44px;
 		min-width: 44px;
@@ -2870,6 +2933,7 @@ main:focus {
 }
 
 @media (prefers-reduced-motion: reduce) {
+
 	*,
 	*::before,
 	*::after {
@@ -2881,6 +2945,7 @@ main:focus {
 }
 
 @media (forced-colors: active) {
+
 	.modal-content,
 	.card,
 	.toast {
@@ -2909,7 +2974,7 @@ main:focus {
 }
 
 /* Compact target cards on phones while keeping every primary field and action visible. */
-@media (width <= 767.98px) {
+@media (width <=767.98px) {
 	.targets-table tbody tr {
 		display: grid;
 		grid-template-columns: 1.5rem minmax(0, 1fr) auto;
@@ -2971,7 +3036,7 @@ main:focus {
 	}
 }
 
-@media (width <= 767.98px) {
+@media (width <=767.98px) {
 	.groups-list-card {
 		padding: 0.5rem;
 	}
@@ -3054,4 +3119,3 @@ main:focus {
 		background-color: color-mix(in srgb, var(--bs-primary) 80%, white);
 	}
 }
-

@@ -1,5 +1,5 @@
 /* The shell is viewport-bound (ju-shell--fit), so only the active step scrolls inside the card. */
-.ju-content > main:has(.target-wizard-page) {
+.ju-content>main:has(.target-wizard-page) {
 	display: flex;
 	flex-direction: column;
 	overflow: hidden;
@@ -19,7 +19,7 @@
 	padding: clamp(1.25rem, 3vw, 2rem);
 }
 
-.target-wizard-panel > .card-body,
+.target-wizard-panel>.card-body,
 .target-wizard-panel form {
 	display: flex;
 	flex: 1 1 auto;
@@ -180,7 +180,7 @@
 	font-weight: 700;
 }
 
-.target-type-copy > span {
+.target-type-copy>span {
 	color: var(--bs-secondary-color);
 	font-size: 0.85rem;
 	line-height: 1.45;
@@ -244,12 +244,12 @@
 	overflow-wrap: anywhere;
 }
 
-.wizard-summary dl > .row {
+.wizard-summary dl>.row {
 	margin-inline: 0;
 	padding-inline: 0.75rem;
 }
 
-.wizard-summary dl > .row:nth-child(odd) {
+.wizard-summary dl>.row:nth-child(odd) {
 	background: rgb(var(--bs-primary-rgb) / 4%);
 }
 
@@ -275,7 +275,8 @@
 }
 
 /* Short viewports: drop the page chrome so the step keeps usable room. */
-@media (height <= 800px) {
+@media (height <=800px) {
+
 	.target-wizard-page .breadcrumb,
 	.target-wizard-page .ui-page-eyebrow,
 	.target-wizard-page .ui-page-lead {
@@ -297,20 +298,24 @@
 }
 
 /* Landscape phones: the card cannot hold header, step and buttons, so the page scrolls in <main>. */
-@media (height <= 520px) {
-	.ju-content > main:has(.target-wizard-page) {
+@media (height <=520px) {
+	.ju-content>main:has(.target-wizard-page) {
 		overflow-y: auto;
 	}
+
 	.target-wizard-page {
 		flex: 0 0 auto;
 		overflow: visible;
 	}
+
 	.target-wizard-step:not([hidden]) {
 		flex: 0 0 auto;
 		overflow-y: visible;
 	}
 }
-@media (width <= 700px) {
+
+@media (width <=700px) {
+
 	.target-type-grid,
 	.wizard-check-grid {
 		grid-template-columns: minmax(0, 1fr);
@@ -321,7 +326,7 @@
 	}
 }
 
-@media (width <= 480px) {
+@media (width <=480px) {
 	.wizard-progress {
 		gap: 0.35rem;
 		margin-bottom: 1.5rem;

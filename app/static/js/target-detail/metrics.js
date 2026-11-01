@@ -17,17 +17,21 @@
  * @returns {boolean}
  */
 function _hasValidRange() {
-	return appState?.range?.from && appState?.range?.to && appState.range.from < appState.range.to;
+  return (
+    appState?.range?.from &&
+    appState?.range?.to &&
+    appState.range.from < appState.range.to
+  );
 }
 
 function displayPlotWidth(width) {
-	const pixels = Math.max(120, Math.min(2400, Math.round(width || 900)));
-	return pixels < 500 ? Math.max(120, Math.round(pixels / 3)) : pixels;
+  const pixels = Math.max(120, Math.min(2400, Math.round(width || 900)));
+  return pixels < 500 ? Math.max(120, Math.round(pixels / 3)) : pixels;
 }
 
 /** True for the AbortError raised by a deliberately cancelled load cycle. */
 function isAbortError(err) {
-	return err?.name === 'AbortError';
+  return err?.name === "AbortError";
 }
 
 /**
@@ -39,29 +43,35 @@ function isAbortError(err) {
  * @returns {Promise<object|null>} { series: { "PING": [{ts, up}], ... } }
  */
 async function fetchAvailabilitySeries(targetId, loadToken, signal) {
-	if (appState.currentLoadToken !== loadToken) return null;
+  if (appState.currentLoadToken !== loadToken) return null;
 
-	const { from, to } = appState.range;
-	if (!from || !to) return null;
+  const { from, to } = appState.range;
+  if (!from || !to) return null;
 
-	try {
-		const params = new URLSearchParams({ since: from.toISOString(), until: to.toISOString(), limit: '50000' });
-		const url = `/ui/fragments/availability-series/${targetId}?${params}`;
+  try {
+    const params = new URLSearchParams({
+      since: from.toISOString(),
+      until: to.toISOString(),
+      limit: "50000",
+    });
+    const url = `/ui/fragments/availability-series/${targetId}?${params}`;
 
-		const resp = await apiFetch(url, { signal });
-		if (!resp.ok) return null;
+    const resp = await apiFetch(url, { signal });
+    if (!resp.ok) return null;
 
-		// Stale check after network
-		if (appState.currentLoadToken !== loadToken) return null;
+    // Stale check after network
+    if (appState.currentLoadToken !== loadToken) return null;
 
-		const data = await resp.json();
-		return data;
-
-	} catch (err) {
-		if (isAbortError(err)) return null;
-		console.warn(`Failed to fetch availability series for target ${targetId}:`, err);
-		return null;
-	}
+    const data = await resp.json();
+    return data;
+  } catch (err) {
+    if (isAbortError(err)) return null;
+    console.warn(
+      `Failed to fetch availability series for target ${targetId}:`,
+      err,
+    );
+    return null;
+  }
 }
 
 /**
@@ -73,70 +83,88 @@ async function fetchAvailabilitySeries(targetId, loadToken, signal) {
  * @returns {Promise<object>} { points: [{ ts, value }, ...] }
  */
 async function fetchMetric(targetId, metric, useCache = true, signal) {
-	if (!_hasValidRange()) {
-		console.warn('appState.range not available or invalid');
-		return { points: [] };
-	}
+  if (!_hasValidRange()) {
+    console.warn("appState.range not available or invalid");
+    return { points: [] };
+  }
 
-	const { from, to } = appState.range;
+  const { from, to } = appState.range;
 
-	const plotWidth = displayPlotWidth(document.getElementById('chart-combined')?.clientWidth || window.innerWidth || 900);
-	const cacheKey = `${metric}_${from.toISOString()}_${to.toISOString()}_${plotWidth}`;
-	if (useCache && appState.metricsCache && appState.metricsCache.has(cacheKey)) {
-		return appState.metricsCache.get(cacheKey);
-	}
+  const plotWidth = displayPlotWidth(
+    document.getElementById("chart-combined")?.clientWidth ||
+      window.innerWidth ||
+      900,
+  );
+  const cacheKey = `${metric}_${from.toISOString()}_${to.toISOString()}_${plotWidth}`;
+  if (
+    useCache &&
+    appState.metricsCache &&
+    appState.metricsCache.has(cacheKey)
+  ) {
+    return appState.metricsCache.get(cacheKey);
+  }
 
-	try {
-		// Build API URL with URLSearchParams (consistent with pdf-export.js)
-		const params = new URLSearchParams({
-			display: 'true',
-			plot_width: String(plotWidth),
-			since: from.toISOString(),
-			until: to.toISOString(),
-		});
+  try {
+    // Build API URL with URLSearchParams (consistent with pdf-export.js)
+    const params = new URLSearchParams({
+      display: "true",
+      plot_width: String(plotWidth),
+      since: from.toISOString(),
+      until: to.toISOString(),
+    });
 
-		const url = `/targets/${encodeURIComponent(targetId)}/metrics/${encodeURIComponent(metric)}?${params}`;
+    const url = `/targets/${encodeURIComponent(targetId)}/metrics/${encodeURIComponent(metric)}?${params}`;
 
-		const resp = await apiFetch(url, { signal });
+    const resp = await apiFetch(url, { signal });
 
-		if (!resp.ok) {
-			showFetchError(`Failed to load ${metric}`);
-			return { points: [], error: true };
-		}
+    if (!resp.ok) {
+      showFetchError(`Failed to load ${metric}`);
+      return { points: [], error: true };
+    }
 
-		const data = await resp.json();
+    const data = await resp.json();
 
-		// Cache the result (with size limit to prevent memory leak)
-		const MAX_CACHE_ENTRIES = 50;
-		if (appState.metricsCache) {
-			// Remove oldest entry if cache is full
-			if (appState.metricsCache.size >= MAX_CACHE_ENTRIES) {
-				const firstKey = appState.metricsCache.keys().next().value;
-				appState.metricsCache.delete(firstKey);
-			}
-			appState.metricsCache.set(cacheKey, data);
-		}
+    // Cache the result (with size limit to prevent memory leak)
+    const MAX_CACHE_ENTRIES = 50;
+    if (appState.metricsCache) {
+      // Remove oldest entry if cache is full
+      if (appState.metricsCache.size >= MAX_CACHE_ENTRIES) {
+        const firstKey = appState.metricsCache.keys().next().value;
+        appState.metricsCache.delete(firstKey);
+      }
+      appState.metricsCache.set(cacheKey, data);
+    }
 
-		return data;
-	} catch (e) {
-		if (isAbortError(e)) throw e;
-		console.error('Fetch error:', e);
-		showFetchError(`Network error loading ${metric}`);
-		return { points: [], error: true };
-	}
+    return data;
+  } catch (e) {
+    if (isAbortError(e)) throw e;
+    console.error("Fetch error:", e);
+    showFetchError(`Network error loading ${metric}`);
+    return { points: [], error: true };
+  }
 }
 
-async function fetchDisplayMetricRange(targetId, metric, fromMs, toMs, plotWidth, signal) {
-	const params = new URLSearchParams({
-		display: 'true', plot_width: String(displayPlotWidth(plotWidth)),
-		since: new Date(fromMs).toISOString(), until: new Date(toMs).toISOString(),
-	});
-	const response = await apiFetch(
-		`/targets/${encodeURIComponent(targetId)}/metrics/${encodeURIComponent(metric)}?${params}`,
-		{ signal },
-	);
-	if (!response.ok) throw new Error(`Metric request failed: ${response.status}`);
-	return response.json();
+async function fetchDisplayMetricRange(
+  targetId,
+  metric,
+  fromMs,
+  toMs,
+  plotWidth,
+  signal,
+) {
+  const params = new URLSearchParams({
+    display: "true",
+    plot_width: String(displayPlotWidth(plotWidth)),
+    since: new Date(fromMs).toISOString(),
+    until: new Date(toMs).toISOString(),
+  });
+  const response = await apiFetch(
+    `/targets/${encodeURIComponent(targetId)}/metrics/${encodeURIComponent(metric)}?${params}`,
+    { signal },
+  );
+  if (!response.ok)
+    throw new Error(`Metric request failed: ${response.status}`);
+  return response.json();
 }
 
 /**
@@ -149,17 +177,17 @@ async function fetchDisplayMetricRange(targetId, metric, fromMs, toMs, plotWidth
  * @returns {Promise<object|null>} { points } or null if stale or aborted
  */
 async function fetchMetricGuarded(targetId, metric, loadToken, signal) {
-	if (!appState || appState.currentLoadToken !== loadToken) return null;
+  if (!appState || appState.currentLoadToken !== loadToken) return null;
 
-	try {
-		const data = await fetchMetric(targetId, metric, true, signal);
-		if (appState.currentLoadToken !== loadToken) return null;
-		return data;
-	} catch (e) {
-		// Cancelled or stale requests are expected and need no error handling
-		if (isAbortError(e) || appState.currentLoadToken !== loadToken) return null;
-		throw e;
-	}
+  try {
+    const data = await fetchMetric(targetId, metric, true, signal);
+    if (appState.currentLoadToken !== loadToken) return null;
+    return data;
+  } catch (e) {
+    // Cancelled or stale requests are expected and need no error handling
+    if (isAbortError(e) || appState.currentLoadToken !== loadToken) return null;
+    throw e;
+  }
 }
 
 /**
@@ -171,12 +199,12 @@ let _lastFetchErrorTime = 0;
 const FETCH_ERROR_DEBOUNCE_MS = 2000;
 
 function showFetchError(message) {
-	console.warn('Fetch error:', message);
-	const now = Date.now();
-	if (now - _lastFetchErrorTime > FETCH_ERROR_DEBOUNCE_MS) {
-		_lastFetchErrorTime = now;
-		window.justUpToast?.error?.(message);
-	}
+  console.warn("Fetch error:", message);
+  const now = Date.now();
+  if (now - _lastFetchErrorTime > FETCH_ERROR_DEBOUNCE_MS) {
+    _lastFetchErrorTime = now;
+    window.justUpToast?.error?.(message);
+  }
 }
 
 /**
@@ -187,34 +215,40 @@ function showFetchError(message) {
  * @returns {string} Formatted date/time
  */
 function formatTimestamp(ts, utc) {
-	const d = new Date(ts);
-	const locale = navigator.language || 'de-DE';
+  const d = new Date(ts);
+  const locale = navigator.language || "de-DE";
 
-	// Determine UTC mode: explicit param > pageConfig > global useUtc > false
-	const isUtc = typeof utc === 'boolean'
-		? utc
-		: (typeof pageConfig !== 'undefined' && pageConfig.useUtc)
-			? pageConfig.useUtc
-			: (typeof useUtc !== 'undefined' ? useUtc : false);
+  // Determine UTC mode: explicit param > pageConfig > global useUtc > false
+  const isUtc =
+    typeof utc === "boolean"
+      ? utc
+      : typeof pageConfig !== "undefined" && pageConfig.useUtc
+        ? pageConfig.useUtc
+        : typeof useUtc !== "undefined"
+          ? useUtc
+          : false;
 
-	const timeOptions = {
-		hour: '2-digit',
-		minute: '2-digit',
-		hour12: false,
-	};
-	if (isUtc) timeOptions.timeZone = 'UTC';
+  const timeOptions = {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  };
+  if (isUtc) timeOptions.timeZone = "UTC";
 
-	const dateOptions = {};
-	if (isUtc) dateOptions.timeZone = 'UTC';
+  const dateOptions = {};
+  if (isUtc) dateOptions.timeZone = "UTC";
 
-	// Show date+time for ranges > 24h
-	if (appState?.range) {
-		const { from, to } = appState.range;
-		if (from && to && (to - from) > 24 * 60 * 60 * 1000) {
-			return d.toLocaleDateString(locale, dateOptions) + ' '
-				+ d.toLocaleTimeString(locale, timeOptions);
-		}
-	}
+  // Show date+time for ranges > 24h
+  if (appState?.range) {
+    const { from, to } = appState.range;
+    if (from && to && to - from > 24 * 60 * 60 * 1000) {
+      return (
+        d.toLocaleDateString(locale, dateOptions) +
+        " " +
+        d.toLocaleTimeString(locale, timeOptions)
+      );
+    }
+  }
 
-	return d.toLocaleTimeString(locale, timeOptions);
+  return d.toLocaleTimeString(locale, timeOptions);
 }
