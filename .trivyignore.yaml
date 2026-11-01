@@ -1,0 +1,10 @@
+# DS-0002 (image runs as root) is accepted for docker/Dockerfile only: the entrypoint needs root
+# for PUID/PGID and volume ownership setup, then execs `gosu justup`; PID 1 runs as the
+# unprivileged justup user (verified with PUID=1234/PGID=2345, CapEff=0). Not a global switch-off.
+misconfigurations:
+  - id: DS-0002
+    paths:
+      - docker/Dockerfile
+    # Review date: re-check the entrypoint design (root init, then gosu) before this lapses.
+    expired_at: 2027-04-29
+    statement: Root only for entrypoint UID/GID and volume init; application runs via gosu as justup.

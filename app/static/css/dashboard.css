@@ -1,0 +1,209 @@
+/*
+ * app/static/css/dashboard.css
+ * Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
+ *
+ * GridStack layout of the dashboard (view, edit mode, stacked phone/tablet fallback).
+ */
+
+/* --ju-dash-gap is the gutter between tiles and must stay 2 x GRID_MARGIN in js/dashboard-grid.js:
+   GridStack insets every tile by its margin on each side. */
+.dashboard-grid {
+	--ju-dash-gap: var(--ui-space-tile);
+	--ju-dash-gutter: calc(var(--ju-dash-gap) / 2);
+
+	min-height: 4rem;
+
+	/* Pull the grid out by the tile inset so outer tile edges line up with the page heading. */
+	margin-inline: calc(-1 * var(--gs-item-margin-left, var(--ju-dash-gutter))) calc(-1 * var(--gs-item-margin-right, var(--ju-dash-gutter)));
+	margin-block-end: calc(-1 * var(--gs-item-margin-bottom, var(--ju-dash-gutter)));
+}
+
+/* Hidden until dashboard-grid.js applied the stored layout; the delayed keyframe is the failsafe
+   (no JS, failed script, stalled request) and shows the grid after 4s regardless. */
+.dashboard-grid--loading {
+	visibility: hidden;
+	animation: dashboard-grid-failsafe 0s 4s forwards;
+}
+
+@keyframes dashboard-grid-failsafe {
+	to {
+		visibility: visible;
+	}
+}
+
+.dashboard-grid .grid-stack-item-content {
+	display: flex;
+	border-radius: var(--bs-border-radius-lg);
+}
+
+.dashboard-grid .grid-stack-item-content > :not(.dashboard-widget-header) {
+	width: 100%;
+	min-width: 0;
+}
+
+/* Edit mode: a button strip over the tile top is the drag handle and the keyboard control. It is
+   out of flow so toggling edit mode never shifts the tile content. */
+.dashboard-widget-header {
+	position: absolute;
+	inset: 0 0 auto;
+	z-index: 2;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	height: 1.5rem;
+	padding: 0;
+	border: 0;
+	border-radius: var(--bs-border-radius-lg) var(--bs-border-radius-lg) 0 0;
+	background: transparent;
+	color: var(--bs-secondary-color);
+	cursor: grab;
+	touch-action: none;
+}
+
+.dashboard-widget-header:active {
+	cursor: grabbing;
+}
+
+.dashboard-widget-header:hover,
+.dashboard-widget-header:focus-visible {
+	background: var(--bs-tertiary-bg);
+	color: var(--bs-body-color);
+}
+
+.dashboard-widget-header:focus-visible {
+	outline: 2px solid var(--bs-primary);
+	outline-offset: -2px;
+}
+
+.dashboard-widget-header .material-icons {
+	font-size: 1rem;
+	line-height: 1;
+}
+
+.dashboard-grid:not(.dashboard-grid--editing) .ui-resizable-handle {
+	display: none !important;
+}
+
+/* Edit mode: empty grid cells show as dashed drop slots. dashboard-grid.js fills this layer with
+   one slot per cell; it sits under the tiles and never takes pointer events. */
+.dashboard-slots {
+	display: none;
+}
+
+@media (width >= 992px) {
+	.dashboard-grid--editing > .dashboard-slots {
+		position: absolute;
+		inset: 0;
+		display: flex;
+		flex-wrap: wrap;
+		align-content: flex-start;
+		overflow: hidden;
+		pointer-events: none;
+	}
+}
+
+.dashboard-slot {
+	box-sizing: border-box;
+	flex: 0 0 var(--gs-column-width);
+	height: var(--gs-cell-height);
+	padding:
+		var(--gs-item-margin-top, var(--ju-dash-gutter))
+		var(--gs-item-margin-right, var(--ju-dash-gutter))
+		var(--gs-item-margin-bottom, var(--ju-dash-gutter))
+		var(--gs-item-margin-left, var(--ju-dash-gutter));
+}
+
+.dashboard-slot::before {
+	content: "";
+	display: block;
+	height: 100%;
+	border: 1px dashed var(--bs-border-color);
+	border-radius: var(--bs-border-radius-lg);
+	background: var(--bs-tertiary-bg);
+}
+
+.dashboard-grid--editing .grid-stack-item-content {
+	outline: 1px dashed var(--bs-border-color);
+	outline-offset: 2px;
+}
+
+/* Dragging/resizing must not select text or icons inside tiles. */
+.dashboard-grid--editing .grid-stack-item,
+.dashboard-grid--editing .grid-stack-item * {
+	user-select: none;
+}
+
+.dashboard-grid--editing .ui-resizable-handle {
+	opacity: 0.75;
+}
+
+/* Inset the corner grip from the tile's rounded edge and keep a 24px touch target. */
+.dashboard-grid--editing.dashboard-grid .grid-stack-item > .ui-resizable-se {
+	width: 24px;
+	height: 24px;
+	right: calc(var(--gs-item-margin-right, var(--ju-dash-gutter)) + 6px);
+	bottom: calc(var(--gs-item-margin-bottom, var(--ju-dash-gutter)) + 6px);
+	background-image: none;
+	color: var(--bs-body-color);
+}
+
+.dashboard-grid--editing.dashboard-grid .grid-stack-item > .ui-resizable-se::after {
+	content: "";
+	position: absolute;
+	right: 0.25rem;
+	bottom: 0.25rem;
+	width: 0.625rem;
+	height: 0.625rem;
+	border-right: 2px solid currentcolor;
+	border-bottom: 2px solid currentcolor;
+	pointer-events: none;
+}
+
+.dashboard-grid--editing .ui-resizable-handle:hover {
+	opacity: 1;
+}
+
+.dashboard-grid--editing .grid-stack-item.ui-draggable-dragging .grid-stack-item-content {
+	outline-color: var(--bs-primary);
+}
+
+/* Phone/tablet fallback. Keep 991.98px in sync with MOBILE_QUERY in dashboard-grid.js.
+   The four status tiles form a 2×2 grid; the larger widgets span both columns. The edit toolbar
+   is hidden by its Bootstrap d-lg-flex class, and the saved desktop layout stays untouched. */
+@media (width <= 991.98px) {
+	.dashboard-grid {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: var(--ju-dash-gap);
+		height: auto !important;
+		margin-inline: 0;
+		margin-block-end: 0;
+	}
+
+	.dashboard-grid > .grid-stack-item[data-widget-id="quality"],
+	.dashboard-grid > .grid-stack-item[data-widget-id="downtime"] {
+		grid-column: 1 / -1;
+	}
+
+	.dashboard-grid > .grid-stack-item {
+		position: static !important;
+		width: auto !important;
+		height: auto !important;
+		transform: none !important;
+	}
+
+	.dashboard-grid > .grid-stack-item > .grid-stack-item-content {
+		position: relative !important;
+		inset: auto;
+		margin: 0 !important;
+		overflow: visible !important;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.dashboard-grid,
+	.dashboard-grid .grid-stack-item {
+		transition: none !important;
+		animation-duration: 0s !important;
+	}
+}

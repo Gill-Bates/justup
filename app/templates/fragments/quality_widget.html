@@ -1,0 +1,18 @@
+{# Quality Gate Status Widget #}
+<div class="card shadow-sm h-100">
+    <div class="card-header d-flex align-items-center justify-content-between">
+        <span class="fw-semibold">
+            <span class="material-icons me-1" aria-hidden="true">device_thermostat</span> Monitor Quality
+        </span>
+        <span class="badge" id="quality-state-badge">--</span>
+    </div>
+    <div class="card-body d-flex flex-column align-items-center pt-3">
+        <div class="display-4 fw-bold" id="quality-score">--</div>
+        <div class="text-body-secondary small" id="quality-label">Loading...</div>
+        {# Probe Targets (centered, light gray badges) #}
+        <div class="mt-3" id="quality-targets-container" style="display: none;">
+            <div id="quality-targets" class="d-flex flex-wrap gap-1 justify-content-center"></div>
+        </div>
+    </div>
+</div>
+

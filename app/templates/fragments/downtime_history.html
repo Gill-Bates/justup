@@ -1,0 +1,66 @@
+{# Downtime History Fragment (HTMX). Styles live in target-detail.css. #}
+{% if periods %}
+<div class="downtime-scroll" data-range-label="{{ range_label | default('30d') }}">
+	<p class="downtime-summary">
+		<strong>{{ periods | length }}</strong> {{ 'downtime' if periods | length == 1 else 'downtimes' }}
+		{% if periods | selectattr('end', 'none') | list | length %}<span class="badge bg-danger">Ongoing</span>{% endif %}
+	</p>
+	<ol class="downtime-list">
+		{% for p in periods %}
+		<li class="downtime-item{% if p.end is none %} downtime-item--ongoing{% endif %}">
+			<span class="downtime-marker" aria-hidden="true"></span>
+			<div class="downtime-body">
+				<div class="downtime-times">
+					<span class="local-time" data-utc="{{ p.start.isoformat() }}"
+						data-use-utc="{{ 'true' if use_utc else 'false' }}">
+						{{ p.start.strftime('%Y-%m-%d %H:%M:%S') }} UTC
+					</span>
+					<span class="downtime-arrow" aria-hidden="true">→</span><span class="visually-hidden"> until </span>
+					{% if p.end %}
+					<span class="local-time" data-utc="{{ p.end.isoformat() }}"
+						data-use-utc="{{ 'true' if use_utc else 'false' }}">
+						{{ p.end.strftime('%Y-%m-%d %H:%M:%S') }} UTC
+					</span>
+					{% else %}
+					<span class="badge bg-danger">Ongoing</span>
+					{% endif %}
+				</div>
+				<div class="downtime-services">
+					{% for svc in p.failed_services %}
+					<span class="badge bg-danger">{{ svc }}</span>
+					{% endfor %}
+				</div>
+			</div>
+			<div class="downtime-duration">
+				{% if p.duration_seconds is not none %}
+				{% set hours = p.duration_seconds // 3600 %}
+				{% set minutes = (p.duration_seconds % 3600) // 60 %}
+				{% set seconds = p.duration_seconds % 60 %}
+				{% if hours > 0 %}
+				{{ hours }}h {{ minutes }}m
+				{% elif minutes > 0 %}
+				{{ minutes }}m {{ seconds }}s
+				{% else %}
+				{{ seconds }}s
+				{% endif %}
+				{% else %}
+				<span class="text-danger">--</span>
+				{% endif %}
+			</div>
+		</li>
+		{% endfor %}
+	</ol>
+</div>
+{% elif has_data %}
+<div class="target-empty-state" role="status" data-range-label="{{ range_label | default('30d') }}">
+	<span class="target-empty-icon target-empty-icon--ok"><i class="material-icons" aria-hidden="true">check_circle</i></span>
+	<p class="target-empty-title">No downtimes in selected range</p>
+	<p class="target-empty-text">All enabled checks stayed up during this period.</p>
+</div>
+{% else %}
+<div class="target-empty-state" role="status" data-range-label="{{ range_label | default('30d') }}">
+	<span class="target-empty-icon"><i class="material-icons" aria-hidden="true">info</i></span>
+	<p class="target-empty-title">No measurement data in selected range</p>
+	<p class="target-empty-text">No availability checks were recorded during this period.</p>
+</div>
+{% endif %}

@@ -1,0 +1,97 @@
+/* Custom styles for the justUp! documentation */
+
+@font-face {
+    font-family: "IBM Plex Sans";
+    src: url("../assets/fonts/IBM-Plex-Sans-Variable.woff2") format("woff2");
+    font-style: normal;
+    font-weight: 100 700;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: "IBM Plex Sans";
+    src: url("../assets/fonts/IBM-Plex-Sans-Variable-Italic.woff2") format("woff2");
+    font-style: italic;
+    font-weight: 100 700;
+    font-display: swap;
+}
+
+body,
+button,
+input,
+select,
+textarea,
+.md-typeset,
+.md-header,
+.md-tabs,
+.md-nav,
+.md-search {
+    font-family: var(--md-text-font-family);
+}
+
+:root {
+    --md-text-font: "IBM Plex Sans";
+    --md-code-font: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+code,
+kbd,
+pre,
+.md-typeset code,
+.md-typeset pre {
+    font-family: var(--md-code-font-family);
+}
+
+/* Grid cards on the home page */
+.grid.cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 1rem;
+    margin: 2rem 0;
+}
+
+.grid.cards > * {
+    border: 1px solid var(--md-default-fg-color--lightest);
+    border-radius: 8px;
+    padding: 1.5rem;
+    transition: box-shadow 0.2s;
+}
+
+.grid.cards > *:hover {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+/* Material icons in lists/cards */
+.md-typeset .lg {
+    font-size: 2em;
+}
+
+.md-typeset .middle {
+    vertical-align: middle;
+}
+
+/* Round the corners of code blocks */
+.highlight {
+    border-radius: 8px;
+    margin: 1em 0;
+}
+
+/* Give buttons a little breathing room */
+.md-button {
+    margin: 0.2rem;
+}
+
+/* Make tables more readable */
+.md-typeset table:not([class]) {
+    font-size: 0.9em;
+}
+
+.md-typeset table:not([class]) th {
+    background-color: var(--md-default-fg-color--lightest);
+    font-weight: 600;
+}
+
+/* Mermaid diagrams: use theme colors, transparent background */
+.mermaid {
+    background-color: transparent;
+}

@@ -1,0 +1,22 @@
+{
+    // Disable formatting for Jinja2 templates to preserve {{ }} syntax
+    "[html]": {
+        "editor.formatOnSave": true
+    },
+    "files.associations": {
+        "*.html": "jinja-html"
+    },
+    // Exclude templates from Prettier
+    "prettier.ignorePath": ".prettierignore",
+    // Python: Ruff is the single source of truth
+    "[python]": {
+        "editor.defaultFormatter": "charliermarsh.ruff",
+        "editor.formatOnSave": true,
+        "editor.codeActionsOnSave": {
+            "source.fixAll.ruff": "explicit",
+            "source.organizeImports.ruff": "explicit"
+        }
+    },
+    // Prefer project pyproject.toml / ruff.toml over editor overrides
+    "ruff.configurationPreference": "filesystemFirst"
+}

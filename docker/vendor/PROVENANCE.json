@@ -1,0 +1,34 @@
+{
+  "name": "sslyze",
+  "version": "6.3.1+justup.1",
+  "wheel": "docker/vendor/wheels/sslyze-6.3.1+justup.1-py3-none-any.whl",
+  "sha256": "90a9a690991cf247388e0ba953cbd0e8a62af20c687261eeb513e667a77dbc4a",
+  "size_bytes": 1064021,
+  "tags": "py3-none-any",
+  "license": "AGPL-3.0 (upstream LICENSE.txt shipped in the wheel's dist-info/licenses)",
+  "upstream": {
+    "repository": "https://github.com/nabla-c0d3/sslyze",
+    "commit": "e064c2c8e7d251e5bc5db1a7beb21add5e12a0bc",
+    "commit_date": "2026-10-27T23:31:50-07:00",
+    "relation": "tag 6.3.1 + 2 commits (git describe: 6.3.1-2-ge064c2c); the only upstream change over 6.3.1 is setup.py install_requires cryptography>=43,<51"
+  },
+  "patches": [
+    {
+      "file": "docker/vendor/sslyze/patches/0001-justup-local-version.patch",
+      "purpose": "sslyze/__version__.py: 6.3.1 -> 6.3.1+justup.1 so the artifact cannot be confused with a PyPI release"
+    }
+  ],
+  "toolchain": {
+    "python": "3.13.5",
+    "umask": "0002",
+    "build_requirements_lock": "docker/vendor/sslyze/build-requirements.lock",
+    "pip": "26.2.2",
+    "setuptools": "84.2.1",
+    "wheel": "0.48.0",
+    "packaging": "26.3",
+    "command": "pip wheel --no-build-isolation --no-deps --no-index",
+    "source_date_epoch": "commit time of the upstream commit",
+    "script": "docker/vendor/sslyze/build-wheel.sh"
+  },
+  "reproducibility": "build-wheel.sh --check rebuilt a byte-identical wheel on 2026-10-29"
+}

@@ -1,0 +1,251 @@
+{# MTR network diagnostics fragment: route overview, KPI row, hop table and Leaflet route map. #}
+{# All values are rendered through Jinja autoescape; nothing here is marked |safe. #}
+{% macro country_flag(country_code, title_text='') %}
+{% if country_code and country_code|length == 2 %}
+<span class="country-flag-wrap" title="{{ title_text or country_code|upper }}">
+    <img class="country-flag-svg" src="https://cdn.jsdelivr.net/npm/flag-icons@7.3.2/flags/4x3/{{ country_code|lower }}.svg"
+        alt="" loading="lazy" decoding="async"
+        onerror="this.style.display='none'; this.nextElementSibling.style.display='inline';">
+    <span class="country-flag-fallback" style="display:none;">{{ country_code|upper }}</span>
+</span>
+{% endif %}
+{% endmacro %}
+
+{% macro status_badge(h) %}
+{% set status = h.status_display or h.status %}
+{% if h._collapsed or status == 'interpolated' or status == 'n/a' %}
+<span class="badge tr-badge tr-badge--na" title="Values are interpolated, not measured">{{ labels.estimated }}</span>
+{% elif status == 'ok' %}
+<span class="badge tr-badge tr-badge--ok">OK</span>
+{% elif h._synthetic_destination %}
+<span class="badge tr-badge tr-badge--warn" title="The destination did not answer the probes">No reply</span>
+{% elif status == 'partial' %}
+<span class="badge tr-badge tr-badge--warn" title="Some probes were lost">Partial</span>
+{% else %}
+<span class="badge tr-badge tr-badge--bad" title="No answer to the probes">Timeout</span>
+{% endif %}
+{% endmacro %}
+
+{# One selectable timeline node (leaf). Connectors are CSS pseudo-elements, never list items. #}
+{% macro timeline_step(node, extra='') %}
+<li class="tr-step tr-step--{{ node.kind }} {{ extra }}" data-measurement="{{ node.measurement }}" data-location="{{ node.location }}">
+    <button type="button" class="tr-step-btn" data-tr-hop aria-pressed="false"
+        data-hop-first="{{ node.first_hop if node.first_hop is not none else '' }}"
+        data-hop-last="{{ node.last_hop if node.last_hop is not none else '' }}"
+        data-detail="{{ node.detail }}"{% if node.country %} data-country="{{ node.country }}"{% endif %}
+        aria-label="{{ node.aria_label }}" title="{{ node.detail }}">
+        <span class="tr-step-dot" aria-hidden="true">{{ node.label }}</span>
+        <span class="tr-step-body">
+            <span class="tr-step-title">{{ node.title }}</span>
+            <span class="tr-step-sub">{{ node.subtitle }}</span>
+            <span class="tr-step-state">{{ node.location_label }} · {{ node.measurement_label }}</span>
+        </span>
+        <span class="material-icons tr-step-icon" aria-hidden="true">{{ node.icon }}</span>
+    </button>
+</li>
+{% endmacro %}
+
+{% if hops %}
+{% set total_hops = kpis.hop_count if kpis else (hops|length) %}
+<div class="traceroute-diagnostics">
+
+    {# 1. Network route: ONE ordered timeline (first hop -> hops -> destination). Connectors are CSS only. #}
+    {% set tl = route_timeline %}
+    <section class="tr-panel traceroute-route-overview" aria-labelledby="tr-route-title">
+        <header class="tr-panel-head tr-route-head">
+            <div class="tr-route-head-main">
+                <h2 class="tr-panel-title" id="tr-route-title">Network route</h2>
+                <p class="tr-route-meta">{{ tl.hop_count }} hop{{ '' if tl.hop_count == 1 else 's' }} ·
+                    <span class="tr-route-addr" title="{{ tl.first_ip }}">{{ tl.first_ip or 'no reply' }}</span>
+                    <span aria-label="to">→</span>
+                    <span class="tr-route-addr" title="{{ tl.last_ip }}">{{ tl.last_ip or 'unknown' }}</span></p>
+            </div>
+            {% if tl.first_hop is not none %}
+            <span class="tr-route-range">Hop {{ tl.first_hop }}{% if tl.last_hop != tl.first_hop %}–{{ tl.last_hop }}{% endif %}</span>
+            {% endif %}
+        </header>
+        <div class="tr-route-track ju-scrollbar-accent" data-tr-track tabindex="0" role="region"
+            aria-label="Route timeline, scrolls horizontally when it does not fit">
+            <ol class="tr-timeline" aria-labelledby="tr-route-title">
+                {% for node in tl.nodes %}
+                {% if node.kind == 'group' %}
+                <li class="tr-step tr-step--group" data-measurement="{{ node.measurement }}" data-location="{{ node.location }}">
+                    <button type="button" class="tr-step-btn tr-step-toggle" data-tr-group
+                        data-hop-first="{{ node.first_hop }}" data-hop-last="{{ node.last_hop }}"
+                        data-detail="{{ node.detail }}" aria-expanded="false" aria-controls="{{ node.id }}"
+                        aria-label="{{ node.aria_label }}" title="{{ node.title }}">
+                        <span class="tr-step-dot" aria-hidden="true">{{ node.label }}</span>
+                        <span class="tr-step-body">
+                            <span class="tr-step-title">{{ node.title }}</span>
+                            <span class="tr-step-sub">{{ node.subtitle }}</span>
+                            <span class="tr-step-state">{{ node.summary }}</span>
+                        </span>
+                        <span class="material-icons tr-step-icon tr-step-chevron" aria-hidden="true">expand_more</span>
+                    </button>
+                    <ol class="tr-members" id="{{ node.id }}" aria-label="Hops {{ node.first_hop }} to {{ node.last_hop }}" hidden>
+                        {% for m in node.members %}
+                        {{ timeline_step(m, 'tr-step--member') }}
+                        {% endfor %}
+                    </ol>
+                </li>
+                {% else %}
+                {{ timeline_step(node) }}
+                {% endif %}
+                {% endfor %}
+            </ol>
+        </div>
+        <p class="tr-route-detail" data-tr-detail aria-live="polite">Select a hop to see its details.</p>
+        <footer class="tr-route-foot">
+            <ul class="tr-route-legend" aria-label="Node states in this route">
+                {% for state in tl.legend %}
+                <li><span class="material-icons" aria-hidden="true">{{ state.icon }}</span>{{ state.label }}</li>
+                {% endfor %}
+                {% if tl.has_unlocated %}
+                <li><span class="tr-legend-ring" aria-hidden="true"></span>No map location</li>
+                {% endif %}
+            </ul>
+            <p class="traceroute-route-sequence-note">Map markers follow hop order.{% if geo_points and not route_start_is_mapped %} The map starts at hop {{ first_mapped_hop }} because the earlier hops have no location.{% elif not geo_points %} No hops have a usable map location.{% endif %}</p>
+        </footer>
+    </section>
+
+    {# 2. KPI row: derived from measured data in the backend; missing values stay a dash #}
+    {% if kpis %}
+    <dl class="tr-kpis" aria-label="Route summary">
+        <div class="tr-kpi">
+            <span class="material-icons tr-kpi-icon" aria-hidden="true">route</span>
+            <dt class="tr-kpi-label">hops from source to destination</dt>
+            <dd class="tr-kpi-value">{{ kpis.hop_count }}</dd>
+        </div>
+        <div class="tr-kpi" data-known="{{ 'true' if kpis.latency_display else 'false' }}">
+            <span class="material-icons tr-kpi-icon" aria-hidden="true">speed</span>
+            <dt class="tr-kpi-label">average latency to destination{% if not kpis.latency_display %} (not measured){% endif %}</dt>
+            <dd class="tr-kpi-value">{{ kpis.latency_display or '—' }}</dd>
+        </div>
+        <div class="tr-kpi" data-known="{{ 'true' if kpis.loss_display else 'false' }}"
+            data-loss="{{ 'some' if kpis.loss_pct else 'none' }}">
+            <span class="material-icons tr-kpi-icon" aria-hidden="true">swap_vert</span>
+            <dt class="tr-kpi-label">packet loss at destination{% if not kpis.loss_display %} (not measured){% endif %}</dt>
+            <dd class="tr-kpi-value">{{ kpis.loss_display or '—' }}</dd>
+        </div>
+        <div class="tr-kpi">
+            <span class="material-icons tr-kpi-icon" aria-hidden="true">place</span>
+            <dt class="tr-kpi-label">destination location</dt>
+            <dd class="tr-kpi-value tr-kpi-value--text">
+                {% if kpis.city or kpis.country %}
+                {% if kpis.country %}{{ country_flag(kpis.country, kpis.country) }}{% endif %}
+                {{ [kpis.city, kpis.country|upper if kpis.country else none]|select|join(', ') }}
+                {% else %}{{ labels.location_unknown }}{% endif %}
+            </dd>
+        </div>
+    </dl>
+    {% endif %}
+
+    {# 3. Hop table and route map #}
+    <div class="traceroute-fragment{% if geo_points %} traceroute-fragment--split{% endif %}">
+
+        <section class="tr-panel tr-hops-panel" aria-labelledby="tr-hops-title">
+            <header class="tr-panel-head">
+                <h2 class="tr-panel-title" id="tr-hops-title">Traceroute hops <span class="tr-panel-count">({{ total_hops }})</span></h2>
+            </header>
+            <div class="table-responsive tr-table-scroll" tabindex="0" role="region" aria-labelledby="tr-hops-title">
+                <table class="table align-middle mb-0 hop-table" aria-label="Traceroute hops from the start to the destination">
+                    <thead>
+                        <tr>
+                            <th scope="col">Hop</th>
+                            <th scope="col">IP address</th>
+                            <th scope="col">Hostname</th>
+                            <th scope="col">Location</th>
+                            <th scope="col" class="text-end">Latency</th>
+                            <th scope="col" class="text-end">Loss</th>
+                            <th scope="col" class="text-end">Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for h in hops %}
+                        {% set blocked = h._collapsed or h.status == 'interpolated' %}
+                        {% set first_hop = h._raw_hops[0].hop if (h._raw_hops and h._raw_hops|length) else h.hop %}
+                        {% set last_hop = h._raw_hops[-1].hop if (h._raw_hops and h._raw_hops|length) else h.hop %}
+                        <tr class="tr-hop-row{% if blocked %} tr-hop-row--blocked{% elif h.status == 'timeout' %} tr-hop-row--timeout{% endif %}"
+                            data-hop-first="{{ first_hop }}" data-hop-last="{{ last_hop }}">
+                            <th scope="row" class="tr-hop-num">{{ h.hop_display or h.hop }}</th>
+                            {% if blocked %}
+                            <td colspan="3" class="tr-blocked-cell">
+                                <span class="tr-blocked-title">{{ labels.no_reply }}</span>
+                                {% if h._raw_hops and h._raw_hops|length > 1 %}<span class="tr-host">{{ h._raw_hops|length }} hops · {{ labels.estimated|lower }}</span>{% endif %}
+                            </td>
+                            {% else %}
+                            <td class="tr-ip-cell">
+                                {% if h.ip_full and h.ip_full != '—' and h.ip_full != '*' %}
+                                <span class="tr-ip{% if h.is_ipv6 %} tr-ip--v6{% endif %}">{{ h.ip_full }}</span>
+                                {% else %}<span class="tr-muted">—</span>{% endif %}
+                            </td>
+                            <td class="tr-host-cell">
+                                {% set host_full = h.hostname if (h.hostname and h.hostname != '—' and h.hostname != '-') else '' %}
+                                {% if host_full %}<span class="tr-host">{{ host_full }}</span>
+                                {% elif h.hostname_display and h.hostname_display != '—' and h.hostname_display != '-' %}<span class="tr-host">{{ h.hostname_display }}</span>
+                                {% else %}<span class="tr-muted">—</span>{% endif %}
+                            </td>
+                            <td class="tr-loc-cell">
+                                {% if h.on_map %}<span class="material-icons tr-map-pin" role="img" aria-label="Shown on map" title="Shown on map">place</span>{% endif %}
+                                {% if h.city %}
+                                {% if h.country %}{{ country_flag(h.country, h.country) }}{% endif %}<span{% if h.loc_precision == 'approximate' %} class="tr-approx" title="Approximate location"{% endif %}>{{ h.city }}{% if h.country %} <span class="tr-muted">{{ h.country|upper }}</span>{% endif %}{% if h.loc_precision == 'approximate' %} <span class="tr-muted">{{ labels.approx }}</span>{% endif %}</span>
+                                {% elif h.country %}
+                                {{ country_flag(h.country, h.country) }}<span class="tr-muted">{{ h.country|upper }}</span>
+                                {% elif h.ip_full and h.ip_full != '—' and h.ip_full != '*' %}<span class="tr-muted">{{ labels.location_unknown }}</span>
+                                {% else %}<span class="tr-muted">—</span>{% endif %}
+                            </td>
+                            {% endif %}
+                            <td class="text-end tr-num">{{ (h.latency_display or '–') if not blocked else '–' }}</td>
+                            <td class="text-end tr-num">{{ (h.loss_display or '–') if not blocked else '–' }}</td>
+                            <td class="text-end">{{ status_badge(h) }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% if geo_unavailable_reason %}
+            <p class="tr-panel-note">
+                <span class="material-icons" aria-hidden="true">info</span>
+                {{ geo_unavailable_reason }}
+            </p>
+            {% endif %}
+        </section>
+
+        {% if geo_points %}
+        <section class="tr-panel tr-map-panel" aria-labelledby="tr-map-title">
+            <header class="tr-panel-head tr-panel-head--split">
+                <div>
+                    <h2 class="tr-panel-title" id="tr-map-title">Route map</h2>
+                    <p class="tr-panel-sub">Geolocated route for {{ mapped_hop_count }} of {{ total_hops }} hops{% if not destination_on_map %} · Destination not on map{% endif %}</p>
+                </div>
+                <span class="badge tr-badge tr-badge--na">{{ total_hops }} hops total</span>
+            </header>
+            {% set map_id = map_id | default('traceroute-map') %}
+            <div class="tr-map-frame">
+                <div id="{{ map_id }}" class="traceroute-map-container" role="region"
+                    aria-label="Interactive route map for {{ route_destination_host or 'the target' }}"
+                    data-geo-points="{{ geo_points | tojson | forceescape }}" data-map-id="{{ map_id }}"
+                    data-route-start-hop="{{ route_start_hop or '' }}"
+                    data-route-start-is-mapped="{{ 'true' if route_start_is_mapped else 'false' }}"
+                    data-route-destination-host="{{ route_destination_host or '' }}"
+                    data-route-destination-ip="{{ route_destination_ip or '' }}"></div>
+                <ul class="tr-map-legend" aria-label="Map legend">
+                    <li class="tr-map-legend-title">Route showing {{ mapped_hop_count }} of {{ total_hops }} hops</li>
+                    {% if route_start_is_mapped %}<li><span class="tr-legend-dot tr-legend-dot--start" aria-hidden="true"></span>Start</li>{% endif %}
+                    <li><span class="tr-legend-dot tr-legend-dot--hop" aria-hidden="true"></span>Hop</li>
+                    {% if destination_on_map %}<li><span class="tr-legend-dot tr-legend-dot--destination" aria-hidden="true"></span>Destination</li>{% endif %}
+                    {% if has_interpolation %}<li><span class="tr-legend-dash" aria-hidden="true"></span>Interpolated</li>{% endif %}
+                </ul>
+            </div>
+        </section>
+        {% endif %}
+
+    </div>
+</div>
+
+{% else %}
+<div class="text-center text-body-secondary small py-3">
+    <span class="material-icons fs-4 d-block mb-1 opacity-50" aria-hidden="true">account_tree</span>
+    {{ unavailable_reason or 'Network path data unavailable' }}
+</div>
+{% endif %}

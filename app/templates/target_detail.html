@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}{{ target.name }} – justUp!{% endblock %}
+
+{% block content %}
+<div class="ui-page target-detail-page">
+	<header class="target-detail-heading">
+		{% include "fragments/target_detail/header.html" %}
+		<ul class="nav nav-tabs target-detail-tabs" id="target-detail-tabs" role="tablist" aria-label="Target views">
+			<li class="nav-item" role="presentation">
+				<button class="nav-link active" id="target-dashboard-tab" data-bs-toggle="tab"
+					data-bs-target="#target-dashboard-pane" type="button" role="tab"
+					aria-controls="target-dashboard-pane" aria-selected="true">
+					<i class="material-icons" aria-hidden="true">show_chart</i> Dashboard
+				</button>
+			</li>
+			<li class="nav-item" role="presentation">
+				<button class="nav-link" id="target-network-diagnostics-tab" data-bs-toggle="tab"
+					data-bs-target="#target-network-diagnostics-pane" type="button" role="tab"
+					aria-controls="target-network-diagnostics-pane" aria-selected="false" tabindex="-1">
+					<i class="material-icons" aria-hidden="true">account_tree</i> Network diagnostics
+				</button>
+			</li>
+		</ul>
+	</header>
+	<div class="tab-content target-detail-tab-content" id="target-detail-tab-content">
+		<section class="tab-pane active show" id="target-dashboard-pane" role="tabpanel"
+			aria-labelledby="target-dashboard-tab" tabindex="0">
+			{# Refreshed by the live event channel (see live-events.js); display: contents keeps the layout #}
+			<div id="target-info-cards" style="display: contents"
+				hx-get="/ui/fragments/target-info-cards/{{ target.id }}"
+				hx-trigger="justup-target-{{ target.id }} from:body throttle:3s, justup-live-sync from:body throttle:3s"
+				hx-swap="innerHTML">
+			{% include "fragments/target_detail/info_cards.html" %}
+			</div>
+			<section class="target-toolbar" aria-label="Chart controls">
+				{% include "fragments/target_detail/time_range_selector.html" %}
+				{% include "fragments/target_detail/alert_recipients.html" %}
+			</section>
+			{% include "fragments/target_detail/charts_and_downtime.html" %}
+		</section>
+		<section class="tab-pane" id="target-network-diagnostics-pane" role="tabpanel"
+			aria-labelledby="target-network-diagnostics-tab" tabindex="0">
+			{% include "fragments/target_detail/network_diagnostics.html" %}
+		</section>
+	</div>
+
+	<!-- Server-rendered config for JS (no inline script, no |safe, XSS-safe) -->
+	<div id="target-config" class="d-none" data-target-id="{{ target.id }}"
+		data-use-utc="{{ 'true' if use_utc else 'false' }}" data-pdf-page-size="{{ pdf_page_size or 'a4' }}"
+		data-tcp-ports="{{ target.tcp_ports or '80' }}"
+		data-sla-enabled="{{ 'true' if target.sla_enabled else 'false' }}"
+		data-sla-availability="{{ target.sla_availability_pct if target.sla_availability_pct is not none else 99.9 }}"
+		data-sla-response-time="{{ target.sla_response_time_ms if target.sla_response_time_ms is not none else 500 }}"
+		data-sla-ping-latency="{{ target.sla_ping_latency_ms if target.sla_ping_latency_ms is not none else 100 }}"
+		data-enable-http="{{ 'true' if target.enable_http_check else 'false' }}"
+		data-enable-ping="{{ 'true' if target.enable_ping else 'false' }}"
+		data-enable-tcp="{{ 'true' if target.enable_tcp_connect else 'false' }}"
+		data-enable-cert="{{ 'true' if target.enable_cert_expiration else 'false' }}">
+	</div>
+</div>
+{% endblock %}
+
+{% block styles %}
+<link rel="stylesheet" href="/static/css/target-detail.css">
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/chartjs-adapter-date-fns.bundle.min.js"></script>
+<script src="/static/js/chartjs-plugin-zoom.min.js"></script>
+<script src="/static/js/chartjs-plugin-annotation.min.js"></script>
+<script src="/static/js/utils/throttle.js"></script>
+<script src="/static/js/utils/with-alpha.js"></script>
+<script src="/static/js/charts/chart-config.js"></script>
+<script src="/static/js/charts/chart-sampling.js"></script>
+<script src="/static/js/charts/chart-builder.js"></script>
+<script src="/static/js/charts/combined-chart-data.js"></script>
+<script src="/static/js/charts/combined-chart.js"></script>
+<script src="/static/js/charts/chart-theme.js"></script>
+<script src="/static/js/target-detail/date-range.js"></script>
+<script src="/static/js/target-detail/metrics.js"></script>
+<script src="/static/js/target-detail/pdf-export.js"></script>
+<script src="/static/js/target-detail/test-alert.js"></script>
+<script src="/static/js/target-detail/auto-close.js"></script>
+<script src="/static/js/target-detail.js"></script>
+<script src="/static/js/traceroute-map.js"></script>
+{% endblock %}

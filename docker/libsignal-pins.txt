@@ -1,0 +1,6 @@
+# libsignal source pins for the linux/amd64 and linux/arm64 native libraries (see docker/Dockerfile,
+# stage libsignal-build). One line per libsignal version bundled by a signal-cli release:
+#   <libsignal version> <git commit SHA the tag v<version> peels to in github.com/signalapp/libsignal>
+# Obtain the SHA with: git ls-remote https://github.com/signalapp/libsignal "refs/tags/v<version>^{}"
+# A signal-cli update that moves to an unpinned libsignal fails the amd64 and arm64 builds until a reviewer adds the pin.
+0.103.0 ba133bd3457f556fbf56db0a5ab985de0af79da6
