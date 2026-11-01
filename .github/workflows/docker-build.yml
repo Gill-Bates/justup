@@ -380,6 +380,24 @@ jobs:
         with:
           fetch-depth: 1
 
+      # libsignal is compiled from source (Dockerfile stage libsignal-build) and the
+      # GHA cache export adds to that, which is close enough to a stock runner's free
+      # space to be worth reclaiming first. None of these toolchains take part in this
+      # build; later steps that need a tool fetch it themselves.
+      - name: Free disk space
+        run: |
+          set -uo pipefail
+          echo "Before:"
+          df -h /
+          sudo rm -rf \
+            /usr/share/dotnet \
+            /usr/local/lib/android \
+            /opt/ghc \
+            /usr/local/share/boost \
+            "${AGENT_TOOLSDIRECTORY:-/opt/hostedtoolcache}" || true
+          echo "After:"
+          df -h /
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
         with:

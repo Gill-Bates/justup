@@ -127,9 +127,14 @@ def test_cryptography_is_patched_release():
     assert Version(_lock_entries()["cryptography"][0]) >= Version("50.0.2")
 
 
-def test_no_vulnerability_ignore_entries():
+def test_vulnerability_ignore_entries_are_documented_and_expire():
+    # No open-ended ignores: every entry needs an `exp:` date and a comment line directly above it.
     lines = (ROOT / ".trivyignore").read_text(encoding="utf-8").splitlines()
-    assert [ln for ln in lines if ln.strip() and not ln.lstrip().startswith("#")] == []
+    for i, line in enumerate(lines):
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        assert re.fullmatch(r"(CVE-\d{4}-\d{4,}|GHSA(-[0-9a-z]{4}){3}) exp:\d{4}-\d{2}-\d{2}", line), line
+        assert i > 0 and lines[i - 1].lstrip().startswith("#"), f"{line}: missing justification comment"
 
 
 # --- vendored SSLyze wheel ----------------------------------------------------------------

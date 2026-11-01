@@ -1,0 +1,5 @@
+# Accepted until the bundled signal-cli ships wire-runtime >= 6.3.0 (re-check before the date below).
+# CVE-2026-45799 (GHSA-7xpr-hc2w-34m9): wire-runtime-jvm 6.0.0-alpha02 inside signal-cli 0.14.9 lets a
+# crafted protobuf crash the decoder (DoS only). The jar is not a justUp dependency, so it cannot be
+# bumped in pyproject.toml; replacing it inside the image would run Signal against an untested version.
+CVE-2026-45799 exp:2027-02-01
