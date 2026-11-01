@@ -4,9 +4,15 @@
     "[html]": {
         "editor.formatOnSave": false
     },
+    // CSS: apply only Stylelint's autofixes on save (config lives in tools/)
     "[css]": {
-        "editor.formatOnSave": false
+        "editor.formatOnSave": false,
+        "editor.codeActionsOnSave": {
+            "source.fixAll.stylelint": "explicit"
+        }
     },
+    "stylelint.configFile": "tools/stylelint.config.mjs",
+    "stylelint.validate": ["css"],
     "[javascript]": {
         "editor.formatOnSave": false
     },
