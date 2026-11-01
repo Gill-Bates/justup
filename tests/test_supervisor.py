@@ -14,6 +14,7 @@ import asyncio
 import logging
 import random
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -477,7 +478,13 @@ def test_app_lifespan_supervises_services_and_leaves_no_threads(tmp_path: Path, 
         assert all(isinstance(v, str) for v in body["services"].values())
     snap = app.state.supervisor.snapshot()
     assert {s["state"] for s in snap.values()} == {"stopped"}
-    leaked = [t.name for t in threading.enumerate() if t.ident not in before and t.is_alive()]
+    # Threads signalled to stop need a moment to exit on a loaded host (parallel test workers).
+    deadline = time.monotonic() + 5
+    while True:
+        leaked = [t.name for t in threading.enumerate() if t.ident not in before and t.is_alive()]
+        if not leaked or time.monotonic() >= deadline:
+            break
+        time.sleep(0.05)
     assert leaked == []
 
 

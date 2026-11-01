@@ -206,13 +206,15 @@ def test_kill_after_publishing_segments_is_repaired_by_the_next_run_without_dupl
     expected = _all(legacy, "ping_ms")
 
     real_fsync_dir = seg.fsync_dir
-
-    def crash_on_first(_directory):
-        # The first call comes right after the segments were renamed in and before the active file is replaced.
-        monkeypatch.setattr(seg, "fsync_dir", real_fsync_dir)
-        raise OSError("killed between segment publish and active-file rewrite")
-
     with monkeypatch.context() as m:
+
+        def crash_on_first(_directory):
+            # The first call comes right after the segments were renamed in and before the active file is replaced.
+            # Restore through the context patch: the outer one would re-install this stub at teardown and
+            # leak a one-shot crash into whichever test runs next in the same process.
+            m.setattr(seg, "fsync_dir", real_fsync_dir)
+            raise OSError("killed between segment publish and active-file rewrite")
+
         m.setattr(seg, "fsync_dir", crash_on_first)
         assert not _housekeep(legacy).complete
     assert _segments(legacy)  # published ...

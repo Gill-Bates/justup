@@ -56,7 +56,7 @@ The same checks as in CI:
 | --- | --- |
 | Python lint | `ruff check .` |
 | Format | `ruff format --check .` |
-| Python tests | `pytest` |
+| Python tests | `pytest -n auto` (parallel via pytest-xdist; omit `-n` for a single test or a debugger) |
 | JS/CSS lint | `npm run lint` |
 | JS tests | `npm test` |
 | Container check | `docker build --check -f docker/Dockerfile .` |

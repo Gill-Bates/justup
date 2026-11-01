@@ -148,9 +148,10 @@ jobs:
         run: ruff format --check --diff .
 
       # Unit tests set their own environment; no production encryption key is
-      # supplied to the PR gate.
+      # supplied to the PR gate. Tests are independent (own tmp_path, ephemeral
+      # ports), so pytest-xdist spreads them over one worker per runner core.
       - name: pytest
-        run: pytest
+        run: pytest -n auto
 
   container:
     name: Dockerfile + entrypoint

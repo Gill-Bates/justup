@@ -7,7 +7,7 @@ Run the gates locally (see [Setup](setup.md)):
 ```bash
 ruff check .
 ruff format --check .
-pytest
+pytest -n auto   # parallel; plain `pytest` runs serially
 npm run lint
 npm test
 docker build --check -f docker/Dockerfile .

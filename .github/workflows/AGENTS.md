@@ -8,14 +8,15 @@ GitHub Actions for the justUp PR gate, multi-architecture Docker Hub release, an
 ## Files
 | File | Role |
 | --- | --- |
-| `ci.yml` | Push and PR gate on `main`, manual dispatch, and reusable release gate. Runs Ruff, pytest, entrypoint syntax, Dockerfile checks, manifest checks, actionlint with shellcheck, and a Trivy source secret/misconfiguration scan. |
-| `docker-build.yml` | Runs only for version tags or manual dispatch on a tag. Validates the tag and ancestry, calls CI, builds and smoke-tests both architectures, scans images, publishes `DOCKERHUB_USERNAME/justup`, assembles the digest-based index, guards `latest` with `is_newest`, cleans fragment tags, and creates a GitHub release. |
-| `docs-build.yml` | Builds `docs/mkdocs.yml`, scans the resolved docs dependencies, checks links, and deploys from `main` to GitHub Pages. A successful release also triggers a documentation refresh. |
+| `ci.yml` | Push and PR gate on `main`, manual dispatch, and reusable release gate. Runs Ruff, pytest (parallel, `-n auto`), entrypoint syntax, Dockerfile checks, manifest checks, actionlint with shellcheck, and a Trivy source secret/misconfiguration scan. |
+| `docker-build.yml` | Runs only for version tags or manual dispatch on a tag. Validates the tag and ancestry, calls CI, builds and smoke-tests both architectures, scans images, publishes `DOCKERHUB_USERNAME/justup`, assembles and verifies the digest-based index, then promotes `latest` from the verified digest (`moves_latest`), cleans fragment tags, and creates a GitHub release. |
+| `docs-build.yml` | Builds `docs/mkdocs.yml`, scans the resolved docs dependencies, checks links, and deploys from `main` to GitHub Pages. A successful release also triggers a refresh, built from the current head of `main` (never the release commit). |
 
 ## Working here
 - The application version comes from `pyproject.toml`. The release tag must be `v` plus that version.
 - Pin third-party actions to verified full commit SHAs with version comments. The Trivy action revision sets its scanner default; do not override it with `version: latest`.
 - Keep `permissions` minimal, release concurrency serialized, and `is_newest` fail-closed. An older tag must never move `latest` or prune a newer release.
+- `meta` declares the build matrix once (step `matrix`); `build` consumes it and `create-manifest` requires exactly those architectures in the digest and toolchain files before publishing. `tools/release-newest.py` yields `is_newest` (no newer release of any kind; gates the tag cleanup) and `moves_latest` (stable and newest stable; gates `latest`). A prerelease never moves `latest`. `latest` is promoted only after the version index passed `verify_manifest.py` (platforms and pushed digests).
 - Docker images use the `justup` repository. The smoke test supplies a test-only `SECRET_KEY` and checks `/healthz` on port 8000. The Dockerfile supplies its own healthcheck.
 - libsignal is built from source for both architectures (Dockerfile stage `libsignal-build`). After the smoke test, `tools/verify-libsignal-native.py` runs inside each image and checks the packaging only: exactly one non-empty `libsignal_jni_<arch>.so` in the libsignal-client jar with a matching ELF64 little-endian header. It does not prove that the JVM loads the library; native load and a real Signal send stay a manual gate.
 - The toolchain manifest also carries `java_version` and `libsignal_client` (read from `/opt/COMPONENTS.txt`), so the parity gate compares them across architectures. Keep architecture-specific values (library file names, hashes) out of it.

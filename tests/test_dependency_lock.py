@@ -519,6 +519,6 @@ def test_release_version_pattern_accepts_only_release_shaped_versions(version, v
 def test_release_never_moves_latest_for_prerelease():
     text = RELEASE_WORKFLOW.read_text(encoding="utf-8")
     start = text.index('if [[ "$VERSION" == *-* ]]; then')
-    prerelease_branch = text[start : text.index("elif", start)]
+    prerelease_branch = text[start : text.index("\n          fi\n", start)]
     assert ":latest" not in prerelease_branch
     assert text.index('"${IMAGE_NAME}:latest"', start) > start

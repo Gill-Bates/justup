@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import gc
 import logging
 import threading
 from pathlib import Path
@@ -450,6 +451,8 @@ def test_invalid_stored_auth_limit_falls_back_to_the_default(auth_setting, bad):
 
 def test_changing_the_auth_limit_creates_no_new_counters(auth_setting):
     client = _auth_client(FakeClock())
+    # _windows is weak: collect dead windows of earlier tests so GC timing cannot skew the count.
+    gc.collect()
     windows_before = len(rl._windows)  # noqa: SLF001
     for value in ("3/minute", "4/minute", "3/minute", "5/hour", "x", "3/minute"):
         auth_setting["value"] = value

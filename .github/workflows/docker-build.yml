@@ -48,6 +48,9 @@ jobs:
       tag: ${{ steps.meta.outputs.tag }}
       version: ${{ steps.meta.outputs.version }}
       is_newest: ${{ steps.newest.outputs.is_newest }}
+      moves_latest: ${{ steps.newest.outputs.moves_latest }}
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      archs: ${{ steps.matrix.outputs.archs }}
       python_base: ${{ steps.rolling.outputs.python_base }}
       signal_cli_version: ${{ steps.rolling.outputs.signal_cli_version }}
 
@@ -180,6 +183,36 @@ jobs:
           echo "  python base      : ${python_base}"
           echo "  signal-cli       : ${signal_cli_version}"
 
+      # The only place architectures are declared. The build job takes its
+      # matrix from here, and create-manifest checks the published digests and
+      # toolchain files against exactly this list, so a lost or extra
+      # architecture stops the release instead of being derived from whatever
+      # artifacts happened to arrive. Both run on native runners - no QEMU.
+      # Both runners name an image rather than following ubuntu-latest, which
+      # migrates from 24.04 to 26.04 in a staged rollout between 2026-10-19
+      # and 2026-11-19 - a window in which two runs of one tag could land on
+      # different operating systems. Both name the same generation: 26.04 went
+      # generally available for x64 and arm64 on 2026-09-17. The host adds
+      # nothing to what ships (every layer is built inside python:3.13-slim);
+      # if the arm64 job queues or fails alone, ubuntu-24.04-arm is the fallback.
+      - name: Declare build matrix
+        id: matrix
+        run: |
+          set -euo pipefail
+          matrix="$(jq -c . <<'JSON'
+          {"include": [
+            {"arch":"amd64","runner":"ubuntu-26.04","platform":"linux/amd64","cache_scope":"amd64","test_image":"justup:test-amd64","container_name":"justup-test-amd64","image_suffix":"amd64"},
+            {"arch":"arm64","runner":"ubuntu-26.04-arm","platform":"linux/arm64","cache_scope":"arm64","test_image":"justup:test-arm64","container_name":"justup-test-arm64","image_suffix":"arm64"}
+          ]}
+          JSON
+          )"
+          archs="$(jq -r '[.include[].arch] | sort | join(" ")' <<< "$matrix")"
+          {
+            echo "matrix=${matrix}"
+            echo "archs=${archs}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Architectures: ${archs}"
+
       # A release must not travel backwards. Re-running this workflow on an older
       # tag - v1.5.0 while 1.6.1 is published - passes every check above, because
       # pyproject.toml at that commit really does read 1.5.0. It would then move
@@ -222,7 +255,7 @@ jobs:
           next_url="$first_url"
           : > published-tags.txt
 
-          # This listing decides is_newest, which in turn moves 'latest' and
+          # This listing decides is_newest and moves_latest, which in turn gate 'latest' and
           # releases the destructive tag cleanup. An empty answer therefore
           # cannot be allowed to mean "nothing newer exists" - a 401, a 429, a
           # 5xx or a dropped connection would then read exactly like a pristine
@@ -259,74 +292,12 @@ jobs:
             next_url="$(jq -r '.next // empty' < "$response_body")"
           done
 
-          # Only the is_newest line goes to GITHUB_OUTPUT, which accepts
-          # key=value and nothing else; the reasoning goes to the log.
-          python3 - <<'PY' >> "$GITHUB_OUTPUT"
-          import os
-          import re
-          import sys
-
-          # Architecture fragments (1.6.1-amd64) parse as prereleases of 1.6.1
-          # and would otherwise be compared as versions. They are build
-          # artefacts of this workflow, not releases.
-          ARCH_SUFFIXES = {
-              "amd64", "arm64", "arm", "armv6", "armv7", "386",
-              "ppc64le", "s390x", "riscv64", "mips64le", "loong64",
-          }
-          VERSION_RE = re.compile(r"^(\d+(?:\.\d+)*)(?:-([0-9A-Za-z.-]+))?$")
-
-          def suffix_key(suffix):
-              # Identifier-wise, like PEP 440 / semver: numeric parts compare as
-              # numbers, so rc.10 sorts above rc.2 - a plain string comparison
-              # gets that backwards, and this decides whether the destructive
-              # tag cleanup is allowed to run.
-              parts = []
-              for part in suffix.split("."):
-                  if part.isdigit():
-                      parts.append((0, int(part), ""))
-                  else:
-                      parts.append((1, 0, part))
-              return tuple(parts)
-
-          def key(tag):
-              match = VERSION_RE.match(tag)
-              if not match:
-                  return None
-              suffix = match.group(2)
-              if suffix in ARCH_SUFFIXES:
-                  return None
-              # Padded to a fixed width so a hypothetical 1.7 and 1.7.0 are one
-              # version rather than (1, 7) < (1, 7, 0). justUp tags strict
-              # X.Y.Z, but the cost of being wrong here is a deleted release.
-              release = tuple(int(part) for part in match.group(1).split("."))
-              if len(release) < 3:
-                  release += (0,) * (3 - len(release))
-              # A prerelease sorts below its own release: 1.7.0-rc.1 < 1.7.0. GNU
-              # `sort -V` gets this backwards, which is why the comparison is
-              # done here rather than in the shell.
-              return (release, (0, suffix_key(suffix)) if suffix else (1, ()))
-
-          current = os.environ["VERSION"]
-          current_key = key(current)
-          assert current_key is not None, f"unparseable version: {current}"
-
-          with open("published-tags.txt", encoding="utf-8") as handle:
-              published = {line.strip() for line in handle if line.strip()}
-
-          newer = sorted(
-              tag for tag in published
-              if (tag_key := key(tag)) is not None and tag_key > current_key
-          )
-
-          if newer:
-              print(f"Newer versions already published: {', '.join(newer)}", file=sys.stderr)
-              print(f"{current} will be republished, but 'latest' stays put "
-                    "and nothing is pruned.", file=sys.stderr)
-              print("is_newest=false")
-          else:
-              print(f"{current} is the newest published version.", file=sys.stderr)
-              print("is_newest=true")
-          PY
+          # is_newest (any newer release exists: gates the destructive cleanup)
+          # and moves_latest (stable and newest stable: gates 'latest') are
+          # separate decisions, so a newer prerelease cannot block 'latest' for
+          # a stable release. Only key=value lines go to GITHUB_OUTPUT; the
+          # reasoning goes to the log. A failure here stops the release.
+          python3 tools/release-newest.py published-tags.txt "$VERSION" >> "$GITHUB_OUTPUT"
 
   build:
     name: Build ${{ matrix.arch }} image
@@ -336,37 +307,7 @@ jobs:
       IMAGE_NAME: ${{ format('{0}/justup', secrets.DOCKERHUB_USERNAME) }}
     strategy:
       fail-fast: false
-      matrix:
-        # The only place architectures are declared. The manifest and cleanup
-        # jobs discover them from the digests these jobs publish, so adding an
-        # entry here is all it takes. Both run on native runners - no QEMU.
-        #
-        # Both runners name an image rather than following ubuntu-latest, which
-        # migrates from 24.04 to 26.04 in a staged rollout between 2026-10-19
-        # and 2026-11-19 - a window in which two runs of one tag could land on
-        # different operating systems. Both name the same generation: 26.04 went
-        # generally available for x64 and arm64 on 2026-09-17, so the arm64 job
-        # no longer has to trail a release behind.
-        #
-        # The host contributes nothing to what ships - every layer is produced
-        # inside python:3.13-slim - so these only have to supply Docker and
-        # buildx. If the arm64 job starts queueing for capacity or failing for
-        # reasons the amd64 job does not, ubuntu-24.04-arm is the fallback.
-        include:
-          - arch: amd64
-            runner: ubuntu-26.04
-            platform: linux/amd64
-            cache_scope: amd64
-            test_image: justup:test-amd64
-            container_name: justup-test-amd64
-            image_suffix: amd64
-          - arch: arm64
-            runner: ubuntu-26.04-arm
-            platform: linux/arm64
-            cache_scope: arm64
-            test_image: justup:test-arm64
-            container_name: justup-test-arm64
-            image_suffix: arm64
+      matrix: ${{ fromJSON(needs.meta.outputs.matrix) }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     # No actions: write. The gha cache backend authenticates with the runner's
@@ -674,7 +615,8 @@ jobs:
     env:
       VERSION: ${{ needs.meta.outputs.version }}
       IMAGE_NAME: ${{ format('{0}/justup', secrets.DOCKERHUB_USERNAME) }}
-      IS_NEWEST: ${{ needs.meta.outputs.is_newest }}
+      MOVES_LATEST: ${{ needs.meta.outputs.moves_latest }}
+      EXPECTED_ARCHS: ${{ needs.meta.outputs.archs }}
     permissions:
       contents: read
 
@@ -699,6 +641,44 @@ jobs:
           pattern: toolchain-*
           path: toolchain/
           merge-multiple: true
+
+      # The architectures come from the meta job's matrix declaration, never from
+      # what was downloaded: a lost artifact must stop the release, not shrink
+      # the set the later checks expect. merge-multiple overwrites a duplicate
+      # file name silently, so the artifact names are not enough - the files
+      # themselves are compared as exact sets.
+      - name: Verify digest and toolchain files match the build matrix
+        run: |
+          set -euo pipefail
+          if [[ -z "${EXPECTED_ARCHS// /}" ]]; then
+            echo "ERROR: meta job declared no architectures"
+            exit 1
+          fi
+          expected="$(tr ' ' '\n' <<< "$EXPECTED_ARCHS" | sort)"
+          if [[ -n "$(uniq -d <<< "$expected")" ]]; then
+            echo "ERROR: duplicate architecture in the matrix: ${EXPECTED_ARCHS}"
+            exit 1
+          fi
+          shopt -s nullglob
+          digest_files=(digests/*)
+          toolchain_files=(toolchain/*)
+          found_digests="$( (( ${#digest_files[@]} )) && printf '%s\n' "${digest_files[@]##*/}" | sort || true)"
+          found_toolchain="$( (( ${#toolchain_files[@]} )) && printf '%s\n' "${toolchain_files[@]##*/}" | sed 's/\.txt$//' | sort || true)"
+          if [[ "$found_digests" != "$expected" ]]; then
+            echo "ERROR: digest files [$(tr '\n' ' ' <<< "$found_digests")] differ from the build matrix [${EXPECTED_ARCHS}]"
+            exit 1
+          fi
+          if [[ "$found_toolchain" != "$expected" ]]; then
+            echo "ERROR: toolchain files [$(tr '\n' ' ' <<< "$found_toolchain")] differ from the build matrix [${EXPECTED_ARCHS}]"
+            exit 1
+          fi
+          for file in "${digest_files[@]}"; do
+            if ! grep -qE '^sha256:[0-9a-f]{64}$' "$file"; then
+              echo "ERROR: ${file} does not contain a sha256 digest"
+              exit 1
+            fi
+          done
+          echo "OK: digests and toolchain manifests exist for exactly: ${EXPECTED_ARCHS}"
 
       # The release gate for "both images contain the same versions". Runs
       # before the manifest is created, so a mismatch stops the publish rather
@@ -730,8 +710,10 @@ jobs:
               for name, value in sorted(versions.items()):
                   print(f"  {name}={value}")
 
+          # The exact file set was checked against the matrix in the previous
+          # step, so a single entry here means the matrix has one architecture.
           if len(recorded) == 1:
-              print("\nOnly one architecture was built; nothing to compare.")
+              print("\nThe matrix declares one architecture; nothing to compare.")
               sys.exit(0)
 
           names = sorted({name for versions in recorded.values() for name in versions})
@@ -762,14 +744,8 @@ jobs:
           set -euo pipefail
 
           # One file per architecture, named after it, containing its digest.
-          # Discovered rather than hardcoded, so the build matrix stays the only
-          # place architectures are declared.
-          shopt -s nullglob
+          # The set was verified against the matrix declaration above.
           digest_files=(digests/*)
-          if (( ${#digest_files[@]} == 0 )); then
-            echo "ERROR: no image digests were published by the build jobs"
-            exit 1
-          fi
 
           declare -a sources=()
           declare -a platforms=()
@@ -782,45 +758,40 @@ jobs:
             echo "  linux/${arch}  ${digest}"
           done
 
+          # Only the version tag here. 'latest' is promoted after the verify
+          # step below, from the verified digest.
           docker buildx imagetools create \
             --tag "${IMAGE_NAME}:${VERSION}" \
             "${sources[@]}"
           echo "Pushed manifest: ${IMAGE_NAME}:${VERSION}"
-
-          # 'latest' moves only for a stable release, and only when this really
-          # is the newest one - see the meta job's is_newest probe.
-          if [[ "$VERSION" == *-* ]]; then
-            echo "Skipping 'latest': ${VERSION} is a prerelease"
-          elif [[ "$IS_NEWEST" != "true" ]]; then
-            echo "Skipping 'latest': a newer version is already published, and 'latest' must never move backwards"
-          else
-            docker buildx imagetools create \
-              --tag "${IMAGE_NAME}:latest" \
-              "${sources[@]}"
-            echo "Pushed manifest: ${IMAGE_NAME}:latest"
-            touch latest-pushed
-          fi
 
           printf '%s\n' "${platforms[@]}" > expected-platforms.txt
 
       # imagetools create reports success as soon as the registry accepts the
       # index - it does not confirm the index describes what was intended. A
       # missing or duplicated architecture would otherwise surface as `docker
-      # pull` quietly selecting the wrong image on a user's machine.
+      # pull` quietly selecting the wrong image on a user's machine. The index
+      # entries must also be the very digests that were scanned and pushed.
       - name: Verify manifest
         run: |
           set -euo pipefail
 
           cat > verify_manifest.py <<'PY'
           import json
+          import pathlib
           import sys
 
-          manifest_file, expected_file = sys.argv[1], sys.argv[2]
+          manifest_file, expected_file, digest_dir = sys.argv[1], sys.argv[2], sys.argv[3]
 
           with open(manifest_file, encoding="utf-8") as handle:
               index = json.load(handle)
           with open(expected_file, encoding="utf-8") as handle:
               expected = sorted(line.strip() for line in handle if line.strip())
+          # linux/<arch> -> the digest the build job scanned and pushed.
+          expected_digests = {
+              f"linux/{path.name}": path.read_text(encoding="utf-8").strip()
+              for path in pathlib.Path(digest_dir).iterdir()
+          }
 
           manifests = index.get("manifests")
           if manifests is None:
@@ -832,6 +803,7 @@ jobs:
           # them.
           identities = []
           found = set()
+          found_digests = {}
           for entry in manifests:
               platform = entry.get("platform") or {}
               architecture = platform.get("architecture")
@@ -843,6 +815,7 @@ jobs:
                   (operating_system, architecture, platform.get("variant") or "")
               )
               found.add(f"{operating_system}/{architecture}")
+              found_digests[f"{operating_system}/{architecture}"] = entry.get("digest")
 
           duplicates = sorted({
               "/".join(part for part in identity if part)
@@ -855,16 +828,46 @@ jobs:
           if sorted(found) != expected:
               sys.exit(f"FAIL: index describes {sorted(found)}, expected {expected}")
 
-          print(f"OK: {manifest_file} describes {', '.join(sorted(found))}")
+          if found_digests != expected_digests:
+              sys.exit(f"FAIL: index digests {found_digests} differ from the pushed {expected_digests}")
+
+          print(f"OK: {manifest_file} describes {', '.join(sorted(found))} with the pushed digests")
           PY
 
           docker buildx imagetools inspect --raw "${IMAGE_NAME}:${VERSION}" > manifest-version.json
-          python3 verify_manifest.py manifest-version.json expected-platforms.txt
+          python3 verify_manifest.py manifest-version.json expected-platforms.txt digests
 
-          if [[ -f latest-pushed ]]; then
-            docker buildx imagetools inspect --raw "${IMAGE_NAME}:latest" > manifest-latest.json
-            python3 verify_manifest.py manifest-latest.json expected-platforms.txt
+      # 'latest' moves only after the version index passed verification, only
+      # for a stable release, and only when no newer stable release is
+      # published (meta job's moves_latest; a prerelease never moves it). It
+      # points at the verified index digest - no rebuild, no re-assembly.
+      - name: Promote latest
+        run: |
+          set -euo pipefail
+
+          if [[ "$VERSION" == *-* ]]; then
+            echo "Skipping 'latest': ${VERSION} is a prerelease"
+            exit 0
           fi
+          if [[ "$MOVES_LATEST" != "true" ]]; then
+            echo "Skipping 'latest': a newer stable version is already published, and 'latest' must never move backwards"
+            exit 0
+          fi
+
+          index_digest="$(docker buildx imagetools inspect "${IMAGE_NAME}:${VERSION}" \
+            --format '{{.Manifest.Digest}}')"
+          case "$index_digest" in
+            sha256:*) ;;
+            *) echo "ERROR: could not resolve the digest of ${IMAGE_NAME}:${VERSION}"; exit 1 ;;
+          esac
+
+          docker buildx imagetools create \
+            --tag "${IMAGE_NAME}:latest" \
+            "${IMAGE_NAME}@${index_digest}"
+          echo "Pushed manifest: ${IMAGE_NAME}:latest -> ${index_digest}"
+
+          docker buildx imagetools inspect --raw "${IMAGE_NAME}:latest" > manifest-latest.json
+          python3 verify_manifest.py manifest-latest.json expected-platforms.txt digests
 
   # Deliberately always(): the arch tags are pushed by the build jobs, but only
   # the manifest above makes them redundant. If a later architecture fails, or
@@ -994,6 +997,8 @@ jobs:
           keep_latest="latest"
           api_base="https://hub.docker.com/v2/namespaces/${DOCKERHUB_USERNAME}/repositories/${REPOSITORY}/tags"
 
+          # Called from an `if`, where set -e does not apply inside the function,
+          # so every step reports failure with an explicit return.
           list_tags() {
             local next_url="${api_base}?page_size=100"
             local response=""
@@ -1001,10 +1006,10 @@ jobs:
             while [[ -n "$next_url" && "$next_url" != "null" ]]; do
               response="$(curl -fsSL \
                 -H "Authorization: Bearer ${hub_token}" \
-                "$next_url")"
+                "$next_url")" || return 1
 
-              printf '%s' "$response" | jq -r '.results[].name'
-              next_url="$(printf '%s' "$response" | jq -r '.next // empty')"
+              printf '%s' "$response" | jq -r '.results[].name' || return 1
+              next_url="$(printf '%s' "$response" | jq -r '.next // empty')" || return 1
             done
           }
 
@@ -1059,6 +1064,16 @@ jobs:
             exit 1
           fi
 
+          # Read the complete listing with a checked exit status BEFORE anything
+          # is deleted. `done < <(list_tags)` would swallow a failure on a later
+          # page and prune against a partial list.
+          listing="$(mktemp)"
+          trap 'rm -f "$listing"' EXIT
+          if ! list_tags > "$listing"; then
+            echo "ERROR: Docker Hub tag listing failed; nothing was deleted."
+            exit 1
+          fi
+
           declare -a tags_to_delete=()
           while IFS= read -r tag; do
             [[ -n "$tag" ]] || continue
@@ -1069,7 +1084,7 @@ jobs:
             fi
 
             tags_to_delete+=("$tag")
-          done < <(list_tags)
+          done < "$listing"
 
           for tag in "${tags_to_delete[@]}"; do
             echo "Deleting tag: $tag"
@@ -1093,6 +1108,12 @@ jobs:
             esac
           done
 
+          if ! list_tags > "$listing"; then
+            echo "ERROR: Docker Hub tag listing failed after cleanup; cannot verify the result."
+            exit 1
+          fi
+          sort -u -o "$listing" "$listing"
+
           declare -A remaining_tags=()
           while IFS= read -r tag; do
             [[ -n "$tag" ]] || continue
@@ -1102,7 +1123,7 @@ jobs:
               echo "ERROR: Unexpected tag remained after cleanup: $tag"
               exit 1
             fi
-          done < <(list_tags | sort -u)
+          done < "$listing"
 
           # Prereleases never publish 'latest' (see create-manifest), so only
           # require it for stable releases. Demanding it unconditionally made
@@ -1142,7 +1163,7 @@ jobs:
     env:
       VERSION: ${{ needs.meta.outputs.version }}
       IMAGE_NAME: ${{ format('{0}/justup', secrets.DOCKERHUB_USERNAME) }}
-      IS_NEWEST: ${{ needs.meta.outputs.is_newest }}
+      MOVES_LATEST: ${{ needs.meta.outputs.moves_latest }}
     permissions:
       contents: write
       actions: read
@@ -1160,6 +1181,23 @@ jobs:
           path: trivy-reports/
           merge-multiple: false
 
+      # The release body links to both reports, so they must exist and be valid
+      # JSON before a public release is created or updated.
+      - name: Validate Trivy findings
+        run: |
+          set -euo pipefail
+          for arch in amd64 arm64; do
+            report="trivy-reports/trivy-findings-${arch}/trivy-${arch}.json"
+            if [[ ! -s "$report" ]]; then
+              echo "ERROR: missing or empty Trivy report: ${report}"
+              exit 1
+            fi
+            if ! jq empty "$report"; then
+              echo "ERROR: Trivy report is not valid JSON: ${report}"
+              exit 1
+            fi
+          done
+
       - name: Create or update GitHub Release
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
@@ -1172,8 +1210,7 @@ jobs:
             // Mirrors the condition create-manifest applies. Listing ':latest'
             // unconditionally would document a tag this run deliberately left
             // pointing at a newer release.
-            const isNewest = process.env.IS_NEWEST === 'true';
-            const movedLatest = !isPrerelease && isNewest;
+            const movedLatest = !isPrerelease && process.env.MOVES_LATEST === 'true';
             const tagName = 'v' + version;
 
             function parseTrivyStatus(arch) {
@@ -1318,29 +1355,27 @@ jobs:
             for (const arch of ['amd64', 'arm64']) {
               const assetName = `trivy-${arch}.json`;
               const file = path.join('trivy-reports', `trivy-findings-${arch}`, assetName);
-              try {
-                const data = fs.readFileSync(file);
-                const existing = (release.assets || []).find(a => a.name === assetName);
-                if (existing) {
-                  await github.rest.repos.deleteReleaseAsset({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    asset_id: existing.id
-                  });
-                }
-                await github.rest.repos.uploadReleaseAsset({
+              // Any failure here fails the job: a replacement that did not
+              // upload is not a success, and the body links to these assets.
+              const data = fs.readFileSync(file);
+              const existing = (release.assets || []).find(a => a.name === assetName);
+              if (existing) {
+                await github.rest.repos.deleteReleaseAsset({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
-                  release_id: release.id,
-                  name: assetName,
-                  data: data,
-                  headers: {
-                    'content-type': 'application/json',
-                    'content-length': data.length
-                  }
+                  asset_id: existing.id
                 });
-                console.log('Attached ' + assetName);
-              } catch (err) {
-                console.log('Could not attach ' + assetName + ': ' + err.message);
               }
+              await github.rest.repos.uploadReleaseAsset({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                release_id: release.id,
+                name: assetName,
+                data: data,
+                headers: {
+                  'content-type': 'application/json',
+                  'content-length': data.length
+                }
+              });
+              console.log('Attached ' + assetName);
             }

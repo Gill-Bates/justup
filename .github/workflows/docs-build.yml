@@ -73,12 +73,10 @@ jobs:
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           fetch-depth: 0  # Full history for git-based plugins
-          # On workflow_run, GITHUB_SHA is the default branch's head, not the
-          # commit the release published - so the default checkout would deploy
-          # documentation for changes that are not in the release whenever main
-          # moved on in the meantime. Empty for every other trigger, which
-          # leaves checkout's own default in place.
-          ref: ${{ github.event.workflow_run.head_sha }}
+          # No explicit ref: on workflow_run the default checkout is the head of
+          # the default branch, which is what must be deployed. The release's
+          # own head_sha would let a re-run of an older tag publish stale docs
+          # over a newer site.
 
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6

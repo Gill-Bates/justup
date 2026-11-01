@@ -8,18 +8,15 @@ Prints two GITHUB_OUTPUT lines; reasoning goes to stderr.
   is_newest    no published release of any kind is newer; gates the tag cleanup.
   moves_latest stable version and no newer stable release is published; gates 'latest'.
 A prerelease never moves 'latest'. Any parse problem fails closed (exit 1, no output).
-Usage: release-newest.py <published-tags-file> <version>
+Usage: release-newest.py <published-tags-file> <version> <arch>...
+<arch>... are the built architectures; <version>-<arch> fragment tags are not releases.
 """
 from __future__ import annotations
+
 import re
 import sys
+from pathlib import Path
 
-# Architecture fragments (1.6.1-amd64) parse as prereleases of 1.6.1; they are
-# build artefacts of the release workflow, not releases.
-ARCH_SUFFIXES = {
-    "amd64", "arm64", "arm", "armv6", "armv7", "386",
-    "ppc64le", "s390x", "riscv64", "mips64le", "loong64",
-}
 VERSION_RE = re.compile(r"^(\d+(?:\.\d+)*)(?:-([0-9A-Za-z.-]+))?$")
 
 
@@ -28,13 +25,13 @@ def suffix_key(suffix: str) -> tuple:
     return tuple((0, int(p), "") if p.isdigit() else (1, 0, p) for p in suffix.split("."))
 
 
-def parse(tag: str):
+def parse(tag: str, archs: frozenset[str]):
     """Return (sort key, is_prerelease), or None for a non-release tag."""
     match = VERSION_RE.match(tag)
     if not match:
         return None
     suffix = match.group(2)
-    if suffix in ARCH_SUFFIXES:
+    if suffix in archs:
         return None
     # Padded so 1.7 and 1.7.0 are one version.
     release = tuple(int(p) for p in match.group(1).split("."))
@@ -44,14 +41,14 @@ def parse(tag: str):
     return key, suffix is not None
 
 
-def decide(published: set[str], current: str) -> tuple[bool, bool, list[str], list[str]]:
-    parsed = parse(current)
+def decide(published: set[str], current: str, archs: frozenset[str]) -> tuple[bool, bool, list[str], list[str]]:
+    parsed = parse(current, archs)
     if parsed is None:
         raise ValueError(f"unparseable version: {current}")
     current_key, current_pre = parsed
     newer, newer_stable = [], []
     for tag in sorted(published):
-        entry = parse(tag)
+        entry = parse(tag, archs)
         if entry is None or entry[0] <= current_key:
             continue
         newer.append(tag)
@@ -61,13 +58,13 @@ def decide(published: set[str], current: str) -> tuple[bool, bool, list[str], li
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) != 3:
+    if len(argv) < 4:
         print(__doc__, file=sys.stderr)
         return 1
-    with open(argv[1], encoding="utf-8") as handle:
-        published = {line.strip() for line in handle if line.strip()}
+    lines = Path(argv[1]).read_text(encoding="utf-8").splitlines()
+    published = {line.strip() for line in lines if line.strip()}
     try:
-        is_newest, moves_latest, newer, newer_stable = decide(published, argv[2])
+        is_newest, moves_latest, newer, newer_stable = decide(published, argv[2], frozenset(argv[3:]))
     except ValueError as err:
         print(f"ERROR: {err}", file=sys.stderr)
         return 1
