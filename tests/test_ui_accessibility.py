@@ -98,8 +98,9 @@ def test_disabled_pagination_links_have_no_href() -> None:
 
 def test_network_diagnostics_fit_mode_shares_the_dashboard_viewport_condition() -> None:
     css = (TEMPLATES.parent / "static/css/target-detail.css").read_text(encoding="utf-8")
-    condition = "@media (width >= 1200px) and (height >= 800px)"
-    assert css.count(condition) == 2
+    # The formatter may drop the space after ">=", so match both spellings.
+    condition = r"@media \(width >= ?1200px\) and \(height >= ?800px\)"
+    assert len(re.findall(condition, css)) == 2
     dashboard, network = css.split("/* ---- 7.", 1)
     assert "#target-dashboard-pane.active) {\n\t\t--ju-fit-height: 100dvh;" in dashboard
     # Fit only once a route is rendered, so placeholder/empty states keep the flow layout.
