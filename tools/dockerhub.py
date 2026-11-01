@@ -140,7 +140,8 @@ def main(argv: list[str]) -> int:
         token = login(namespace, password)
         if command == "list":
             tags = list_tags(namespace, repository, token, "--allow-missing-repo" in flags)
-            print("\n".join(tags))
+            for tag in tags:
+                print(tag)
             return 0
         for tag in rest:
             if delete_tag(namespace, repository, token, tag):
