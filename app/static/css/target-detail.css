@@ -269,8 +269,7 @@
 .target-detail-page .target-detail-tabs .nav-link:focus-visible,
 .target-recipients-summary:focus-visible,
 .target-custom-range>summary:focus-visible,
-.combined-legend-btn:focus-visible,
-.combined-data summary:focus-visible {
+.combined-legend-btn:focus-visible {
 	outline: 2px solid var(--bs-primary);
 	outline-offset: 2px;
 }
@@ -938,11 +937,6 @@ details[open]>summary .target-details-chevron {
 	flex: 1 1 auto;
 }
 
-.combined-footer .combined-data {
-	position: relative;
-	flex: none;
-}
-
 .combined-status-key:empty {
 	display: none;
 }
@@ -1062,16 +1056,6 @@ details[open]>summary .target-details-chevron {
 
 .combined-empty[hidden] {
 	display: none;
-}
-
-.combined-data {
-	margin-top: 0.75rem;
-	font-size: 0.8125rem;
-}
-
-.combined-data summary {
-	cursor: pointer;
-	color: var(--bs-secondary-color);
 }
 
 @media (width < 576px) {
@@ -1273,7 +1257,7 @@ details[open]>summary .target-details-chevron {
 		min-height: 0;
 	}
 
-	#target-dashboard-pane.active>.target-kpi-row,
+	#target-dashboard-pane.active #target-info-cards>.target-kpi-row,
 	#target-dashboard-pane.active>.target-toolbar {
 		grid-column: 1 / -1;
 	}
@@ -1367,8 +1351,16 @@ details[open]>summary .target-details-chevron {
 		min-height: 9rem;
 	}
 
-	#target-dashboard-pane.active .target-combined-plot {
-		min-height: 14rem;
+	#target-dashboard-pane.active .target-availability-plot {
+		min-height: 0;
+	}
+
+	#target-dashboard-pane.active .target-availability-card>.card-header {
+		padding: 0.45rem 0.75rem;
+	}
+
+	#target-dashboard-pane.active .target-availability-card>.card-body {
+		padding: 0.5rem 0.75rem;
 	}
 
 	#target-dashboard-pane.active .target-combined-plot>canvas,
@@ -1379,7 +1371,6 @@ details[open]>summary .target-details-chevron {
 	}
 
 	#target-dashboard-pane.active .combined-status-key,
-	#target-dashboard-pane.active .combined-data,
 	#target-dashboard-pane.active .combined-note {
 		margin-top: 0.35rem;
 	}
@@ -1397,15 +1388,31 @@ details[open]>summary .target-details-chevron {
 		min-height: 0;
 	}
 
-	/* Long downtime lists scroll inside their panel; nothing is cut off. */
+	/* Keep empty states in flow and make only a long history list scrollable. */
 	#target-dashboard-pane.active .target-downtime-card>.card-body {
-		overflow-y: auto;
-		scrollbar-width: thin;
+		overflow: visible;
+	}
+
+	#target-dashboard-pane.active #downtime-history-body {
+		display: flex;
+		flex: 1 1 auto;
+		flex-direction: column;
+		min-height: 0;
+	}
+
+	#target-dashboard-pane.active .target-downtime-card .target-empty-state {
+		flex: 1 1 auto;
+		align-content: center;
+		min-height: 0;
+		padding: 0.5rem;
 	}
 
 	#target-dashboard-pane.active .target-downtime-card .downtime-scroll {
+		flex: 1 1 auto;
+		min-height: 0;
 		max-height: none;
-		overflow: visible;
+		overflow-y: auto;
+		scrollbar-width: thin;
 	}
 
 	#target-dashboard-pane.active .downtime-item {
@@ -1444,11 +1451,6 @@ details[open]>summary .target-details-chevron {
 		min-height: 49rem;
 		padding-block: 1rem;
 		overflow: visible;
-	}
-
-	/* The lead line is redundant here; the saved height goes to the table and the map. */
-	.target-detail-page:has(#target-network-diagnostics-pane.active .traceroute-diagnostics) .target-detail-lead {
-		display: none;
 	}
 
 	.target-detail-page:has(#target-network-diagnostics-pane.active .traceroute-diagnostics) .target-detail-tab-content {
@@ -1609,7 +1611,6 @@ details[open]>summary .target-details-chevron {
 
 	.target-detail-breadcrumb,
 	.target-detail-eyebrow,
-	.target-detail-lead,
 	.target-detail-actions-sep {
 		display: none;
 	}
@@ -1668,7 +1669,7 @@ details[open]>summary .target-details-chevron {
 		--td-control-h: 2.75rem;
 
 		flex: 0 0 auto;
-		justify-content: flex-start;
+		justify-content: flex-end;
 		margin-inline-start: 0;
 	}
 

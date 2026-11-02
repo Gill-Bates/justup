@@ -6,18 +6,23 @@
 
 """Check that the libsignal-client jar packages a native library for the target architecture.
 
-This confirms packaging and architecture only (entry name, non-empty, ELF header).
-It does NOT prove that the JVM can load the library; there is no JNI load test here.
+This confirms packaging and architecture (entry name, non-empty, ELF header). With ``--load`` it
+also dlopen()s the extracted library (RTLD_NOW), which catches an unresolved glibc symbol or a
+missing shared dependency, i.e. a build/runtime base mismatch. It does NOT run JNI_OnLoad or
+prove that the JVM loads the library; a real Signal send stays a manual gate.
 
 docker-build.yml pipes this script into the finished image
 (``python - <arch> < tools/verify-libsignal-native.py``).
 
-Usage: verify-libsignal-native.py {amd64|arm64} [lib-dir]
+Usage: verify-libsignal-native.py [--load] {amd64|arm64} [lib-dir]
 """
 
 from __future__ import annotations
 
+import ctypes
+import os
 import sys
+import tempfile
 import zipfile
 from pathlib import Path
 
@@ -66,13 +71,29 @@ def check(jar: Path, arch: str) -> str:
     return f"{name} size={len(data)} machine={found} ({label})"
 
 
+def load(jar: Path, arch: str) -> str:
+    """dlopen the packaged library with immediate symbol binding; must run on the target architecture."""
+    name = EXPECTED[arch][0]
+    with tempfile.TemporaryDirectory() as directory, zipfile.ZipFile(jar) as archive:
+        path = archive.extract(name, directory)
+        try:
+            ctypes.CDLL(path, mode=ctypes.RTLD_LOCAL | os.RTLD_NOW)
+        except OSError as error:
+            raise CheckError(f"{name}: dlopen failed: {error}") from error
+    return f"{name} loads (dlopen, RTLD_NOW)"
+
+
 def main(argv: list[str]) -> int:
-    if len(argv) not in (2, 3):
+    args = [a for a in argv[1:] if a != "--load"]
+    if len(args) not in (1, 2):
         print(__doc__, file=sys.stderr)
         return 2
-    lib_dir = Path(argv[2]) if len(argv) == 3 else DEFAULT_LIB_DIR
+    lib_dir = Path(args[1]) if len(args) == 2 else DEFAULT_LIB_DIR
     try:
-        print(f"OK: {check(find_jar(lib_dir), argv[1])}")
+        jar = find_jar(lib_dir)
+        print(f"OK: {check(jar, args[0])}")
+        if "--load" in argv:
+            print(f"OK: {load(jar, args[0])}")
     except (CheckError, zipfile.BadZipFile, OSError) as error:
         print(f"FAIL: {error}", file=sys.stderr)
         return 1

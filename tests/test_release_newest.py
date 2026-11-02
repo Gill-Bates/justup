@@ -1,3 +1,9 @@
+#!/usr/bin/env python3
+#
+# tests/test_release_newest.py
+# Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
+#
+
 """Release privileges (cleanup, 'latest') derived from published tags."""
 
 import importlib.util

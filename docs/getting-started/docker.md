@@ -22,6 +22,7 @@ services:
       PGID: 1000
       LOG_LEVEL: INFO
       SECRET_KEY: ${SECRET_KEY:?Set a persistent key for justUp}
+      SECRET_KEYS: ${SECRET_KEYS:-}
     volumes:
       - ./:/app/data
     tmpfs:
@@ -32,7 +33,11 @@ The file also sets log rotation (50 MB x 5), a health check on `/healthz`, and
 the hardening options below.
 
 - `./` is relative to the Compose file, so data lands in the repository's
-  `docker/` directory. Change the mount for another location.
+  `docker/` directory. Change the mount for another location. Starting the same
+  stack from another directory (a copied Compose file, a re-imported stack) mounts an
+  empty data directory: the database, users and sessions seem gone.
+- Compose reads `.env` from the directory of the Compose file (`docker/`), not
+  from the directory you run the command in. Use `--env-file` to be explicit.
 - PDF reports live in a 256 MiB `tmpfs` and are gone after a restart.
 - The file publishes no port. Add `ports: ["8000:8000"]` under `services.justup`
   or connect the service to a reverse proxy.
@@ -43,7 +48,8 @@ docker compose --env-file .env -f docker/docker-compose.yml up -d
 
 !!! warning "SECRET_KEY is required"
     The start aborts without it. Keep the key stable; otherwise stored secrets
-    cannot be decrypted.
+    cannot be decrypted and all sessions end, because the session-token hashes
+    are keyed with it. Mount the data volume persistently as well.
 
 !!! warning "Behind a reverse proxy, set UPMON_TRUSTED_PROXIES"
     Add `UPMON_TRUSTED_PROXIES` with the proxy address as the container sees it.

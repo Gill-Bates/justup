@@ -58,8 +58,8 @@
    <!-- Alerts Table -->
    <div class="card shadow-sm">
       {% if alerts %}
-      <div class="table-responsive">
-         <table class="table table-hover align-middle rtable mb-0" id="alerts-table">
+      <div class="ju-table-viewport" role="region" tabindex="0" aria-label="Alerts">
+         <table class="table table-hover align-middle rtable ju-data-table mb-0" id="alerts-table">
             <thead>
                <tr>
                   <th scope="col" class="ui-col-status text-center"><span class="visually-hidden">Status</span></th>
@@ -91,7 +91,7 @@
                      </a>
                   </td>
 
-                  <td data-label="Service" class="checks-cell">
+                  <td data-label="Service">
                      <div class="check-badges">
                         {% set failed_list = alert.failed_service.split(', ') %}
                         {% if alert.target_services %}
@@ -252,7 +252,7 @@
       }
 
       async function closeAllAlerts() {
-         if (!confirm('Close all open alerts?')) {
+         if (!(await window.confirmAction({ title: 'Close all alerts', message: 'All open alerts are closed.', confirmLabel: 'Close all' }))) {
             return;
          }
          try {

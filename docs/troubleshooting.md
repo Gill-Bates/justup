@@ -86,4 +86,6 @@ docker logs -f justup
     docker logs justup 2>&1 | grep "event=crashed\|event=degraded"
     ```
     `GET /healthz` lists the state of each service. Fix the cause named in the
-    traceback; the service recovers on its next retry.
+    traceback; the service recovers on its next retry. Admins also get a
+    [Notification Center entry](features/notifications.md#background-service-alerts)
+    for a crash, for `degraded`, and for the recovery.

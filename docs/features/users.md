@@ -28,9 +28,10 @@ growing delay (up to one hour). See [Authentication](../security/authentication.
 ```bash
 docker exec -it justup justup-cli reset password <username>
 docker exec -it justup justup-cli reset password admin   # all admins
+docker exec -it justup justup-cli reset password        # all admins (default)
 ```
 
-The CLI prints a new password and revokes the user's sessions.
+The username is optional. Omitting it is equivalent to `admin` and resets every admin account. The CLI prints each new password and revokes that user's sessions.
 
 !!! note "Initial admin password"
     On first start justUp! prints a random one-time password to the container

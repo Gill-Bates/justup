@@ -201,6 +201,8 @@ class MiniElement {
     child.parentElement = null; return child;
   }
   setAttribute(name, value) { this.attrs = { ...this.attrs, [name]: String(value) }; }
+  getAttribute(name) { return this.attrs && name in this.attrs ? this.attrs[name] : null; }
+  removeAttribute(name) { if (this.attrs) delete this.attrs[name]; }
   remove() { if (this.parentElement) this.parentElement.removeChild(this); }
   closest(selector) {
     for (let node = this; node; node = node.parentElement) if (node.matches(selector)) return node;
@@ -217,6 +219,14 @@ class MiniElement {
       if (nested) return nested;
     }
     return null;
+  }
+  querySelectorAll(selector) {
+    const found = [];
+    for (const child of this.children) {
+      if (child.matches(selector)) found.push(child);
+      found.push(...child.querySelectorAll(selector));
+    }
+    return found;
   }
   focus() {
     if (!this.ownerDocument.roots.some(root => root.contains(this))) { this.focusedWhileDetached = true; return; }
@@ -268,11 +278,12 @@ test("focus moves to a newly created preview row only after it is attached", () 
   assert.equal(list.contains(replacement), true);
 });
 
-test("the preview names the context on a second line and never prints null", () => {
-  assert.equal(N.detailLine({ body: "Created by root", actor: "root" }, "5 min ago"), "Created by root · 5 min ago");
-  assert.equal(N.detailLine({ body: "", actor: "root" }, "just now"), "root · just now");
-  assert.equal(N.detailLine({ body: null, actor: null }, "just now"), "just now");
-  assert.equal(N.detailLine(null, ""), "");
+test("the context line carries only the body/actor and never prints null", () => {
+  // The time is rendered as a separate <time> element now, so detailLine returns context only.
+  assert.equal(N.detailLine({ body: "Created by root", actor: "root" }), "Created by root");
+  assert.equal(N.detailLine({ body: "", actor: "root" }), "root");
+  assert.equal(N.detailLine({ body: null, actor: null }), "");
+  assert.equal(N.detailLine(null), "");
 });
 
 test("every category has an icon and unknown ones fall back to the bell", () => {
@@ -296,7 +307,7 @@ test("preview rows show context, icon and a screen-reader-only unread marker; ma
   assert.equal(row(1).querySelector(".material-icons").textContent, "shield");
   assert.equal(row(0).querySelector(".ju-notif-pop-text").textContent, "Target created: " + evil); // literal text, not markup
   assert.equal(row(0).querySelector(".ju-notif-pop-text").title, "Target created: " + evil);
-  assert.match(row(0).querySelector(".ju-notif-pop-detail").textContent, /^Created by root · /);
+  assert.equal(row(0).querySelector(".ju-notif-pop-context").textContent, "Created by root");
   assert.equal(row(0).querySelector(".visually-hidden").hidden, false);
   assert.equal(row(1).querySelector(".visually-hidden").hidden, true); // read rows carry no unread text
   assert.doesNotMatch(row(1).textContent, /null|undefined|None/);
@@ -362,7 +373,7 @@ function swipeHarness() {
 test("a left swipe reveals the delete action, a right swipe or outside click hides it", () => {
   const h = swipeHarness();
   const swipe = (from, to) => {
-    h.handlers.pointerdown({ target: h.target, clientX: from, clientY: 10, pointerId: 1 });
+    h.handlers.pointerdown({ target: h.target, clientX: from, clientY: 10, pointerId: 1, pointerType: "touch" });
     h.handlers.pointerup({ clientX: to, clientY: 12, pointerId: 1 });
   };
   swipe(200, 100);
@@ -376,9 +387,9 @@ test("a left swipe reveals the delete action, a right swipe or outside click hid
 
 test("short or mostly vertical gestures neither reveal nor swallow the click", () => {
   const h = swipeHarness();
-  h.handlers.pointerdown({ target: h.target, clientX: 200, clientY: 10, pointerId: 1 });
+  h.handlers.pointerdown({ target: h.target, clientX: 200, clientY: 10, pointerId: 1, pointerType: "touch" });
   h.handlers.pointerup({ clientX: 170, clientY: 10, pointerId: 1 });
-  h.handlers.pointerdown({ target: h.target, clientX: 200, clientY: 10, pointerId: 2 });
+  h.handlers.pointerdown({ target: h.target, clientX: 200, clientY: 10, pointerId: 2, pointerType: "touch" });
   h.handlers.pointerup({ clientX: 120, clientY: 150, pointerId: 2 });
   assert.equal(h.classes.has("is-dismiss-revealed"), false);
   let prevented = false;
@@ -386,9 +397,16 @@ test("short or mostly vertical gestures neither reveal nor swallow the click", (
   assert.equal(prevented, false);
 });
 
+test("a touch tap does not reveal the delete action", () => {
+  const h = swipeHarness();
+  h.handlers.pointerdown({ target: h.target, clientX: 200, clientY: 10, pointerId: 1, pointerType: "touch" });
+  h.handlers.pointerup({ clientX: 200, clientY: 10, pointerId: 1 });
+  assert.equal(h.classes.has("is-dismiss-revealed"), false);
+});
+
 test("the click that ends a swipe is swallowed once", () => {
   const h = swipeHarness();
-  h.handlers.pointerdown({ target: h.target, clientX: 200, clientY: 10, pointerId: 1 });
+  h.handlers.pointerdown({ target: h.target, clientX: 200, clientY: 10, pointerId: 1, pointerType: "touch" });
   h.handlers.pointerup({ clientX: 100, clientY: 10, pointerId: 1 });
   let prevented = 0;
   const click = { target: { closest: (sel) => (sel === ".ju-notif-swipe-content" ? {} : null) }, preventDefault() { prevented++; }, stopPropagation() {} };
@@ -412,9 +430,16 @@ test("a right swipe on a closed row calls onSwipeRead when provided", () => {
   const sandbox = { window: { document: { addEventListener() {} }, setTimeout() {} } };
   vm.runInNewContext(src, sandbox);
   sandbox.window.JustUpNotifications.bindSwipeRows(container, { onSwipeRead: (item) => seen.push(item) });
-  h.handlers.pointerdown({ target: h.target, clientX: 100, clientY: 10, pointerId: 1 });
+  h.handlers.pointerdown({ target: h.target, clientX: 100, clientY: 10, pointerId: 1, pointerType: "touch" });
   h.handlers.pointerup({ clientX: 200, clientY: 12, pointerId: 1 });
   assert.deepEqual(seen, [h.item]);
+});
+
+test("mouse dragging does not reveal the delete action", () => {
+  const h = swipeHarness();
+  h.handlers.pointerdown({ target: h.target, clientX: 200, clientY: 10, pointerId: 1, pointerType: "mouse" });
+  h.handlers.pointerup({ clientX: 100, clientY: 10, pointerId: 1 });
+  assert.equal(h.classes.has("is-dismiss-revealed"), false);
 });
 
 test("a ready-PDF preview row carries its attachment URL; other rows carry none", () => {
@@ -429,4 +454,133 @@ test("a ready-PDF preview row carries its attachment URL; other rows carry none"
   assert.equal(button().dataset.url, url);
   N.renderPreview(list, { items: [{ ...base, id: 1, title: "PDF ready", action: { type: "unavailable", label: "Report expired" } }] }, doc, bell);
   assert.equal(button().dataset.url, undefined);
+});
+
+// --- Relative time: formatting, boundaries and singular/plural ---------------------------------
+
+const MIN = 60 * 1000, HOUR = 60 * MIN, DAY = 24 * HOUR;
+const iso = (ms) => new Date(ms).toISOString();
+
+test("relTime renders short English ages with correct singular/plural", () => {
+  const now = Date.parse("2026-06-15T12:00:00Z");
+  const at = (ago) => N.relTime(iso(now - ago), now);
+  assert.equal(at(0), "Now");
+  assert.equal(at(59 * 1000), "Now"); // still under a minute
+  assert.equal(at(1 * MIN), "1 min ago");
+  assert.equal(at(15 * MIN), "15 min ago");
+  assert.equal(at(59 * MIN), "59 min ago");
+  assert.equal(at(1 * HOUR), "1 hour ago");
+  assert.equal(at(3 * HOUR), "3 hours ago");
+  assert.equal(at(23 * HOUR), "23 hours ago");
+  assert.equal(at(1 * DAY), "1 day ago");
+  assert.equal(at(7 * DAY), "7 days ago");
+  assert.equal(at(120 * DAY), "120 days ago");
+});
+
+test("relTime crosses each unit boundary cleanly", () => {
+  const now = Date.parse("2026-06-15T12:00:00Z");
+  const at = (ago) => N.relTime(iso(now - ago), now);
+  assert.equal(at(60 * 1000 - 1), "Now"); // just under one minute
+  assert.equal(at(60 * 1000), "1 min ago"); // exactly one minute
+  assert.equal(at(HOUR - 1), "59 min ago"); // just under one hour
+  assert.equal(at(HOUR), "1 hour ago");
+  assert.equal(at(DAY - 1), "23 hours ago"); // just under one day
+  assert.equal(at(DAY), "1 day ago");
+});
+
+test("relTime never shows a missing, invalid or future timestamp as Now", () => {
+  const now = Date.parse("2026-06-15T12:00:00Z");
+  assert.equal(N.relTime(undefined, now), "");
+  assert.equal(N.relTime(null, now), "");
+  assert.equal(N.relTime("", now), "");
+  assert.equal(N.relTime("not-a-date", now), "");
+  // A slightly future timestamp (clock skew) must stay blank, not read as "Now".
+  assert.equal(N.relTime(iso(now + 5 * MIN), now), "");
+});
+
+test("absTime formats the full timestamp and honours UTC mode, blank when unparseable", () => {
+  assert.equal(N.absTime("not-a-date", false), "");
+  const utc = N.absTime("2026-06-15T09:05:00Z", true);
+  assert.match(utc, /2026/);
+  assert.match(utc, /\bUTC$/);
+  assert.doesNotMatch(N.absTime("2026-06-15T09:05:00Z", false), /UTC$/);
+});
+
+test("a preview row renders the time as its own <time> element, context stays separate", () => {
+  const doc = previewDocument();
+  const list = doc.createElement("ul");
+  doc.roots.push(list);
+  const bell = doc.createElement("button");
+  const created = "2026-06-15T09:00:00Z";
+  N.renderPreview(list, { items: [
+    { id: 1, title: "Report ready", body: "A long description that would otherwise push the time off", actor: "root", severity: "info", category: "reports", is_read: false, created_at: created },
+  ] }, doc, bell);
+  const row = list.children[0].querySelector(".ju-notif-pop-btn");
+  const timeEl = row.querySelector(".ju-notif-pop-time");
+  assert.ok(timeEl, "the row carries a dedicated time element");
+  assert.equal(timeEl.tagName, "time");
+  assert.equal(timeEl.getAttribute("datetime"), created); // unmodified original ISO
+  assert.ok(/ago$|^Now$/.test(timeEl.textContent), "shows a relative age");
+  assert.match(timeEl.title, /Created:/); // full timestamp available as a tooltip
+  // Context lives in its own span and does not carry the time.
+  const ctx = row.querySelector(".ju-notif-pop-context");
+  assert.equal(ctx.textContent, "A long description that would otherwise push the time off");
+  assert.doesNotMatch(ctx.textContent, /ago|Now/);
+});
+
+test("an invalid created_at leaves the time element empty and hidden, never Now", () => {
+  const doc = previewDocument();
+  const list = doc.createElement("ul");
+  doc.roots.push(list);
+  const bell = doc.createElement("button");
+  N.renderPreview(list, { items: [
+    { id: 1, title: "Broken", body: "ctx", severity: "info", category: "activity", is_read: false, created_at: "not-a-date" },
+  ] }, doc, bell);
+  const timeEl = list.children[0].querySelector(".ju-notif-pop-time");
+  assert.equal(timeEl.textContent, "");
+  assert.equal(timeEl.hidden, true);
+  assert.equal(timeEl.getAttribute("datetime"), null);
+  assert.doesNotMatch(timeEl.textContent, /Now/);
+});
+
+test("refreshRelativeTimes updates ages from the datetime attribute without rebuilding the list", () => {
+  const doc = previewDocument();
+  const list = doc.createElement("ul");
+  doc.roots.push(list);
+  const bell = doc.createElement("button");
+  const created = "2026-06-15T09:00:00Z";
+  N.renderPreview(list, { items: [{ id: 1, title: "T", body: "ctx", severity: "info", category: "activity", is_read: false, created_at: created }] }, doc, bell);
+  const timeEl = list.children[0].querySelector(".ju-notif-pop-time");
+  const control = list.children[0].querySelector(".ju-notif-pop-btn");
+  const movesBefore = list.moves;
+
+  // One hour after creation the visible age must change to "1 hour ago" without any re-render.
+  N.refreshRelativeTimes(list, doc, Date.parse(created) + HOUR);
+  assert.equal(timeEl.textContent, "1 hour ago");
+  assert.equal(list.moves, movesBefore); // no DOM node was moved or recreated
+  assert.equal(list.children[0].querySelector(".ju-notif-pop-btn"), control); // same control, focus-safe
+
+  // Three hours: plural.
+  N.refreshRelativeTimes(list, doc, Date.parse(created) + 3 * HOUR);
+  assert.equal(timeEl.textContent, "3 hours ago");
+});
+
+test("refreshRelativeTimes ignores a time element without a datetime and never writes an empty age", () => {
+  const doc = previewDocument();
+  const list = doc.createElement("ul");
+  const bare = doc.createElement("time");
+  bare.className = "ju-notif-pop-time";
+  bare.textContent = "7 days ago";
+  list.appendChild(bare);
+  doc.roots.push(list);
+  // No datetime attribute: it must be left untouched (not blanked).
+  N.refreshRelativeTimes(list, doc, Date.now());
+  assert.equal(bare.textContent, "7 days ago");
+});
+
+test("the public API exposes the relative formatter so the time logic is not duplicated", () => {
+  // DRY: one formatter, shared and testable, rather than a second copy of the rules.
+  assert.equal(typeof N.relTime, "function");
+  assert.equal(typeof N.absTime, "function");
+  assert.equal(typeof N.refreshRelativeTimes, "function");
 });

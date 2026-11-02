@@ -146,14 +146,6 @@ body {
 	text-transform: uppercase;
 }
 
-.ui-page-lead {
-	max-width: 65ch;
-	margin: 0.3rem 0 0;
-	color: var(--bs-secondary-color);
-	font-size: 0.95rem;
-	line-height: 1.55;
-}
-
 /* Breadcrumb trail above a page header; spacing comes from the page grid. */
 .ui-page .breadcrumb {
 	--bs-breadcrumb-margin-bottom: 0;
@@ -249,11 +241,6 @@ textarea.smtp-editor-frame {
 		grid-template-rows: auto auto minmax(0, 1fr);
 		align-content: stretch;
 		min-height: 0;
-	}
-
-	/* The lead line is redundant here; its height goes to the editor. */
-	.ui-page:has(#smtp-pane.active .settings-editor--fill) .ui-page-lead {
-		display: none;
 	}
 
 	.ui-page:has(#smtp-pane.active .settings-editor--fill) :is(#settings-form, .tab-content, #smtp-pane.active) {
@@ -950,27 +937,178 @@ textarea.smtp-editor-frame {
 	padding: 2rem 1rem;
 }
 
-/* ----- Responsive Data Table (.rtable) ----- */
+/* ----- Responsive data tables -----
+   One contract for every data table (docs/development/contributing.md, "Table contract"):
+   .ju-table-viewport  scroll and size container; role="region", tabindex="0" and an aria-label make it keyboard operable.
+   .ju-data-table      content-sized columns, headers never wrapped, long values wrap, no ellipsis.
+   .rtable             adds the label/value card layout when the viewport is narrower than 40rem.
+   Between both the viewport scrolls horizontally instead of squeezing columns.
+   Cell helpers: .ju-cell-text (free text, minimum width), .ju-cell-icon (icon-only column).
+   The 40rem threshold is repeated in each container query because a custom property cannot be used there. */
+.ju-table-viewport {
+	container: ju-table / inline-size;
 
-/* .rtable marks tables that reflow into a card layout on mobile (see media query below). */
-.rtable {
+	/* Containing block for absolutely positioned content (.visually-hidden), which would otherwise widen the document. */
+	position: relative;
+	max-width: 100%;
+	overflow-x: auto;
+	-webkit-overflow-scrolling: touch;
+}
+
+.ju-table-viewport:focus-visible {
+	outline: 2px solid var(--bs-primary);
+	outline-offset: -2px;
+}
+
+.ju-data-table {
 	width: 100%;
 }
 
-/* Desktop: real table, no card reflow */
-@media (width >=768px) {
-	.targets-table td::before {
-		content: none !important;
-		display: none !important;
+.ju-data-table>thead>tr>th {
+	white-space: nowrap;
+}
+
+.ju-data-table>tbody>tr>td {
+	overflow-wrap: break-word;
+}
+
+.ju-data-table .ju-cell-text {
+	min-width: 10rem;
+	overflow-wrap: anywhere;
+}
+
+.ju-data-table .check-badges {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 4px;
+}
+
+.ju-data-table .check-badges .badge {
+	min-width: auto;
+	text-align: center;
+	white-space: nowrap;
+}
+
+/* Table mode: rows keep the wizard's inset-card shape while the table semantics stay intact. */
+@container ju-table (width >=40rem) {
+	.ui-page .rtable {
+		border-collapse: separate;
+		border-spacing: 0 0.4rem;
 	}
 
-	.targets-table tr {
-		display: table-row;
+	.ui-page .rtable>tbody>tr>* {
+		--bs-table-bg: var(--bs-body-bg);
+
+		border-block: 1px solid var(--ju-panel-line);
 	}
 
-	.targets-table td,
-	.targets-table th {
-		display: table-cell;
+	.ui-page .rtable>tbody>tr> :first-child {
+		border-left: 1px solid var(--ju-panel-line);
+		border-radius: var(--ju-radius-tile) 0 0 var(--ju-radius-tile);
+	}
+
+	.ui-page .rtable>tbody>tr> :last-child {
+		border-right: 1px solid var(--ju-panel-line);
+		border-radius: 0 var(--ju-radius-tile) var(--ju-radius-tile) 0;
+	}
+
+	.rtable tbody tr:hover {
+		background-color: var(--bs-table-hover-bg, rgb(0 0 0 / 7.5%));
+	}
+
+	.ui-page .ju-data-table .ju-cell-icon {
+		width: 1%;
+		padding-inline: 0.75rem;
+	}
+}
+
+/* Card mode: every column stays visible as a label/value row. */
+@container ju-table (width <40rem) {
+	.rtable thead {
+		display: none;
+	}
+
+	.rtable tbody tr {
+		display: block;
+		border: 1px solid var(--bs-border-color);
+		border-radius: var(--ju-radius-tile);
+		padding: var(--ui-card-padding);
+		margin-bottom: var(--ui-space-tile);
+		background: var(--bs-body-bg);
+	}
+
+	.ui-page .rtable tbody td {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		gap: 1rem;
+		min-width: 0;
+		padding: 0.4rem 0;
+		border: none;
+	}
+
+	.rtable tbody td::before {
+		content: attr(data-label);
+		font-weight: 600;
+		color: var(--bs-secondary-color);
+		flex-shrink: 0;
+	}
+
+	.rtable tbody td[data-label=""]::before,
+	.rtable tbody td[data-label="Actions"]::before {
+		display: none;
+	}
+
+	.rtable tbody td.actions-cell {
+		justify-content: flex-end;
+		width: auto;
+	}
+
+	.rtable .btn-icon .material-icons,
+	.rtable .btn-icon i {
+		font-size: 22px;
+	}
+
+	/* Targets: the primary fields form a compact header; all other values follow as label/value rows. */
+	.targets-table tbody tr {
+		display: grid;
+		grid-template-columns: 1.5rem minmax(0, 1fr) auto;
+		grid-template-areas:
+			"status name name"
+			"checks checks uptime";
+		align-items: center;
+		gap: 0.25rem 0.5rem;
+		padding: 0.75rem;
+	}
+
+	.targets-table td {
+		grid-column: 1 / -1;
+	}
+
+	.targets-table td[data-label="Status"] {
+		grid-area: status;
+		justify-content: center;
+	}
+
+	.targets-table td[data-label="Name"] {
+		grid-area: name;
+	}
+
+	.targets-table td[data-label="Checks"] {
+		grid-area: checks;
+		justify-content: flex-start;
+	}
+
+	.targets-table td[data-label="Uptime"] {
+		grid-area: uptime;
+		justify-content: flex-end;
+		gap: 0.35rem;
+	}
+
+	.targets-table td[data-label="Status"]::before,
+	.targets-table td[data-label="Name"]::before {
+		display: none;
 	}
 }
 
@@ -1103,111 +1241,8 @@ textarea.smtp-editor-frame {
 
 /* ----- Settings List Tables (Users, Recipients) ----- */
 
-/* Content-sized columns: a fixed layout split them evenly and squeezed the nowrap actions column. */
-#users-list .table,
-#recipients-list .table {
-	width: 100%;
-}
-
-#users-list .table th,
-#recipients-list .table th,
-#users-list .table td:last-child,
-#recipients-list .table td:last-child {
-	white-space: nowrap;
-}
-
-/* Data cells wrap long unbreakable values (e-mail, IPv6) instead of being clipped or widening the table. */
-#users-list .table td,
-#recipients-list .table td {
-	overflow-wrap: anywhere;
-}
-
-
-
-/* ----- Mobile Responsive: Settings Tables (Users, Recipients) ----- */
-@media (width <=991.98px) {
-	#users-list .table,
-	#recipients-list .table {
-		table-layout: auto;
-	}
-
-	/* Make tables horizontally scrollable on tablets */
-	#users-list,
-	#recipients-list {
-		overflow-x: auto;
-		-webkit-overflow-scrolling: touch;
-	}
-
-	#users-list .table,
-	#recipients-list .table {
-		min-width: 700px;
-	}
-}
-
-@media (width <=767.98px) {
-	/* Stack tables as cards on mobile */
-	#users-list .table,
-	#recipients-list .table {
-		table-layout: auto;
-		min-width: auto;
-	}
-
-	#users-list .table thead,
-	#recipients-list .table thead {
-		display: none;
-	}
-
-	#users-list .table tbody tr,
-	#recipients-list .table tbody tr {
-		display: block;
-		margin-bottom: var(--ui-space-tile);
-		border: 1px solid var(--bs-border-color);
-		border-radius: 0.5rem;
-		padding: var(--ui-card-padding);
-		background: var(--bs-body-bg);
-	}
-
-	#users-list .table tbody td,
-	#recipients-list .table tbody td {
-		display: flex;
-		justify-content: space-between;
-		align-items: center;
-		padding: 0.4rem 0;
-		border: none;
-	}
-
-	#users-list .table tbody td::before,
-	#recipients-list .table tbody td::before {
-		content: attr(data-label);
-		font-weight: 600;
-		color: var(--bs-secondary-color);
-		margin-right: 0.5rem;
-		flex-shrink: 0;
-	}
-
-	/* Actions row - full width */
-	#users-list .table tbody td:last-child,
-	#recipients-list .table tbody td:last-child {
-		justify-content: flex-end;
-		padding-top: 0.75rem;
-		margin-top: 0.5rem;
-		border-top: 1px solid var(--bs-border-color);
-	}
-
-	#users-list .table tbody td:last-child::before,
-	#recipients-list .table tbody td:last-child::before {
-		display: none;
-	}
-
-	/* Action buttons larger touch targets on mobile */
-	#recipients-list .action-buttons .btn {
-		padding: 0.5rem;
-	}
-
-	#recipients-list .action-buttons .material-icons {
-		font-size: 24px;
-	}
-
+/* Card layout and scrolling come from the table contract; only the Users card keeps its own two-row grid. */
+@container ju-table (width <40rem) {
 	/* Users: compact two-row card (name + badges, then last login + actions) */
 	#users-list .table tbody tr {
 		display: grid;
@@ -1218,9 +1253,8 @@ textarea.smtp-editor-frame {
 		padding: 0.5rem 0.75rem;
 	}
 
-	#users-list .table tbody td {
+	.ui-page #users-list .table tbody td {
 		padding: 0;
-		min-width: 0;
 	}
 
 	#users-list .table tbody td::before {
@@ -1229,13 +1263,6 @@ textarea.smtp-editor-frame {
 
 	#users-list .table tbody td.user-cell {
 		grid-area: 1 / 1;
-	}
-
-	#users-list .user-name {
-		min-width: 0;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
 	}
 
 	#users-list .table tbody td.user-role {
@@ -1261,7 +1288,6 @@ textarea.smtp-editor-frame {
 		display: inline;
 		content: "Last login ";
 		font-weight: 400;
-		margin: 0;
 	}
 
 	#users-list .table tbody td.user-login .small {
@@ -1278,10 +1304,6 @@ textarea.smtp-editor-frame {
 
 	#users-list .table tbody td.user-actions {
 		grid-area: 2 / 2 / 3 / 5;
-		margin: 0;
-		padding: 0;
-		border-top: 0;
-		justify-content: flex-end;
 	}
 
 	/* !important beats the Bootstrap .gap-1 utility in the markup. */
@@ -1301,77 +1323,20 @@ textarea.smtp-editor-frame {
 	#users-list .user-action-buttons .material-icons {
 		font-size: 20px;
 	}
+}
 
-	/* Compact Users card header */
+@media (width <=767.98px) {
 	.card-header:has(+ .card-body > #users-list) {
 		padding: 0.5rem 0.75rem;
 	}
 }
 
 /* ----- Spooler Notification Log ----- */
-.spooler-log td {
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
 
-.spooler-log td[data-label="Time"],
-.spooler-log td[data-label="Channel"] {
-	overflow: visible;
-	text-overflow: clip;
-}
-
-.spooler-log td[data-label="Target"],
-.spooler-log td[data-label="Recipient"],
-.spooler-log td[data-label="Error"] {
-	overflow: visible;
-	text-overflow: clip;
-	white-space: normal;
-	word-break: break-word;
-}
-
+/* A dense log: no card layout, the table contract scrolls it locally and wraps long values. */
 .spooler-log td[data-label="Error"] {
 	font-size: 0.875rem;
 	line-height: 1.3;
-}
-
-/* ----- Mobile Responsive: Spooler Notification Log ----- */
-@media (width <=767.98px) {
-	/* Hide low-priority columns on mobile */
-	.spooler-log th:nth-child(3),
-	/* Target */
-	.spooler-log td[data-label="Target"],
-	.spooler-log th:nth-child(5),
-	/* Type */
-	.spooler-log td[data-label="Type"],
-	.spooler-log th:nth-child(7),
-	/* Retries */
-	.spooler-log td[data-label="Retries"],
-	.spooler-log th:nth-child(8),
-	/* Error */
-	.spooler-log td[data-label="Error"] {
-		display: none;
-	}
-
-	.spooler-log {
-		font-size: 0.78rem;
-	}
-
-	.spooler-log th,
-	.spooler-log td {
-		padding: 0.3rem 0.4rem;
-	}
-
-	.spooler-log th:nth-child(1),
-	.spooler-log td[data-label="Time"] {
-		white-space: nowrap;
-		font-size: 0.72rem;
-	}
-
-	/* Channel: icon only (hide text) */
-	.spooler-log td[data-label="Channel"] .material-icons {
-		margin-right: 0 !important;
-	}
 }
 
 @media (width >=768px) {
@@ -1608,16 +1573,17 @@ textarea.smtp-editor-frame {
 	font-weight: 600;
 }
 
+/* Text-emphasis tokens keep AA contrast on light and dark surfaces; plain status colors do not. */
 .uptime-ok {
-	color: var(--bs-success);
+	color: var(--bs-success-text-emphasis);
 }
 
 .uptime-warn {
-	color: var(--bs-warning);
+	color: var(--bs-warning-text-emphasis);
 }
 
 .uptime-bad {
-	color: var(--bs-danger);
+	color: var(--bs-danger-text-emphasis);
 }
 
 .uptime-none {
@@ -1749,7 +1715,7 @@ textarea.smtp-editor-frame {
 	}
 
 	.alert-recipients-grid {
-		grid-template-columns: repeat(2, 1fr);
+		grid-template-columns: repeat(2, minmax(0, 1fr));
 	}
 
 	.alert-recipient-channel .alert-recipient-channel-text {
@@ -1869,7 +1835,7 @@ textarea.smtp-editor-frame {
 	--bs-table-border-color: var(--bs-border-color);
 }
 
-[data-bs-theme="dark"] .targets-table tbody tr {
+[data-bs-theme="dark"] .rtable tbody tr {
 	border-color: var(--ui-card-border);
 }
 
@@ -1881,75 +1847,6 @@ textarea.smtp-editor-frame {
 	/* Buttons */
 	.btn-page-primary {
 		width: 100%;
-	}
-
-	/* Responsive tables: card layout on mobile only */
-	.rtable {
-		table-layout: auto;
-	}
-
-	.rtable colgroup,
-	.rtable thead {
-		display: none;
-	}
-
-	.rtable tbody tr {
-		display: block;
-		border: 1px solid var(--bs-border-color);
-		border-radius: var(--ju-radius-tile);
-		padding: var(--ui-card-padding);
-		margin-bottom: var(--ui-space-tile);
-		background: var(--bs-body-bg);
-	}
-
-	.rtable tbody td {
-		display: flex;
-		justify-content: space-between;
-		align-items: center;
-		padding: 0.4rem 0;
-		border: none;
-		white-space: normal;
-		overflow: visible;
-		text-overflow: clip;
-	}
-
-	.rtable tbody td::before {
-		content: attr(data-label);
-		font-weight: 600;
-		color: var(--bs-secondary-color);
-		margin-right: 1rem;
-		flex-shrink: 0;
-	}
-
-	.rtable tbody td[data-label=""]::before,
-	.rtable tbody td[data-label="Actions"]::before {
-		display: none;
-	}
-
-	.rtable tbody td.actions-cell {
-		justify-content: flex-end;
-		width: 100% !important;
-
-		/* override desktop table sizing (prevents clipped action icons) */
-	}
-
-	/* Desktop table layout helper; breaks card-layout if not reset */
-	.actions-cell {
-		width: auto !important;
-	}
-
-	/* Mobile: make icons inside icon-box buttons a bit larger */
-	.rtable .btn-icon .material-icons,
-	.rtable .btn-icon i {
-		font-size: 22px;
-	}
-
-	/* Hide less important columns on mobile */
-	.targets-table td[data-label="Last Check"],
-	.targets-table td[data-label="Last Downtime"],
-	.targets-table td[data-label="HTTP"],
-	.targets-table td[data-label="Interval"] {
-		display: none;
 	}
 
 	/* Sticky Actions */
@@ -2061,190 +1958,13 @@ textarea.smtp-editor-frame {
 		width: 100%;
 	}
 
-	/* Keep table semantics while giving each data row the wizard's inset-card shape. */
-	.ui-page .rtable {
-		border-collapse: separate;
-		border-spacing: 0 0.4rem;
-	}
-
-	.ui-page .rtable>tbody>tr>* {
-		--bs-table-bg: var(--bs-body-bg);
-
-		border-block: 1px solid var(--ju-panel-line);
-	}
-
-	.ui-page .rtable>tbody>tr> :first-child {
-		border-left: 1px solid var(--ju-panel-line);
-		border-radius: var(--ju-radius-tile) 0 0 var(--ju-radius-tile);
-	}
-
-	.ui-page .rtable>tbody>tr> :last-child {
-		border-right: 1px solid var(--ju-panel-line);
-		border-radius: 0 var(--ju-radius-tile) var(--ju-radius-tile) 0;
-	}
 }
-
-/* Targets Table: Hover and Truncation (Desktop) */
-@media (width >=768px) {
-	.targets-table .truncate {
-		max-width: 300px;
-	}
-
-	.targets-table tbody tr:hover {
-		background-color: var(--bs-table-hover-bg, rgb(0 0 0 / 7.5%));
-	}
-}
-
-/* =============================================
-   TARGETS TABLE - FIXED LAYOUT
-   Prevents column jumping by fixing table layout
-   and explicitly defining column widths
-   ============================================= */
-
-.targets-table {
-	width: 100%;
-}
-
-/* Desktop/Tablet: fixed layout for consistent column alignment across groups */
-@media (width >=768px) {
-	.targets-table {
-		table-layout: fixed;
-	}
-
-	/* Column widths - fixed percentages for consistent alignment across all groups */
-	.targets-table .col-status {
-		width: 2.5rem;
-	}
-
-	.targets-table .col-name {
-		width: 20%;
-	}
-
-	.targets-table .col-checks {
-		width: 16%;
-	}
-
-	.targets-table .col-uptime {
-		width: 7%;
-	}
-
-	.targets-table .col-lastchk {
-		width: 10%;
-	}
-
-	.targets-table .col-lastdown {
-		width: 10%;
-	}
-
-	.targets-table .col-http {
-		width: 5%;
-	}
-
-	.targets-table .col-interval {
-		width: 6%;
-	}
-
-	/* Four 2rem icon buttons, gaps and cell padding; the % columns stay below 100% minus this. */
-	.targets-table .col-actions {
-		width: 11.5rem;
-	}
-}
-
-/* Narrow page container (not window): hide the secondary columns (5 to 8: last check, last
-   downtime, HTTP, interval) with their cells, so the fixed layout keeps room for the actions. */
-@media (width >=768px) {
-	@container ju-page (width < 60rem) {
-		.targets-table :is(col, th, td):nth-child(n + 5):nth-child(-n + 8) {
-			display: none;
-		}
-
-		.targets-table .col-name {
-			width: 34%;
-		}
-
-		.targets-table .col-checks {
-			width: 24%;
-		}
-
-		.targets-table .col-uptime {
-			width: 12%;
-		}
-	}
-}
-
-/* Text overflow control for long content */
-.targets-table td,
-.targets-table th {
-	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
-}
-
-/* Status icon cell: the 3% column is narrower than icon + padding, so ellipsis clipped the icon and drew a stray "…" dot */
-.targets-table td[data-label="Status"] {
-	overflow: visible;
-	text-overflow: clip;
-}
-
-@media (width >=768px) {
-	.ui-page .targets-table td[data-label="Status"],
-	.ui-page .targets-table thead th:first-child {
-		padding-inline: 0.25rem;
-	}
-}
-
-/* Name column: allow tooltip on hover for long names */
-.targets-table td[data-label="Name"] {
-	overflow: hidden;
-	text-overflow: ellipsis;
-	min-width: 240px;
-
-	/* guard so name doesn't collapse visually */
-}
-
-.targets-table td[data-label="Name"] a {
-	display: block;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	text-decoration: none;
-}
-
-/* Badges container - normalized display */
-.targets-table .checks-cell {
-	white-space: nowrap;
-	overflow: hidden;
-
-	/* Clip badges that overflow */
-}
-
-.targets-table .check-badges {
-	display: flex;
-	gap: 4px;
-	flex-wrap: nowrap;
-	align-items: center;
-	overflow: hidden;
-}
-
-.targets-table .check-badges .badge {
-	min-width: auto;
-	text-align: center;
-	white-space: nowrap;
-	flex-shrink: 0;
-	padding: 0.25em 0.5em;
-}
-
-
 
 /* =============================================
    7. VERY NARROW DEVICES (max-width: 360px)
    ============================================= */
 
 @media (width <=360px) {
-	/* Action buttons may wrap on very narrow devices */
-	.targets-table td [class*="flex-nowrap"] {
-		flex-wrap: wrap;
-	}
-
 	/* Smaller icon buttons, still square */
 	.btn-icon {
 		width: 32px;
@@ -2703,7 +2423,7 @@ textarea.smtp-editor-frame {
 	transition: all 0.3s ease;
 }
 
-.htmx-request {
+.htmx-request:not(:where(#targets-table, #targets-table *)) {
 	opacity: 0.5;
 }
 
@@ -2721,6 +2441,102 @@ textarea.smtp-editor-frame {
 
 .fade-in {
 	animation: fadeIn 0.3s ease-in;
+}
+
+@media (width <=576px) {
+	@container ju-table (width <40rem) {
+		.ui-page .targets-table>tbody>tr {
+			display: grid;
+			grid-template-columns: 1.375rem minmax(0, 1fr) minmax(0, 1fr);
+			grid-template-areas:
+				"status name name"
+				"checks checks uptime"
+				"actions actions actions";
+			gap: 0.375rem 0.5rem;
+			padding: 0.625rem;
+			margin-bottom: 0.5rem;
+		}
+
+		.ui-page .targets-table>tbody>tr>td {
+			grid-column: auto;
+			min-width: 0;
+			padding: 0.125rem 0;
+			gap: 0.375rem;
+		}
+
+		.ui-page .targets-table td[data-label="Status"] {
+			grid-area: status;
+		}
+
+		.ui-page .targets-table td[data-label="Name"] {
+			grid-area: name;
+			justify-content: flex-start;
+			min-width: 0;
+		}
+
+		.ui-page .targets-table .ju-cell-text {
+			min-width: 0;
+		}
+
+		.ui-page .targets-table .check-badges {
+			min-width: 0;
+		}
+
+		.targets-table td[data-label="Name"] a {
+			overflow-wrap: anywhere;
+		}
+
+		.ui-page .targets-table td[data-label="Checks"] {
+			grid-area: checks;
+			justify-content: flex-start;
+		}
+
+		.ui-page .targets-table td[data-label="Uptime"] {
+			grid-area: uptime;
+			justify-content: flex-end;
+		}
+
+		.ui-page .targets-table td[data-label="Actions"] {
+			grid-area: actions;
+			justify-content: flex-end;
+		}
+
+		.ui-page .targets-table .action-buttons>.btn {
+			width: 44px;
+			height: 44px;
+			min-width: 44px;
+			min-height: 44px;
+			flex: 0 0 44px;
+		}
+	}
+
+	@container ju-table (width <288px) {
+		.ui-page .targets-table td[data-label="Checks"] {
+			flex-direction: column;
+			align-items: flex-start;
+		}
+
+		.ui-page .targets-table .check-badges {
+			width: 100%;
+		}
+
+		.ui-page .targets-table .check-badges .badge {
+			min-width: 0;
+			max-width: 100%;
+			white-space: normal;
+			overflow-wrap: anywhere;
+		}
+	}
+
+	.targets-group .accordion-button {
+		padding-block: 0.5rem;
+	}
+
+	.targets-group-header .group-icon {
+		width: 2rem;
+		height: 2rem;
+		flex-basis: 2rem;
+	}
 }
 
 @keyframes fadeIn {
@@ -2901,6 +2717,11 @@ main:focus {
 	padding: env(safe-area-inset-top, 0) env(safe-area-inset-right, 0) env(safe-area-inset-bottom, 0) env(safe-area-inset-left, 0);
 }
 
+/* Backdrop clicks are ignored (static backdrop): no scale bump that hints at dismissal. */
+.modal.modal-static .modal-dialog {
+	transform: none;
+}
+
 .modal-content {
 	min-width: 0;
 }
@@ -2956,126 +2777,6 @@ main:focus {
 	#server-offline-overlay {
 		background: Canvas;
 		backdrop-filter: none;
-	}
-}
-
-/* Compact target cards on phones while keeping every primary field and action visible. */
-@media (width <=767.98px) {
-	.targets-table tbody tr {
-		display: grid;
-		grid-template-columns: 1.5rem minmax(0, 1fr) auto;
-		grid-template-areas:
-			"status name name"
-			"checks checks uptime"
-			"actions actions actions";
-		align-items: center;
-		gap: 0.25rem 0.5rem;
-		padding: 0.75rem;
-	}
-
-	.ui-page .targets-table tbody td {
-		min-width: 0;
-		padding: 0;
-	}
-
-	.targets-table td[data-label="Status"] {
-		grid-area: status;
-		justify-content: center;
-	}
-
-	.targets-table td[data-label="Status"]::before,
-	.targets-table td[data-label="Name"]::before,
-	.targets-table td[data-label="Actions"]::before {
-		display: none;
-	}
-
-	.targets-table td[data-label="Name"] {
-		grid-area: name;
-		min-width: 0;
-	}
-
-	.targets-table td[data-label="Checks"] {
-		grid-area: checks;
-		justify-content: flex-start;
-		gap: 0.5rem;
-	}
-
-	.targets-table td[data-label="Uptime"] {
-		grid-area: uptime;
-		justify-content: flex-end;
-		gap: 0.35rem;
-	}
-
-	.targets-table .checks-cell,
-	.targets-table .check-badges {
-		overflow: visible;
-	}
-
-	.targets-table .check-badges {
-		flex-wrap: wrap;
-	}
-
-	.targets-table td.actions-cell {
-		grid-area: actions;
-		justify-content: flex-end;
-		width: auto !important;
-	}
-}
-
-@media (width <=767.98px) {
-	.groups-list-card {
-		padding: 0.5rem;
-	}
-
-	#groups-table tbody tr {
-		display: grid;
-		grid-template-columns: minmax(0, 1fr) auto;
-		grid-template-areas:
-			"name name"
-			"description description"
-			"targets targets";
-		align-items: center;
-		gap: 0.375rem 0.5rem;
-		padding: 0.75rem;
-		margin-bottom: 0.5rem;
-	}
-
-	#groups-table.groups-table-admin tbody tr {
-		grid-template-areas:
-			"name name"
-			"description description"
-			"targets actions";
-	}
-
-	.ui-page #groups-table tbody td {
-		min-width: 0;
-		padding: 0;
-		justify-content: flex-start;
-		gap: 0.75rem;
-		overflow-wrap: anywhere;
-	}
-
-	#groups-table tbody td::before {
-		flex: 0 0 5.5rem;
-		margin-right: 0;
-	}
-
-	#groups-table td[data-label="Name"] {
-		grid-area: name;
-	}
-
-	#groups-table td[data-label="Description"] {
-		grid-area: description;
-	}
-
-	#groups-table td[data-label="Targets"] {
-		grid-area: targets;
-	}
-
-	#groups-table td.actions-cell {
-		grid-area: actions;
-		justify-content: flex-end;
-		width: auto !important;
 	}
 }
 

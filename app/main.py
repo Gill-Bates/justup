@@ -45,6 +45,7 @@ from .services.notifications.signal_backend import (
     get_signal_backend,
     reset_signal_backend,
 )
+from .services.service_alerts import ServiceAlertSink
 from .utils import bootstrap, config
 from .utils.banner import print_banner
 from .utils.config import ConfigValidationError, load_config, validate_runtime_config
@@ -154,7 +155,8 @@ async def _lifespan(app: FastAPI):
 
     # ─── BOOTSTRAP ───────────────────────────────────────────
     try:
-        admin_created = bootstrap.bootstrap(cfg.db_path, cfg.tsdb_dir, cfg.data_dir)
+        # Off the loop: the first start may download the GeoIP database (up to minutes).
+        admin_created = await asyncio.to_thread(bootstrap.bootstrap, cfg.db_path, cfg.tsdb_dir, cfg.data_dir)
     except sqlite_db.IncompatibleSchemaError as e:
         _log.critical("%s", e)
         print(f"\n❌ FATAL: {e}\n", file=sys.stderr)  # noqa: T201 - fatal message, the server exits right after
@@ -209,15 +211,32 @@ async def _lifespan(app: FastAPI):
         get_conn=_db_conn_factory, tsdb_dir=cfg.tsdb_dir, refresh_seconds=config.MONITOR_REFRESH_SECONDS
     )
     # One watchdog restarts every background service with backoff; scheduler hangs are detected by heartbeat.
-    supervisor = ServiceSupervisor()
+    # Crashes, degradation and recovery reach the admin inbox through the sink's own DB connection,
+    # independent of the scheduler and the SMTP spooler.
+    alert_sink = ServiceAlertSink(_db_conn_factory)
+    supervisor = ServiceSupervisor(notifier=alert_sink)
     app.state.supervisor = supervisor
     scheduler.on_heartbeat = lambda: supervisor.heartbeat("monitor_scheduler")
+    scheduler.on_iteration_failed = lambda exc_type: supervisor.report_failure("monitor_scheduler", exc_type)
+    scheduler.on_iteration_ok = lambda: supervisor.report_success("monitor_scheduler")
+    scheduler.on_notification_heartbeat = lambda: supervisor.heartbeat("notification_worker")
+    scheduler.on_notification_failed = lambda exc_type: supervisor.report_failure("notification_worker", exc_type)
+    scheduler.on_notification_ok = lambda: supervisor.report_success("notification_worker")
     supervisor.add(
         ServiceSpec(
             name="monitor_scheduler",
+            label="Monitoring scheduler",
             run=scheduler.run,
             request_stop=scheduler.request_stop,
             heartbeat_timeout=SCHEDULER_HEARTBEAT_TIMEOUT_SECONDS,
+        )
+    )
+    supervisor.add(
+        ServiceSpec(
+            name="notification_worker",
+            label="Notification delivery worker",
+            run=scheduler.run_notification_worker,
+            request_stop=scheduler.request_notification_stop,
         )
     )
 
@@ -238,6 +257,7 @@ async def _lifespan(app: FastAPI):
     supervisor.add(
         ServiceSpec(
             name="pdf_worker",
+            label="PDF worker",
             run=lambda: pdf_worker.run_pdf_worker_loop(_db_conn_factory, pdf_stop_event),
             request_stop=pdf_stop_event.set,
         )
@@ -245,8 +265,16 @@ async def _lifespan(app: FastAPI):
     supervisor.add(
         ServiceSpec(
             name="pdf_cleanup",
-            run=lambda: pdf_worker.cleanup_expired_jobs(_db_conn_factory, cfg.db_path, pdf_stop_event),
+            label="PDF cleanup",
+            run=lambda: pdf_worker.cleanup_expired_jobs(
+                _db_conn_factory,
+                cfg.db_path,
+                pdf_stop_event,
+                on_failure=lambda exc_type: supervisor.report_failure("pdf_cleanup", exc_type),
+                on_success=lambda: supervisor.report_success("pdf_cleanup"),
+            ),
             request_stop=pdf_stop_event.set,
+            failure_limit=3,
         )
     )
 
@@ -300,6 +328,10 @@ async def _lifespan(app: FastAPI):
                         )
                     else:
                         _log.warning("POP refresh %s failed: %s", r.source, r.error)
+                if any(not r.success and r.error != "maintenance_in_progress" for r in results):
+                    supervisor.report_failure("pop_refresh", "RefreshFailed")
+                elif results and all(r.success for r in results):
+                    supervisor.report_success("pop_refresh")
 
                 with _db_connection(_db_conn_factory) as conn:
                     active_count = pop_locations.count_active_pop_locations(conn)
@@ -315,6 +347,7 @@ async def _lifespan(app: FastAPI):
                         )
             except Exception as e:  # noqa: BLE001 - lifespan boundary: startup/shutdown steps log and continue, never crash the app
                 _log.exception("POP refresh task error: %s", e)
+                supervisor.report_failure("pop_refresh", type(e).__name__)
                 # An error before any run was persisted leaves the plan "due"; pause so it cannot spin.
                 with suppress(TimeoutError):
                     await asyncio.wait_for(pop_refresh_stop_event.wait(), timeout=POP_ERROR_RETRY_SECONDS)
@@ -322,15 +355,33 @@ async def _lifespan(app: FastAPI):
             # Loop back: the next delay (freshness window or backoff) is recomputed from the freshly
             # persisted run on the next iteration.
 
-    supervisor.add(ServiceSpec(name="pop_refresh", run=_pop_refresh_loop, request_stop=pop_refresh_stop_event.set))
+    supervisor.add(
+        ServiceSpec(
+            name="pop_refresh",
+            label="POP location refresh",
+            run=_pop_refresh_loop,
+            request_stop=pop_refresh_stop_event.set,
+            failure_limit=3,
+        )
+    )
 
     # ─── RELEASE CHECK ───────────────────────────────────────
     # Daily check for a newer published GitHub release; reports through the notification inbox.
     from .services.release_check import ReleaseChecker
 
-    release_checker = ReleaseChecker(_db_conn_factory)
+    release_checker = ReleaseChecker(
+        _db_conn_factory,
+        on_failure=lambda exc_type: supervisor.report_failure("release_check", exc_type),
+        on_success=lambda: supervisor.report_success("release_check"),
+    )
     supervisor.add(
-        ServiceSpec(name="release_check", run=release_checker.run, request_stop=release_checker.request_stop)
+        ServiceSpec(
+            name="release_check",
+            label="Release check",
+            run=release_checker.run,
+            request_stop=release_checker.request_stop,
+            failure_limit=3,
+        )
     )
 
     _log.info("Application started")
@@ -362,6 +413,7 @@ async def _lifespan(app: FastAPI):
 
         # 2. Stop background tasks (stop events are already set)
         await _bounded_stop(supervisor.stop(), label="service_supervisor")
+        await _bounded_stop(alert_sink.aclose(), label="service_alert_sink")
         # to_thread jobs cannot be cancelled; shutdown() joins the PDF thread pool, so keep it off the loop
         await _bounded_stop(asyncio.to_thread(pdf_worker.shutdown_pdf_worker), label="pdf_worker_pool")
         # TLS scan pool: cancels queued scans; running ones end by their own connection timeouts

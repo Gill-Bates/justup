@@ -19,7 +19,7 @@ var COMBINED_PALETTES = {
     tcp: "#b45309",
     "2xx": "#15803d",
     info: "#0369a1",
-    "3xx": "#475569",
+    "3xx": "#15803d",
     "4xx": "#c2410c",
     "5xx": "#b91c1c",
     err: "#7f1d1d",
@@ -33,7 +33,7 @@ var COMBINED_PALETTES = {
     tcp: "#fbbf24",
     "2xx": "#4ade80",
     info: "#7dd3fc",
-    "3xx": "#94a3b8",
+    "3xx": "#4ade80",
     "4xx": "#fb923c",
     "5xx": "#f87171",
     err: "#fca5a5",
@@ -72,12 +72,6 @@ function _registerCombinedInteraction() {
     useFinalPosition,
   ) {
     var items = modes.point(chart, e, options, useFinalPosition);
-    if (
-      items.some(function (it) {
-        return chart.data.datasets[it.datasetIndex]._kind === "status";
-      })
-    )
-      return items;
     var di = chart.data.datasets.findIndex(function (d) {
       return d._kind === "status";
     });
@@ -87,7 +81,20 @@ function _registerCombinedInteraction() {
     var pos =
       isLeave || !helpers ? null : helpers.getRelativePosition(e, chart);
     var meta = chart.getDatasetMeta(di);
-    if (!pos || !meta || !chart.scales.x) return items;
+    var statusScale = chart.scales.yStatus;
+    if (!pos || !meta || !chart.scales.x || !statusScale) return items;
+    var statusTop = Math.min(statusScale.top, statusScale.bottom);
+    var statusBottom = Math.max(statusScale.top, statusScale.bottom);
+    if (pos.y < statusTop || pos.y > statusBottom)
+      return items.filter(function (it) {
+        return chart.data.datasets[it.datasetIndex]._kind !== "status";
+      });
+    if (
+      items.some(function (it) {
+        return chart.data.datasets[it.datasetIndex]._kind === "status";
+      })
+    )
+      return items;
     var xVal = chart.scales.x.getValueForPixel(pos.x);
     var idx = chart.data.datasets[di].data.findIndex(function (p) {
       return xVal >= p.x && xVal <= p.end;
@@ -133,6 +140,24 @@ function _styleAnnotations(ann, palette) {
       ann[k].backgroundColor = palette[ann[k]._cls];
     }
   });
+}
+
+function _downAnnotations(bands, palette, visible) {
+  var annotations = {};
+  bands.forEach(function (band, i) {
+    annotations["down" + i] = {
+      type: "box",
+      xMin: band.start,
+      xMax: band.end,
+      display: visible,
+      drawTime: "beforeDatasetsDraw",
+      backgroundColor: withAlpha(palette.down, 0.14),
+      borderColor: palette.down,
+      borderWidth: 1,
+      borderDash: [4, 3],
+    };
+  });
+  return annotations;
 }
 
 /** True while the "HTTP status" dataset is visible, so the strip follows its legend toggle. */
@@ -259,6 +284,22 @@ function _rerenderCombinedLegend(chart, legendEl, keyEl, activeBtn) {
   if (next) next.focus();
 }
 
+function _combinedLegendLabel(dataset) {
+  if (dataset._kind === "status") return "Status";
+  var label =
+    dataset._srcId === "http"
+      ? "HTTP"
+      : dataset._srcId === "ping"
+        ? "Ping"
+        : dataset._srcId === "tcp"
+          ? "TCP"
+          : dataset.label;
+  if (dataset._srcKey && dataset._srcKey.indexOf("tcp:") === 0)
+    label += " " + dataset._srcKey.slice(4);
+  if (dataset._kind === "peak") label += " peak";
+  return label;
+}
+
 /**
  * Render legend toggle buttons + status-class key.
  * Buttons use aria-pressed so state is exposed without relying on color.
@@ -275,7 +316,10 @@ function _renderCombinedLegend(chart, legendEl, keyEl) {
     )
       return;
     var btn = _el("button", "btn btn-sm combined-legend-btn");
+    var label = _combinedLegendLabel(ds);
     btn.type = "button";
+    btn.setAttribute("aria-label", label);
+    btn.title = ds.label;
     btn.setAttribute(
       "aria-pressed",
       chart.isDatasetVisible(i) ? "true" : "false",
@@ -288,10 +332,11 @@ function _renderCombinedLegend(chart, legendEl, keyEl) {
         ds._kind !== "status",
       ),
     );
-    btn.appendChild(_el("span", "", ds.label));
+    btn.appendChild(_el("span", "", label));
     btn.addEventListener("click", function () {
       chart.setDatasetVisibility(i, !chart.isDatasetVisible(i));
       chart.update("none");
+      if (chart._renderText) chart._renderText();
       _rerenderCombinedLegend(chart, legendEl, keyEl, btn);
     });
     legendEl.appendChild(btn);
@@ -299,15 +344,16 @@ function _renderCombinedLegend(chart, legendEl, keyEl) {
   if (chart._bandCount > 0) {
     var bandBtn = _el("button", "btn btn-sm combined-legend-btn");
     bandBtn.type = "button";
+    var bandLabel = "Down (" + chart._bandSourceLabel + ")";
+    bandBtn.setAttribute("aria-label", bandLabel);
+    bandBtn.title = "Downtime (" + chart._bandSourceLabel + ")";
     bandBtn.setAttribute(
       "aria-pressed",
       chart._bandsVisible ? "true" : "false",
     );
     var sw = _swatch("band", palette.down, false);
     bandBtn.appendChild(sw);
-    bandBtn.appendChild(
-      _el("span", "", "Downtime (" + chart._bandSourceLabel + ")"),
-    );
+    bandBtn.appendChild(_el("span", "", bandLabel));
     bandBtn.addEventListener("click", function () {
       chart._bandsVisible = !chart._bandsVisible;
       var ann = chart.options.plugins.annotation.annotations;
@@ -315,6 +361,7 @@ function _renderCombinedLegend(chart, legendEl, keyEl) {
         if (k.indexOf("down") === 0) ann[k].display = chart._bandsVisible;
       });
       chart.update("none");
+      if (chart._renderText) chart._renderText();
       _rerenderCombinedLegend(chart, legendEl, keyEl, bandBtn);
     });
     legendEl.appendChild(bandBtn);
@@ -330,54 +377,6 @@ function _renderCombinedLegend(chart, legendEl, keyEl) {
   });
 }
 
-function _renderCombinedTable(tbody, sources, summaries, statusBuckets, bands) {
-  tbody.textContent = "";
-  function row(cells) {
-    var tr = _el("tr");
-    cells.forEach(function (c, i) {
-      var cell = _el(i === 0 ? "th" : "td", "", c);
-      if (i === 0) cell.scope = "row";
-      tr.appendChild(cell);
-    });
-    tbody.appendChild(tr);
-  }
-  sources.forEach(function (src) {
-    var s = summaries[src.key];
-    row([
-      src.label,
-      s.median === null
-        ? "no data"
-        : "min " +
-          Math.round(s.min) +
-          " / median " +
-          Math.round(s.median) +
-          " / max " +
-          Math.round(s.max) +
-          " ms",
-    ]);
-  });
-  var counts = {};
-  statusBuckets.forEach(function (b) {
-    counts[b.cls] = (counts[b.cls] || 0) + b.count;
-  });
-  Object.keys(counts)
-    .sort()
-    .forEach(function (k) {
-      row([
-        "HTTP status " + CombinedChartData.STATUS_CLASSES[k].label,
-        counts[k] + " samples",
-      ]);
-    });
-  bands.slice(0, 20).forEach(function (b, i) {
-    row([
-      "Outage " + (i + 1),
-      _fmtDateTime(b.start) + " to " + _fmtDateTime(b.end),
-    ]);
-  });
-  if (bands.length > 20)
-    row(["More outages", String(bands.length - 20) + " not listed"]);
-}
-
 function _summarizeSource(series, points) {
   var summary = CombinedChartData.summarize(series, [], []);
   var rawMax = Math.max.apply(
@@ -390,16 +389,26 @@ function _summarizeSource(series, points) {
   return summary;
 }
 
-// Keep summary, aria-label and data table in sync with the data the chart currently shows.
-function _renderCombinedText(canvas, input, view) {
+// Keep the visible summary and canvas accessible name in sync with the displayed chart data.
+function _renderCombinedText(canvas, input, view, chart) {
   var D = CombinedChartData;
   var visibleSrc = input.sources.filter(function (s) {
-    return view.summaries[s.key].median !== null;
+    var datasetIndex = chart
+      ? chart.data.datasets.findIndex(function (dataset) {
+          return dataset._kind === "ms" && dataset._srcKey === s.key;
+        })
+      : -1;
+    return (
+      view.summaries[s.key] &&
+      view.summaries[s.key].median !== null &&
+      (!chart ||
+        (datasetIndex >= 0 && chart.isDatasetVisible(datasetIndex)))
+    );
   })[0];
   var visibleSummary = D.summarize(
     visibleSrc ? view.series[visibleSrc.key] : [],
-    view.statusBuckets,
-    view.bands,
+    !chart || _statusDatasetVisible(chart) ? view.statusBuckets : [],
+    !chart || chart._bandsVisible ? view.bands : [],
   );
   if (visibleSrc && view.summaries[visibleSrc.key]) {
     var sourceSummary = view.summaries[visibleSrc.key];
@@ -407,10 +416,19 @@ function _renderCombinedText(canvas, input, view) {
     visibleSummary.median = sourceSummary.median;
     visibleSummary.max = sourceSummary.max;
   }
-  var text = D.describeSummary(
-    visibleSrc ? visibleSrc.label : "Response time",
-    visibleSummary,
-  );
+  var hasLatencyData = input.sources.some(function (source) {
+    return view.summaries[source.key] && view.summaries[source.key].median !== null;
+  });
+  var text = visibleSrc
+    ? D.describeSummary(visibleSrc.label, visibleSummary)
+    : D.describeSummary("Response time", visibleSummary).replace(
+        "No response time data in this range",
+        hasLatencyData ? "No visible response-time series" : "No response time data in this range",
+      );
+  if (chart && input.statusEnabled && !_statusDatasetVisible(chart))
+    text += "; HTTP status layer hidden";
+  if (chart && chart._bandCount > 0 && !chart._bandsVisible)
+    text += "; downtime bands hidden";
   var rollupNote =
     input.range.from.getTime() < Date.now() - 30 * 86400000
       ? " Data older than 30 days uses stored rollups; raw latency extremes and individual status codes are unavailable there."
@@ -425,15 +443,6 @@ function _renderCombinedText(canvas, input, view) {
   );
   var summaryEl = document.getElementById("combined-summary");
   if (summaryEl) summaryEl.textContent = text + "." + rollupNote;
-  var tbody = document.getElementById("combined-table-body");
-  if (tbody)
-    _renderCombinedTable(
-      tbody,
-      input.sources,
-      view.summaries,
-      view.statusBuckets,
-      view.bands,
-    );
 }
 
 // Original annotation objects are shared with the legend toggle, so restoring them must re-apply the current state
@@ -442,6 +451,29 @@ function _syncDownVisibility(annotations, visible) {
     if (key.indexOf("down") === 0) annotations[key].display = visible;
   });
 }
+
+function _beginCombinedChartBuild(canvasId) {
+  var chart =
+    typeof appState !== "undefined" && appState.charts
+      ? appState.charts.get(canvasId)
+      : null;
+  if (!chart) return 1;
+  if (chart._cancelZoomLoader) chart._cancelZoomLoader();
+  chart._buildGeneration = (chart._buildGeneration || 0) + 1;
+  return chart._buildGeneration;
+}
+
+function _setCombinedZoomNote(chart, message) {
+  if (typeof document === "undefined") return;
+  var noteEl = document.getElementById("combined-status-note");
+  if (!noteEl) return;
+  noteEl.textContent = [chart._statusNoteBase, message].filter(Boolean).join(" ");
+  if (message) {
+    noteEl.setAttribute("role", "status");
+    noteEl.setAttribute("aria-live", "polite");
+  }
+}
+
 function _createCombinedZoomLoader(
   chart,
   canvasId,
@@ -450,22 +482,31 @@ function _createCombinedZoomLoader(
   fromMs,
   toMs,
   onView,
+  buildGeneration,
 ) {
   var original = datasets.map(function (d) {
     return d.data;
   });
   var originalAnnotations = Object.assign(
     {},
-    chart.options.plugins.annotation.annotations,
+    chart.config.options.plugins.annotation.annotations,
   );
   var originalBandCount = chart._bandCount;
   var originalPresentClasses = chart._presentClasses;
+  var generation =
+    buildGeneration === undefined ? chart._buildGeneration : buildGeneration;
   var serial = 0;
   var controller = null;
-  return function () {
+  function cancelPending() {
     clearTimeout(chart._zoomTimer);
+    chart._zoomTimer = null;
     serial += 1;
     if (controller) controller.abort();
+    controller = null;
+  }
+  chart._cancelZoomLoader = cancelPending;
+  return function () {
+    cancelPending();
     var current = serial;
     var start = Math.max(fromMs, chart.scales.x.min);
     var end = Math.min(toMs, chart.scales.x.max);
@@ -473,18 +514,20 @@ function _createCombinedZoomLoader(
       chart.data.datasets.forEach(function (d, i) {
         d.data = original[i];
       });
-      chart.options.plugins.annotation.annotations = Object.assign(
-        {},
-        originalAnnotations,
-      );
+      var annotations = chart.config.options.plugins.annotation.annotations;
+      Object.keys(annotations).forEach(function (key) {
+        delete annotations[key];
+      });
+      Object.assign(annotations, originalAnnotations);
+      _styleAnnotations(annotations, chart._palette);
       _syncDownVisibility(
-        chart.options.plugins.annotation.annotations,
+        annotations,
         chart._bandsVisible,
       );
       chart._bandCount = originalBandCount;
       chart._presentClasses = originalPresentClasses;
-      if (chart.options.scales.yPeak) {
-        chart.options.scales.yPeak.display = original.some(function (data, i) {
+      if (chart.config.options.scales.yPeak) {
+        chart.config.options.scales.yPeak.display = original.some(function (data, i) {
           return (
             datasets[i]._kind === "peak" &&
             data.some(function (point) {
@@ -495,11 +538,16 @@ function _createCombinedZoomLoader(
       }
       chart.update("none");
       chart._renderLegend();
+      _setCombinedZoomNote(chart, "");
       if (onView) onView(null);
       return;
     }
     chart._zoomTimer = setTimeout(async function () {
-      if (appState.charts.get(canvasId) !== chart) return;
+      if (
+        chart._buildGeneration !== generation ||
+        appState.charts.get(canvasId) !== chart
+      )
+        return;
       controller = new AbortController();
       var width = chart.chartArea?.width || chart.canvas.clientWidth || 900;
       var requests = input.sources.map(function (src) {
@@ -516,7 +564,6 @@ function _createCombinedZoomLoader(
           controller.signal,
         );
       });
-      if (input.statusEnabled)
         requests.push(
           fetchDisplayMetricRange(
             pageConfig.targetId,
@@ -539,7 +586,11 @@ function _createCombinedZoomLoader(
       );
       try {
         var results = await Promise.all(requests);
-        if (current !== serial || appState.charts.get(canvasId) !== chart)
+        if (
+          current !== serial ||
+          chart._buildGeneration !== generation ||
+          appState.charts.get(canvasId) !== chart
+        )
           return;
         var view = {
           summaries: {},
@@ -608,19 +659,10 @@ function _createCombinedZoomLoader(
         Object.keys(ann).forEach(function (key) {
           if (key.indexOf("down") === 0) delete ann[key];
         });
-        bands.forEach(function (band, i) {
-          ann["down" + i] = {
-            type: "box",
-            xMin: band.start,
-            xMax: band.end,
-            display: chart._bandsVisible,
-            drawTime: "beforeDatasetsDraw",
-            backgroundColor: withAlpha(chart._palette.down, 0.14),
-            borderColor: chart._palette.down,
-            borderWidth: 1,
-            borderDash: [4, 3],
-          };
-        });
+        Object.assign(
+          ann,
+          _downAnnotations(bands, chart._palette, chart._bandsVisible),
+        );
         chart._bandCount = bands.length;
         view.bands = bands;
         if (chart.options.scales.yPeak) {
@@ -637,10 +679,21 @@ function _createCombinedZoomLoader(
         }
         chart.update("none");
         chart._renderLegend();
+        _setCombinedZoomNote(chart, "");
         if (onView) onView(view);
       } catch (error) {
-        if (error.name !== "AbortError")
+        if (
+          error.name !== "AbortError" &&
+          current === serial &&
+          chart._buildGeneration === generation &&
+          appState.charts.get(canvasId) === chart
+        ) {
           console.warn("Could not load zoom detail:", error);
+          _setCombinedZoomNote(
+            chart,
+            "Zoom details could not be loaded. Displayed values may be incomplete for this range; reset zoom to return to the overview.",
+          );
+        }
       }
     }, 300);
   };
@@ -674,6 +727,7 @@ function _configureCombinedAxes(options, width) {
 function buildCombinedChart(canvasId, input) {
   var canvas = document.getElementById(canvasId);
   if (!canvas) return;
+  var buildGeneration = _beginCombinedChartBuild(canvasId);
 
   var D = window.CombinedChartData;
   var theme = appState.theme;
@@ -683,7 +737,6 @@ function buildCombinedChart(canvasId, input) {
   var legendEl = document.getElementById("combined-legend");
   var keyEl = document.getElementById("combined-status-key");
   var summaryEl = document.getElementById("combined-summary");
-  var detailsEl = document.getElementById("combined-data-details");
 
   var fromMs = input.range.from.getTime();
   var toMs = input.range.to.getTime();
@@ -801,7 +854,6 @@ function buildCombinedChart(canvasId, input) {
     if (plotEl) plotEl.hidden = true;
     if (legendEl) legendEl.textContent = "";
     if (keyEl) keyEl.textContent = "";
-    if (detailsEl) detailsEl.hidden = true;
     if (emptyEl) {
       emptyEl.hidden = false;
       emptyEl.querySelector('[data-role="message"]').textContent = allFailed
@@ -819,7 +871,6 @@ function buildCombinedChart(canvasId, input) {
   }
   if (plotEl) plotEl.hidden = false;
   if (emptyEl) emptyEl.hidden = true;
-  if (detailsEl) detailsEl.hidden = false;
 
   var zoomOpts = createZoomOptions(function (ch) {
     if (ch._reloadVisible) ch._reloadVisible();
@@ -915,19 +966,7 @@ function buildCombinedChart(canvasId, input) {
     return " " + item.dataset.label + ": " + Math.round(item.parsed.y) + " ms";
   };
 
-  var annotations = {};
-  bands.forEach(function (b, i) {
-    annotations["down" + i] = {
-      type: "box",
-      xMin: b.start,
-      xMax: b.end,
-      drawTime: "beforeDatasetsDraw",
-      backgroundColor: withAlpha(palette.down, 0.14),
-      borderColor: palette.down,
-      borderWidth: 1,
-      borderDash: [4, 3],
-    };
-  });
+  var annotations = _downAnnotations(bands, palette, true);
   slaLines.forEach(function (l) {
     var a = createSlaAnnotation({ enabled: true }, l.sla.value, l.sla.label);
     if (!a) return;
@@ -942,6 +981,7 @@ function buildCombinedChart(canvasId, input) {
   o.plugins.annotation = { annotations: annotations };
 
   var chart = _createOrUpdateChart(canvasId, canvas, config);
+  chart._buildGeneration = buildGeneration;
   chart._palette = palette;
   chart._skipSampling = true;
   chart._bandCount = bands.length;
@@ -961,6 +1001,10 @@ function buildCombinedChart(canvasId, input) {
     bands: bands,
     zoomed: false,
   };
+  chart._currentView = fullView;
+  chart._renderText = function () {
+    _renderCombinedText(canvas, input, chart._currentView, chart);
+  };
   chart._reloadVisible = _createCombinedZoomLoader(
     chart,
     canvasId,
@@ -969,13 +1013,15 @@ function buildCombinedChart(canvasId, input) {
     fromMs,
     toMs,
     function (view) {
-      _renderCombinedText(canvas, input, view || fullView);
+      chart._currentView = view || fullView;
+      chart._renderText();
     },
+    buildGeneration,
   );
   _registerChart(canvasId, chart, canvas, true);
   chart._renderLegend();
 
-  _renderCombinedText(canvas, input, fullView);
+  chart._renderText();
   var noteEl = document.getElementById("combined-status-note");
   if (noteEl) {
     noteEl.textContent = !input.statusEnabled
@@ -987,6 +1033,7 @@ function buildCombinedChart(canvasId, input) {
           : "";
     if (input.upError)
       noteEl.textContent += " Downtime bands could not be loaded.";
+    chart._statusNoteBase = noteEl.textContent;
   }
 }
 

@@ -7,7 +7,6 @@
 		<div class="ui-page-heading">
 			<p class="ui-page-eyebrow">Organization</p>
 			<h1>Groups</h1>
-			<p class="ui-page-lead">Keep related targets together and find them quickly.</p>
 		</div>
 		{% if user and user.is_admin %}
 		<button type="button" class="btn btn-primary btn-page-primary" id="newGroupButton" data-bs-toggle="modal" data-bs-target="#groupModal">
@@ -18,8 +17,8 @@
 
 	<div class="card ui-card{% if groups %} groups-list-card{% endif %}">
 		{% if groups %}
-		<div class="table-responsive-md">
-			<table class="table table-hover align-middle rtable mb-0{% if user and user.is_admin %} groups-table-admin{% endif %}" id="groups-table">
+		<div class="ju-table-viewport" role="region" tabindex="0" aria-label="Groups">
+			<table class="table table-hover align-middle rtable ju-data-table mb-0{% if user and user.is_admin %} groups-table-admin{% endif %}" id="groups-table">
 				<thead>
 					<tr>
 						<th scope="col">Name</th>
@@ -31,8 +30,8 @@
 				<tbody>
 					{% for group in groups %}
 					<tr data-group-id="{{ group.id }}" data-group-name="{{ group.name }}" data-group-description="{{ group.description or '' }}">
-						<td data-label="Name">{{ group.name }}</td>
-						<td data-label="Description" class="truncate">{{ group.description or '–' }}</td>
+						<td data-label="Name" class="ju-cell-text">{{ group.name }}</td>
+						<td data-label="Description" class="ju-cell-text">{{ group.description or '–' }}</td>
 						<td data-label="Targets">
 							<span class="badge badge-muted">{{ group.target_count }}</span>
 						</td>
@@ -106,7 +105,7 @@
 				openGroupModal(row.dataset.groupId, row.dataset.groupName, row.dataset.groupDescription);
 			} else if (event.target.closest('.js-delete-group')) {
 				const name = row.dataset.groupName;
-				if (window.confirm(`Delete group '${name}'?`)) deleteGroup(row.dataset.groupId);
+				window.confirmAction({ title: 'Delete group', message: `Group '${name}' is deleted.`, confirmLabel: 'Delete' }).then((ok) => { if (ok) deleteGroup(row.dataset.groupId); });
 			}
 		});
 

@@ -140,20 +140,6 @@
 					throw new Error('Login failed — unexpected server response');
 				}
 
-				if (!data.access_token) {
-					throw new Error('Login failed — no access token received');
-				}
-
-				// Store token in localStorage only (server sets HttpOnly cookie)
-				// This allows client-side Authorization headers while keeping the
-				// cookie secure from XSS (server must set: HttpOnly; Secure; SameSite=Strict)
-				try {
-					localStorage.setItem('token', data.access_token);
-				} catch (storageErr) {
-					console.warn('Could not persist token to localStorage:', storageErr);
-					// Token still works via server-set HttpOnly cookie
-				}
-
 				window.location.href = data.must_change_password ? '/ui/change-password' : '/';
 			} catch (err) {
 				errBox.textContent = err.message;

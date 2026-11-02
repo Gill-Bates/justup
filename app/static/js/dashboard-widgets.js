@@ -9,9 +9,9 @@
 (function () {
 	'use strict';
 
-	const def = (id, label, x, y, w, h, minW, minH) => Object.freeze({
+	const def = (id, label, x, y, w, h, minW, minH, defaultVisible = true, adminOnly = false) => Object.freeze({
 		id, label, defaultX: x, defaultY: y, defaultSize: Object.freeze({ w, h }),
-		minW, minH, defaultVisible: true,
+		minW, minH, defaultVisible, adminOnly,
 	});
 
 	window.JuDashboardRegistry = Object.freeze({
@@ -20,8 +20,22 @@
 			def('status-offline', 'Offline', 3, 0, 3, 2, 1, 2),
 			def('status-disabled', 'Disabled', 6, 0, 3, 2, 1, 2),
 			def('status-total', 'Total', 9, 0, 3, 2, 1, 2),
-			def('quality', 'Monitor quality', 0, 2, 3, 4, 2, 2),
+			def('quality', 'Monitor quality', 0, 2, 3, 3, 2, 2),
 			def('downtime', 'Downtime overview (24h)', 3, 2, 6, 4, 3, 3),
+			def('alerts-open', 'Active alerts', 9, 2, 3, 4, 3, 3),
+			def('delivery-queue', 'Delivery queue', 9, 2, 3, 3, 3, 3, true, true),
+			def('uptime-day', 'Uptime (24h)', 0, 10, 3, 2, 3, 2, false),
+			def('cert-expiry', 'Certificate expiry', 3, 10, 3, 4, 3, 3, false),
+			def('slowest-monitors', 'Slowest monitors (latest)', 0, 14, 6, 4, 4, 3, false),
+			def('quality-trend', 'Quality trend (24h)', 6, 14, 6, 4, 4, 3, false),
+			def('stale-checks', 'Stale checks', 6, 10, 3, 4, 3, 3, false),
 		]),
+		forRole(isAdmin) {
+			return this.registry.filter((entry) => !entry.adminOnly || isAdmin).map((entry) => (
+				entry.id === 'alerts-open' && isAdmin
+					? { ...entry, defaultX: 0, defaultY: 6, defaultSize: { w: 6, h: 4 } }
+					: entry
+			));
+		},
 	});
 })();

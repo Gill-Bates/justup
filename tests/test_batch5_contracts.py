@@ -29,7 +29,7 @@ from app.utils import auth_helpers, bootstrap, settings_cache
 from app.utils import backup as backup_mod
 from app.utils import config as config_mod
 from app.utils.client_ip import TRUSTED_PROXIES_ENV, resolve_trusted_client_ip
-from app.utils.constants import AlertStatus, SettingKeys
+from app.utils.constants import SESSION_MAX_DAYS_MAX, AlertStatus, SettingKeys
 from app.utils.rate_limit import rate_limit_key
 from tests import _support  # noqa: F401 - imported for its sys.path side effect
 
@@ -342,6 +342,8 @@ def test_csrf_cookie_secure_only_with_trusted_forwarded_proto():
     assert "secure" in _csrf_cookie("203.0.113.9", {"X-Forwarded-Proto": "http"}, "https://testserver")
     cookie = _csrf_cookie("fd00::1", {"X-Forwarded-Proto": "https"})
     assert "secure" in cookie and "samesite=lax" in cookie and "httponly" not in cookie
+    # Not shorter than the longest configurable session.
+    assert f"max-age={SESSION_MAX_DAYS_MAX * 24 * 3600}" in cookie
 
 
 # --- CR-05 / CR-06: GeoIP download limits and change detection --------------------------------

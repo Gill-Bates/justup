@@ -11,8 +11,8 @@ import vm from "node:vm";
 const root = new URL("../../app/", import.meta.url);
 const read = (path) => readFileSync(new URL(path, root), "utf8");
 
-function load(path, document = {}) {
-  const sandbox = { document };
+function load(path, document = {}, globals = {}) {
+  const sandbox = { document, ...globals };
   sandbox.window = sandbox;
   vm.runInNewContext(read(path), sandbox);
   return sandbox;
@@ -28,6 +28,27 @@ test("getCsrfToken reads the csrf_token cookie on every call", () => {
   assert.equal(w.getCsrfToken(), "");
   document.cookie = "";
   assert.equal(w.getCsrfToken(), "");
+});
+
+test("apiFetch adds the current CSRF token and same-origin credentials", async () => {
+  const calls = [];
+  const w = load("static/js/app.js", {
+    cookie: "csrf_token=token%2Fvalue",
+    readyState: "loading",
+    addEventListener() {},
+  }, {
+    Headers,
+    getCsrfToken: () => "token/value",
+    fetch: async (...args) => { calls.push(args); return { ok: true }; },
+  });
+
+  await w.apiFetch("/mutate", { method: "POST", headers: { Accept: "application/json" } });
+  assert.equal(calls[0][1].headers.get("X-CSRF-Token"), "token/value");
+  assert.equal(calls[0][1].credentials, "same-origin");
+  assert.equal(calls[0][1].headers.get("Accept"), "application/json");
+
+  await w.apiFetch("/explicit", { method: "POST", headers: { "X-CSRF-Token": "caller-token" } });
+  assert.equal(calls[1][1].headers.get("X-CSRF-Token"), "caller-token");
 });
 
 test("escapeHtml and escapeAttr neutralize markup and quotes and tolerate null", () => {

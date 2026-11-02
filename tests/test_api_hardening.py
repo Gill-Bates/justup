@@ -179,6 +179,7 @@ class _Session:
         self.client = TestClient(app)
         self.client.get("/ui/login")
         self.token = token
+        self.cookie = cookie
         if cookie:
             self.client.cookies.set("token", token)
 
@@ -186,6 +187,8 @@ class _Session:
         headers = {"X-CSRF-Token": self.client.cookies.get("csrf_token")}
         if bearer:
             headers["Authorization"] = f"Bearer {self.token}"
+        elif self.cookie:
+            headers["Origin"] = "http://testserver"
         return self.client.request(method, url, json=body, headers=headers)
 
 
@@ -216,6 +219,27 @@ def env(monkeypatch: pytest.MonkeyPatch):
 
 def _db(env):
     return sqlite_db.connect(env["db_path"])
+
+
+def test_https_login_uses_host_prefixed_http_only_cookie(env, monkeypatch):
+    from app.api import users
+
+    monkeypatch.setattr(users, "verify_password", lambda _password, _password_hash: True)
+    client = TestClient(env["app"], base_url="https://testserver")
+    try:
+        client.get("/ui/login")
+        response = client.post(
+            "/login",
+            json={"username": "root", "password": "test-password"},
+            headers={"Origin": "https://testserver", "X-CSRF-Token": client.cookies.get("csrf_token")},
+        )
+        assert response.status_code == 200
+        assert client.cookies.get("__Host-token") == response.json()["access_token"]
+        assert client.cookies.get("token") is None
+        cookie = next(value for value in response.headers.get_list("set-cookie") if value.startswith("__Host-token="))
+        assert "HttpOnly" in cookie and "Secure" in cookie and "Path=/" in cookie and "SameSite=lax" in cookie
+    finally:
+        client.close()
 
 
 class TestLogout:
@@ -574,12 +598,22 @@ class TestTargetWizardContracts:
         assert env["user"].call("GET", "/ui/targets/new").status_code == 403
         assert env["admin"].call("GET", "/ui/targets/new").status_code == 200
 
-    def test_api_create_requires_bearer_even_with_ui_cookie(self, env):
+    def test_cookie_auth_requires_csrf_and_same_origin_for_api_writes(self, env):
         cookie_session = _Session(env["app"], env["admin_token"], cookie=True)
         try:
             values = _preview_target(env, "server", "cookie.example.com")["values"]
-            response = cookie_session.call("POST", "/targets", values, bearer=False)
-            assert response.status_code == 401
+            csrf = cookie_session.client.cookies.get("csrf_token")
+            no_origin = cookie_session.client.post("/targets", json=values, headers={"X-CSRF-Token": csrf})
+            assert no_origin.status_code == 403
+            hostile_origin = cookie_session.client.post(
+                "/targets",
+                json=values,
+                headers={"Origin": "https://attacker.example", "X-CSRF-Token": csrf},
+            )
+            assert hostile_origin.status_code == 403
+            allowed = cookie_session.call("POST", "/targets", values, bearer=False)
+            assert allowed.status_code == 201, allowed.text
+            assert cookie_session.client.get("/me").status_code == 200
         finally:
             cookie_session.client.close()
 

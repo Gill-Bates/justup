@@ -887,6 +887,7 @@ def compute_next_action(
     last_attempt_at: datetime | None,
     consecutive_failures: int,
     rng: random.Random | None = None,
+    include_jitter: bool = True,
 ) -> RefreshPlan:
     """Decide whether a PeeringDB refresh is due and, if not, how long to wait.
 
@@ -909,13 +910,17 @@ def compute_next_action(
         return RefreshPlan(0.0, f"retry after backoff ({consecutive_failures} failure(s))")
 
     if last_success_at is None:
-        jitter = rng.uniform(POP_STARTUP_JITTER_MIN_SECONDS, POP_STARTUP_JITTER_MAX_SECONDS)
+        jitter = (
+            rng.uniform(POP_STARTUP_JITTER_MIN_SECONDS, POP_STARTUP_JITTER_MAX_SECONDS)
+            if include_jitter
+            else POP_STARTUP_JITTER_MIN_SECONDS
+        )
         return RefreshPlan(jitter, "first install: no successful external import yet")
 
     age = (now - last_success_at).total_seconds()
     remaining = POP_FRESHNESS_SECONDS - age
     if remaining > 0:
-        jitter = rng.uniform(0, POP_SCHEDULE_JITTER_SECONDS)
+        jitter = rng.uniform(0, POP_SCHEDULE_JITTER_SECONDS) if include_jitter else 0
         return RefreshPlan(remaining + jitter, "data still fresh")
     return RefreshPlan(0.0, "freshness window expired")
 
@@ -947,7 +952,9 @@ def get_scheduler_state(conn: sqlite3.Connection) -> dict[str, Any]:
     }
 
 
-def plan_next_refresh(conn: sqlite3.Connection, *, rng: random.Random | None = None) -> RefreshPlan:
+def plan_next_refresh(
+    conn: sqlite3.Connection, *, rng: random.Random | None = None, include_jitter: bool = True
+) -> RefreshPlan:
     """Compute the next refresh action from the persisted PeeringDB import history."""
     last_success = pop_locations.get_last_import_run(conn, SOURCE_PEERINGDB)
     last_attempt = pop_locations.get_last_import_attempt(conn, SOURCE_PEERINGDB)
@@ -958,6 +965,7 @@ def plan_next_refresh(conn: sqlite3.Connection, *, rng: random.Random | None = N
         last_attempt_at=_attempt_timestamp(last_attempt),
         consecutive_failures=consecutive_failures,
         rng=rng,
+        include_jitter=include_jitter,
     )
 
 
@@ -1027,8 +1035,14 @@ def get_refresh_status(get_conn) -> dict:
     """
     with _db_connection(get_conn) as conn:
         scheduler_state = get_scheduler_state(conn)
-        plan = plan_next_refresh(conn)
+        plan = plan_next_refresh(conn, include_jitter=False)
         next_attempt_at = (utcnow() + timedelta(seconds=plan.delay_seconds)).isoformat()
+        jitter_seconds = 0
+        if not scheduler_state["consecutive_failures"]:
+            if not scheduler_state["last_success_at"]:
+                jitter_seconds = POP_STARTUP_JITTER_MAX_SECONDS - POP_STARTUP_JITTER_MIN_SECONDS
+            elif plan.delay_seconds > 0:
+                jitter_seconds = POP_SCHEDULE_JITTER_SECONDS
         return {
             "active_locations": pop_locations.count_active_pop_locations(conn),
             "retired_locations": pop_locations.count_retired_pop_locations(conn),
@@ -1039,6 +1053,7 @@ def get_refresh_status(get_conn) -> dict:
             "auto_refresh": {
                 **scheduler_state,
                 "next_attempt_at": next_attempt_at,
+                "next_attempt_jitter_seconds": jitter_seconds,
                 "next_attempt_reason": plan.reason,
                 "freshness_days": POP_FRESHNESS_SECONDS // (24 * 3600),
             },

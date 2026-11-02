@@ -138,11 +138,54 @@
 	min-width: 0;
 }
 
-.ju-notif-pop-title,
-.ju-notif-pop-detail {
+.ju-notif-pop-title {
+	min-width: 0;
+	max-width: 100%;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+}
+
+.ju-notif-pop-text {
+	display: inline-block;
+	max-width: 100%;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	vertical-align: bottom;
+}
+
+/* Detail line: a shrinkable context (ellipsized) and the time, which never shrinks and never
+   truncates. On a narrow row the time wraps to its own line instead of pushing the context away. */
+.ju-notif-pop-detail {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 0.15rem 0.5rem;
+	min-width: 0;
+	max-width: 100%;
+}
+
+.ju-notif-pop-context {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.ju-notif-pop-context[hidden] {
+	display: none;
+}
+
+.ju-notif-pop-time {
+	flex: 0 0 auto;
+	margin-inline-start: auto;
+	white-space: nowrap;
+	font-variant-numeric: tabular-nums;
+}
+
+.ju-notif-pop-time[hidden] {
+	display: none;
 }
 
 .ju-notif-pop-btn:hover,

@@ -465,7 +465,7 @@
 			attributionControl: false,
 			zoomSnap: 1,
 			zoomDelta: 1,
-			minZoom: 2,
+			minZoom: 1,
 			// 1:110m outlines get coarse beyond this zoom
 			maxZoom: 8,
 			maxBounds: [[-90, -180], [90, 180]],
@@ -678,6 +678,19 @@
 		// follows exact coordinates; short leader lines fan nearby hops out to one
 		// readable marker that lists every hop in the cluster.
 		var markerLayer = window.L.layerGroup().addTo(map);
+		function syncVisibleMarkers() {
+			var viewport = null;
+			markerRecords.forEach(function (rec) {
+				var el = rec.marker.getElement();
+				if (!el) return;
+				if (!viewport) viewport = mapContainer.getBoundingClientRect();
+				var bounds = el.getBoundingClientRect();
+				var visible = bounds.left >= viewport.left && bounds.right <= viewport.right
+					&& bounds.top >= viewport.top && bounds.bottom <= viewport.bottom;
+				el.tabIndex = visible ? 0 : -1;
+				el.setAttribute('aria-hidden', visible ? 'false' : 'true');
+			});
+		}
 		function drawHopMarkers() {
 			markerLayer.clearLayers();
 			markerRecords = [];
@@ -753,8 +766,10 @@
 				markerEl.addEventListener('blur', function () { setLinkedRows(spans, false); });
 			}
 		});
+			syncVisibleMarkers();
 		}
 		map.on('zoomend', function () { drawHopMarkers(); drawDirectionArrows(); });
+		map.on('moveend', syncVisibleMarkers);
 
 		// "Show entire route" control: clears a segment selection. Hidden until a
 		// segment is selected, so the default view carries no redundant control.
@@ -820,6 +835,11 @@
 
 		// Auto-zoom to bounds with ResizeObserver
 		var hasInitialZoom = false;
+		// Only a user-driven pan/zoom freezes the view; layout resizes (sidebar, tabs) refit it.
+		var userAdjustedView = false;
+		['pointerdown', 'wheel', 'keydown'].forEach(function (name) {
+			mapContainer.addEventListener(name, function () { userAdjustedView = true; }, { passive: true });
+		});
 		var applyAutoZoom = function () {
 			map.invalidateSize();
 
@@ -827,12 +847,12 @@
 			var area = map.getSize();
 			if (area.x === 0 || area.y === 0) return;
 
-			if (hasInitialZoom) return; // Preserve user's manual zoom
+			if (hasInitialZoom && userAdjustedView) return; // Preserve user's manual zoom
 			if (latlngs.length >= 2) {
 				var bounds = window.L.latLngBounds(latlngs);
 				map.fitBounds(bounds, {
-					paddingTopLeft: [40, 40],
-					paddingBottomRight: [40, 80],
+					paddingTopLeft: [64, 40],
+					paddingBottomRight: [64, 80],
 					maxZoom: 8,
 					animate: false
 				});
@@ -852,12 +872,13 @@
 			var ro = new ResizeObserver(function (entries) {
 				for (var k = 0; k < entries.length; k++) {
 					if (entries[k].contentRect.width > 0 && entries[k].contentRect.height > 0) {
+						syncVisibleMarkers();
 						if (mapContainer._resizeTimeout) clearTimeout(mapContainer._resizeTimeout);
 						mapContainer._resizeTimeout = setTimeout(function () {
 							// Guard: check map still exists before calling
 							if (!mapContainer._leaflet_map) return;
 							applyAutoZoom();
-						}, 150);
+						}, 60);
 						break;
 					}
 				}

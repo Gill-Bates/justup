@@ -19,6 +19,7 @@ from __future__ import annotations
 
 __all__ = [
     "SignalError",
+    "SignalNotInstalled",
     "SignalNotRegistered",
     "SignalRateLimited",
     "SignalRecipientInvalid",
@@ -34,6 +35,10 @@ class SignalError(Exception):
 
 class SignalUnavailable(SignalError):  # noqa: N818 - public Signal exception name, kept for API stability
     """signal-cli binary not found or not executable."""
+
+
+class SignalNotInstalled(SignalUnavailable):
+    """signal-cli is missing or cannot be started: an installation problem, not an outage."""
 
 
 class SignalNotRegistered(SignalError):  # noqa: N818 - public Signal exception name, kept for API stability

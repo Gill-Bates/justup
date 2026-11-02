@@ -29,5 +29,11 @@
         }
     },
     // Prefer project pyproject.toml / ruff.toml over editor overrides
-    "ruff.configurationPreference": "filesystemFirst"
+    "ruff.configurationPreference": "filesystemFirst",
+    // MkDocs resolves these Python tags itself; the YAML extension does not know them.
+    "yaml.customTags": [
+        "tag:yaml.org,2002:python/name:material.extensions.emoji.twemoji",
+        "tag:yaml.org,2002:python/name:material.extensions.emoji.to_svg",
+        "tag:yaml.org,2002:python/name:pymdownx.superfences.fence_code_format"
+    ]
 }

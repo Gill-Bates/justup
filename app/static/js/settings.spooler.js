@@ -43,9 +43,49 @@
 			_setText('spooler-stat-failed', data.failed || 0);
 			_setText('spooler-stat-sent', data.sent || 0);
 			_setText('spooler-stat-processing', data.processing || 0);
+			_renderChannels(data.channels || {});
+			_renderHealth(data);
 		} catch (err) {
 			console.error('Spooler stats error:', err);
 		}
+	}
+
+	// Failed handoffs of the last 24 h (server window) keep the queue from looking healthy.
+	function _healthState(data) {
+		const failed = Number.isInteger(data.failed_recent) ? data.failed_recent : (data.failed || 0);
+		if (failed > 0) {
+			return { icon: 'error_outline', tone: 'text-danger', text: failed + ' handoff failure(s) in the last 24 h' };
+		}
+		if ((data.cooldowns || []).length > 0 || (data.max_retry_count || 0) > 0) {
+			return { icon: 'sync_problem', tone: 'text-warning', text: 'SMTP/Signal handoff is being retried' };
+		}
+		return { icon: 'info', tone: 'text-body-secondary', text: 'No failed handoffs in the last 24 h' };
+	}
+
+	function _renderHealth(data) {
+		const state = _healthState(data);
+		const icon = document.getElementById('spooler-health-icon');
+		const wrap = document.getElementById('spooler-health');
+		if (icon) icon.textContent = state.icon;
+		if (wrap) wrap.className = 'small mb-0 d-flex align-items-center gap-2 ' + state.tone;
+		_setText('spooler-health-text', state.text);
+	}
+
+	function _renderChannels(channels) {
+		document.querySelectorAll('#spooler-channel-table tr[data-channel]').forEach(function (row) {
+			const info = channels[row.getAttribute('data-channel')] || {};
+			const values = {
+				pending: info.pending || 0,
+				next_attempt_at: info.next_attempt_at ? _formatTime(info.next_attempt_at) : '–',
+				oldest_at: info.oldest_at ? _formatTime(info.oldest_at) : '–',
+				cooldown_until: info.cooldown_until ? _formatTime(info.cooldown_until) : '–',
+				failed: info.failed || 0,
+			};
+			Object.keys(values).forEach(function (field) {
+				const cell = row.querySelector('[data-field="' + field + '"]');
+				if (cell) cell.textContent = String(values[field]);
+			});
+		});
 	}
 
 	// ── Log Table ─────────────────────────────────────────────────────────
@@ -97,7 +137,7 @@
 				? '<span class="material-icons me-1" style="font-size:16px;vertical-align:middle;">chat</span><span class="d-none d-md-inline">Signal</span>'
 				: '<span class="material-icons me-1" style="font-size:16px;vertical-align:middle;">email</span><span class="d-none d-md-inline">Email</span>';
 
-			const statusBadge = _statusBadge(e.status);
+			const statusBadge = _statusBadge(e.status, e.retry_count);
 			const errorCell = e.last_error
 				? '<span class="text-danger" title="' + escapeHtml(e.last_error) + '">' + escapeHtml(e.last_error.substring(0, 160)) + (e.last_error.length > 160 ? '…' : '') + '</span>'
 				: '<span class="text-body-secondary">–</span>';
@@ -111,12 +151,12 @@
 			return '<tr>'
 				+ '<td data-label="Time" class="small text-nowrap">' + timeStr + '</td>'
 				+ '<td data-label="Channel" class="small text-nowrap">' + channelIcon + '</td>'
-				+ '<td data-label="Target" class="small">' + targetDisplay + '</td>'
-				+ '<td data-label="Recipient" class="small">' + recipientDisplay + '</td>'
+				+ '<td data-label="Target" class="small ju-cell-text">' + targetDisplay + '</td>'
+				+ '<td data-label="Recipient" class="small ju-cell-text">' + recipientDisplay + '</td>'
 				+ '<td data-label="Type" class="small">' + _typeBadge(e.notification_type) + '</td>'
 				+ '<td data-label="Status">' + statusBadge + '</td>'
 				+ '<td data-label="Retries" class="text-center small">' + (e.retry_count || 0) + '</td>'
-				+ '<td data-label="Error" class="small">' + errorCell + '</td>'
+				+ '<td data-label="Error" class="small ju-cell-text">' + errorCell + '</td>'
 				+ '</tr>';
 		});
 
@@ -166,7 +206,7 @@
 	// ── Flush ─────────────────────────────────────────────────────────────
 
 	async function flushQueue() {
-		if (!confirm('Delete all pending and failed notifications from the queue?')) return;
+		if (!(await window.confirmAction({ title: 'Delete queued notifications', message: 'All pending and failed notifications are deleted from the queue. This cannot be undone.', confirmLabel: 'Delete all' }))) return;
 
 		const btn = document.getElementById('spooler-flush-btn');
 		if (btn) btn.disabled = true;
@@ -227,15 +267,22 @@
 		if (el) el.textContent = String(text);
 	}
 
-	function _statusBadge(status) {
+	// Labels state what is known: "sent" only means the server accepted the message.
+	function _statusBadge(status, retries) {
 		const map = {
-			pending: 'bg-warning text-dark',
-			processing: 'bg-info text-dark',
-			sent: 'bg-success',
-			failed: 'bg-danger',
+			pending: ['bg-warning text-dark', 'schedule', 'Waiting for handoff', 'Waiting for SMTP handoff'],
+			processing: ['bg-info text-dark', 'sync', 'Handing over', 'Being handed to the server'],
+			sent: ['bg-success', 'check', 'Accepted by server', 'Accepted by the server; final delivery is not verifiable'],
+			failed: ['bg-danger', 'error_outline', 'Handoff failed', 'Handoff to the server failed'],
 		};
-		const cls = map[status] || 'bg-secondary';
-		return '<span class="badge ' + cls + '">' + escapeHtml(status) + '</span>';
+		const entry = map[status];
+		if (!entry) return '<span class="badge bg-secondary">' + escapeHtml(status) + '</span>';
+		const retrying = status === 'pending' && retries > 0;
+		const label = retrying ? 'Retrying handoff' : entry[2];
+		const title = retrying ? 'SMTP handoff is being retried' : entry[3];
+		return '<span class="badge ' + entry[0] + '" title="' + title + '">'
+			+ '<span class="material-icons me-1" style="font-size:12px;vertical-align:middle;" aria-hidden="true">' + entry[1] + '</span>'
+			+ label + '</span>';
 	}
 
 	function _typeBadge(type) {
@@ -250,7 +297,8 @@
 	function _formatTime(isoStr) {
 		if (!isoStr) return '–';
 		try {
-			const d = new Date(isoStr.endsWith('Z') ? isoStr : isoStr + 'Z');
+			const normalized = /(?:Z|[+-]\d{2}:\d{2})$/i.test(isoStr) ? isoStr : isoStr.replace(' ', 'T') + 'Z';
+			const d = new Date(normalized);
 			if (isNaN(d.getTime())) return isoStr.substring(0, 19);
 			return d.toLocaleString(undefined, {
 				month: 'short', day: 'numeric',
@@ -325,6 +373,8 @@
 	// Entry point: run init when spooler pane is revealed via HTMX
 	// The HTMX after-settle event calls window._initSpoolerTab()
 	window._initSpoolerTab = init;
+	// Test hook: pure state helpers
+	window._spoolerInternals = { healthState: _healthState, statusBadge: _statusBadge };
 
 	// Also try immediate init if already in DOM (e.g. direct page load)
 	if (document.getElementById('spooler-stat-queue')) {

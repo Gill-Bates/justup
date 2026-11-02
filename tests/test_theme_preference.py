@@ -71,10 +71,14 @@ async def test_cookie_theme_route_requires_csrf_and_isolates_users(monkeypatch: 
                 max_expires_at=max_expires_at,
             )
 
-            def request(path: str, *, method: str = "GET", csrf: str | None = None) -> Request:
+            def request(
+                path: str, *, method: str = "GET", csrf: str | None = None, origin: str | None = None
+            ) -> Request:
                 headers = [(b"cookie", f"token={token}; csrf_token=csrf-value".encode()), (b"host", b"testserver")]
                 if csrf:
                     headers.append((b"x-csrf-token", csrf.encode()))
+                if origin:
+                    headers.append((b"origin", origin.encode()))
                 return Request(
                     {
                         "type": "http",
@@ -89,9 +93,8 @@ async def test_cookie_theme_route_requires_csrf_and_isolates_users(monkeypatch: 
 
             user = get_current_user(request("/me/theme"), credentials=None, conn=conn)
             assert users_api.get_user_theme(user=user, conn=conn) == {"theme": "system"}
-            with pytest.raises(HTTPException) as denied:
-                get_current_user(request("/me"), credentials=None, conn=conn)
-            assert denied.value.status_code == 401
+            # Cookie auth is accepted on every route; CSRFMiddleware guards unsafe methods instead.
+            assert get_current_user(request("/me"), credentials=None, conn=conn)["id"] == first
 
             async def ignored_asgi_app(_scope, _receive, _send) -> None:
                 return None
@@ -103,8 +106,12 @@ async def test_cookie_theme_route_requires_csrf_and_isolates_users(monkeypatch: 
 
             denied_patch = await middleware.dispatch(request("/me/theme", method="PATCH"), continue_request)
             assert denied_patch.status_code == 403
-            allowed_patch = await middleware.dispatch(
+            no_origin_patch = await middleware.dispatch(
                 request("/me/theme", method="PATCH", csrf="csrf-value"), continue_request
+            )
+            assert no_origin_patch.status_code == 403
+            allowed_patch = await middleware.dispatch(
+                request("/me/theme", method="PATCH", csrf="csrf-value", origin="http://testserver"), continue_request
             )
             assert allowed_patch.status_code == 200
             assert users_api.update_user_theme({"theme": "dark"}, user=user, conn=conn) == {"theme": "dark"}

@@ -13,8 +13,19 @@ const DEFAULTS = ["https://1.1.1.1", "8.8.8.8", "9.9.9.9", "https://www.de-cix.n
 // Must mirror QUALITY_TARGET_PATTERN in app/utils/runtime_fields.py.
 const OPTS = {
   defaults: DEFAULTS, min: 3, maxLength: 300, maxTotal: 2000,
-  pattern: "^(https?://)?[A-Za-z0-9][A-Za-z0-9.:\\[\\]-]{0,252}(/[^\\s]*)?$",
+  pattern: "^(https?://[A-Za-z0-9\\[][A-Za-z0-9.:\\[\\]-]{0,252}(/[^\\s]*)?"
+    + "|[A-Za-z0-9][A-Za-z0-9.-]{0,252}"
+    + "|(?:[0-9A-Fa-f]{0,4}:){2,7}[0-9A-Fa-f.]{0,15})$",
 };
+
+test("isValidEntry rejects schemeless entries that ping cannot reach", () => {
+  for (const ok of ["1.1.1.1", "dns.google", "2606:4700:4700::1111", "https://example.org:8443/x"]) {
+    assert.equal(isValidEntry(ok, OPTS), true, ok);
+  }
+  for (const bad of ["host:80", "a/b", "abc:80", "bad host"]) {
+    assert.equal(isValidEntry(bad, OPTS), false, bad);
+  }
+});
 
 test("splitTokens handles commas, newlines and surrounding whitespace", () => {
   assert.deepEqual(splitTokens(" a.example, b.example\nc.example\r\n,, "), ["a.example", "b.example", "c.example"]);
@@ -51,10 +62,10 @@ test("serialize sends an empty string for unchanged defaults, a list otherwise",
 });
 
 test("isValidEntry mirrors the backend rule", () => {
-  for (const ok of ["8.8.8.8", "https://1.1.1.1", "dns.google", "http://[::1]:8080/x", "host.example/path?q=1"]) {
+  for (const ok of ["8.8.8.8", "https://1.1.1.1", "dns.google", "http://[::1]:8080/x", "https://host.example/path?q=1"]) {
     assert.equal(isValidEntry(ok, OPTS), true, ok);
   }
-  for (const bad of ["bad host!", "-x.example", "a b", "a".repeat(301)]) {
+  for (const bad of ["bad host!", "-x.example", "a b", "host.example/path?q=1", "a".repeat(301)]) {
     assert.equal(isValidEntry(bad, OPTS), false, bad);
   }
 });

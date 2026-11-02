@@ -43,7 +43,7 @@ function build() {
     confirm: () => true,
   });
   ctx.window = ctx;
-  ctx.document = { getElementById: (id) => dom[id] ?? null };
+  ctx.document = { getElementById: (id) => dom[id] ?? null, querySelectorAll: () => [] };
   const fragment = () => {
     dom = {};
     for (const id of ["spooler-stat-queue", "spooler-refresh-btn", "spooler-flush-btn",
@@ -105,4 +105,57 @@ test("an older log response never overwrites a newer one", async () => {
   await new Promise((r) => setImmediate(r));
   assert.match(dom["spooler-log-body"].innerHTML, /newer@example/);
   assert.doesNotMatch(dom["spooler-log-body"].innerHTML, /older@example/);
+});
+
+test("log timestamps preserve existing UTC and non-UTC offsets", async () => {
+  const h = build();
+  const dom = h.fragment();
+  vm.runInContext(src, h.ctx);
+  h.ctx._initSpoolerTab();
+  const request = h.requests.filter((item) => item.url.includes("/log")).at(-1);
+  const timestamps = ["2026-11-01T19:30:00+00:00", "2026-11-01T19:30:00+02:00"];
+  request.resolve({ ok: true, json: async () => ({ total: timestamps.length, entries: timestamps.map((updated_at) => ({
+    notification_type: "alert", status: "sent", channel_type: "email", recipient_address: "ops@example.com", retry_count: 0, updated_at,
+  })) }) });
+  await new Promise((resolve) => setImmediate(resolve));
+  for (const timestamp of timestamps) {
+    const expected = new Date(timestamp).toLocaleString(undefined, {
+      month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit",
+    });
+    assert.ok(dom["spooler-log-body"].innerHTML.includes(expected));
+  }
+});
+test("failed handoffs with an empty active queue are not shown as healthy", async () => {
+  const h = build();
+  const dom = h.fragment();
+  for (const id of ["spooler-health", "spooler-health-icon", "spooler-health-text"]) dom[id] = makeEl();
+  vm.runInContext(src, h.ctx);
+  h.ctx._initSpoolerTab();
+  const stats = h.requests.filter((r) => r.url.includes("/stats")).at(-1);
+  stats.resolve({ ok: true, json: async () => ({ pending: 0, processing: 0, failed: 3, failed_recent: 3, sent: 5, channels: {}, cooldowns: [] }) });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.match(dom["spooler-health-text"].textContent, /3 handoff failure/);
+  assert.equal(dom["spooler-health-icon"].textContent, "error_outline");
+  assert.match(dom["spooler-health"].className, /text-danger/);
+});
+test("old failures outside the 24 h window do not turn the state red", () => {
+  const h = build();
+  h.fragment();
+  vm.runInContext(src, h.ctx);
+  const { healthState } = h.ctx._spoolerInternals;
+  assert.match(healthState({ pending: 0, processing: 0, failed: 3, failed_recent: 0, cooldowns: [] }).tone, /body-secondary/);
+  assert.match(healthState({ failed: 3, cooldowns: [] }).tone, /danger/);
+  assert.match(healthState({ failed_recent: 0, max_retry_count: 2, cooldowns: [] }).text, /retried/);
+});
+test("status labels say accepted/handoff and never claim delivery", () => {
+  const h = build();
+  h.fragment();
+  vm.runInContext(src, h.ctx);
+  const { statusBadge } = h.ctx._spoolerInternals;
+  assert.match(statusBadge("sent", 0), /Accepted by server/);
+  assert.match(statusBadge("sent", 0), /not verifiable/);
+  assert.match(statusBadge("pending", 0), /Waiting for handoff/);
+  assert.match(statusBadge("pending", 2), /Retrying handoff/);
+  assert.match(statusBadge("failed", 3), /Handoff failed/);
+  for (const status of ["sent", "pending", "failed", "processing"]) assert.doesNotMatch(statusBadge(status, 1), /[Dd]elivered/);
 });

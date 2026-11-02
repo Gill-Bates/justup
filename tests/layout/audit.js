@@ -172,6 +172,203 @@
 		}
 	}
 
+	const textRects = (el) => {
+		const rects = [];
+		const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+		while (walker.nextNode()) {
+			if (!walker.currentNode.nodeValue.trim()) continue;
+			if (!visible(walker.currentNode.parentElement)) continue;
+			const range = document.createRange();
+			range.selectNodeContents(walker.currentNode);
+			for (const rect of range.getClientRects()) {
+				let visible = {
+					left: rect.left,
+					top: rect.top,
+					right: rect.right,
+					bottom: rect.bottom,
+					text: walker.currentNode.nodeValue.trim(),
+					source: desc(walker.currentNode.parentElement),
+				};
+				for (let p = el; p && p !== document.documentElement; p = p.parentElement) {
+					const cs = getComputedStyle(p);
+					if (cs.position === "fixed") break;
+					if (!clipsX(cs) && !clipsY(cs)) continue;
+					const pr = p.getBoundingClientRect();
+					if (clipsX(cs)) { visible.left = Math.max(visible.left, pr.left); visible.right = Math.min(visible.right, pr.right); }
+					if (clipsY(cs)) { visible.top = Math.max(visible.top, pr.top); visible.bottom = Math.min(visible.bottom, pr.bottom); }
+				}
+				if (visible.right - visible.left > 1 && visible.bottom - visible.top > 1) rects.push(visible);
+			}
+		}
+		return rects;
+	};
+	const compareText = (elements, group) => {
+		const measured = elements.filter(visible).map((el) => ({ el, rects: textRects(el) }));
+		for (let i = 0; i < measured.length; i++) {
+			for (let j = i + 1; j < measured.length; j++) {
+				for (const a of measured[i].rects) {
+					for (const b of measured[j].rects) {
+						if (Math.min(a.right, b.right) - Math.max(a.left, b.left) > TOL && Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > TOL) {
+							issue("text-overlap", measured[i].el, {
+								group,
+								with: desc(measured[j].el),
+								text: a.text,
+								source: a.source,
+								withText: b.text,
+								withSource: b.source,
+								rect: r2(a),
+								withRect: r2(b),
+							});
+							j = measured.length;
+							break;
+						}
+					}
+					if (j === measured.length) break;
+				}
+			}
+		}
+	};
+	for (const pair of content.querySelectorAll(".target-kpi-pair")) {
+		compareText(Array.from(pair.querySelectorAll(".target-kpi-label, .target-kpi-value")), "target-kpi-pair");
+	}
+	for (const toolbar of content.querySelectorAll(".target-toolbar")) {
+		compareText(Array.from(toolbar.querySelectorAll(":scope > .target-toolbar-group")), "target-toolbar");
+	}
+	for (const heading of content.querySelectorAll(".target-panel-heading")) {
+		compareText(Array.from(heading.querySelectorAll(":scope > .target-panel-title, :scope > .target-panel-sub")), "target-panel-heading");
+	}
+	const dashboardPane = document.getElementById("target-dashboard-pane");
+	const kpiRow = document.querySelector("#target-info-cards > .target-kpi-row");
+	if (dashboardPane && kpiRow && visible(kpiRow)) {
+		const paneRect = dashboardPane.getBoundingClientRect();
+		const rowRect = kpiRow.getBoundingClientRect();
+		if (rowRect.left > paneRect.left + TOL || rowRect.right < paneRect.right - TOL) {
+			issue("dashboard-kpi-row-does-not-fill-grid", kpiRow, { pane: r2(paneRect), row: r2(rowRect) });
+		}
+	}
+	for (const legend of content.querySelectorAll(".combined-legend")) {
+		compareText(Array.from(legend.querySelectorAll(".combined-legend-btn")), "combined-legend");
+	}
+	for (const item of document.querySelectorAll(".ju-notif-swipe-item.is-dismiss-revealed")) {
+		const swipe = item.querySelector(":scope > .ju-notif-swipe-content");
+		const action = item.querySelector(":scope > .ju-notif-dismiss-action");
+		if (!visible(item) || !swipe || !action || !visible(action)) continue;
+		const swipeRect = swipe.getBoundingClientRect();
+		const actionRect = action.getBoundingClientRect();
+		if (swipeRect.right > actionRect.left + TOL) {
+			issue("notification-delete-overlaps-content", item, { content: r2(swipeRect), action: r2(actionRect) });
+		}
+	}
+
+	const combined = document.getElementById("combined-card");
+	if (combined) {
+		const card = combined.getBoundingClientRect();
+		for (const selector of [".combined-legend", ".target-combined-plot", ".combined-footer", "#combined-status-note", "#combined-summary"]) {
+			for (const el of combined.querySelectorAll(selector)) {
+				if (!visible(el)) continue;
+				const r = el.getBoundingClientRect();
+				if (r.top < card.top - TOL || r.bottom > card.bottom + TOL) {
+					issue("dashboard-content-outside-card", el, { card: r2(card), rect: r2(r) });
+				}
+			}
+		}
+		const footerParts = Array.from(combined.querySelectorAll(".combined-status-key, #combined-status-note, #combined-summary"));
+		compareText(footerParts, "combined-footer");
+	}
+
+	for (const selector of [".target-combined-plot", ".target-availability-plot"]) {
+		for (const plot of content.querySelectorAll(selector)) {
+			if (!visible(plot)) continue;
+			const r = plot.getBoundingClientRect();
+			if (r.width < (cfg.minPlotWidth || 120) || r.height < (cfg.minPlotHeight || 96)) {
+				issue("chart-plot-too-small", plot, { rect: r2(r), min: [cfg.minPlotWidth || 120, cfg.minPlotHeight || 96] });
+			}
+			const body = plot.closest(".card")?.querySelector(":scope > .card-body");
+			if (body) {
+				const bodyRect = body.getBoundingClientRect();
+				if (r.top < bodyRect.top - TOL || r.bottom > bodyRect.bottom + TOL) {
+					issue("chart-plot-outside-card", plot, { body: r2(bodyRect), plot: r2(r) });
+				}
+			}
+			const canvas = plot.querySelector("canvas");
+			const chart = canvas && window.Chart?.getChart(canvas);
+			const legend = chart?.legend;
+			const area = chart?.chartArea;
+			if (!legend || legend.options?.display === false || !area) continue;
+			const width = chart.width || canvas.clientWidth;
+			const height = chart.height || canvas.clientHeight;
+			if (legend.left < -TOL || legend.top < -TOL || legend.right > width + TOL || legend.bottom > height + TOL) {
+				issue("chart-legend-outside-canvas", canvas, { legend: [legend.left, legend.top, legend.right, legend.bottom], canvas: [width, height] });
+			}
+			if (Math.min(legend.right, area.right) - Math.max(legend.left, area.left) > TOL &&
+				Math.min(legend.bottom, area.bottom) - Math.max(legend.top, area.top) > TOL) {
+				issue("chart-legend-overlaps-plot", canvas, { legend: [legend.left, legend.top, legend.right, legend.bottom], chartArea: [area.left, area.top, area.right, area.bottom] });
+			}
+			const areaWidth = area.width || area.right - area.left;
+			const areaHeight = area.height || area.bottom - area.top;
+			if (areaWidth < (cfg.minChartAreaWidth || 120) || areaHeight < (cfg.minChartAreaHeight || 40)) {
+				issue("chart-area-too-small", canvas, { chartArea: [areaWidth, areaHeight], min: [cfg.minChartAreaWidth || 120, cfg.minChartAreaHeight || 40] });
+			}
+			const fitDashboard = innerWidth >= 1200 && innerHeight >= 800;
+			const expectedPosition = fitDashboard || width >= 768 ? "right" : "bottom";
+			if (legend.options.position !== expectedPosition) {
+				issue("chart-legend-position", canvas, { expected: expectedPosition, actual: legend.options.position, width, fitDashboard });
+			}
+		}
+	}
+
+	const downtime = document.getElementById("downtime-history-card");
+	if (downtime) {
+		const empty = downtime.querySelector(".target-empty-state");
+		const body = downtime.querySelector(":scope > .card-body");
+		if (empty && visible(empty) && body) {
+			const cs = getComputedStyle(body);
+			if (["auto", "scroll"].includes(cs.overflowY) && body.scrollHeight > body.clientHeight + TOL) {
+				issue("downtime-empty-ghost-scroll", body, { scrollHeight: body.scrollHeight, clientHeight: body.clientHeight, overflowY: cs.overflowY });
+			}
+		}
+		const list = downtime.querySelector(".downtime-scroll");
+		if (list && list.scrollHeight > list.clientHeight + TOL) {
+			const cs = getComputedStyle(list);
+			if (!["auto", "scroll"].includes(cs.overflowY)) issue("downtime-list-not-scrollable", list, { overflowY: cs.overflowY });
+			if (list.tabIndex < 0 || list.getAttribute("role") !== "region" || !list.getAttribute("aria-label")) {
+				issue("downtime-list-not-keyboard-operable", list, { tabIndex: list.tabIndex, role: list.getAttribute("role") || "" });
+			}
+			if (body && ["auto", "scroll"].includes(getComputedStyle(body).overflowY) && body.scrollHeight > body.clientHeight + TOL) {
+				issue("nested-downtime-scroll", body, { inner: desc(list) });
+			}
+		}
+	}
+
+	// 9. Table contract: cells never truncate (no ellipsis, no clipped cell), nothing is hidden, the
+	//    card/table mode follows the container width and a scrolling viewport is operable by keyboard.
+	const rem = parseFloat(getComputedStyle(doc).fontSize) || 16;
+	for (const cell of content.querySelectorAll("td, th")) {
+		if (!visible(cell) && getComputedStyle(cell).display !== "none") continue;
+		const cs = getComputedStyle(cell);
+		const row = cell.closest("tr");
+		if (cs.display === "none") {
+			if (cell.tagName === "TD" && row && visible(row) && !cell.hidden) issue("table-cell-hidden", cell, { label: cell.dataset.label || "" });
+			continue;
+		}
+		for (const el of [cell, ...cell.querySelectorAll("*")]) {
+			if (el.matches(".visually-hidden")) continue;
+			const ecs = getComputedStyle(el);
+			if (ecs.textOverflow === "ellipsis" && ecs.overflowX !== "visible") issue("table-ellipsis", el, { text: (el.textContent || "").trim().slice(0, 30) });
+			else if (ecs.overflowX !== "visible" && el.scrollWidth > el.clientWidth + TOL && el.clientWidth > 0) issue("table-cell-clipped", el, { text: (el.textContent || "").trim().slice(0, 30), scrollWidth: el.scrollWidth, clientWidth: el.clientWidth });
+		}
+	}
+	for (const vp of content.querySelectorAll(".ju-table-viewport")) {
+		if (getComputedStyle(vp).display === "none" || vp.clientWidth === 0) continue;
+		const operable = vp.getAttribute("role") === "region" && vp.tabIndex >= 0 && vp.hasAttribute("aria-label");
+		if (!operable && vp.scrollWidth > vp.clientWidth + TOL) issue("table-scroll-not-operable", vp, { scrollWidth: vp.scrollWidth, clientWidth: vp.clientWidth });
+		if (!operable) issue("table-viewport-unlabelled", vp, {});
+		for (const t of vp.querySelectorAll("table.rtable")) {
+			const cards = getComputedStyle(t.tBodies[0]?.rows[0] || t).display === "block" || getComputedStyle(t.tBodies[0]?.rows[0] || t).display === "grid";
+			const narrow = vp.clientWidth < 40 * rem;
+			if (t.tBodies[0]?.rows.length && cards !== narrow) issue("table-mode-mismatch", t, { viewport: vp.clientWidth, cards });
+		}
+	}
 	// 8. Fit shells must not scroll the document.
 	if (out.info.fit && out.info.fit !== "auto" && doc.scrollHeight > vh + TOL) {
 		issue("fit-document-scrolls", doc, { scrollHeight: doc.scrollHeight, vh });

@@ -21,8 +21,13 @@ var _MOBILE_BREAKPOINT = 768;
  * Return 'bottom' on narrow screens, 'right' on wider ones.
  * @returns {'bottom'|'right'}
  */
-function _legendPosition() {
-  return window.innerWidth < _MOBILE_BREAKPOINT ? "bottom" : "right";
+function _legendPosition(chartOrCanvas) {
+  const canvas = chartOrCanvas?.canvas || chartOrCanvas;
+  const width = chartOrCanvas?.width || canvas?.parentElement?.clientWidth || canvas?.clientWidth || window.innerWidth;
+  const fitDashboard =
+    window.matchMedia &&
+    window.matchMedia("(min-width: 1200px) and (min-height: 800px)").matches;
+  return width < _MOBILE_BREAKPOINT && !fitDashboard ? "bottom" : "right";
 }
 
 /**
@@ -119,7 +124,7 @@ function _registerChart(canvasId, chart, ctx, skipSampling) {
 
   appState.charts.set(canvasId, chart);
 
-  // Responsive legend: update position on resize (right ↔ bottom)
+  // Keep the fit dashboard's narrow side chart tall enough by placing its legend on the right.
   if (
     chart.options &&
     chart.options.plugins &&
@@ -128,7 +133,7 @@ function _registerChart(canvasId, chart, ctx, skipSampling) {
   ) {
     var origOnResize = chart.options.onResize;
     chart.options.onResize = function (ch, size) {
-      var newPos = _legendPosition();
+      var newPos = _legendPosition(ch);
       if (ch.options.plugins.legend.position !== newPos) {
         ch.options.plugins.legend.position = newPos;
         ch.update("none");
@@ -306,7 +311,7 @@ function buildAvailabilitySeriesChart(canvasId, data) {
   // Legend: right on desktop, bottom on mobile
   config.options.plugins.legend = {
     display: true,
-    position: _legendPosition(),
+    position: _legendPosition(ctx),
     labels: {
       color: theme.text,
       padding: 15,

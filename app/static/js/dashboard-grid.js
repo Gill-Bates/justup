@@ -21,12 +21,13 @@
 	// Mirrors DASHBOARD_MAX_Y on the server; no widget may cross this row bound (y + h <= MAX_Y).
 	const MAX_Y = 1000;
 	const REVEAL_TIMEOUT_MS = 2500; // below the CSS failsafe (4s)
+	const LAYOUT_LOAD_TIMEOUT_MS = 3000;
 	// Keep in sync with the stacked block in dashboard.css (Bootstrap lg breakpoint).
 	const MOBILE_QUERY = '(max-width: 991.98px)';
 	const REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)';
 	const PARK_ROWS = 10000;
 
-	const { registry } = window.JuDashboardRegistry;
+	const registry = window.JuDashboardRegistry.forRole(root.dataset.isAdmin === 'true');
 	const DEFAULT_LAYOUT = registry.map((def) => ({
 		id: def.id, x: def.defaultX, y: def.defaultY,
 		w: def.defaultSize.w, h: def.defaultSize.h,
@@ -58,8 +59,9 @@
 		if (live) live.textContent = message;
 	}
 
-	async function request(method, body) {
+	async function request(method, body, signal) {
 		const options = { method, headers: { Accept: 'application/json' } };
+		if (signal) options.signal = signal;
 		if (body !== undefined) {
 			options.headers['Content-Type'] = 'application/json';
 			options.body = JSON.stringify(body);
@@ -77,7 +79,8 @@
 	// falls back to the known-good default instead of raising.
 	function mergeWithDefault(stored) {
 		const byId = new Map();
-		if (stored && stored.version === 1 && Array.isArray(stored.widgets)) {
+		const hasStoredLayout = stored && stored.version === 1 && Array.isArray(stored.widgets);
+		if (hasStoredLayout) {
 			for (const widget of stored.widgets) {
 				if (widget && typeof widget.id === 'string') byId.set(widget.id, widget);
 			}
@@ -85,7 +88,7 @@
 		const inRange = (value, max) => Number.isInteger(value) && value >= 0 && value <= max;
 		const merged = DEFAULT_LAYOUT.map((def) => {
 			const saved = byId.get(def.id);
-			if (!saved) return defaultEntry(def);
+			if (!saved) return { ...defaultEntry(def), visible: hasStoredLayout ? false : def.visible };
 			const valid = inRange(saved.x, 11) && inRange(saved.y, MAX_Y) &&
 				Number.isInteger(saved.w) && saved.w >= 1 && saved.w <= 12 &&
 				Number.isInteger(saved.h) && saved.h >= 1 && saved.h <= 100 &&
@@ -140,6 +143,7 @@
 			grid.batchUpdate(false);
 			applyingLayout = false;
 		}
+		document.dispatchEvent(new CustomEvent('dashboard:layout-applied'));
 	}
 
 	// Content height without the tile's stretch (cards use h-100), so the measure can shrink again.
@@ -326,6 +330,7 @@
 		widgetState.set(id, { ...state, visible });
 		el.querySelectorAll('.dashboard-widget-header').forEach((header) => { header.hidden = !editingNow; });
 		if (visible) document.dispatchEvent(new CustomEvent('dashboard:widget-shown'));
+		document.dispatchEvent(new CustomEvent('dashboard:layout-applied'));
 		scheduleFit();
 		renderWidgetList();
 	}
@@ -408,6 +413,22 @@
 	}
 
 	function buildLayout() {
+		const targets = $('quality-targets');
+		if (targets && !targets.closest('details')) {
+			const details = document.createElement('details');
+			const summary = document.createElement('summary');
+			summary.title = 'Probe targets';
+			summary.setAttribute('aria-label', 'Probe targets');
+			const icon = document.createElement('span');
+			icon.className = 'material-icons';
+			icon.setAttribute('aria-hidden', 'true');
+			icon.textContent = 'network_check';
+			summary.append(icon);
+			details.append(summary);
+			targets.parentElement.append(details);
+			details.append(targets);
+			details.addEventListener('toggle', scheduleFit);
+		}
 		grid = window.GridStack.init({
 			column: 12,
 			cellHeight: CELL_HEIGHT,
@@ -446,12 +467,26 @@
 	async function initLayout() {
 		buildLayout();
 		let stored = null;
+		const controller = new AbortController();
+		let timeoutId;
 		try {
-			const result = await request('GET');
-			stored = result ? result.layout : null;
+			const result = await Promise.race([
+				request('GET', undefined, controller.signal).then((value) => ({ value })),
+				new Promise((resolve) => {
+					timeoutId = window.setTimeout(() => resolve({ timedOut: true }), LAYOUT_LOAD_TIMEOUT_MS);
+				}),
+			]);
+			if (result.timedOut) {
+				controller.abort();
+				notify('Loading saved layout timed out. Using defaults.', false);
+			} else {
+				stored = result.value ? result.value.layout : null;
+			}
 		} catch (error) {
 			// A failed GET falls back to the factory default; the reveal below still runs.
 			notify(messageFrom(error), false);
+		} finally {
+			window.clearTimeout(timeoutId);
 		}
 		savedLayout = mergeWithDefault(stored);
 		applyLayout(savedLayout);

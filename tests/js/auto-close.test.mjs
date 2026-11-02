@@ -50,3 +50,32 @@ test("disabled toggle sends nothing", async () => {
   await h.save({ checked: true, disabled: true }, 7);
   assert.equal(h.calls.length, 0);
 });
+
+test("rapid changes are serialized and stale failures do not revert the latest choice", async () => {
+  const replies = [];
+  const h = harness(() => new Promise((resolve) => { replies.push(resolve); }));
+  const toggle = { checked: true, disabled: false };
+  const first = h.save(toggle, 7);
+  toggle.checked = false;
+  const second = h.save(toggle, 7);
+  toggle.checked = true;
+  const third = h.save(toggle, 7);
+
+  await new Promise(setImmediate);
+  assert.equal(h.calls.length, 1, "only the first target update is in flight");
+  replies[0]({ ok: false, status: 500 });
+  await first;
+  assert.equal(toggle.checked, true, "an obsolete failure does not undo the latest choice");
+
+  await new Promise(setImmediate);
+  assert.equal(h.calls.length, 2);
+  replies[1]({ ok: true, status: 200 });
+  await second;
+  await new Promise(setImmediate);
+  assert.equal(h.calls.length, 3);
+  replies[2]({ ok: true, status: 200 });
+  await third;
+
+  assert.deepEqual(h.calls.map(([, options]) => JSON.parse(options.body).auto_close_alert), [true, false, true]);
+  assert.equal(toggle.checked, true);
+});

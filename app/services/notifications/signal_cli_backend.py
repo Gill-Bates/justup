@@ -38,6 +38,7 @@ from typing import Final
 from ...utils.phone import mask_phone as _mask_phone
 from .signal_backend import SignalBackend
 from .signal_errors import (
+    SignalNotInstalled,
     SignalNotRegistered,
     SignalRateLimited,
     SignalRecipientInvalid,
@@ -246,7 +247,7 @@ class SignalCliBackend(SignalBackend):
         resolved = shutil.which(self._cli_path)
         if resolved:
             return resolved
-        raise SignalUnavailable(f"signal-cli not found: {self._cli_path}")
+        raise SignalNotInstalled(f"signal-cli not found: {self._cli_path}")
 
     def _run_signal_cli(
         self,
@@ -308,9 +309,9 @@ class SignalCliBackend(SignalBackend):
         except subprocess.TimeoutExpired as e:
             raise SignalTimeout(f"signal-cli timed out after {timeout}s") from e
         except FileNotFoundError as e:
-            raise SignalUnavailable(f"signal-cli not found: {e}") from e
+            raise SignalNotInstalled(f"signal-cli not found: {e}") from e
         except OSError as e:
-            raise SignalUnavailable(f"Failed to run signal-cli: {e}") from e
+            raise SignalNotInstalled(f"Failed to run signal-cli: {e}") from e
 
     def _run_signal_rpc(self, method: str, params: dict | None = None, timeout: int = DEFAULT_TIMEOUT) -> dict:
         """Run one documented JSON-RPC request with stdin closed after the request."""
@@ -413,7 +414,7 @@ class SignalCliBackend(SignalBackend):
         except subprocess.TimeoutExpired as e:
             raise SignalTimeout(f"signal-cli timed out after {timeout}s") from e
         except (FileNotFoundError, OSError) as e:
-            raise SignalUnavailable(f"Failed to run signal-cli: {e}") from e
+            raise SignalNotInstalled(f"Failed to run signal-cli: {e}") from e
 
     def invalidate_cache(self) -> None:
         """No-op for API compatibility. Status is always fetched fresh."""

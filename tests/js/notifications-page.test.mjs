@@ -88,15 +88,19 @@ test("the right-swipe hook and ArrowRight mark the row read", async () => {
   assert.equal(row2.classes.has("is-unread"), false);
 });
 
-test("unmodified click on a linked notification marks read, then navigates", async () => {
+test("unmodified click navigates immediately while marking read in the background", async () => {
   let finishRead;
-  const h = harness(() => new Promise(resolve => { finishRead = resolve; }));
+  const requests = [];
+  const h = harness((url, options) => {
+    requests.push({ url, options });
+    return new Promise(resolve => { finishRead = resolve; });
+  });
   const row = unreadRow("link", { href: "/ui/targets/7" });
   const event = rowEvent(row.content);
   h.handlers.click(event);
-  await tick();
   assert.equal(event.prevented, true);
-  assert.deepEqual(h.navigations, []);
+  assert.deepEqual(h.navigations, ["/ui/targets/7"]);
+  assert.equal(requests[0].options.keepalive, true);
   finishRead({ ok: true });
   await tick();
   assert.deepEqual(h.navigations, ["/ui/targets/7"]);
@@ -172,7 +176,7 @@ test("the page binds swipe handling to the list container", () => {
   assert.equal(h.window.swipeBound, h.page);
 });
 
-test("delete posts to the dismiss endpoint through apiFetch (CSRF header), notifies the bell and reloads", async () => {
+test("delete sends the dismiss request through apiFetch, notifies the bell and reloads", async () => {
   const requests = [];
   const h = harness(async (url, options) => { requests.push([url, options]); return { ok: true }; });
   const button = { dataset: { notificationId: "42" }, disabled: false };

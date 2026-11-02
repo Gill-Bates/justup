@@ -586,6 +586,49 @@ class TestSchedulerRestoreGeneration:
         sqlite_db.close_connection(conn)
         return MonitorScheduler(get_conn=lambda: sqlite_db.connect(db_path), tsdb_dir=tmp_path / "tsdb")
 
+    def test_target_refresh_reads_run_in_worker_and_applies_state_on_event_loop(self, tmp_path: Path):
+        db_path = tmp_path / "justup.db"
+        sched = self._sched(db_path, tmp_path)
+        conn = sqlite_db.connect(db_path)
+        target_id = sqlite_db.create_target(
+            conn,
+            {"name": "loop-boundary", "host": "example.test", "interval_seconds": 60, "retention_days": 30},
+        )
+        sqlite_db.close_connection(conn)
+
+        loop_thread = threading.get_ident()
+        observed_threads = {}
+        load_snapshot = sched._load_target_refresh_snapshot
+        apply_snapshot = sched._apply_target_refresh_snapshot
+
+        def record_load(generation):
+            observed_threads["load"] = threading.get_ident()
+            return load_snapshot(generation)
+
+        def record_apply(now, snapshot):
+            observed_threads["apply"] = threading.get_ident()
+            return apply_snapshot(now, snapshot)
+
+        async def skip_work(*_args, **_kwargs):
+            return None
+
+        sched._run_id = "scheduler-thread-boundary-test"
+        sched._load_target_refresh_snapshot = record_load
+        sched._apply_target_refresh_snapshot = record_apply
+        sched._run_quality_probe = skip_work
+        sched._run_housekeeping = skip_work
+        sched._process_notification_spooler = skip_work
+
+        async def scenario() -> None:
+            await sched._run_iteration(asyncio.get_running_loop(), maintenance.current_generation())
+
+        asyncio.run(scenario())
+
+        assert observed_threads["load"] != loop_thread
+        assert observed_threads["apply"] == loop_thread
+        assert target_id in sched._targets
+        assert target_id in sched._rt
+
     def test_iteration_threads_generation_into_periodic_work_without_type_error(self, tmp_path: Path):
         # Regression: _run_iteration passes generation into the periodic helpers; their signatures
         # must accept it, or every real iteration raises TypeError and the loop silently stalls.

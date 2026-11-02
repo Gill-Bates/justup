@@ -54,11 +54,11 @@ server-side validation.
 | `POST` | `/ui/notifications/{id}/read`, `/ui/notifications/read-all` | mark as read (only for the caller; changes no alert) |
 | `GET`, `POST` | `/groups` | list / create groups |
 | `GET`, `PATCH`, `DELETE` | `/groups/{group_id}` | read, change, delete group (`409` if the name exists or targets still use the group, `404` if unknown) |
-| `GET`, `POST` | `/recipients` | list / create recipients |
+| `GET`, `POST` | `/recipients` | list / create recipients (`409` if the phone number already exists) |
 | `GET`, `PATCH`, `DELETE` | `/recipients/{recipient_id}` | read, change, delete recipient |
 | `POST` | `/recipients/verify-signal` | verify Signal number |
 | `POST` | `/recipients/{recipient_id}/test` | queue a test message to the saved Signal/email channel (`channel`: `signal`, `email`, `all`; admin; 30 s cooldown per recipient and channel) |
-| `GET` | `/recipients/{recipient_id}/test/{queue_id}` | delivery state of a test message: `pending`, `sent`, `failed` (admin) |
+| `GET` | `/recipients/{recipient_id}/test/{queue_id}` | delivery state of a test message: `pending`, `sent` (accepted by the SMTP server; final delivery is not verifiable), `failed` (admin) |
 | `GET`, `POST` | `/users` | list / create users (admin) |
 | `PUT`, `DELETE` | `/users/{user_id}` | change / delete user (admin) |
 | `POST` | `/users/{user_id}/active` | set user status (admin) |
@@ -68,7 +68,7 @@ server-side validation.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET`, `PATCH` | `/settings` | read / change runtime settings |
+| `GET`, `PATCH` | `/settings` | read / change runtime settings (admin); the response includes the non-secret SMTP values, the effective `smtp_use_tls` and `smtp_password_set`, never the password |
 | `POST` | `/settings/backup` | create and download a backup |
 | `POST` | `/settings/restore` | restore a backup with admin password confirmation |
 | `POST` | `/settings/auth/toggle` | enable or disable authentication (`disable`, admin `password`; admin) |
@@ -79,15 +79,15 @@ server-side validation.
 | `GET` | `/reports/targets/{target_id}/pdf` | request a report directly |
 | `GET` | `/quality/current`, `/quality/history` | Quality Gate state and history |
 | various | `/signal/*`, `/settings/signal/*` | signal-cli account, messages, and templates |
-| various | `/settings/smtp/*`, `/settings/notification-queue/*` | email, queue, and delivery log |
+| various | `/settings/smtp/*`, `/settings/notification-queue/*` | email, queue, and delivery log; `GET /settings/notification-queue/stats` returns `failed` (all stored) and `failed_recent` (last 24 h); `sent` means accepted by the server, not delivered |
 | `GET`, `POST` | `/api/admin/pop/*` | POP data and import runs (admin) |
 
 Backup, restore, purge, and Signal operations are additionally rate-limited.
 
 ## Notifications
 
-The notification endpoints live under `/ui/` (cookie auth and CSRF protection), respond with
-`Cache-Control: private, no-store`, and return 404 for IDs not visible. `/ui/alerts` redirects to
-`/ui/notifications?category=monitoring`; the `/alerts` API is unchanged. Report jobs
-(`/reports/jobs/{id}`, `/download`) are accessible to the requester and to admins; an
-expired download responds with 410.
+The notification endpoints live under `/ui/` (cookie auth and CSRF protection),
+respond with `Cache-Control: private, no-store`, and return 404 for IDs not visible.
+`/ui/alerts` redirects to `/ui/notifications?category=monitoring`. Report jobs
+(`/reports/jobs/{id}`, `/download`) are accessible to the requester and admins;
+expired downloads return `410`.

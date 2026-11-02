@@ -33,7 +33,7 @@
         data-hop-first="{{ node.first_hop if node.first_hop is not none else '' }}"
         data-hop-last="{{ node.last_hop if node.last_hop is not none else '' }}"
         data-detail="{{ node.detail }}"{% if node.country %} data-country="{{ node.country }}"{% endif %}
-        aria-label="{{ node.aria_label }}" title="{{ node.detail }}">
+        title="{{ node.detail }}">
         <span class="tr-step-dot" aria-hidden="true">{{ node.label }}</span>
         <span class="tr-step-body">
             <span class="tr-step-title">{{ node.title }}</span>
@@ -73,7 +73,7 @@
                     <button type="button" class="tr-step-btn tr-step-toggle" data-tr-group
                         data-hop-first="{{ node.first_hop }}" data-hop-last="{{ node.last_hop }}"
                         data-detail="{{ node.detail }}" aria-expanded="false" aria-controls="{{ node.id }}"
-                        aria-label="{{ node.aria_label }}" title="{{ node.title }}">
+                        title="{{ node.title }}">
                         <span class="tr-step-dot" aria-hidden="true">{{ node.label }}</span>
                         <span class="tr-step-body">
                             <span class="tr-step-title">{{ node.title }}</span>
@@ -147,7 +147,7 @@
             <header class="tr-panel-head">
                 <h2 class="tr-panel-title" id="tr-hops-title">Traceroute hops <span class="tr-panel-count">({{ total_hops }})</span></h2>
             </header>
-            <div class="table-responsive tr-table-scroll" tabindex="0" role="region" aria-labelledby="tr-hops-title">
+            <div class="table-responsive tr-table-scroll" tabindex="0" role="region" aria-label="Hop table, scrolls when it does not fit">
                 <table class="table align-middle mb-0 hop-table" aria-label="Traceroute hops from the start to the destination">
                     <thead>
                         <tr>

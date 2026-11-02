@@ -89,12 +89,17 @@ async function testSmtp() {
 	recipientInput?.removeAttribute('aria-invalid');
 
 	btn.disabled = true;
-	// A password save started by the field's blur must land before the test mail is queued
-	await window.justUpSettingsSavePending;
 	const originalText = btn.innerHTML;
 	btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Queuing...';
 
 	try {
+		// A failed save means the test would otherwise use stale server-side settings.
+		const saveResults = await window.justUpSettingsSavePending;
+		if (Array.isArray(saveResults) && saveResults.some((saved) => saved === false)) {
+			window.justUpToast?.error?.('Could not save settings. Test email was not sent.');
+			return;
+		}
+
 		const response = await window.apiFetch('/settings/smtp/test-mail', {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
@@ -173,7 +178,7 @@ async function loadUsers() {
 		}
 
 		let html = `
-			<table class="table table-sm table-hover align-middle mb-0">
+			<table class="table table-sm table-hover align-middle rtable ju-data-table mb-0">
 				<thead class="table-light">
 					<tr>
 						<th>Username</th>
@@ -223,17 +228,17 @@ async function loadUsers() {
 
 			html += `
 				<tr data-user-id="${user.id}">
-					<td data-label="Username" class="user-cell">
+					<td data-label="Username" class="user-cell ju-cell-text">
 						<span class="d-flex align-items-center gap-2">
 							<span class="material-icons" style="font-size: 20px;" aria-hidden="true">person</span>
-							<strong class="user-name">${escapeHtml(user.username)}</strong>
+							<strong>${escapeHtml(user.username)}</strong>
 						</span>
 					</td>
 					<td data-label="Role" class="user-role">${roleBadge}</td>
 					<td data-label="Close Alerts" class="text-center user-close">${closeAlertsIcon}</td>
 					<td data-label="Status" class="text-center user-status">${statusBadge}</td>
 					<td data-label="Last Login" class="user-login">${lastLoginCell}</td>
-					<td class="text-end user-actions">
+					<td data-label="" class="text-end actions-cell user-actions">
 						<div class="d-flex justify-content-end gap-1 flex-nowrap user-action-buttons">
 							<button class="btn btn-sm btn-icon btn-outline-secondary toggle-user-btn"
 								data-user-id="${user.id}"

@@ -729,8 +729,8 @@ html {
 	}
 
 	.ju-nav-sm .ju-sidebar-brand {
-		justify-content: center;
-		padding-inline: 0;
+		justify-content: flex-start;
+		padding-inline: 1.4rem;
 	}
 
 	.ju-nav-sm .ju-brand-mark {
@@ -738,8 +738,8 @@ html {
 	}
 
 	.ju-nav-sm .ju-profile {
-		justify-content: center;
-		padding-inline: 0;
+		justify-content: flex-start;
+		padding-inline: 1.4rem;
 	}
 
 	/* Account name stays available to assistive technology. */
@@ -752,12 +752,12 @@ html {
 	}
 
 	.ju-nav-sm .ju-nav-link {
-		justify-content: center;
-		padding-inline: 0;
+		justify-content: flex-start;
+		padding-inline: 0.9rem;
 	}
 
 	.ju-nav-sm .ju-nav-sub .ju-nav-link {
-		padding-left: 0;
+		padding-left: 2.75rem;
 	}
 
 	/* Text stays in the accessibility tree and is only hidden visually. */

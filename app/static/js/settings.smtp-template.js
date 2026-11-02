@@ -14,11 +14,14 @@
   // ─────────────────────────────────────────────────────────────────────────────
 
   // Preview placeholder URL (matches LOGO_URL_PREVIEW from backend)
-  var LOGO_URL_PREVIEW = '/static/justup_1c.png';
-  
+  var LOGO_URL_PREVIEW = '/static/img/justup_email_logo.png';
+
   // NOTE: Must match the placeholder syntax of the server-side renderer
-  // (app/services/notifications/email_template.py).
+  // (app/services/notifications/email_template.py). The stored template keeps the
+  // {{logo_url}} placeholder; a rendered cid: reference is also mapped so a saved,
+  // already-rendered template still previews the logo.
   var LOGO_PLACEHOLDER_RE = /\{\{logo_url\}\}/g;
+  var LOGO_CID_RE = /cid:justup-logo/g;
 
   // Track current mode and WYSIWYG initialization
   let currentMode = 'preview';
@@ -249,16 +252,60 @@
     return sanitizeTemplateDocument(html).documentElement.outerHTML;
   }
 
-  function updatePreview() {
+  // Current preview sample variant ("down" | "resolved").
+  let previewVariant = 'down';
+  let previewGeneration = 0;
+  let previewController = null;
+
+  // Local fallback: swap logo references so the raw template at least shows the logo.
+  function localLogoPreview(html) {
+    return (html || '')
+      .replace(LOGO_PLACEHOLDER_RE, LOGO_URL_PREVIEW)
+      .replace(LOGO_CID_RE, LOGO_URL_PREVIEW);
+  }
+
+  // Render the preview server-side with sample data so no {{placeholder}} remains and
+  // the result matches what the real send path produces. Falls back to a local logo
+  // swap if the request fails (e.g. offline), which still renders the layout.
+  async function updatePreview() {
+    const generation = ++previewGeneration;
+    previewController?.abort();
+    const controller = new AbortController();
+    previewController = controller;
     const previewFrame = document.getElementById('email_preview_frame');
     if (!previewFrame) return;
 
-    var html = getCurrentTemplateHtml();
-    // Replace logo_url placeholder with preview URL
-    var renderedHtml = html.replace(LOGO_PLACEHOLDER_RE, LOGO_URL_PREVIEW);
-    
-    // Sanitize and use srcdoc for preview (defense in depth)
-    previewFrame.srcdoc = sanitizeForPreview(renderedHtml);
+    const html = getCurrentTemplateHtml();
+    const subject = (document.getElementById('email_subject')?.value || '');
+
+    try {
+      const resp = await window.apiFetch('/settings/smtp/template/preview', {
+        method: 'POST',
+        signal: controller.signal,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ subject, html, variant: previewVariant }),
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        if (generation !== previewGeneration) return;
+        previewFrame.srcdoc = sanitizeForPreview(data.html || '');
+        return;
+      }
+    } catch (e) {
+      if (generation !== previewGeneration) return;
+      console.warn('Preview render failed, falling back to local preview:', e);
+    }
+    if (generation !== previewGeneration) return;
+    previewFrame.srcdoc = sanitizeForPreview(localLogoPreview(html));
+  }
+
+  function setPreviewVariant(variant) {
+    previewVariant = variant === 'resolved' ? 'resolved' : 'down';
+    const btnDown = document.getElementById('btn-preview-down');
+    const btnResolved = document.getElementById('btn-preview-resolved');
+    btnDown?.classList.toggle('active', previewVariant === 'down');
+    btnResolved?.classList.toggle('active', previewVariant === 'resolved');
+    if (currentMode === 'preview') updatePreview();
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -360,7 +407,7 @@
   }
 
   async function resetTemplate() {
-    if (!confirm('Reset email template to default? This will overwrite your current template.')) {
+    if (!(await window.confirmAction({ title: 'Reset email template', message: 'The current template is overwritten with the default.', confirmLabel: 'Reset' }))) {
       return;
     }
 
@@ -441,6 +488,17 @@
       resetBtn.dataset.bound = '1';
       resetBtn.addEventListener('click', resetTemplate);
     }
+
+    const btnPreviewDown = scope.querySelector('#btn-preview-down');
+    const btnPreviewResolved = scope.querySelector('#btn-preview-resolved');
+    if (btnPreviewDown && !btnPreviewDown.dataset.bound) {
+      btnPreviewDown.dataset.bound = '1';
+      btnPreviewDown.addEventListener('click', () => setPreviewVariant('down'));
+    }
+    if (btnPreviewResolved && !btnPreviewResolved.dataset.bound) {
+      btnPreviewResolved.dataset.bound = '1';
+      btnPreviewResolved.addEventListener('click', () => setPreviewVariant('resolved'));
+    }
   }
 
   // Expose mode switcher for other modules (optional)
@@ -451,7 +509,8 @@
     // Clear previous bindings when resetting state
     document.querySelectorAll('[data-bound]').forEach(function (el) {
       if (['btn-mode-edit', 'btn-mode-html', 'btn-mode-preview',
-           'save-template-btn', 'reset-template-btn'].includes(el.id)) {
+           'save-template-btn', 'reset-template-btn',
+           'btn-preview-down', 'btn-preview-resolved'].includes(el.id)) {
         delete el.dataset.bound;
       }
     });

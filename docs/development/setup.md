@@ -1,7 +1,5 @@
 # Development Setup
 
-This page describes how to set up justUp! locally for development.
-
 ## Prerequisites
 
 - Python ≥ 3.13

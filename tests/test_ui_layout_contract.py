@@ -17,6 +17,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -36,7 +37,7 @@ def _unavailable(reason: str) -> None:
     pytest.skip(reason)
 
 
-def test_layout_contract_holds_in_browser() -> None:
+def _run_browser_check(*extra_args: str) -> None:
     node = shutil.which("node")
     if node is None:
         _unavailable("Node.js is not installed")
@@ -48,16 +49,26 @@ def test_layout_contract_holds_in_browser() -> None:
             os.environ.get("JUSTUP_LAYOUT_PROFILE", "quick"),
             "--browsers",
             os.environ.get("JUSTUP_LAYOUT_BROWSERS", "chromium"),
+            *extra_args,
         ],
         cwd=_REPO,
         capture_output=True,
         text=True,
         timeout=1500,
         check=False,
+        env={**os.environ, "PYTHON": sys.executable},
     )
     if result.returncode == _SKIP_EXIT or result.stdout.startswith("0 audits"):
         _unavailable(result.stdout.strip() or "Playwright or browser unavailable")
     assert result.returncode == 0, result.stdout[-4000:] + result.stderr[-1000:]
+
+
+def test_layout_contract_holds_in_browser() -> None:
+    _run_browser_check()
+
+
+def test_dashboard_grid_interactions_in_browser() -> None:
+    _run_browser_check("--gridstack")
 
 
 @pytest.mark.parametrize("strict", [False, True])

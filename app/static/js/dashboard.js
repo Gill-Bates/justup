@@ -94,6 +94,7 @@
 
 			// Built with the DOM API (prevents XSS via href injection)
 			const tdName = document.createElement('td');
+			tdName.className = 'ju-cell-text';
 			const a = document.createElement('a');
 			a.href = '/ui/targets/' + encodeURIComponent(target.target_id);
 			a.className = 'text-decoration-none text-reset fw-semibold';
@@ -152,29 +153,7 @@
 		}).concat(0));
 	}
 
-
-	function bindRefreshButton() {
-		const btn = document.getElementById('dashboard-refresh-btn');
-		if (!btn || btn.dataset.bound) return;
-		btn.dataset.bound = '1';
-		btn.addEventListener('click', function (e) {
-			e.preventDefault();
-			location.reload();
-		});
-	}
-
-	document.body.addEventListener('htmx:afterSwap', function (evt) {
-		const el = evt && evt.detail && evt.detail.elt;
-		if (el && el.classList) {
-			el.classList.remove('fade-in');
-			// Force reflow to restart animation
-			void el.offsetWidth;
-			el.classList.add('fade-in');
-		}
-	});
-
 	document.addEventListener('DOMContentLoaded', function () {
-		bindRefreshButton();
 		loadDowntimeOverview();
 
 		// Push-driven while the live channel is healthy; the interval only runs as fallback.

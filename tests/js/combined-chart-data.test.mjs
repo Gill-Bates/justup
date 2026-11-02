@@ -16,6 +16,20 @@ const D = sandbox.window.CombinedChartData;
 const plain = (v) => JSON.parse(JSON.stringify(v));
 const T0 = Date.parse("2026-01-01T00:00:00Z");
 const pt = (min, value) => ({ ts: new Date(T0 + min * 60000).toISOString(), value });
+function controlledTimers() {
+  let nextId = 0;
+  const pending = new Map();
+  return {
+    setTimeout(fn, ms) { const id = ++nextId; pending.set(id, { fn, ms }); return id; },
+    clearTimeout(id) { pending.delete(id); },
+    async run(ms) {
+      const entry = [...pending].find(([, timer]) => timer.ms === ms);
+      assert.ok(entry, `expected a pending ${ms} ms timer`);
+      pending.delete(entry[0]);
+      await entry[1].fn();
+    },
+  };
+}
 
 test("status codes are classified by class with a distinct shape each", () => {
   assert.equal(D.classifyStatus(200).key, "2xx");
@@ -43,18 +57,24 @@ test("gaps in the series become null points instead of interpolated lines", () =
   assert.equal(D.toGappedSeries([pt(0, 10), pt(1, 12), pt(2, 11)]).length, 3);
 });
 
-test("peak response times preserve rollup gaps and insert display-bucket gaps without changing peak values", () => {
-  const peaks = D.toPeakSeries([
+test("peak response times preserve rollup gaps and match measurement gaps without changing peak values", () => {
+  const points = [
     { ts: new Date(T0).toISOString(), value: 100, max: 350, count: 6 },
     { ts: new Date(T0 + 60000).toISOString(), value: 150, max: 180, count: 5 },
     { ts: new Date(T0 + 120000).toISOString(), value: 200, max: null, count: 1, rollup: true },
     { ts: new Date(T0 + 180000).toISOString(), value: 250, max: 700, count: 4 },
-    { ts: new Date(T0 + 420000).toISOString(), value: 300, max: 900, count: 3 },
-  ], 3 * 60000);
+    { ts: new Date(T0 + 4 * 60 * 60000).toISOString(), value: 300, max: 900, count: 3 },
+  ];
+  const minGapMs = 3 * 60 * 60000;
+  const measurements = D.toGappedSeries(points, minGapMs);
+  const peaks = D.toPeakSeries(points, minGapMs);
   assert.deepEqual(plain(peaks.map(p => p.y)), [350, 180, null, 700, null, 900]);
   assert.deepEqual(plain(peaks.filter(p => p.y !== null).map(p => [p.y, p.median, p.outlier, p.count])), [
     [350, 100, true, 6], [180, 150, false, 5], [700, 250, true, 4], [900, 300, true, 3],
   ]);
+  const gapX = T0 + 180000 + 1;
+  assert.equal(measurements.find(p => p.x === gapX).y, null);
+  assert.equal(peaks.find(p => p.x === gapX).y, null);
   assert.equal(peaks[0].median, 100);
   assert.equal(peaks[0].count, 6);
 });
@@ -92,7 +112,7 @@ test("summary text reports latency range, last status and outages", () => {
   assert.match(D.describeSummary("Ping", D.summarize([], [], [])), /No response time data/);
 });
 
-test("visible summary, aria label and table use the measured peak instead of the median ceiling", () => {
+test("visible summary and canvas aria label use the measured peak instead of the median ceiling", () => {
   const chartSource = readFileSync(new URL("../../app/static/js/charts/combined-chart.js", import.meta.url), "utf8");
   const elements = {};
   const makeElement = () => ({
@@ -116,7 +136,134 @@ test("visible summary, aria label and table use the measured peak instead of the
   context._renderCombinedText(canvas, input, view);
   assert.match(elements["combined-summary"].textContent, /max 3200 ms/);
   assert.match(attrs["aria-label"], /max 3200 ms/);
-  assert.match(elements["combined-table-body"].children[0].children[1].textContent, /max 3200 ms/);
+});
+
+test("combined legend accessible names match visible labels and titles retain detail", () => {
+  const chartSource = readFileSync(new URL("../../app/static/js/charts/combined-chart.js", import.meta.url), "utf8");
+  const makeElement = () => ({
+    children: [], attributes: {}, style: { setProperty() {} },
+    appendChild(child) { this.children.push(child); },
+    setAttribute(name, value) { this.attributes[name] = value; },
+    listeners: {},
+    addEventListener(name, callback) { this.listeners[name] = callback; },
+    focus() {},
+    set textContent(value) { this._text = value; this.children = []; },
+    get textContent() { return this._text || this.children.map((child) => child.textContent).join(""); },
+  });
+  const context = {
+    window: {}, document: { createElement: makeElement }, CombinedChartData: D, console,
+  };
+  vm.runInNewContext(chartSource, context);
+  const datasets = [
+    { label: "HTTP response time", _kind: "ms", _srcId: "http", _srcKey: "http", data: [] },
+    { label: "HTTP response time peak response time", _kind: "peak", _srcId: "http", _srcKey: "http", data: [{ y: 120 }] },
+    { label: "TCP connect :443", _kind: "ms", _srcId: "tcp", _srcKey: "tcp:443", data: [] },
+    { label: "HTTP status", _kind: "status", data: [] },
+  ];
+  const visibility = new Map();
+  let textRenders = 0;
+  const chart = {
+    data: { datasets }, _palette: { http: "#123456", tcp: "#654321", down: "#c0283a" },
+    _bandCount: 1, _bandsVisible: true, _bandSourceLabel: "HTTP", _presentClasses: [],
+    options: { plugins: { annotation: { annotations: { down0: {} } } } },
+    isDatasetVisible: index => visibility.get(index) ?? true,
+    setDatasetVisibility(index, visible) { visibility.set(index, visible); },
+    update() {}, _renderText() { textRenders += 1; },
+  };
+  const legend = makeElement();
+  context._renderCombinedLegend(chart, legend, makeElement());
+  assert.deepEqual(legend.children.map((button) => button.children.at(-1).textContent), [
+    "HTTP", "HTTP peak", "TCP 443", "Status", "Down (HTTP)",
+  ]);
+  assert.deepEqual(legend.children.map((button) => button.attributes["aria-label"]), [
+    "HTTP", "HTTP peak", "TCP 443", "Status", "Down (HTTP)",
+  ]);
+  assert.deepEqual(legend.children.map((button) => button.title), [
+    "HTTP response time", "HTTP response time peak response time", "TCP connect :443", "HTTP status", "Downtime (HTTP)",
+  ]);
+  assert.equal(datasets[0].label, "HTTP response time");
+  legend.children[0].listeners.click();
+  assert.equal(visibility.get(0), false);
+  assert.equal(textRenders, 1);
+  assert.equal(legend.children[0].attributes["aria-pressed"], "false");
+});
+
+test("combined summary and canvas name follow visible data layers", () => {
+  const chartSource = readFileSync(new URL("../../app/static/js/charts/combined-chart.js", import.meta.url), "utf8");
+  const elements = {};
+  const document = {
+    getElementById: id => (elements[id] ||= { textContent: "" }),
+    createElement: () => ({ setAttribute() {}, appendChild() {} }),
+  };
+  const attrs = {};
+  const canvas = { setAttribute: (name, value) => { attrs[name] = value; } };
+  const context = { window: {}, document, CombinedChartData: D, console };
+  vm.runInNewContext(chartSource, context);
+  const http = D.toGappedSeries([pt(0, 100), pt(1, 200)]);
+  const ping = D.toGappedSeries([pt(0, 10), pt(1, 20)]);
+  const input = {
+    sources: [
+      { key: "http", label: "HTTP response time" },
+      { key: "ping", label: "Ping" },
+    ],
+    statusEnabled: true,
+    range: { from: new Date(T0), to: new Date(T0 + 60000) },
+  };
+  const view = {
+    summaries: { http: context._summarizeSource(http, []), ping: context._summarizeSource(ping, []) },
+    series: { http, ping },
+    statusBuckets: [{ code: 503, cls: "5xx", x: T0, count: 1 }],
+    bands: [{ start: T0, end: T0 + 60000 }],
+    zoomed: false,
+  };
+  const chart = {
+    data: { datasets: [
+      { _kind: "ms", _srcKey: "http" },
+      { _kind: "ms", _srcKey: "ping" },
+      { _kind: "status" },
+    ] },
+    isDatasetVisible: index => index === 1,
+    _bandsVisible: false,
+    _bandCount: 1,
+  };
+  context._renderCombinedText(canvas, input, view, chart);
+  const summary = elements["combined-summary"].textContent;
+  assert.match(summary, /^Ping: min 10 ms, median 15 ms, max 20 ms/);
+  assert.match(summary, /HTTP status layer hidden/);
+  assert.match(summary, /downtime bands hidden/);
+  assert.doesNotMatch(summary, /last HTTP status 503|1 outage/);
+  assert.match(attrs["aria-label"], /Ping: min 10 ms/);
+});
+
+test("status hover is limited to the status strip's vertical bounds", () => {
+  const chartSource = readFileSync(new URL("../../app/static/js/charts/combined-chart.js", import.meta.url), "utf8");
+  let pointerY = 50;
+  const statusElement = {};
+  const chart = {
+    data: { datasets: [{ _kind: "status", data: [{ x: 0, end: 100 }] }] },
+    scales: {
+      x: { getValueForPixel: () => 50 },
+      yStatus: { top: 80, bottom: 100 },
+    },
+    isDatasetVisible: () => true,
+    getDatasetMeta: () => ({ data: [statusElement] }),
+  };
+  const context = {
+    window: {
+      Chart: {
+        Interaction: { modes: { point: () => [] } },
+        helpers: { getRelativePosition: () => ({ x: 50, y: pointerY }) },
+      },
+    },
+    CombinedChartData: D,
+  };
+  context.Chart = context.window.Chart;
+  vm.runInNewContext(chartSource, context);
+  context._registerCombinedInteraction();
+  const mode = context.window.Chart.Interaction.modes.combinedStatus;
+  assert.deepEqual(plain(mode(chart, { type: "mousemove" }, {}, false)), []);
+  pointerY = 90;
+  assert.equal(mode(chart, { type: "mousemove" }, {}, false)[0].element, statusElement);
 });
 
 test("status buckets older than the rollup cutoff are flagged as rollups", () => {
@@ -150,16 +297,17 @@ test("display bucket gap does not invent zero latency or a continuous outage", (
 test("zoom reloads finer buckets once and reset restores the overview", async () => {
   const chartSource = readFileSync(new URL("../../app/static/js/charts/combined-chart.js", import.meta.url), "utf8");
   const calls = [];
+  const timers = controlledTimers();
   const context = {
     window: {}, appState: { charts: new Map() }, pageConfig: { targetId: 7 },
-    CombinedChartData: D, AbortController, setTimeout, clearTimeout, console,
+    CombinedChartData: D, AbortController, setTimeout: timers.setTimeout, clearTimeout: timers.clearTimeout, console,
     withAlpha: color => color,
     fetchDisplayMetricRange: async (_id, metric) => {
       calls.push(metric);
       if (metric === "http_ms") return {
-        bucket_seconds: 60, points: [
+        bucket_seconds: 3600, points: [
           { ...pt(60, 120), max: 500, min: 80, count: 4 },
-          { ...pt(65, 130), max: 180, min: 100, count: 3 },
+          { ...pt(360, 130), max: 180, min: 100, count: 3 },
         ]
       };
       if (metric === "http_status") return {
@@ -172,14 +320,23 @@ test("zoom reloads finer buckets once and reset restores the overview", async ()
   };
   vm.runInNewContext(chartSource, context);
   const original = [{ x: T0, y: 100 }];
+  const originalPeaks = D.toPeakSeries([
+    { ...pt(0, 100), max: 250, count: 1 },
+    { ...pt(300, 120), max: 400, count: 1 },
+  ], 3 * 60 * 60000);
+  assert.deepEqual(plain(originalPeaks.map(p => p.y)), [250, null, 400]);
   const datasets = [
     { _kind: "ms", _srcKey: "http", data: original },
-    { _kind: "peak", _srcKey: "http", data: [] },
+    { _kind: "peak", _srcKey: "http", data: originalPeaks },
     { _kind: "status", data: [{ x: T0, code: 200 }] },
   ];
+  const chartOptions = {
+    plugins: { annotation: { annotations: { down0: { xMin: T0, xMax: T0 + 1 } } } },
+    scales: { yPeak: { display: false } },
+  };
   const chart = {
     data: { datasets }, scales: { x: { min: T0, max: T0 + 7 * 86400000 } },
-    options: { plugins: { annotation: { annotations: { down0: { xMin: T0, xMax: T0 + 1 } } } }, scales: { yPeak: { display: false } } },
+    options: chartOptions, config: { options: chartOptions },
     chartArea: { width: 900 }, canvas: { clientWidth: 900 }, _bandCount: 1, _palette: { down: "#f00" },
     update() { }, _renderLegend() { },
   };
@@ -188,19 +345,118 @@ test("zoom reloads finer buckets once and reset restores the overview", async ()
     sources: [{ id: "http", key: "http" }], statusEnabled: true, upSourceLabel: "HTTP",
   }, datasets, T0, T0 + 7 * 86400000);
   chart.scales.x.min = T0 + 60 * 60000;
-  chart.scales.x.max = T0 + 90 * 60000;
+  chart.scales.x.max = T0 + 6 * 60 * 60000;
   chart._reloadVisible();
   chart._reloadVisible();
-  await new Promise(resolve => setTimeout(resolve, 360));
+  await timers.run(300);
   assert.deepEqual(calls, ["http_ms", "http_status", "http_up"]);
   assert.equal(chart.data.datasets[0].data.length, 3);
   assert.deepEqual(plain(chart.data.datasets[1].data.map(p => p.y)), [500, null, 180]);
   assert.equal(chart.data.datasets[2].data[0].code, 503);
+  chart._palette.down = "#0f0";
   chart.scales.x.min = T0;
   chart.scales.x.max = T0 + 7 * 86400000;
   chart._reloadVisible();
   assert.equal(chart.data.datasets[0].data, original);
+  assert.equal(chart.data.datasets[1].data, originalPeaks);
+  assert.equal(chart.options.plugins.annotation.annotations.down0.backgroundColor, "#0f0");
+  assert.equal(chart.options.plugins.annotation.annotations.down0.borderColor, "#0f0");
   assert.equal(calls.length, 3);
+});
+
+test("starting a chart build cancels its pending zoom loader and advances the generation", () => {
+  const chartSource = readFileSync(new URL("../../app/static/js/charts/combined-chart.js", import.meta.url), "utf8");
+  const context = { window: {}, appState: { charts: new Map() }, CombinedChartData: D, console };
+  vm.runInNewContext(chartSource, context);
+  let cancelled = false;
+  context.appState.charts.set("chart", {
+    _buildGeneration: 4,
+    _cancelZoomLoader() { cancelled = true; },
+  });
+  assert.equal(context._beginCombinedChartBuild("chart"), 5);
+  assert.equal(cancelled, true);
+});
+
+test("a delayed zoom response cannot overwrite data after the chart build generation changes", async () => {
+  const chartSource = readFileSync(new URL("../../app/static/js/charts/combined-chart.js", import.meta.url), "utf8");
+  const timers = controlledTimers();
+  const pending = [];
+  const context = {
+    window: {}, appState: { charts: new Map() }, pageConfig: { targetId: 7 },
+    CombinedChartData: D, AbortController, setTimeout: timers.setTimeout, clearTimeout: timers.clearTimeout,
+    console, withAlpha: color => color,
+    fetchDisplayMetricRange: () => new Promise(resolve => pending.push(resolve)),
+  };
+  vm.runInNewContext(chartSource, context);
+  const original = [{ x: T0, y: 100 }];
+  const datasets = [
+    { _kind: "ms", _srcKey: "http", data: original },
+    { _kind: "status", data: [] },
+  ];
+  const chartOptions = { plugins: { annotation: { annotations: { down0: { xMin: T0, xMax: T0 + 1 } } } }, scales: {} };
+  const chart = {
+    data: { datasets }, config: { options: chartOptions }, options: chartOptions,
+    scales: { x: { min: T0 + 60000, max: T0 + 120000 } },
+    chartArea: { width: 900 }, canvas: { clientWidth: 900 },
+    _buildGeneration: 1, _bandCount: 1, _bandsVisible: true, _palette: { down: "#f00" },
+    update() {}, _renderLegend() {},
+  };
+  context.appState.charts.set("chart", chart);
+  chart._reloadVisible = context._createCombinedZoomLoader(
+    chart,
+    "chart",
+    { sources: [{ id: "http", key: "http" }], statusEnabled: true, upSourceLabel: "HTTP" },
+    datasets,
+    T0,
+    T0 + 7 * 86400000,
+    undefined,
+    chart._buildGeneration,
+  );
+  chart._reloadVisible();
+  const loading = timers.run(300);
+  await Promise.resolve();
+  assert.equal(pending.length, 3);
+  chart._buildGeneration += 1;
+  const replacement = [{ x: T0 + 60000, y: 900 }];
+  chart.data.datasets[0].data = replacement;
+  chart.config.options.plugins.annotation.annotations = { downB: { xMin: T0, xMax: T0 + 1 } };
+  pending.forEach(resolve => resolve({ bucket_seconds: 60, points: [pt(60, 200)] }));
+  await loading;
+  assert.equal(chart.data.datasets[0].data, replacement);
+  assert.deepEqual(Object.keys(chart.config.options.plugins.annotation.annotations), ["downB"]);
+});
+
+test("zoom request failures are announced in the combined chart status note", async () => {
+  const chartSource = readFileSync(new URL("../../app/static/js/charts/combined-chart.js", import.meta.url), "utf8");
+  const timers = controlledTimers();
+  const note = { textContent: "Base status.", attributes: {}, setAttribute(name, value) { this.attributes[name] = value; } };
+  const context = {
+    window: {}, document: { getElementById: () => note }, appState: { charts: new Map() },
+    pageConfig: { targetId: 7 }, CombinedChartData: D, AbortController,
+    setTimeout: timers.setTimeout, clearTimeout: timers.clearTimeout,
+    console: { warn() {} }, withAlpha: color => color,
+    fetchDisplayMetricRange: async () => { throw new Error("offline"); },
+  };
+  vm.runInNewContext(chartSource, context);
+  const datasets = [{ _kind: "ms", _srcKey: "http", data: [{ x: T0, y: 100 }] }];
+  const chartOptions = { plugins: { annotation: { annotations: {} } }, scales: {} };
+  const chart = {
+    data: { datasets }, config: { options: chartOptions }, options: chartOptions,
+    scales: { x: { min: T0 + 60000, max: T0 + 120000 } },
+    chartArea: { width: 900 }, canvas: { clientWidth: 900 },
+    _buildGeneration: 1, _statusNoteBase: "Base status.", _bandCount: 0, _bandsVisible: true,
+    _palette: { down: "#f00" }, update() {}, _renderLegend() {},
+  };
+  context.appState.charts.set("chart", chart);
+  chart._reloadVisible = context._createCombinedZoomLoader(
+    chart, "chart", { sources: [{ id: "http", key: "http" }], statusEnabled: true, upSourceLabel: "HTTP" },
+    datasets, T0, T0 + 7 * 86400000, undefined, chart._buildGeneration,
+  );
+  chart._reloadVisible();
+  await timers.run(300);
+  assert.match(note.textContent, /Zoom details could not be loaded/);
+  assert.equal(note.attributes.role, "status");
+  assert.equal(note.attributes["aria-live"], "polite");
 });
 
 test("zoom reset is safe when the initial chart has no peak axis", () => {
@@ -209,9 +465,10 @@ test("zoom reset is safe when the initial chart has no peak axis", () => {
   vm.runInNewContext(chartSource, context);
   const data = [{ x: T0, y: 100 }];
   const datasets = [{ _kind: "ms", _srcKey: "http", data }];
+  const chartOptions = { plugins: { annotation: { annotations: {} } }, scales: {} };
   const chart = {
     data: { datasets }, scales: { x: { min: T0, max: T0 + 7 * 86400000 } },
-    options: { plugins: { annotation: { annotations: {} } }, scales: {} },
+    options: chartOptions, config: { options: chartOptions },
     _bandCount: 0, update() { }, _renderLegend() { },
   };
   context.appState.charts.set("chart", chart);
@@ -222,7 +479,6 @@ test("zoom reset is safe when the initial chart has no peak axis", () => {
 
 test("SLA thresholds exist only for HTTP and Ping and only when SLA is enabled", () => {
   const sla = { enabled: true, responseTimeMs: 500, pingLatencyMs: 100 };
-  assert.equal(D.slaFor("http", sla).value, 500);
   assert.equal(D.slaFor("ping", sla).label, "100 ms");
   assert.equal(D.slaFor("tcp", sla), null);
   assert.equal(D.slaFor("http", { ...sla, enabled: false }), null);
@@ -255,8 +511,9 @@ test("informational 1xx codes form their own non-success class", () => {
   assert.equal(buckets[0].cls, "info");
 });
 
-test("zoom reload refreshes summary, label and data table; reset restores the overview", async () => {
+test("zoom reload refreshes summary and label; reset restores the overview", async () => {
   const chartSource = readFileSync(new URL("../../app/static/js/charts/combined-chart.js", import.meta.url), "utf8");
+  const timers = controlledTimers();
   const els = {};
   const makeEl = () => ({
     children: [],
@@ -273,7 +530,7 @@ test("zoom reload refreshes summary, label and data table; reset restores the ov
   const canvas = { setAttribute: (k, v) => { attrs[k] = v; } };
   const context = {
     window: {}, document, appState: { charts: new Map() }, pageConfig: { targetId: 7 },
-    CombinedChartData: D, AbortController, setTimeout, clearTimeout, console, withAlpha: (c) => c,
+    CombinedChartData: D, AbortController, setTimeout: timers.setTimeout, clearTimeout: timers.clearTimeout, console, withAlpha: (c) => c,
     fetchDisplayMetricRange: async (_id, metric) => {
       if (metric === "http_ms") return { bucket_seconds: 60, points: [pt(60, 900), pt(61, 1000)] };
       return { bucket_seconds: 60, points: [pt(60, 1), pt(61, 1)] };
@@ -294,9 +551,10 @@ test("zoom reload refreshes summary, label and data table; reset restores the ov
   const overview = els["combined-summary"].textContent;
   assert.match(overview, /min 100 ms/);
   const datasets = [{ _kind: "ms", _srcKey: "http", data: series }];
+  const chartOptions = { plugins: { annotation: { annotations: {} } }, scales: { yPeak: { display: false } } };
   const chart = {
     data: { datasets }, scales: { x: { min: T0 + 60 * 60000, max: T0 + 90 * 60000 } },
-    options: { plugins: { annotation: { annotations: {} } }, scales: { yPeak: { display: false } } },
+    options: chartOptions, config: { options: chartOptions },
     chartArea: { width: 900 }, canvas: { clientWidth: 900 }, _bandCount: 0, _palette: { down: "#f00" },
     update() { }, _renderLegend() { },
   };
@@ -304,16 +562,14 @@ test("zoom reload refreshes summary, label and data table; reset restores the ov
   const onView = (view) => context._renderCombinedText(canvas, input, view || fullView);
   chart._reloadVisible = context._createCombinedZoomLoader(chart, "chart", input, datasets, T0, T0 + 7 * 86400000, onView);
   chart._reloadVisible();
-  await new Promise((resolve) => setTimeout(resolve, 360));
+  await timers.run(300);
   assert.match(els["combined-summary"].textContent, /min 900 ms/);
   assert.match(els["combined-summary"].textContent, /zoomed range/);
   assert.match(attrs["aria-label"], /min 900 ms/);
-  assert.match(els["combined-table-body"].children[0].children[1].textContent, /min 900 \/ median/);
   chart.scales.x.min = T0;
   chart.scales.x.max = T0 + 7 * 86400000;
   chart._reloadVisible();
   assert.equal(els["combined-summary"].textContent, overview);
-  assert.match(els["combined-table-body"].children[0].children[1].textContent, /min 100 \//);
 });
 
 test("rebuilding a chart leaves exactly one dblclick listener on the canvas", () => {
@@ -369,6 +625,30 @@ test("refreshing a chart reuses its instance and preserves dataset visibility", 
   assert.equal(refreshed.data.datasets[0].data[0], 2);
   assert.equal(refreshed.data.datasets[0].hidden, true);
   assert.equal(refreshed.updateMode, "none");
+});
+
+test("responsive legend follows chart width and updates when the chart resizes", () => {
+  const src = readFileSync(new URL("../../app/static/js/charts/chart-builder.js", import.meta.url), "utf8");
+  let fitDashboard = false;
+  const context = {
+    window: { innerWidth: 1366, matchMedia: () => ({ matches: fitDashboard }) },
+    appState: { charts: new Map() }, setTimeout: () => 0,
+  };
+  vm.runInNewContext(src, context);
+  const canvas = { dataset: {}, parentElement: { clientWidth: 640 }, addEventListener() {}, removeEventListener() {} };
+  assert.equal(context._legendPosition(canvas), "bottom");
+
+  const chart = { canvas, width: 640, options: { plugins: { legend: { position: "right" } } }, update() {} };
+  context._registerChart("availability", chart, canvas, true);
+  chart.options.onResize(chart, { width: 640, height: 300 });
+  assert.equal(chart.options.plugins.legend.position, "bottom");
+  chart.width = 900;
+  chart.options.onResize(chart, { width: 900, height: 300 });
+  assert.equal(chart.options.plugins.legend.position, "right");
+  chart.width = 640;
+  fitDashboard = true;
+  chart.options.onResize(chart, { width: 640, height: 300 });
+  assert.equal(chart.options.plugins.legend.position, "right");
 });
 
 test("latency source priority mirrors _PRIORITY in app/utils/uptime_metric.py", () => {

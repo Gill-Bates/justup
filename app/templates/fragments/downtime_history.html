@@ -1,6 +1,6 @@
 {# Downtime History Fragment (HTMX). Styles live in target-detail.css. #}
 {% if periods %}
-<div class="downtime-scroll" data-range-label="{{ range_label | default('30d') }}">
+<div class="downtime-scroll" role="region" aria-label="Downtime history" tabindex="0" data-range-label="{{ range_label | default('30d') }}">
 	<p class="downtime-summary">
 		<strong>{{ periods | length }}</strong> {{ 'downtime' if periods | length == 1 else 'downtimes' }}
 		{% if periods | selectattr('end', 'none') | list | length %}<span class="badge bg-danger">Ongoing</span>{% endif %}

@@ -183,6 +183,8 @@ VALID_PDF_PAGE_SIZES = frozenset({"a4", "letter"})
 # Defaults seeded at bootstrap and used when a stored setting is missing
 DEFAULT_PURGE_ENABLED = True
 DEFAULT_GEOIP_AUTO_UPDATE = True
+# SMTP encryption is on unless an administrator explicitly stored `false` (trusted plaintext relay).
+DEFAULT_SMTP_USE_TLS = True
 # Online geolocation fallback default (used while no value is stored); an explicit opt-out is stored durably.
 DEFAULT_ONLINE_GEO_FALLBACK_ENABLED = True
 DEFAULT_PDF_PAGE_SIZE = "a4"

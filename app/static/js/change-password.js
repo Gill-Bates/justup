@@ -65,11 +65,6 @@
 					throw new Error(detail);
 				}
 				// The server revoked all sessions; sign in again with the new password.
-				try {
-					localStorage.removeItem('token');
-				} catch (storageErr) {
-					// localStorage may be blocked; nothing to clean up then
-				}
 				window.location.href = '/ui/login';
 			} catch (err) {
 				showError(errBox, err.message);

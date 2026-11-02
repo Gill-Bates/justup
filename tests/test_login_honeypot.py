@@ -8,17 +8,19 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
 from cryptography.fernet import Fernet
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, Request
 from fastapi.testclient import TestClient
 
-from app.api import users
+from app.api import events, users
 from app.db import sqlite as sqlite_db
 from app.models.users import hash_password
 from app.utils import crypto
+from app.utils.auth_helpers import resolve_user_optional
 from app.utils.deps import get_conn
 from app.utils.rate_limit import RateLimitExceededError, rate_limit_exceeded_handler, reset_all
 from tests import _support  # noqa: F401 - imported for its sys.path side effect
@@ -129,6 +131,174 @@ def test_new_token_lifetime_follows_session_max_days_setting(client, conn):
     # Out-of-range stored values are clamped on read.
     sqlite_db.set_setting(conn, "session_max_days", 99)
     assert sqlite_db.get_session_max_days(conn) == 7
+
+
+def _shift_token_clock(conn, delta: timedelta) -> None:
+    """Simulate elapsed time by moving every stored token timestamp into the past."""
+    for row in conn.execute("SELECT id, created_at, expires_at, max_expires_at FROM auth_tokens").fetchall():
+        conn.execute(
+            "UPDATE auth_tokens SET created_at = ?, expires_at = ?, max_expires_at = ? WHERE id = ?",
+            (row["created_at"] - delta, row["expires_at"] - delta, row["max_expires_at"] - delta, row["id"]),
+        )
+    conn.commit()
+
+
+def _me(client, token: str) -> int:
+    return client.get("/me", headers={"Authorization": f"Bearer {token}"}).status_code
+
+
+@pytest.mark.parametrize("days", [1, 7])
+def test_session_stays_valid_for_the_configured_days_without_activity(client, conn, days):
+    sqlite_db.set_setting(conn, "session_max_days", days)
+    resp = _login_ok(client)
+    token = resp.json()["access_token"]
+    row = conn.execute("SELECT created_at, expires_at, max_expires_at FROM auth_tokens").fetchone()
+    # No hidden shorter idle window: the server-side expiry equals the configured lifetime.
+    assert row["expires_at"] == row["max_expires_at"]
+    assert abs((row["max_expires_at"] - row["created_at"]) - timedelta(days=days)) < timedelta(seconds=1)
+    assert f"Max-Age={days * 86400}" in resp.headers["set-cookie"]
+    # Idle for longer than the former 6 h window, with no request in between.
+    _shift_token_clock(conn, timedelta(days=days) - timedelta(hours=1))
+    assert _me(client, token) == 200
+    _shift_token_clock(conn, timedelta(hours=2))
+    assert _me(client, token) == 401
+
+
+def test_session_survives_process_restart_with_same_secret_key(tmp_path, monkeypatch):
+    key = Fernet.generate_key().decode("ascii")
+    db_file = tmp_path / "db" / "justup.db"
+
+    def boot():
+        monkeypatch.setenv("SECRET_KEY", key)
+        monkeypatch.setattr(crypto, "_primary_key", None)  # a new process derives the pepper afresh
+        connection = sqlite_db.connect(db_file)
+        sqlite_db.init_schema(connection)
+        app = FastAPI()
+        app.include_router(users.router)
+        app.dependency_overrides[get_conn] = lambda: connection
+        return connection, TestClient(app)
+
+    first_conn, first_client = boot()
+    sqlite_db.create_user(first_conn, username="alice", password_hash=hash_password(PASSWORD), is_admin=False)
+    sqlite_db.set_setting(first_conn, "session_max_days", 7)
+    reset_all()
+    token = _login_ok(first_client).json()["access_token"]
+    sqlite_db.close_connection(first_conn)
+    second_conn, second_client = boot()
+    try:
+        assert _me(second_client, token) == 200
+        # A different SECRET_KEY invalidates the stored token hashes (documented operator contract).
+        monkeypatch.setenv("SECRET_KEY", Fernet.generate_key().decode("ascii"))
+        monkeypatch.setattr(crypto, "_primary_key", None)
+        assert _me(second_client, token) == 401
+    finally:
+        sqlite_db.close_connection(second_conn)
+
+
+def test_logout_and_password_change_still_end_a_long_session(client, conn):
+    sqlite_db.set_setting(conn, "session_max_days", 7)
+    token = _login_ok(client).json()["access_token"]
+    assert _me(client, token) == 200
+    assert client.post("/logout", headers={"Authorization": f"Bearer {token}"}).status_code == 200
+    assert _me(client, token) == 401
+    conn.execute("DELETE FROM login_attempts")
+    token = _login_ok(client).json()["access_token"]
+    resp = client.post(
+        "/me/password",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"current_password": PASSWORD, "new_password": "Another-horse-2"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert _me(client, token) == 401
+
+
+def test_deactivated_user_loses_a_long_session(client, conn):
+    sqlite_db.set_setting(conn, "session_max_days", 7)
+    token = _login_ok(client).json()["access_token"]
+    conn.execute("UPDATE users SET is_active = 0")
+    conn.commit()
+    assert _me(client, token) == 401
+
+
+def _cookie_probe_client(conn) -> TestClient:
+    """Test app with one route that resolves the user like the HTML pages do (cookie allowed)."""
+    app = FastAPI()
+    app.include_router(users.router)
+    app.dependency_overrides[get_conn] = lambda: conn
+
+    @app.get("/cookie-probe")
+    def cookie_probe(request: Request, db=Depends(get_conn)):
+        return {"ok": resolve_user_optional(request, db, allow_cookie=True) is not None}
+
+    return TestClient(app)
+
+
+@pytest.mark.parametrize("idle", [timedelta(hours=1, minutes=1), timedelta(hours=6, minutes=1), timedelta(hours=23)])
+def test_cookie_session_survives_idle_periods_longer_than_one_and_six_hours(conn, idle):
+    sqlite_db.set_setting(conn, "session_max_days", 1)
+    probe = _cookie_probe_client(conn)
+    assert _login_ok(probe).status_code == 200  # the client keeps the HttpOnly session cookie
+    assert probe.get("/cookie-probe").json() == {"ok": True}
+    _shift_token_clock(conn, idle)
+    assert probe.get("/cookie-probe").json() == {"ok": True}
+    # The live-event stream validates without renewing and must agree.
+    token = probe.cookies.get("token")
+    assert events.check_token(conn_path(conn), token) is not None
+
+
+def conn_path(conn) -> Path:
+    return Path(conn.execute("PRAGMA database_list").fetchone()["file"])
+
+
+def test_expired_cookie_session_is_rejected_after_the_configured_days(conn):
+    sqlite_db.set_setting(conn, "session_max_days", 1)
+    probe = _cookie_probe_client(conn)
+    assert _login_ok(probe).status_code == 200
+    _shift_token_clock(conn, timedelta(days=1, minutes=1))
+    assert probe.get("/cookie-probe").json() == {"ok": False}
+
+
+def test_secret_keys_rotation_only_the_primary_key_validates_sessions(tmp_path, monkeypatch):
+    old, new = (Fernet.generate_key().decode("ascii") for _ in range(2))
+
+    def boot(secret_keys: str | None, secret_key: str | None):
+        for name, value in (("SECRET_KEYS", secret_keys), ("SECRET_KEY", secret_key)):
+            if value is None:
+                monkeypatch.delenv(name, raising=False)
+            else:
+                monkeypatch.setenv(name, value)
+        monkeypatch.setattr(crypto, "_primary_key", None)
+
+    boot(None, old)
+    connection = sqlite_db.connect(tmp_path / "db" / "justup.db")
+    sqlite_db.init_schema(connection)
+    sqlite_db.create_user(connection, username="alice", password_hash=hash_password(PASSWORD), is_admin=False)
+    app = FastAPI()
+    app.include_router(users.router)
+    app.dependency_overrides[get_conn] = lambda: connection
+    client = TestClient(app)
+    reset_all()
+    try:
+        token = _login_ok(client).json()["access_token"]
+        assert _me(client, token) == 200
+        boot(f"{old},{new}", old)  # old stays primary: sessions keep working
+        assert _me(client, token) == 200
+        boot(f"{new},{old}", old)  # rotation: the old key only decrypts, sessions end
+        assert _me(client, token) == 401
+        boot(f"{old},{new}", None)  # SECRET_KEYS alone configures the primary as well
+        assert _me(client, token) == 200
+    finally:
+        sqlite_db.close_connection(connection)
+
+
+def test_authorization_header_never_falls_back_to_a_valid_session_cookie(conn):
+    """A stale localStorage bearer or a proxy-forwarded Basic header beats the cookie and ends in 401."""
+    probe = _cookie_probe_client(conn)
+    assert _login_ok(probe).status_code == 200
+    assert probe.get("/cookie-probe").json() == {"ok": True}
+    assert probe.get("/cookie-probe", headers={"Authorization": "Bearer stale-token"}).json() == {"ok": False}
+    assert probe.get("/cookie-probe", headers={"Authorization": "Basic dXNlcjpwdw=="}).json() == {"ok": False}
+    assert probe.get("/cookie-probe", headers={"Authorization": ""}).json() == {"ok": True}
 
 
 # --- failed-login lockout: one increment, 2^n Retry-After, distinct reasons ----------------------

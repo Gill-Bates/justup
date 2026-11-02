@@ -336,6 +336,26 @@ test('a failed automatic scan keeps the old result and marks it outdated', async
   assert.equal(stored(storage)[0].measuredAt, T0);
 });
 
+test('a failed automatic scan retries after backoff without another user action', async () => {
+  const storage = new FakeStorage(); const clock = { t: T0 + TTL };
+  seed(storage, { t: T0 }, T0);
+  const p = page({ storage, clock, responses: [
+    reply({ status: 500 }), reply({ html: '<p>refreshed</p>', measuredAt: T0 + TTL + 1000 }),
+  ] });
+  await p.loader.show();
+  assert.deepEqual(p.rec.calls, [`${URL_}?refresh=1`]);
+  assert.deepEqual(plain(p.rec.statuses.at(-1)), { kind: 'outdated' });
+
+  const retry = p.rec.timers.at(-1);
+  assert.ok(retry.ms > 0);
+  clock.t += retry.ms;
+  await retry.fn();
+
+  assert.deepEqual(p.rec.calls, [`${URL_}?refresh=1`, `${URL_}?refresh=1`]);
+  assert.equal(p.rec.renders.at(-1).html, '<p>refreshed</p>');
+  assert.deepEqual(plain(p.rec.statuses.at(-1)), { kind: 'scanned', measuredAt: T0 + TTL + 1000 });
+});
+
 test('a response stamped in the future is clamped to the client clock', async () => {
   const storage = new FakeStorage(); const clock = { t: T0 };
   const p = page({ storage, clock, responses: [reply({ measuredAt: T0 + 3_600_000 })] });

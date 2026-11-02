@@ -169,6 +169,7 @@ nav:
       - Architecture: development/architecture.md
       - Database maintenance: development/database-maintenance.md
       - Contributing: development/contributing.md
+      - Release image: development/release-image.md
   - Troubleshooting: troubleshooting.md
 
 copyright: Copyright &copy; 2026 Gill-Bates | Licensed under MIT

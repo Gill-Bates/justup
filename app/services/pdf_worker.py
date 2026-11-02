@@ -462,9 +462,18 @@ class PDFWorker:
         return False
 
     async def cleanup_loop(
-        self, db_connector: Callable, db_path: Path, *, stop_event: asyncio.Event | None = None
+        self,
+        db_connector: Callable,
+        db_path: Path,
+        *,
+        stop_event: asyncio.Event | None = None,
+        on_failure: Callable[[str], None] | None = None,
+        on_success: Callable[[], None] | None = None,
     ) -> None:
-        """Periodic cleanup of expired jobs and their PDF files."""
+        """Periodic cleanup of expired jobs and their PDF files.
+
+        ``on_failure`` (exception class name) and ``on_success`` report each cycle's outcome to the supervisor.
+        """
         from ..db import sqlite as sqlite_db
         from ..utils.time import utcnow
 
@@ -486,6 +495,8 @@ class PDFWorker:
                     orphans = self.sweep_orphan_pdfs(conn)
                     if orphans > 0:
                         _log.info("Removed %d orphaned PDF file(s)", orphans)
+                if on_success is not None:
+                    on_success()
 
                 # Wait until the next cycle, interruptible by the stop event.
                 with contextlib.suppress(TimeoutError):
@@ -496,6 +507,8 @@ class PDFWorker:
                 await asyncio.sleep(5)
             except Exception as e:  # noqa: BLE001 - worker-loop resilience: log and keep the loop alive on any job failure
                 _log.warning("Cleanup task error: %s", e)
+                if on_failure is not None:
+                    on_failure(type(e).__name__)
                 await asyncio.sleep(1)
 
 
@@ -570,8 +583,17 @@ async def run_pdf_worker_loop(db_connector: Callable, stop_event: asyncio.Event 
     await _worker.run_loop(db_connector, stop_event=stop_event)
 
 
-async def cleanup_expired_jobs(db_connector: Callable, db_path: Path, stop_event: asyncio.Event | None = None) -> None:
+async def cleanup_expired_jobs(
+    db_connector: Callable,
+    db_path: Path,
+    stop_event: asyncio.Event | None = None,
+    *,
+    on_failure: Callable[[str], None] | None = None,
+    on_success: Callable[[], None] | None = None,
+) -> None:
     """Backward-compatible wrapper around the worker cleanup loop."""
     if _worker is None:
         raise RuntimeError("PDF worker not initialized")
-    await _worker.cleanup_loop(db_connector, db_path, stop_event=stop_event)
+    await _worker.cleanup_loop(
+        db_connector, db_path, stop_event=stop_event, on_failure=on_failure, on_success=on_success
+    )

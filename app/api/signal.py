@@ -100,7 +100,7 @@ class RegisterRequest(BaseModel):
 class VerifyRequest(BaseModel):
     """Request to verify Signal registration."""
 
-    number: str = Field(..., min_length=5, max_length=20, description="Phone number in E.164 format")
+    number: E164Number
     code: str = Field(..., pattern=r"^[0-9]{6}$", description="6-digit verification code")
 
 

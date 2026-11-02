@@ -3,6 +3,7 @@
 # tools/release-newest.py
 # Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 #
+
 """Decide which release privileges a version has, given the tags already published.
 Prints two GITHUB_OUTPUT lines; reasoning goes to stderr.
   is_newest    no published release of any kind is newer; gates the tag cleanup.

@@ -458,6 +458,20 @@ def test_chart_queries_over_several_resolutions_are_unchanged_by_compression(tmp
     assert snapshot() == expected
 
 
+def test_downtime_periods_keep_the_newest_outage_beyond_50000_points(tmp_path):
+    down = NOW - timedelta(minutes=10)
+    _write_legacy(
+        tmp_path,
+        "ping_up",
+        NOW - timedelta(seconds=60_000),
+        NOW,
+        timedelta(seconds=1),
+        value=lambda i, t: 0 if down <= t < down + timedelta(minutes=5) else 1,
+    )
+    periods = tsdb.query_downtime_periods(tmp_path, target_id=1, since=NOW - timedelta(days=1), until=NOW)
+    assert [p.start for p in periods] == [down]
+
+
 def test_downtime_periods_and_availability_are_unchanged_by_compression(tmp_path):
     down = NOW - timedelta(days=12)
     _write_legacy(

@@ -5,7 +5,7 @@ name: Docker Multi-Arch Build
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
   workflow_dispatch:
 
 concurrency:
@@ -40,6 +40,7 @@ jobs:
       build_date: ${{ steps.meta.outputs.build_date }}
       tag: ${{ steps.meta.outputs.tag }}
       version: ${{ steps.meta.outputs.version }}
+      candidate_tag: ${{ steps.meta.outputs.candidate_tag }}
       is_newest: ${{ steps.newest.outputs.is_newest }}
       moves_latest: ${{ steps.newest.outputs.moves_latest }}
       matrix: ${{ steps.matrix.outputs.matrix }}
@@ -58,7 +59,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: '3.13'
+          python-version: "3.13"
 
       - name: Validate Docker Hub secrets
         env:
@@ -113,11 +114,15 @@ jobs:
 
           BUILD_DATE="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
           TAG="v${VERSION}"
+          # Run-specific temporary tag for the unverified index. It does not parse as a
+          # release (release-newest.py ignores it) and cleanup-arch-tags derives it again.
+          CANDIDATE_TAG="candidate-${VERSION}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
 
           {
             echo "build_date=${BUILD_DATE}"
             echo "tag=${TAG}"
             echo "version=${VERSION}"
+            echo "candidate_tag=${CANDIDATE_TAG}"
           } >> "$GITHUB_OUTPUT"
 
       # Resolve shared release inputs once for both architecture builds.
@@ -312,15 +317,35 @@ jobs:
           docker ps -a -f name="${{ matrix.container_name }}"
           exit 1
 
-      # Packaging and ELF header check only; it does not prove the JVM can load the library.
-      - name: Verify libsignal native library packaging (${{ matrix.arch }})
+      # Packaging, ELF header and a dlopen of the library (--load); JNI_OnLoad inside the JVM
+      # and a real Signal send stay a manual gate.
+      - name: Verify libsignal native library (${{ matrix.arch }})
         env:
           EXPECTED_ARCH: ${{ matrix.arch }}
         run: |
           set -euo pipefail
           docker run --rm -i --platform "${{ matrix.platform }}" \
-            --entrypoint python "${{ matrix.test_image }}" - "$EXPECTED_ARCH" \
+            --entrypoint python "${{ matrix.test_image }}" - --load "$EXPECTED_ARCH" \
             < tools/verify-libsignal-native.py
+
+      # Runtime image purity (contract in tools/verify-runtime-image.py): no build tools,
+      # caches, source trees or object files, neither in the final file system nor in
+      # any layer (an artifact deleted by a later layer is still shipped). Runs before the push.
+      - name: Verify runtime image purity (${{ matrix.arch }})
+        env:
+          ARCH: ${{ matrix.arch }}
+          TEST_IMAGE: ${{ matrix.test_image }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -euo pipefail
+          docker run --rm -i --platform "$PLATFORM" \
+            --entrypoint python "$TEST_IMAGE" - fs "$ARCH" \
+            < tools/verify-runtime-image.py
+
+          archive="${RUNNER_TEMP}/runtime-image-${ARCH}.tar"
+          trap 'rm -f "$archive"' EXIT
+          docker save "$TEST_IMAGE" -o "$archive"
+          python3 tools/verify-runtime-image.py layers "$archive"
 
       # Evidence for the parity gate in create-manifest, read from the finished
       # image: a stale cached layer would hide an older toolchain from build args.
@@ -373,60 +398,39 @@ jobs:
           docker tag "${{ matrix.test_image }}" "${IMAGE_NAME}:${VERSION}-${{ matrix.image_suffix }}"
 
       - name: Trivy vulnerability scan
+        id: trivy
         # SHA-pinned: trivy-action tags were force-pushed to a credential-stealing
         # commit in March 2026 (GHSA-69fq-xp46-6x23). Runs between the Docker Hub logins.
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          cache: 'false'
-          image-ref: '${{ matrix.test_image }}'
+          cache: "false"
+          image-ref: "${{ matrix.test_image }}"
           # The reviewed action revision defaults to Trivy v0.70.0.
-          format: 'json'
-          output: 'trivy-${{ matrix.image_suffix }}.json'
-          exit-code: '1'
+          format: "json"
+          output: "trivy-${{ matrix.image_suffix }}.json"
+          exit-code: "1"
           ignore-unfixed: true
           # Source secrets and misconfiguration are gated in ci.yml.
-          scanners: 'vuln'
-          vuln-type: 'os,library'
-          severity: 'CRITICAL,HIGH'
-          timeout: '10m'
-          trivyignores: '.trivyignore'
+          scanners: "vuln"
+          vuln-type: "os,library"
+          severity: "CRITICAL,HIGH"
+          timeout: "10m"
+          trivyignores: ".trivyignore"
 
+      # Scanner failure (exit 1 here, no valid report) and findings (valid report,
+      # counts > 0; the scan step above already failed the job) are reported separately.
+      # "0 findings" appears only for a report that proves an OS target was scanned.
       - name: Generate Trivy summary (${{ matrix.arch }})
-        if: always()
+        if: ${{ !cancelled() && steps.trivy.conclusion != 'skipped' }}
+        env:
+          ARCH: ${{ matrix.image_suffix }}
+          TEST_IMAGE: ${{ matrix.test_image }}
         run: |
           set -euo pipefail
-          ARCH="${{ matrix.image_suffix }}"
-          FILE="trivy-${ARCH}.json"
-
-          if [[ ! -f "$FILE" ]]; then
-            echo "### Trivy (${ARCH}): Scan failed — no results file" >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-
-          # An unreadable report is a failure, never "zero findings".
-          if ! jq -e 'type == "object"' "$FILE" > /dev/null; then
-            echo "### Trivy (${ARCH}): report is not valid JSON, not evaluated" >> "$GITHUB_STEP_SUMMARY"
-            echo "ERROR: ${FILE} is not a valid Trivy report" >&2
+          if ! python3 tools/trivy-report.py summary "trivy-${ARCH}.json" "$ARCH" \
+              --expect-ref "$TEST_IMAGE" >> "$GITHUB_STEP_SUMMARY"; then
+            echo "### Trivy (${ARCH}): scanner failure, no valid report for ${TEST_IMAGE}" >> "$GITHUB_STEP_SUMMARY"
             exit 1
-          fi
-
-          CRITICAL=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL")] | length' "$FILE")
-          HIGH=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "HIGH")] | length' "$FILE")
-
-          if (( CRITICAL == 0 && HIGH == 0 )); then
-            SUMMARY="✅ No HIGH/CRITICAL vulnerabilities found"
-          else
-            SUMMARY="⚠️ ${CRITICAL} CRITICAL, ${HIGH} HIGH vulnerabilities"
-          fi
-
-          echo "### Trivy Scan Results (${ARCH})" >> "$GITHUB_STEP_SUMMARY"
-          if (( CRITICAL > 0 || HIGH > 0 )); then
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
-            jq -r '.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL" or .Severity == "HIGH") | "\(.Severity)\t\(.VulnerabilityID)\t\(.PkgName)\t\(.InstalledVersion)"' \
-              "$FILE" | head -20 >> "$GITHUB_STEP_SUMMARY" || true
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "$SUMMARY" >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Upload Trivy findings (${{ matrix.arch }})
@@ -451,8 +455,8 @@ jobs:
           docker push "${IMAGE_NAME}:${VERSION}-${{ matrix.image_suffix }}"
 
       # The manifest is built from digests, not mutable arch tags that are
-      # deleted afterwards. A digest artifact exists exactly for the tags that
-      # reached Docker Hub; cleanup-arch-tags relies on that.
+      # deleted afterwards. cleanup-arch-tags derives the fragment tags from the
+      # version and the matrix, so a failure here still gets cleaned up.
       - name: Record image digest
         run: |
           set -euo pipefail
@@ -489,6 +493,7 @@ jobs:
     timeout-minutes: 15
     env:
       VERSION: ${{ needs.meta.outputs.version }}
+      CANDIDATE_TAG: ${{ needs.meta.outputs.candidate_tag }}
       IMAGE_NAME: ${{ format('{0}/justup', secrets.DOCKERHUB_USERNAME) }}
       MOVES_LATEST: ${{ needs.meta.outputs.moves_latest }}
       EXPECTED_ARCHS: ${{ needs.meta.outputs.archs }}
@@ -496,6 +501,12 @@ jobs:
       contents: read
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
       - name: Log in to Docker Hub
         uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4
         with:
@@ -553,60 +564,14 @@ jobs:
           done
           echo "OK: digests and toolchain manifests exist for exactly: ${EXPECTED_ARCHS}"
 
-      # Parity gate: runs before the manifest exists, so a mismatch stops the publish.
+      # Parity gate: runs before any index exists, so a mismatch or an incomplete
+      # manifest (required fields, every direct dependency) stops the publish.
       - name: Verify architectures carry identical versions
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          import pathlib
-          import sys
+        run: python3 tools/toolchain-parity.py toolchain --pyproject pyproject.toml
 
-          # The file set equals the matrix (previous step), so it is never empty.
-          files = sorted(pathlib.Path("toolchain").glob("*.txt"))
-
-          def read(path):
-              out = {}
-              for line in path.read_text(encoding="utf-8").splitlines():
-                  line = line.strip()
-                  if not line:
-                      continue
-                  name, _, value = line.partition("=")
-                  out[name] = value
-              return out
-
-          recorded = {path.stem: read(path) for path in files}
-          for arch, versions in recorded.items():
-              print(f"--- {arch} ---")
-              for name, value in sorted(versions.items()):
-                  print(f"  {name}={value}")
-
-          if len(recorded) < 2:
-              sys.exit("FAIL: parity needs at least two architectures, got " + ", ".join(recorded))
-
-          names = sorted({name for versions in recorded.values() for name in versions})
-          mismatches = []
-          for name in names:
-              seen = {arch: versions.get(name, "<missing>") for arch, versions in recorded.items()}
-              if len(set(seen.values())) > 1:
-                  detail = ", ".join(f"{arch}={value}" for arch, value in sorted(seen.items()))
-                  mismatches.append(f"{name}: {detail}")
-
-          if mismatches:
-              print("\nFAIL: the architectures do not carry the same versions:", file=sys.stderr)
-              for mismatch in mismatches:
-                  print(f"  {mismatch}", file=sys.stderr)
-              print(
-                  "\nEvery rolling component is resolved once in the meta job and passed "
-                  "to both builds, so this means a build arg did not reach the Dockerfile, "
-                  "or a stale cached layer was reused.",
-                  file=sys.stderr,
-              )
-              sys.exit(1)
-
-          print(f"\nOK: {', '.join(sorted(recorded))} carry identical versions of all {len(names)} components")
-          PY
-
-      - name: Create and push manifest
+      # Candidate first: the index is built from the pushed digests under a run-specific
+      # temporary tag, so a failed verification never touches a public version tag.
+      - name: Create candidate index
         run: |
           set -euo pipefail
 
@@ -614,90 +579,43 @@ jobs:
           digest_files=(digests/*)
 
           declare -a sources=()
-          declare -a platforms=()
           echo "Assembling index from:"
           for file in "${digest_files[@]}"; do
-            arch="$(basename "$file")"
             digest="$(tr -d '[:space:]' < "$file")"
             sources+=("${IMAGE_NAME}@${digest}")
-            platforms+=("linux/${arch}")
-            echo "  linux/${arch}  ${digest}"
+            echo "  linux/$(basename "$file")  ${digest}"
           done
 
-          # Version tag only; 'latest' follows after verification.
-          docker buildx imagetools create \
-            --tag "${IMAGE_NAME}:${VERSION}" \
-            "${sources[@]}"
-          echo "Pushed manifest: ${IMAGE_NAME}:${VERSION}"
-
-          printf '%s\n' "${platforms[@]}" > expected-platforms.txt
+          docker buildx imagetools create --tag "${IMAGE_NAME}:${CANDIDATE_TAG}" "${sources[@]}"
+          echo "Pushed candidate: ${IMAGE_NAME}:${CANDIDATE_TAG}"
 
       # imagetools create only confirms the registry accepted the index. Check
       # that it lists the expected platforms with the digests that were scanned and pushed.
-      - name: Verify manifest
+      - name: Verify candidate index
         run: |
           set -euo pipefail
+          docker buildx imagetools inspect --raw "${IMAGE_NAME}:${CANDIDATE_TAG}" > manifest-candidate.json
+          python3 tools/verify-manifest.py verify manifest-candidate.json digests
 
-          cat > verify_manifest.py <<'PY'
-          import json
-          import pathlib
-          import sys
+          index_digest="$(docker buildx imagetools inspect "${IMAGE_NAME}:${CANDIDATE_TAG}" \
+            --format '{{.Manifest.Digest}}')"
+          case "$index_digest" in
+            sha256:*) ;;
+            *) echo "ERROR: could not resolve the digest of ${IMAGE_NAME}:${CANDIDATE_TAG}"; exit 1 ;;
+          esac
+          echo "INDEX_DIGEST=${index_digest}" >> "$GITHUB_ENV"
 
-          manifest_file, expected_file, digest_dir = sys.argv[1], sys.argv[2], sys.argv[3]
-
-          with open(manifest_file, encoding="utf-8") as handle:
-              index = json.load(handle)
-          with open(expected_file, encoding="utf-8") as handle:
-              expected = sorted(line.strip() for line in handle if line.strip())
-          # linux/<arch> -> the digest the build job scanned and pushed.
-          expected_digests = {
-              f"linux/{path.name}": path.read_text(encoding="utf-8").strip()
-              for path in pathlib.Path(digest_dir).iterdir()
-          }
-
-          manifests = index.get("manifests")
-          if manifests is None:
-              sys.exit(f"FAIL: {manifest_file} is not a manifest index")
-
-          # Identity includes the variant; the expected set is compared at os/architecture level.
-          identities = []
-          found = set()
-          found_digests = {}
-          for entry in manifests:
-              platform = entry.get("platform") or {}
-              architecture = platform.get("architecture")
-              # Attestations ride along as unknown/unknown entries.
-              if not architecture or architecture == "unknown":
-                  continue
-              operating_system = platform.get("os")
-              identities.append(
-                  (operating_system, architecture, platform.get("variant") or "")
-              )
-              found.add(f"{operating_system}/{architecture}")
-              found_digests[f"{operating_system}/{architecture}"] = entry.get("digest")
-
-          duplicates = sorted({
-              "/".join(part for part in identity if part)
-              for identity in identities
-              if identities.count(identity) > 1
-          })
-          if duplicates:
-              sys.exit(f"FAIL: index lists duplicate platforms: {', '.join(duplicates)}")
-
-          if sorted(found) != expected:
-              sys.exit(f"FAIL: index describes {sorted(found)}, expected {expected}")
-
-          if found_digests != expected_digests:
-              sys.exit(f"FAIL: index digests {found_digests} differ from the pushed {expected_digests}")
-
-          print(f"OK: {manifest_file} describes {', '.join(sorted(found))} with the pushed digests")
-          PY
-
+      # Only the verified index digest is published; nothing is rebuilt or re-resolved.
+      - name: Publish version tag
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create --tag "${IMAGE_NAME}:${VERSION}" "${IMAGE_NAME}@${INDEX_DIGEST}"
           docker buildx imagetools inspect --raw "${IMAGE_NAME}:${VERSION}" > manifest-version.json
-          python3 verify_manifest.py manifest-version.json expected-platforms.txt digests
+          python3 tools/verify-manifest.py verify manifest-version.json digests
+          echo "Pushed manifest: ${IMAGE_NAME}:${VERSION} -> ${INDEX_DIGEST}"
 
-      # 'latest' moves only after the version index passed verification, and
-      # only for the newest stable release (moves_latest). It points at the verified digest.
+      # 'latest' moves only after the candidate passed verification, and only for the
+      # newest stable release (moves_latest). It points at the same verified digest.
       - name: Promote latest
         run: |
           set -euo pipefail
@@ -711,26 +629,19 @@ jobs:
             exit 0
           fi
 
-          index_digest="$(docker buildx imagetools inspect "${IMAGE_NAME}:${VERSION}" \
-            --format '{{.Manifest.Digest}}')"
-          case "$index_digest" in
-            sha256:*) ;;
-            *) echo "ERROR: could not resolve the digest of ${IMAGE_NAME}:${VERSION}"; exit 1 ;;
-          esac
-
-          docker buildx imagetools create \
-            --tag "${IMAGE_NAME}:latest" \
-            "${IMAGE_NAME}@${index_digest}"
-          echo "Pushed manifest: ${IMAGE_NAME}:latest -> ${index_digest}"
+          docker buildx imagetools create --tag "${IMAGE_NAME}:latest" "${IMAGE_NAME}@${INDEX_DIGEST}"
+          echo "Pushed manifest: ${IMAGE_NAME}:latest -> ${INDEX_DIGEST}"
 
           docker buildx imagetools inspect --raw "${IMAGE_NAME}:latest" > manifest-latest.json
-          python3 verify_manifest.py manifest-latest.json expected-platforms.txt digests
+          python3 tools/verify-manifest.py verify manifest-latest.json digests
 
-  # always(): a failed or cancelled build leaves arch tags on Docker Hub that
-  # nothing else would remove. Deletes exactly the tags that have a digest
-  # artifact, i.e. those the build jobs reported pushing.
+  # always(): a failed or cancelled build or manifest leaves temporary tags on Docker
+  # Hub that nothing else would remove. The tags are derived from the version, the
+  # matrix architectures and this run (fragments <version>-<arch>, the run-specific
+  # candidate), never from artifacts that a failed upload could have lost. A tag that
+  # does not exist is fine; any other deletion error fails the job and stays visible.
   cleanup-arch-tags:
-    name: Remove architecture fragment tags
+    name: Remove temporary tags (fragments, candidate)
     needs: [meta, build, create-manifest]
     if: always()
     runs-on: ubuntu-26.04
@@ -745,41 +656,28 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      # continue-on-error: "no artifact" is a valid state when builds failed early.
-      - name: Download image digests
-        id: digests
-        continue-on-error: true
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
-        with:
-          pattern: image-digest-*
-          path: digests/
-          merge-multiple: true
-
-      - name: Delete architecture tags
+      - name: Delete temporary tags
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
           VERSION: ${{ needs.meta.outputs.version }}
+          CANDIDATE_TAG: ${{ needs.meta.outputs.candidate_tag }}
+          ARCHS: ${{ needs.meta.outputs.archs }}
         run: |
           set -euo pipefail
 
-          # meta may have failed: no version, nothing pushed.
-          if [[ -z "${VERSION}" ]]; then
+          # meta may have failed or been skipped: no version, nothing pushed.
+          if [[ -z "$VERSION" || -z "$CANDIDATE_TAG" || -z "${ARCHS// /}" ]]; then
             echo "No version resolved - nothing to clean up."
             exit 0
           fi
 
-          shopt -s nullglob
-          digest_files=(digests/*)
-          if (( ${#digest_files[@]} == 0 )); then
-            echo "No image digests were published - no architecture tags exist."
-            exit 0
-          fi
-
-          tags=()
-          for file in "${digest_files[@]}"; do
-            tags+=("${VERSION}-$(basename "$file")")
+          read -ra archs <<< "$ARCHS"
+          tags=("$CANDIDATE_TAG")
+          for arch in "${archs[@]}"; do
+            tags+=("${VERSION}-${arch}")
           done
+          echo "Deleting temporary tags (if present): ${tags[*]}"
           python3 tools/dockerhub.py delete "${tags[@]}"
 
   # DESTRUCTIVE: deletes every tag except the current version and 'latest'
@@ -879,22 +777,24 @@ jobs:
           path: trivy-reports/
           merge-multiple: false
 
-      # The release body links to the reports: they must exist and parse before
-      # a public release is created or updated.
+      # Per-release record of the installed dependency set (also attached to the release).
+      - name: Download toolchain versions
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          pattern: toolchain-*
+          path: toolchain/
+          merge-multiple: true
+
+      # The release body links to the reports: each must exist and be a valid report
+      # of a recognized image (tools/trivy-report.py) before a public release is created.
       - name: Validate Trivy findings
         run: |
           set -euo pipefail
           read -ra archs <<< "$ARCHS"
           for arch in "${archs[@]}"; do
             report="trivy-reports/trivy-findings-${arch}/trivy-${arch}.json"
-            if [[ ! -s "$report" ]]; then
-              echo "ERROR: missing or empty Trivy report: ${report}"
-              exit 1
-            fi
-            if ! jq empty "$report"; then
-              echo "ERROR: Trivy report is not valid JSON: ${report}"
-              exit 1
-            fi
+            python3 tools/trivy-report.py status "$report" > "${RUNNER_TEMP}/trivy-status-${arch}.txt"
+            echo "${arch}: $(cat "${RUNNER_TEMP}/trivy-status-${arch}.txt")"
           done
 
       - name: Create or update GitHub Release
@@ -911,20 +811,9 @@ jobs:
             const tagName = 'v' + version;
             const archs = process.env.ARCHS.split(' ');
 
-            function parseTrivyStatus(arch) {
-              const file = path.join('trivy-reports', `trivy-findings-${arch}`, `trivy-${arch}.json`);
-              // Validated in the previous step; a read or parse error fails the job.
-              const data = JSON.parse(fs.readFileSync(file, 'utf8'));
-              let critical = 0, high = 0;
-              for (const result of (data.Results || [])) {
-                for (const vuln of (result.Vulnerabilities || [])) {
-                  if (vuln.Severity === 'CRITICAL') critical++;
-                  else if (vuln.Severity === 'HIGH') high++;
-                }
-              }
-              return (critical === 0 && high === 0)
-                ? '✅ No HIGH/CRITICAL vulnerabilities found'
-                : `⚠️ ${critical} CRITICAL, ${high} HIGH vulnerabilities`;
+            // Written by the previous step (tools/trivy-report.py status); one line per architecture.
+            function trivyStatus(arch) {
+              return fs.readFileSync(path.join(process.env.RUNNER_TEMP, `trivy-status-${arch}.txt`), 'utf8').trim();
             }
 
             function extractVersionSection(markdown, targetVersion) {
@@ -973,11 +862,10 @@ jobs:
             // Reports are attached to the release below because run artifacts expire.
             const assetBase = `https://github.com/${context.repo.owner}/${context.repo.repo}/releases/download/${tagName}`;
             const trivyRows = archs.map(arch =>
-              `| ${arch} | ${parseTrivyStatus(arch)} | [trivy-${arch}.json](${assetBase}/trivy-${arch}.json) |`);
+              `| ${arch} | ${trivyStatus(arch)} | [trivy-${arch}.json](${assetBase}/trivy-${arch}.json) |`);
 
+            // The release title already carries the version, so the body starts with the image.
             const body = [
-              '## justUp! ' + version,
-              '',
               '**Docker Image:** `docker pull ' + imageName + ':' + version + '`',
               '',
               '### Available Tags',
@@ -1031,10 +919,13 @@ jobs:
               console.log('Created release ' + tagName);
             }
 
-            // Attach the scan reports; any failure here fails the job because the body links to them.
-            for (const arch of archs) {
-              const assetName = `trivy-${arch}.json`;
-              const file = path.join('trivy-reports', `trivy-findings-${arch}`, assetName);
+            // Attach the scan reports and the installed-dependency manifests (the release body links to
+            // the reports; run artifacts expire). Any failure here fails the job.
+            const assets = archs.flatMap(arch => [
+              [`trivy-${arch}.json`, path.join('trivy-reports', `trivy-findings-${arch}`, `trivy-${arch}.json`), 'application/json'],
+              [`toolchain-${arch}.txt`, path.join('toolchain', `${arch}.txt`), 'text/plain'],
+            ]);
+            for (const [assetName, file, contentType] of assets) {
               const data = fs.readFileSync(file);
               const existing = (release.assets || []).find(a => a.name === assetName);
               if (existing) {
@@ -1051,7 +942,7 @@ jobs:
                 name: assetName,
                 data: data,
                 headers: {
-                  'content-type': 'application/json',
+                  'content-type': contentType,
                   'content-length': data.length
                 }
               });

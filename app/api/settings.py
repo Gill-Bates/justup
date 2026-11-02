@@ -41,6 +41,7 @@ from ..services.notifications.email_template import (
     DEFAULT_HTML_TEMPLATE,
     DEFAULT_SUBJECT,
 )
+from ..services.notifications.smtp_settings import load_public_smtp_settings
 from ..utils import maintenance
 from ..utils.backup import (
     BACKUP_DIRECTORIES,
@@ -112,6 +113,7 @@ def _load(conn) -> Settings:
         ),
         session_max_days=sqlite_db.get_session_max_days(conn),
         **load_runtime_fields(conn),
+        **load_public_smtp_settings(conn),
     )
 
 
@@ -157,6 +159,9 @@ def update_settings(payload: SettingsUpdate, conn=Depends(get_conn), _admin=Depe
             value = _encrypt_ip_api_key(value, encrypt_secret)
         if k == SettingKeys.SESSION_MAX_DAYS and value is None:
             raise HTTPException(status_code=422, detail="session_max_days must not be null")
+        if k == SettingKeys.SMTP_USE_TLS and value is None:
+            # null must never read as "encryption off"; only an explicit false is a decision
+            raise HTTPException(status_code=422, detail="smtp_use_tls must be true or false, not null")
         if k == SettingKeys.SMTP_PASSWORD and value:
             try:
                 value = encrypt_secret(value)
@@ -952,6 +957,66 @@ def reset_email_template(conn=Depends(get_conn), _admin=Depends(require_admin)):
     )
 
 
+class EmailTemplatePreviewRequest(BaseModel):
+    """Preview-render payload: the current (possibly unsaved) editor template."""
+
+    subject: str | None = None
+    html: str | None = None
+    variant: str = "down"  # "down" or "resolved"
+
+
+class EmailTemplatePreviewResponse(BaseModel):
+    """Fully rendered preview with sample data (no unreplaced placeholders)."""
+
+    subject: str
+    html: str
+
+
+@router.post("/smtp/template/preview", response_model=EmailTemplatePreviewResponse)
+def preview_email_template(payload: EmailTemplatePreviewRequest, _admin=Depends(require_admin)):
+    """Render the given template with deterministic sample data for the editor preview.
+
+    Rendering runs through the same whitelist renderer as the real send path, so the
+    preview cannot show anything the send path would not (no code execution, values
+    escaped). The logo reference is rewritten to the local preview URL so the browser
+    iframe shows the logo without a mail client. DOWN and RESOLVED samples are available.
+    """
+    from ..services.notifications.email_template import (
+        DEFAULT_HTML_TEMPLATE as _DEF_HTML,
+    )
+    from ..services.notifications.email_template import (
+        DEFAULT_SUBJECT as _DEF_SUBJECT,
+    )
+    from ..services.notifications.email_template import (
+        build_alert_context,
+        build_test_alert_sample,
+        render_template,
+        template_to_preview,
+    )
+
+    alert_data, target_data = build_test_alert_sample()
+    if payload.variant == "resolved":
+        # A resolved sample: 15-minute outage that just ended, so Resolved/Duration read cleanly.
+        from datetime import datetime as _dt
+        from datetime import timedelta as _td
+
+        started = _dt.fromisoformat(alert_data["started_at"])
+        alert_data = {
+            **alert_data,
+            "status": "RESOLVED",
+            "resolved_at": (started + _td(minutes=15)).isoformat(),
+            "reason": "Recovered: HTTP 200 OK (justUp! test notification)",
+        }
+
+    context = build_alert_context(alert_data, target_data)
+    subject_template = payload.subject if payload.subject is not None else _DEF_SUBJECT
+    html_template = payload.html if payload.html is not None else _DEF_HTML
+
+    subject = render_template(subject_template, context)
+    html = template_to_preview(render_template(html_template, context))
+    return EmailTemplatePreviewResponse(subject=subject, html=html)
+
+
 class TestEmailRequest(BaseModel):
     """Test email request payload."""
 
@@ -969,6 +1034,8 @@ async def send_test_email(
     """
     from ..services.notifications.email_template import (
         build_alert_context,
+        build_test_alert_sample,
+        html_to_text,
         load_email_templates,
         render_template,
     )
@@ -987,27 +1054,13 @@ async def send_test_email(
     stored = load_email_templates(conn)
     subject_template, html_template = stored["subject"], stored["html"]
 
-    test_alert_data = {
-        "status": "OPEN",
-        "started_at": "2026-01-29T12:00:00Z",
-        "resolved_at": None,
-        "reason": "HTTP 503 Service Unavailable",
-        "downtime_minutes": 15,
-        "sla_threshold": "99.9%",
-        "sla_actual": "99.7%",
-        "system_url": "https://monitoring.example.com",
-    }
-    test_target_data = {
-        "name": "Test Target",
-        "host": "example.com",
-        "group": "Production",
-        "check_type": "HTTP",
-    }
+    test_alert_data, test_target_data = build_test_alert_sample()
 
     context = build_alert_context(test_alert_data, test_target_data)
 
     subject = render_template(subject_template, context)
     html_body = render_template(html_template, context)
+    text_body = html_to_text(html_body)
 
     # Enqueue to spooler (all notifications go through spooler)
     db_path = request.app.state.db_path
@@ -1022,7 +1075,7 @@ async def send_test_email(
         recipient_address=payload.recipient,
         payload={
             "subject": subject,
-            "text_body": "",
+            "text_body": text_body,
             "html_body": html_body,
         },
         error=None,
@@ -1030,7 +1083,10 @@ async def send_test_email(
     )
 
     _log.info("Test email queued for %s (queue_id=%d)", payload.recipient, queue_id)
-    return {"ok": True, "message": f"Test email queued for {payload.recipient}"}
+    return {
+        "ok": True,
+        "message": f"Test email queued for {payload.recipient}; the SMTP handoff result appears in the delivery log",
+    }
 
 
 # ─── Notification Spooler ────────────────────────────────────────────────────────
@@ -1064,7 +1120,10 @@ async def get_notification_queue_stats(
         "processing": detailed["by_status"].get("processing", 0),
         "sent": detailed["by_status"].get("sent", 0),
         "failed": detailed["by_status"].get("failed", 0),
+        "failed_recent": detailed["failed_recent"],
         "by_status": detailed["by_status"],
+        "channels": detailed["channels"],
+        "cooldowns": detailed["cooldowns"],
         "oldest_pending": detailed["oldest_pending"],
         "max_retry_count": detailed["max_retry_count"],
         "next_retry_at": detailed["next_retry_at"],

@@ -189,7 +189,11 @@ def login(request: Request, payload: LoginRequest, conn=Depends(get_conn)):
     sqlite_db.update_user_last_login(conn, int(user["id"]), client_ip)
 
     session_days = sqlite_db.get_session_max_days(conn)
-    token, expires_at, max_expires_at = new_token(max_expiry_minutes=session_days * 24 * 60)
+    # The idle window equals the configured lifetime, so no shorter hidden timeout overrides the setting.
+    session_minutes = session_days * 24 * 60
+    token, expires_at, max_expires_at = new_token(
+        sliding_expiry_minutes=session_minutes, max_expiry_minutes=session_minutes
+    )
     token_hash = hash_token(token)
     with sqlite_db.transaction(conn):
         sqlite_db.issue_token(
@@ -209,10 +213,10 @@ def login(request: Request, payload: LoginRequest, conn=Depends(get_conn)):
 
     is_secure = request_is_https(request)
 
-    # Cookie name "token" matches auth_helpers.py expectation
-    # max_age = full absolute session lifetime; the server still enforces the 6 h idle expiry.
+    cookie_name = "__Host-token" if is_secure else "token"
+    # max_age = full session lifetime, identical to the server-side expiry of this token.
     response.set_cookie(
-        key="token",
+        key=cookie_name,
         value=token,
         httponly=True,
         secure=is_secure,
@@ -495,7 +499,8 @@ def logout(
     tokens = []
     if credentials and credentials.credentials:
         tokens.append(credentials.credentials)
-    cookie_token = request.cookies.get("token")
+    cookie_name = "__Host-token" if request_is_https(request) else "token"
+    cookie_token = request.cookies.get(cookie_name)
     if cookie_token and cookie_token not in tokens:
         tokens.append(cookie_token)
 
@@ -511,4 +516,5 @@ def logout(
             detail = "Token already revoked or expired"
     resp = JSONResponse({"ok": True, "detail": detail})
     resp.delete_cookie("token")
+    resp.delete_cookie("__Host-token", secure=True)
     return resp

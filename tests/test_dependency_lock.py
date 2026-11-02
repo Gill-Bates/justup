@@ -18,6 +18,7 @@ import base64
 import hashlib
 import importlib.util
 import json
+import os
 import re
 import subprocess
 import sys
@@ -386,6 +387,12 @@ def test_ci_installs_the_same_runtime_lock_and_vendored_wheel():
 def _pip_install(requirements: Path, find_links: Path) -> subprocess.CompletedProcess:
     # A real install into a scratch --target: pip's --dry-run skips hash verification of
     # local wheels in some releases, which would let a tampered hash pass.
+    # Without pip the negative checks would pass for the wrong reason, so skip locally; CI must have pip.
+    if importlib.util.find_spec("pip") is None:
+        message = "pip is not installed in this interpreter (e.g. a bare uv venv)"
+        if os.environ.get("CI"):
+            pytest.fail(message)
+        pytest.skip(message)
     target = tempfile.mkdtemp(dir=requirements.parent)
     command = [sys.executable, "-m", "pip", "install", "--target", target, "--no-deps", "--no-index"]
     command += ["--no-cache-dir", "--require-hashes", "--only-binary=:all:"]
@@ -443,13 +450,13 @@ def test_installed_versions_are_read_for_expression_and_url_requirements(tmp_pat
     pyproject = tmp_path / "pyproject.toml"
     pyproject.write_text(
         '[project]\nname = "x"\nversion = "9.9.9"\n'
-        'dependencies = ["packaging>=24", "Pytest ; python_version >= \'3.13\'", "pip @ https://example.invalid/pip.tar.gz"]\n',
+        'dependencies = ["packaging>=24", "Pytest ; python_version >= \'3.13\'", "pluggy @ https://example.invalid/pluggy.tar.gz"]\n',
         encoding="utf-8",
     )
     lines = tool.collect(pyproject)
     values = dict(line.split("=", 1) for line in lines)
     assert values["app_version"] == "9.9.9"
-    for name in ("packaging", "pytest", "pip"):
+    for name in ("packaging", "pytest", "pluggy"):
         assert re.fullmatch(r"\d+(\.\d+)*\S*", values[name]), values
     assert "packaging>=24" not in "".join(lines), "requirement expressions must not be used as keys"
 

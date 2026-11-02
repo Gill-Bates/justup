@@ -721,20 +721,16 @@ def fragment_settings_backup(request: Request, conn=Depends(get_conn)):
 @router.get("/ui/fragments/settings-smtp", response_class=HTMLResponse)
 def fragment_settings_smtp(request: Request, conn=Depends(get_conn)):
     """Render SMTP settings tab fragment with pre-populated values."""
-    from ..utils.constants import SettingKeys
+    from ..services.notifications.smtp_settings import load_public_smtp_settings
+    from ..services.notifications.smtp_transport import IMPLICIT_TLS_PORT
 
     user = require_admin_htmx(request, conn)
     if isinstance(user, Response):
         return user
 
-    smtp_data = {
-        "smtp_enabled": sqlite_db.get_setting(conn, SettingKeys.SMTP_ENABLED, False),
-        "smtp_host": sqlite_db.get_setting(conn, SettingKeys.SMTP_HOST, "") or "",
-        "smtp_port": sqlite_db.get_setting(conn, SettingKeys.SMTP_PORT, "") or "",
-        "smtp_from": sqlite_db.get_setting(conn, SettingKeys.SMTP_FROM, "") or "",
-        "smtp_user": sqlite_db.get_setting(conn, SettingKeys.SMTP_USER, "") or "",
-        "smtp_use_tls": sqlite_db.get_setting(conn, SettingKeys.SMTP_USE_TLS, False),
-    }
+    # Same reader as GET /settings and the send path; only the password flag, never the password.
+    smtp_data = load_public_smtp_settings(conn)
+    smtp_data["smtp_port"] = smtp_data["smtp_port"] or ""  # empty field instead of "None"
 
     from ..services.notifications.email_template import load_template_preview
 
@@ -746,6 +742,7 @@ def fragment_settings_smtp(request: Request, conn=Depends(get_conn)):
         {
             "current_user": user,
             "smtp": smtp_data,
+            "implicit_tls_port": IMPLICIT_TLS_PORT,
             "template": template_data,
         },
     )

@@ -72,3 +72,16 @@ test("a failed number save is retried on the next blur of the unchanged value", 
   assert.equal(sent.length, 2);
   assert.deepEqual(sent[1], { retention_days: 30 });
 });
+
+test("a delayed number save does not mark a newer input value as saved", async () => {
+  sent.length = 0;
+  let resolveFirst;
+  responses = [new Promise((resolve) => { resolveFirst = resolve; }), ok];
+  const field = input("number", "retention_days", "30", "7");
+  const firstSave = form.fire("blur", { target: field });
+  field.value = "31";
+  resolveFirst(ok);
+  await firstSave;
+  await form.fire("blur", { target: field });
+  assert.deepEqual(sent, [{ retention_days: 30 }, { retention_days: 31 }]);
+});

@@ -146,11 +146,47 @@ function setSmtpFieldsetEnabled(enabled) {
     fieldset.disabled = !enabled;
 }
 
+/**
+ * Show the STARTTLS switch for the current port. The backend always uses implicit TLS on one
+ * port (data-implicit-port, sent by the server), so the switch is locked "on" there; elsewhere it shows the choice still being saved
+ * (data-wanted-value) or else the stored one (data-stored-value), which only a confirmed save changes.
+ */
+function syncSmtpTlsControl() {
+    const toggle = document.getElementById('smtp_use_tls');
+    if (!toggle) return;
+    const implicitPort = Number.parseInt(toggle.dataset.implicitPort, 10);
+    const implicit = Number.parseInt(document.getElementById('smtp_port')?.value, 10) === implicitPort;
+    const shown = (toggle.dataset.wantedValue ?? toggle.dataset.storedValue) !== 'false';
+    toggle.disabled = implicit;
+    toggle.checked = implicit || shown;
+
+    const label = document.getElementById('smtp_use_tls_label');
+    if (label) label.textContent = (implicit ? label.dataset.labelImplicit : label.dataset.labelStarttls) || '';
+}
+
+let smtpTlsChoiceSeq = 0;
+
+/**
+ * Save the STARTTLS choice. saveSetting() orders saves of one key, so the server ends on the last
+ * choice; only the newest save settles the switch, and a failed one returns it to the stored state.
+ */
+async function saveSmtpTlsChoice(toggle) {
+    const wanted = toggle.checked;
+    const seq = ++smtpTlsChoiceSeq;
+    toggle.dataset.wantedValue = String(wanted);
+    const saved = await saveSetting('smtp_use_tls', wanted);
+    if (saved) toggle.dataset.storedValue = String(wanted);
+    if (seq !== smtpTlsChoiceSeq) return;
+    delete toggle.dataset.wantedValue;
+    syncSmtpTlsControl();
+}
+
 function updateSmtpUiFromDom() {
     const enabled = DOM.smtpEnabled()?.checked === true;
     const host = (DOM.smtpHost()?.value || '').trim();
     const from = (DOM.smtpFrom()?.value || '').trim();
     setSmtpFieldsetEnabled(enabled);
+    syncSmtpTlsControl();
     updateSmtpStatusBadge({ smtp_enabled: enabled, smtp_host: host, smtp_from: from });
 }
 
@@ -615,15 +651,18 @@ export async function loadSettings() {
         // Signal
         setChecked(DOM.signalEnabled(), data.signal_enabled === true);
 
-        // SMTP
-        setChecked(DOM.smtpEnabled(), data.smtp_enabled === true);
-        setValue(DOM.smtpHost(), data.smtp_host || '');
-        setValue(DOM.smtpPort(), data.smtp_port || '');
-        setValue(DOM.smtpFrom(), data.smtp_from || '');
-        setValue(DOM.smtpUser(), data.smtp_user || '');
-        // Don't load password - security best practice (show placeholder instead)
-        setChecked(DOM.smtpUseTls(), data.smtp_use_tls === true);
-        updateSmtpStatusBadge(data);
+        // SMTP: a field missing from the response is left alone, never read as "off" or empty
+        if (typeof data.smtp_enabled === 'boolean') setChecked(DOM.smtpEnabled(), data.smtp_enabled);
+        if (typeof data.smtp_host === 'string') setValue(DOM.smtpHost(), data.smtp_host);
+        if ('smtp_port' in data) setValue(DOM.smtpPort(), data.smtp_port || '');
+        if (typeof data.smtp_from === 'string') setValue(DOM.smtpFrom(), data.smtp_from);
+        if (typeof data.smtp_user === 'string') setValue(DOM.smtpUser(), data.smtp_user);
+        // Never load the password; the server only reports whether one is stored
+        const tlsToggle = document.getElementById('smtp_use_tls');
+        if (tlsToggle && typeof data.smtp_use_tls === 'boolean') {
+            tlsToggle.dataset.storedValue = String(data.smtp_use_tls);
+        }
+        if (typeof data.smtp_enabled === 'boolean') updateSmtpUiFromDom();
 
         // General
         setChecked(DOM.purgeEnabled(), Boolean(data.purge_enabled ?? true));
@@ -680,11 +719,49 @@ function revealSettingsSection(el) {
 }
 
 /**
+ * Switch a write-only secret field (macro `secret_field`) between "stored" and "empty".
+ * The mask is a fixed placeholder, so it never reflects the secret or its length.
+ * @param {HTMLElement|null} wrapper - The `[data-secret-field]` container
+ * @param {boolean} isSet - Whether a secret is stored on the server
+ */
+function setSecretState(wrapper, isSet) {
+    if (!wrapper) return;
+    const input = wrapper.querySelector('input');
+    if (input) {
+        input.value = '';
+        input.placeholder = isSet ? '\u2022'.repeat(8) : '';
+    }
+    const help = wrapper.querySelector('[data-secret-help]');
+    if (help) help.textContent = isSet ? wrapper.dataset.helpSet : wrapper.dataset.helpUnset;
+    const clearButton = wrapper.querySelector('[data-secret-clear]');
+    if (clearButton) clearButton.hidden = !isSet;
+}
+
+// Saves of one key run strictly in call order, so out-of-order responses cannot leave an older
+// value stored. All unsettled saves are published for callers that must not read stale server state.
+const saveChains = new Map();
+const unsettledSaves = new Set();
+
+/**
  * Save a single setting to the API
  * @param {string} key - Setting key
  * @param {any} value - Setting value
+ * @returns {Promise<boolean>} Whether the server accepted the value (never rejects)
  */
-async function saveSetting(key, value) {
+function saveSetting(key, value) {
+    const pending = (saveChains.get(key) ?? Promise.resolve()).then(() => sendSetting(key, value));
+    saveChains.set(key, pending);
+    unsettledSaves.add(pending);
+    window.justUpSettingsSavePending = Promise.all(unsettledSaves);
+    pending.then(() => {
+        if (saveChains.get(key) === pending) saveChains.delete(key);
+        unsettledSaves.delete(pending);
+        window.justUpSettingsSavePending = unsettledSaves.size ? Promise.all(unsettledSaves) : null;
+    });
+    return pending;
+}
+
+async function sendSetting(key, value) {
     try {
         const resp = await apiFetch(SETTINGS_API.settings, {
             method: 'PATCH',
@@ -789,7 +866,8 @@ function bindAutoSaveForm(form) {
             const submittedKey = keyInput.value.trim();
             keyInput.disabled = true;
             const saved = await queueApiKeySave(submittedKey);
-            if (saved) keyInput.value = '';  // clear only after the server accepted the secret
+            // Reset the field only after the server accepted the secret
+            if (saved) setSecretState(keyInput.closest('[data-secret-field]'), submittedKey !== '');
             if (!clearingApiKey) keyInput.disabled = false;
         } else if (t.type === 'text') {
             if (!t.checkValidity()) {
@@ -810,12 +888,8 @@ function bindAutoSaveForm(form) {
             if (keyInput) keyInput.disabled = true;
             const saved = await queueApiKeySave('');
             if (saved) {
-                if (keyInput) keyInput.value = '';
-                keyInput?.setAttribute('placeholder', 'Enter an API key');
-                keyInput?.closest('.mb-3')?.querySelector('.badge')?.remove();
-                clearKeyButton.remove();
+                setSecretState(clearKeyButton.closest('[data-secret-field]'), false);
             } else {
-                clearingApiKey = false;
                 clearKeyButton.disabled = false;
             }
             clearingApiKey = false;
@@ -865,6 +939,10 @@ function initSettingsAutoSave() {
 
         // Checkboxes
         if (target.type === 'checkbox') {
+            if (target.name === 'smtp_use_tls') {
+                saveSmtpTlsChoice(target);
+                return;
+            }
             if (target.name === 'smtp_enabled') {
                 setSmtpFieldsetEnabled(target.checked);
             }
@@ -886,9 +964,20 @@ function initSettingsAutoSave() {
         }
     });
 
+    // Explicit removal of a stored SMTP secret (ip-api key has its own queued handler)
+    form.addEventListener('click', async (e) => {
+        const button = e.target.closest?.('[data-secret-clear="smtp_password"]');
+        if (!button) return;
+        button.disabled = true;
+        const saved = await saveSetting('smtp_password', '');
+        button.disabled = false;
+        if (saved) setSecretState(button.closest('[data-secret-field]'), false);
+    });
+
     // Event delegation for 'input' events (range slider real-time feedback)
     form.addEventListener('input', (e) => {
         const target = e.target;
+        if (target.name === 'smtp_port') syncSmtpTlsControl();
         if (target.type === 'range' && target.name) {
             updateRangeActiveTick(target);
             const valueDisplay = document.getElementById(target.name + '_value');
@@ -918,14 +1007,10 @@ function initSettingsAutoSave() {
             if (target.name === 'smtp_password') {
                 const next = (target.value || '').trim();
                 if (next) {
-                    // Test-mail sends wait on this so they use the saved password
-                    const pending = saveSetting('smtp_password', next);
-                    window.justUpSettingsSavePending = pending;
-                    const saved = await pending;
-                    if (window.justUpSettingsSavePending === pending) window.justUpSettingsSavePending = null;
+                    const saved = await saveSetting('smtp_password', next);
                     // Clear only after a successful save and if the user did not type meanwhile
                     if (saved && (target.value || '').trim() === next) {
-                        target.value = '';
+                        setSecretState(target.closest('[data-secret-field]'), true);
                     }
                 }
             }
@@ -945,9 +1030,10 @@ function initSettingsAutoSave() {
                 let value = Number.isNaN(parsedValue) ? min : parsedValue;
                 value = Math.max(min, Math.min(max, value));
                 target.value = value;
+                const sent = String(value);
                 // Remember the value only after a confirmed save so a failure is retried on the next blur
                 if (await saveSetting(target.name, value)) {
-                    lastValues.set(target, target.value);
+                    lastValues.set(target, sent);
                 }
             }
             return;

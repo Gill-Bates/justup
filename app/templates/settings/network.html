@@ -1,4 +1,5 @@
 {# Settings: Network Tab Content #}
+{% from "settings/_secret_field.html" import secret_field %}
 <form class="ju-settings-grid" id="advanced-settings-form" data-settings-autosave autocomplete="off">
 			<details class="card shadow-sm settings-card settings-details" open>
 				<summary class="card-header"><h2 class="h6 mb-0">Connection Quality</h2></summary>
@@ -49,9 +50,10 @@
 						<div class="form-text">= <output id="provider_lookup_cache_ttl_humanized" aria-live="polite"></output></div>
 					</div>
 					<div>
-						<label for="ip_api_key" class="form-label">ip-api Pro Key {% if settings.ip_api_key_set %}<span class="badge text-bg-success">stored</span>{% endif %}</label>
-						<input type="password" class="form-control" name="ip_api_key" id="ip_api_key" autocomplete="new-password" placeholder="{{ 'Stored — enter a new key to replace' if settings.ip_api_key_set else 'Optional API key' }}">
-						{% if settings.ip_api_key_set %}<button type="button" class="btn btn-outline-secondary btn-sm mt-2" id="clear-ip-api-key">Remove stored key</button>{% endif %}
+						{{ secret_field("ip_api_key", "ip_api_key", "ip-api Pro Key", settings.ip_api_key_set,
+							"A key is stored. Enter a new key to replace it.",
+							"Optional. No key stored.",
+							"clear-ip-api-key", "Remove stored key") }}
 					</div>
 				</div>
 			</details>

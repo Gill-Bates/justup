@@ -13,19 +13,26 @@ are CSRF-protected by CSRFMiddleware (path listed there) and rate limited.
 
 from __future__ import annotations
 
+import asyncio
 import sqlite3
+from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
+from starlette.concurrency import run_in_threadpool
 
+from ..db import sqlite as sqlite_db
+from ..db import tsdb as tsdb_db
 from ..db.dashboard_layouts import (
     DASHBOARD_MAX_Y,
     delete_dashboard_layout,
     get_dashboard_layout,
     set_dashboard_layout,
 )
-from ..utils.deps import get_conn
+from ..utils.deps import get_conn, get_tsdb_dir
 from ..utils.rate_limit import RATE_LIMIT_DEFAULT, rate_limit
+from ..utils.time import parse_utc, utcnow
+from ..utils.uptime_metric import select_uptime_metric
 from .auth import get_current_user
 
 # Server-side allowlist of widget ids; kept in sync with the registry in
@@ -38,6 +45,13 @@ DASHBOARD_WIDGETS = frozenset(
         "status-total",
         "quality",
         "downtime",
+        "alerts-open",
+        "delivery-queue",
+        "uptime-day",
+        "cert-expiry",
+        "slowest-monitors",
+        "quality-trend",
+        "stale-checks",
     }
 )
 
@@ -82,13 +96,95 @@ def validate_dashboard_layout(body: DashboardLayout) -> None:
 router = APIRouter(prefix="/me/dashboard-layout", tags=["dashboard"])
 
 
+def _availability_seconds(points: list[dict], since: datetime, until: datetime, stale_after: float):
+    """Integrate observed transitions; unknown intervals contribute to neither total."""
+    known = 0.0
+    up = 0.0
+    for index, point in enumerate(points):
+        start = parse_utc(point["ts"])
+        if start is None or point["up"] not in (0, 1):
+            continue
+        end = (
+            parse_utc(points[index + 1]["ts"])
+            if index + 1 < len(points)
+            else min(until, start + timedelta(seconds=stale_after))
+        )
+        if end is None:
+            continue
+        duration = max(0.0, (min(until, end) - max(since, start)).total_seconds())
+        known += duration
+        up += duration * point["up"]
+    return up, known
+
+
+@router.get("/uptime", dependencies=[Depends(rate_limit(RATE_LIMIT_DEFAULT))])
+async def get_uptime_widget(request: Request, conn=Depends(get_conn), _user=Depends(get_current_user)):
+    """Return time-weighted availability and coverage without shipping raw checks."""
+    until = utcnow()
+    since = until - timedelta(days=1)
+    tsdb_dir = get_tsdb_dir(request)
+    targets = [
+        target for target in sqlite_db.list_targets(conn) if target["is_enabled"] and select_uptime_metric(target)
+    ]
+    semaphore = asyncio.Semaphore(4)
+
+    async def summarize(target):
+        metric = select_uptime_metric(target)
+        service = {"http_up": "HTTP", "ping_up": "PING", "tcp_up": "TCP"}[metric]
+        async with semaphore:
+            series = await run_in_threadpool(
+                tsdb_db.query_availability_series,
+                tsdb_dir,
+                target_id=target["id"],
+                since=since,
+                until=until,
+                limit=100_000,
+                enabled_services={service},
+                check_interval_seconds=target["interval_seconds"],
+            )
+        return _availability_seconds(series.get(service, []), since, until, max(60, target["interval_seconds"] * 3))
+
+    results = await asyncio.gather(*(summarize(target) for target in targets))
+    up = sum(result[0] for result in results)
+    known = sum(result[1] for result in results)
+    total = len(targets) * 86400
+    return {
+        "uptime_percent": 100 * up / known if known else None,
+        "coverage_percent": 100 * known / total if total else 0,
+    }
+
+
+@router.get("/monitors", dependencies=[Depends(rate_limit(RATE_LIMIT_DEFAULT))])
+def get_monitor_widgets(conn=Depends(get_conn), _user=Depends(get_current_user)):
+    """Return only public metadata and cached measurements needed by dashboard widgets."""
+    statuses = {row["target_id"]: dict(row) for row in sqlite_db.get_all_target_statuses(conn)}
+    fields = ("http_latency_ms", "cert_days_left", "cert_checked_at", "updated_at")
+    return {
+        "targets": [
+            {
+                "id": target["id"],
+                "name": target["name"],
+                "is_enabled": bool(target["is_enabled"]),
+                "interval_seconds": target["interval_seconds"],
+                "enable_http_check": bool(target["enable_http_check"]),
+                "enable_cert_expiration": bool(target["enable_cert_expiration"]),
+                "status": {field: statuses.get(target["id"], {}).get(field) for field in fields},
+            }
+            for target in sqlite_db.list_targets(conn)
+        ]
+    }
+
+
 @router.get("", dependencies=[Depends(rate_limit(RATE_LIMIT_DEFAULT))])
 def get_layout(
     conn: sqlite3.Connection = Depends(get_conn),
     user=Depends(get_current_user),
 ):
     """Return the current user's stored layout, or {"layout": null} when none is stored."""
-    return {"layout": get_dashboard_layout(conn, int(user["id"]))}
+    layout = get_dashboard_layout(conn, int(user["id"]))
+    if layout is not None and not user["is_admin"]:
+        layout["widgets"] = [widget for widget in layout["widgets"] if widget["id"] != "delivery-queue"]
+    return {"layout": layout}
 
 
 @router.put("", dependencies=[Depends(rate_limit(RATE_LIMIT_DEFAULT))])
@@ -99,6 +195,8 @@ def put_layout(
 ):
     """Validate and persist the current user's layout, then return it."""
     validate_dashboard_layout(body)
+    if not user["is_admin"] and any(widget.id == "delivery-queue" for widget in body.widgets):
+        raise HTTPException(403, "Delivery queue widget requires administrator access")
     layout = body.model_dump()
     try:
         set_dashboard_layout(conn, int(user["id"]), layout)

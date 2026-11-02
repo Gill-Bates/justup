@@ -455,7 +455,18 @@ _NOTIFICATION_QUEUE_DDL = (
         last_error TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
-        target_id INTEGER
+        target_id INTEGER,
+        limited_attempts INTEGER NOT NULL DEFAULT 0 CHECK (limited_attempts >= 0)
+    )
+    """,
+    # Per-channel (and Signal per-sender) send pacing and provider cooldown; survives restarts.
+    """
+    CREATE TABLE IF NOT EXISTS notification_channel_state (
+        channel_key TEXT PRIMARY KEY,
+        last_attempt_at TEXT,
+        cooldown_until TEXT,
+        cooldown_reason TEXT,
+        updated_at TEXT NOT NULL
     )
     """,
     # Due-item selection (pending, next_retry_at) and crash recovery / retention (status, updated_at).
@@ -471,6 +482,35 @@ def ensure_notification_queue_table(conn: sqlite3.Connection) -> None:
     """
     for statement in _NOTIFICATION_QUEUE_DDL:
         conn.execute(statement)
+
+
+_ALERT_DISPATCH_OUTBOX_DDL = """
+CREATE TABLE IF NOT EXISTS alert_dispatch_outbox (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    alert_id TEXT NOT NULL,
+    event_type TEXT NOT NULL CHECK (event_type IN ('open', 'resolved')),
+    target_id INTEGER NOT NULL,
+    target_name TEXT NOT NULL,
+    failed_service TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    ended_at TEXT,
+    duration_seconds INTEGER,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'completed')),
+    attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    last_error TEXT,
+    next_attempt_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (alert_id, event_type)
+)
+"""
+
+
+def ensure_alert_dispatch_outbox_table(conn: sqlite3.Connection) -> None:
+    conn.execute(_ALERT_DISPATCH_OUTBOX_DDL)
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_alert_dispatch_outbox_pending ON alert_dispatch_outbox(status, created_at, id)"
+    )
 
 
 _NOTIFICATIONS_DDL = (
@@ -761,6 +801,7 @@ def _create_baseline_schema(conn: sqlite3.Connection) -> None:
             target_name TEXT NOT NULL,
             failed_service TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'resolved')),
+            active_incident INTEGER NOT NULL DEFAULT 1 CHECK (active_incident IN (0, 1)),
             started_at timestamp NOT NULL,
             ended_at timestamp,
             duration_seconds INTEGER,
@@ -896,6 +937,7 @@ def _create_baseline_schema(conn: sqlite3.Connection) -> None:
 
     ensure_notification_queue_table(conn)
     ensure_notifications_tables(conn)
+    ensure_alert_dispatch_outbox_table(conn)
 
     # Per-user dashboard layout: one row per placed widget. The CHECKs mirror the API validation
     # (x 0..11, w 1..12, x+w<=12, h 1..100, y+h<=1000 = DASHBOARD_MAX_Y in dashboard_layouts.py).
@@ -967,7 +1009,7 @@ def _ensure_unique_recipient_phone(conn: sqlite3.Connection) -> None:
 # MIGRATIONS that upgrades a database from ``version - 1``. _create_baseline_schema() must then
 # create the new current schema for fresh databases, so migrations only transform older ones.
 # Migrations run inside init_schema's transaction (an error rolls schema and user_version back).
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 3
 
 
 class IncompatibleSchemaError(RuntimeError):
@@ -982,8 +1024,75 @@ class Migration(NamedTuple):
     apply: Callable[[sqlite3.Connection], None]
 
 
-# Empty for the v1.0.0 baseline; ordered by version, contiguous from 2.
-MIGRATIONS: tuple[Migration, ...] = ()
+def _migrate_2_spooler_resilience(conn: sqlite3.Connection) -> None:
+    """Add the separate budget for non-transient send failures and the persistent channel state."""
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(notification_queue)")}
+    if "limited_attempts" not in columns:
+        conn.execute(
+            "ALTER TABLE notification_queue "
+            "ADD COLUMN limited_attempts INTEGER NOT NULL DEFAULT 0 CHECK (limited_attempts >= 0)"
+        )
+        # Earlier releases counted every failure against one budget: keep those rows' history.
+        conn.execute("UPDATE notification_queue SET limited_attempts = retry_count")
+    ensure_notification_queue_table(conn)
+
+
+def _migrate_3_alert_dispatch_outbox(conn: sqlite3.Connection) -> None:
+    ensure_alert_dispatch_outbox_table(conn)
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(alerts)")}
+    if "active_incident" not in columns:
+        conn.execute(
+            "ALTER TABLE alerts ADD COLUMN active_incident INTEGER NOT NULL DEFAULT 0 CHECK (active_incident IN (0, 1))"
+        )
+    conn.execute(
+        """
+        UPDATE alerts SET active_incident = 1
+        WHERE id IN (
+            SELECT id FROM (
+                SELECT a.id, a.target_id,
+                       upper(a.failed_service) LIKE 'CERT%' AS is_cert,
+                       row_number() OVER (
+                           PARTITION BY a.target_id, upper(a.failed_service) LIKE 'CERT%'
+                           ORDER BY a.started_at DESC, a.id DESC
+                       ) AS position
+                FROM alerts a
+                WHERE a.status = 'open'
+            ) ranked
+            WHERE position = 1 AND (
+                (is_cert AND EXISTS (
+                    SELECT 1 FROM target_status ts
+                    WHERE ts.target_id = ranked.target_id AND ts.cert_days_left <= 7
+                )) OR (NOT is_cert AND EXISTS (
+                    SELECT 1 FROM target_status ts
+                    WHERE ts.target_id = ranked.target_id AND ts.overall_status = 'down'
+                ))
+            )
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO alert_dispatch_outbox (
+            alert_id, event_type, target_id, target_name, failed_service,
+            started_at, ended_at, duration_seconds, status, attempts,
+            next_attempt_at, created_at, updated_at
+        )
+        SELECT id, 'open', target_id, target_name, failed_service,
+               started_at, NULL, NULL, 'pending', 0, created_at, created_at, updated_at
+        FROM alerts WHERE status = 'open' AND active_incident = 1
+        """
+    )
+
+
+# Ordered by version, contiguous from 2.
+MIGRATIONS: tuple[Migration, ...] = (
+    Migration(
+        2,
+        "spooler resilience: limited_attempts column, notification_channel_state table",
+        _migrate_2_spooler_resilience,
+    ),
+    Migration(3, "durable alert dispatch outbox", _migrate_3_alert_dispatch_outbox),
+)
 
 
 def get_schema_version(conn: sqlite3.Connection) -> int:
@@ -2222,6 +2331,7 @@ def create_alert(
     failed_service: str,
     started_at: datetime,
     recipients_notified: list[str],
+    dispatch_outbox: bool = False,
 ) -> None:
     """Create a new downtime alert record."""
     now = utcnow()
@@ -2230,9 +2340,9 @@ def create_alert(
         conn.execute(
             """
             INSERT INTO alerts (
-                id, target_id, target_name, failed_service, status,
+                id, target_id, target_name, failed_service, status, active_incident,
                 started_at, recipients_notified, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, 'open', 1, ?, ?, ?, ?)
             """,
             (alert_id, target_id, target_name, failed_service, started_at, recipients_json, now, now),
         )
@@ -2241,12 +2351,110 @@ def create_alert(
         notifications.notify_alert_opened(
             conn, alert_id=alert_id, target_id=target_id, target_name=target_name, failed_service=failed_service
         )
+        if dispatch_outbox:
+            enqueue_alert_dispatch(
+                conn,
+                alert_id=alert_id,
+                event_type="open",
+                target_id=target_id,
+                target_name=target_name,
+                failed_service=failed_service,
+                started_at=started_at,
+            )
+
+
+def enqueue_alert_dispatch(
+    conn: sqlite3.Connection,
+    *,
+    alert_id: str,
+    event_type: str,
+    target_id: int,
+    target_name: str,
+    failed_service: str,
+    started_at: datetime,
+    ended_at: datetime | None = None,
+    duration_seconds: int | None = None,
+) -> None:
+    """Persist an alert event for retryable external notification dispatch."""
+    now = utcnow()
+    with transaction(conn):
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO alert_dispatch_outbox (
+                alert_id, event_type, target_id, target_name, failed_service,
+                started_at, ended_at, duration_seconds, status, attempts,
+                next_attempt_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?)
+            """,
+            (
+                alert_id,
+                event_type,
+                target_id,
+                target_name,
+                failed_service,
+                started_at,
+                ended_at,
+                duration_seconds,
+                now,
+                now,
+                now,
+            ),
+        )
+
+
+def record_alert_dispatch_attempt(
+    conn: sqlite3.Connection,
+    *,
+    alert_id: str,
+    event_type: str,
+    succeeded: bool,
+    retry_delay_seconds: int = 0,
+    error: str | None = None,
+) -> None:
+    now = utcnow()
+    next_attempt_at = now + timedelta(seconds=max(0, retry_delay_seconds))
+    with transaction(conn):
+        conn.execute(
+            """
+            UPDATE alert_dispatch_outbox
+            SET status = ?, attempts = attempts + 1, last_error = ?, next_attempt_at = ?, updated_at = ?
+            WHERE alert_id = ? AND event_type = ? AND status = 'pending'
+            """,
+            (
+                "completed" if succeeded else "pending",
+                None if succeeded else error,
+                next_attempt_at,
+                now,
+                alert_id,
+                event_type,
+            ),
+        )
+
+
+def list_pending_alert_dispatches(conn: sqlite3.Connection, *, limit: int = 100) -> list[sqlite3.Row]:
+    return list(
+        conn.execute(
+            """
+            SELECT * FROM alert_dispatch_outbox
+            WHERE status = 'pending' AND next_attempt_at <= ?
+            ORDER BY created_at, id
+            LIMIT ?
+            """,
+            (utcnow(), limit),
+        ).fetchall()
+    )
+
+
+def has_pending_alert_dispatches(conn: sqlite3.Connection) -> bool:
+    return conn.execute("SELECT 1 FROM alert_dispatch_outbox WHERE status = 'pending' LIMIT 1").fetchone() is not None
 
 
 def resolve_alert(
     conn: sqlite3.Connection,
     alert_id: str,
     ended_at: datetime,
+    *,
+    dispatch_outbox: bool = False,
 ) -> None:
     """Mark an alert as resolved and record the end time."""
     now = utcnow()
@@ -2260,6 +2468,7 @@ def resolve_alert(
                 """
                 UPDATE alerts SET
                     status = 'resolved',
+                    active_incident = 0,
                     ended_at = ?,
                     duration_seconds = ?,
                     updated_at = ?
@@ -2267,6 +2476,18 @@ def resolve_alert(
                 """,
                 (ended_at, duration_seconds, now, alert_id),
             )
+            if dispatch_outbox:
+                enqueue_alert_dispatch(
+                    conn,
+                    alert_id=alert_id,
+                    event_type="resolved",
+                    target_id=int(row["target_id"]),
+                    target_name=row["target_name"],
+                    failed_service=row["failed_service"],
+                    started_at=row["started_at"],
+                    ended_at=ended_at,
+                    duration_seconds=duration_seconds,
+                )
             from . import notifications
 
             notifications.notify_alert_resolved(
@@ -2278,6 +2499,15 @@ def resolve_alert(
             )
 
 
+def deactivate_alert(conn: sqlite3.Connection, alert_id: str) -> None:
+    """Keep an alert open for manual review while ending its active incident."""
+    with transaction(conn):
+        conn.execute(
+            "UPDATE alerts SET active_incident = 0, updated_at = ? WHERE id = ? AND status = 'open'",
+            (utcnow(), alert_id),
+        )
+
+
 def list_open_alerts(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     """List all currently open alerts.
 
@@ -2285,6 +2515,13 @@ def list_open_alerts(conn: sqlite3.Connection) -> list[sqlite3.Row]:
             List of alert rows with columns: target_id, id, started_at, failed_service
     """
     return conn.execute("SELECT target_id, id, started_at, failed_service FROM alerts WHERE status = 'open'").fetchall()
+
+
+def list_active_alerts(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """List open alerts that still represent an active incident."""
+    return conn.execute(
+        "SELECT target_id, id, started_at, failed_service FROM alerts WHERE status = 'open' AND active_incident = 1"
+    ).fetchall()
 
 
 def acknowledge_alert(
@@ -2304,6 +2541,7 @@ def acknowledge_alert(
             """
             UPDATE alerts SET
                 status = 'resolved',
+                active_incident = 0,
                 ended_at = COALESCE(ended_at, ?),
                 duration_seconds = COALESCE(duration_seconds, ?),
                 is_acknowledged = 1,
@@ -2328,6 +2566,7 @@ def acknowledge_all_open_alerts(
             """
             UPDATE alerts SET
                 status = 'resolved',
+                active_incident = 0,
                 ended_at = COALESCE(ended_at, ?),
                 duration_seconds = COALESCE(
                     duration_seconds,

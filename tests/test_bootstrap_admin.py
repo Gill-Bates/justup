@@ -253,14 +253,14 @@ def test_login_response_carries_must_change_flag(monkeypatch):
         client = TestClient(app)
         client.get("/ui/login")
         csrf = client.cookies.get("csrf_token")
-        headers = {"X-CSRF-Token": csrf}
+        headers = {"Origin": "http://testserver", "X-CSRF-Token": csrf}
         pending = client.post("/login", json={"username": "pending", "password": "Temp-pass-1"}, headers=headers)
         assert pending.status_code == 200
         assert pending.json()["must_change_password"] is True
         regular = client.post(
             "/login",
             json={"username": "regular", "password": "Reg-pass-123"},
-            headers={"X-CSRF-Token": client.cookies.get("csrf_token")},
+            headers={"Origin": "http://testserver", "X-CSRF-Token": client.cookies.get("csrf_token")},
         )
         assert regular.status_code == 200
         assert "must_change_password" not in regular.json()

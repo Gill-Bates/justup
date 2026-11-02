@@ -290,7 +290,11 @@ class ReleaseChecker:
         client_factory: Callable[[], httpx.AsyncClient] | None = None,
         clock: Callable[[], datetime] = utcnow,
         rng: random.Random | None = None,
+        on_failure: Callable[[str], None] | None = None,
+        on_success: Callable[[], None] | None = None,
     ) -> None:
+        self._on_failure = on_failure  # outcome hooks for the supervisor (failure series -> degraded)
+        self._on_success = on_success
         self._conn_factory = conn_factory
         self._client_factory = client_factory or self._default_client
         self._clock = clock
@@ -387,9 +391,13 @@ class ReleaseChecker:
                 if self._stop.is_set():
                     break
                 status = await self.check_once()
-            except Exception:  # noqa: BLE001 - GitHub or storage trouble must never reach the supervisor or monitoring
+            except Exception as exc:  # noqa: BLE001 - GitHub or storage trouble must never reach the supervisor or monitoring
                 _log.exception("Release check iteration failed")
                 status = "crashed"
+                exc_type = type(exc).__name__
+            else:
+                exc_type = "ReleaseCheckError"
+            self._report(status, exc_type)
             if status == "skipped":
                 await self._wait(CHECK_INTERVAL_SECONDS)
             elif status in ("maintenance", "busy"):
@@ -397,6 +405,14 @@ class ReleaseChecker:
             elif status == "crashed":
                 # Only for failures before the outcome was persisted; otherwise next_attempt_at rules.
                 await self._wait(BACKOFF_BASE_SECONDS)
+
+    def _report(self, status: str, exc_type: str = "ReleaseCheckError") -> None:
+        """Tell the supervisor how the iteration went; skipped, busy or maintenance rounds say nothing."""
+        if status in ("error", "crashed"):
+            if self._on_failure is not None:
+                self._on_failure(exc_type)
+        elif status not in ("skipped", "busy", "maintenance", "stopped", "rate_limited") and self._on_success:
+            self._on_success()
 
     async def _reconcile_startup(self) -> None:
         """After an upgrade, retire notices for the installed version without any network access."""

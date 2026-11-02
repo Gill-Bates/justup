@@ -63,6 +63,7 @@ async function fetchAvailabilitySeries(targetId, loadToken, signal) {
     if (appState.currentLoadToken !== loadToken) return null;
 
     const data = await resp.json();
+    if (appState.currentLoadToken !== loadToken) return null;
     return data;
   } catch (err) {
     if (isAbortError(err)) return null;

@@ -8,8 +8,8 @@
 	'use strict';
 	var page = document.getElementById('notifications-page');
 	if (!page) return;
-	function markRead(id) {
-		return window.apiFetch('/ui/notifications/' + encodeURIComponent(id) + '/read', { method: 'POST' });
+	function markRead(id, options) {
+		return window.apiFetch('/ui/notifications/' + encodeURIComponent(id) + '/read', Object.assign({ method: 'POST' }, options));
 	}
 	function changed() { window.dispatchEvent(new Event('justup:notifications-changed')); }
 	function toastError(message) {
@@ -57,11 +57,10 @@
 				}).catch(function () {});
 				return;
 			}
-			Promise.resolve().then(function () { return markRead(content.dataset.id); }).then(function (r) {
+			markRead(content.dataset.id, { keepalive: true }).then(function (r) {
 				if (r.ok) changed();
-			}).catch(function () {}).then(function () {
-				window.location.assign(href);
-			});
+			}).catch(function () {});
+			window.location.assign(href);
 		} else if (action === 'download') {
 			// The anchor itself starts the attachment download; only the read state is recorded here.
 			markRead(content.dataset.id).then(function (r) {

@@ -15,9 +15,6 @@
 // Reentrancy guard: prevents double-click from spawning parallel requests
 let _pdfRequestInFlight = false;
 
-// Store HTMX polling state during PDF generation
-let _pausedPollingElements = new Map();
-
 /**
  * Get PDF export button elements (centralized DOM lookup).
  * @private
@@ -44,68 +41,10 @@ function _setPdfStatus(text) {
   el.hidden = !text;
 }
 /**
- * Pause HTMX polling to reduce server load during PDF generation.
- * Stores original hx-trigger values for later restoration.
- * @private
- */
-function _pauseHtmxPolling() {
-  _pausedPollingElements.clear();
-  const pollingElements = document.querySelectorAll('[hx-trigger*="every"]');
-
-  pollingElements.forEach((el) => {
-    const trigger = el.getAttribute("hx-trigger");
-    if (trigger) {
-      _pausedPollingElements.set(el, trigger);
-      el.removeAttribute("hx-trigger");
-      // Re-process element to stop HTMX polling
-      if (typeof htmx !== "undefined" && htmx.process) {
-        htmx.process(el);
-      }
-    }
-  });
-
-  if (_pausedPollingElements.size > 0) {
-    console.info(
-      "HTMX polling paused for",
-      _pausedPollingElements.size,
-      "elements during PDF generation",
-    );
-  }
-}
-
-/**
- * Resume HTMX polling after PDF generation completes.
- * Restores original hx-trigger values.
- * @private
- */
-function _resumeHtmxPolling() {
-  let resumed = 0;
-
-  _pausedPollingElements.forEach((trigger, el) => {
-    // Only restore if element is still in DOM
-    if (el.isConnected) {
-      el.setAttribute("hx-trigger", trigger);
-      // Re-process to restart polling
-      if (typeof htmx !== "undefined" && htmx.process) {
-        htmx.process(el);
-      }
-      resumed++;
-    }
-  });
-
-  _pausedPollingElements.clear();
-
-  if (resumed > 0) {
-    console.info("HTMX polling resumed for", resumed, "elements");
-  }
-}
-
-/**
  * Reset the PDF export button to its idle state.
  */
 function resetPdfButton() {
   _pdfRequestInFlight = false;
-  _resumeHtmxPolling();
 
   const { btn, icon, spinner } = _getPdfElements();
 
@@ -152,7 +91,6 @@ async function downloadPdfReport(targetId, pdfPageSize) {
 
   _setPdfStatus("");
   _setPdfButtonBusy();
-  _pauseHtmxPolling();
 
   // Safety timeout: reset button if job completion event never arrives
   const safetyTimeout = setTimeout(
@@ -217,7 +155,7 @@ async function downloadPdfReport(targetId, pdfPageSize) {
     _pdfRequestInFlight = false;
     console.error("PDF request failed:", err);
     _setPdfStatus("PDF failed: " + err.message);
-    resetPdfButton(); // This also resumes HTMX polling
+    resetPdfButton();
   }
 }
 

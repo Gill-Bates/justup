@@ -9,12 +9,15 @@ import test from "node:test";
 import vm from "node:vm";
 
 const src = readFileSync(new URL("../../app/static/js/dashboard.js", import.meta.url), "utf8");
+const dashboardTemplate = readFileSync(new URL("../../app/templates/dashboard.html", import.meta.url), "utf8");
 const IDS = ["table-container", "success", "empty", "error", "loading", "count-badge", "table-body"];
 
 function el(id) {
   const classes = new Set(id === "table-container" || id === "success" || id === "empty" || id === "error" ? ["d-none"] : []);
+  const listeners = {};
   return {
     id, textContent: "", innerHTML: "", children: [],
+    listeners,
     classList: {
       add: name => classes.add(name),
       remove: name => classes.delete(name),
@@ -22,7 +25,8 @@ function el(id) {
       contains: name => classes.has(name),
     },
     appendChild(child) { this.children.push(child); return child; },
-    addEventListener() {},
+    addEventListener(name, callback) { (listeners[name] ||= []).push(callback); },
+    dispatch(name, event) { (listeners[name] || []).forEach(callback => callback(event)); },
     dataset: {},
   };
 }
@@ -30,8 +34,17 @@ function el(id) {
 function harness(responses) {
   const nodes = Object.fromEntries(IDS.map(id => [id, el(id)]));
   let ready;
+  const bodyListeners = {};
   const document = {
-    body: { addEventListener() {}, removeEventListener() {} },
+    body: {
+      addEventListener(name, callback) { (bodyListeners[name] ||= []).push(callback); },
+      removeEventListener(name, callback) {
+        bodyListeners[name] = (bodyListeners[name] || []).filter(listener => listener !== callback);
+      },
+      dispatchEvent(event) {
+        (bodyListeners[event.type] || []).forEach(callback => callback(event));
+      },
+    },
     getElementById: id => nodes[id.replace(/^downtime-/, "")] || null,
     createElement: () => el("x"),
     createTextNode: text => ({ textContent: text }),
@@ -48,10 +61,13 @@ function harness(responses) {
     },
     setInterval: () => 1,
   };
-  vm.runInNewContext(src, { window, document, console: { error() {}, warn() {} }, setInterval: window.setInterval });
+  vm.runInNewContext(src, {
+    window, document, console: { error() {}, warn() {} }, setInterval: window.setInterval,
+  });
   const load = async () => { ready(); await new Promise(resolve => setImmediate(resolve)); };
   const visible = id => !nodes[id].classList.contains("d-none");
-  return { nodes, load, visible, requests };
+  const dispatchBodyEvent = event => document.body.dispatchEvent(event);
+  return { nodes, load, visible, requests, dispatchBodyEvent };
 }
 
 const ok = body => ({ ok: true, json: async () => body });
@@ -77,4 +93,15 @@ test("a failure after a success shows the error state instead of stale rows or t
     assert.equal(h.visible("empty"), false);
     assert.equal(h.visible("count-badge"), false);
   }
+});
+
+test("dashboard has no manual refresh button", () => {
+  assert.doesNotMatch(dashboardTemplate, /id="dashboard-refresh-btn"/);
+});
+
+test("HTMX swaps do not restart a fade on dashboard content", () => {
+  const h = harness([]);
+  const swapped = el("dashboard-status-online");
+  h.dispatchBodyEvent({ type: "htmx:afterSwap", detail: { elt: swapped } });
+  assert.equal(swapped.classList.contains("fade-in"), false);
 });

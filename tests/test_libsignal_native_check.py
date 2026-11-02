@@ -24,6 +24,7 @@ SPEC.loader.exec_module(tool)
 
 AMD64 = "libsignal_jni_amd64.so"
 AARCH64 = "libsignal_jni_aarch64.so"
+HOST_LIB_DIRS = ("/lib/x86_64-linux-gnu", "/lib/aarch64-linux-gnu", "/usr/lib64", "/lib64")
 
 
 def elf(machine: int, *, klass: int = 2, data: int = 1, magic: bytes = b"\x7fELF") -> bytes:
@@ -96,3 +97,22 @@ def test_main_exit_codes(tmp_path, capsys):
     assert "OK:" in capsys.readouterr().out
     assert tool.main(["x", "arm64", str(tmp_path)]) == 1
     assert "FAIL:" in capsys.readouterr().err
+
+
+def test_load_check_dlopens_a_real_library_and_rejects_an_unloadable_one(tmp_path):
+    broken = tmp_path / "broken"
+    broken.mkdir()
+    with pytest.raises(tool.CheckError, match="dlopen failed"):
+        tool.load(make_jar(broken, [(AMD64, elf(62) + b"not loadable")]), "amd64")
+    real = next((Path(d) / "libm.so.6" for d in HOST_LIB_DIRS if (Path(d) / "libm.so.6").is_file()), None)
+    if real is None:
+        pytest.skip("no host libm.so.6 to load")
+    good = tmp_path / "good"
+    good.mkdir()
+    assert "loads" in tool.load(make_jar(good, [(AMD64, real.read_bytes())]), "amd64")
+
+
+def test_main_load_flag_fails_on_unloadable_library(tmp_path, capsys):
+    make_jar(tmp_path, [(AMD64, elf(62))])
+    assert tool.main(["x", "--load", "amd64", str(tmp_path)]) == 1
+    assert "dlopen failed" in capsys.readouterr().err

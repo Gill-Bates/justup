@@ -3,6 +3,21 @@
 
 {% block styles %}
 <style>
+	.target-edit-tabs {
+		flex-wrap: nowrap;
+		overscroll-behavior-x: contain;
+		-webkit-overflow-scrolling: touch;
+	}
+
+	.target-edit-tabs .nav-item {
+		flex: 0 0 auto;
+	}
+
+	.target-edit-tabs .nav-link {
+		min-height: 44px;
+		white-space: nowrap;
+	}
+
 	/* Check Cards Pattern */
 	.check-card {
 		border: 1px solid var(--bs-border-color);
@@ -231,7 +246,6 @@
 		<div class="ui-page-heading">
 			<p class="ui-page-eyebrow">Monitor setup</p>
 			<h1>Edit Target</h1>
-			<p class="ui-page-lead">Adjust the address, checks and notifications for this monitor.</p>
 		</div>
 	</div>
 
@@ -241,6 +255,40 @@
 		</div>
 		<div class="card-body">
 			<form id="target-form" autocomplete="off">
+				<ul class="nav nav-tabs target-edit-tabs overflow-x-auto mb-4" id="target-edit-tabs" role="tablist"
+					aria-label="Target configuration sections">
+					<li class="nav-item" role="presentation">
+						<button class="nav-link active" id="target-general-tab" data-bs-toggle="tab"
+							data-bs-target="#target-general-pane" type="button" role="tab"
+							aria-controls="target-general-pane" aria-selected="true" tabindex="0">
+							<span class="material-icons me-1" aria-hidden="true">tune</span> General
+						</button>
+					</li>
+					<li class="nav-item" role="presentation">
+						<button class="nav-link" id="target-http-tab" data-bs-toggle="tab"
+							data-bs-target="#target-http-pane" type="button" role="tab"
+							aria-controls="target-http-pane" aria-selected="false" tabindex="-1">
+							<span class="material-icons me-1" aria-hidden="true">public</span> HTTP / TLS
+						</button>
+					</li>
+					<li class="nav-item" role="presentation">
+						<button class="nav-link" id="target-network-tab" data-bs-toggle="tab"
+							data-bs-target="#target-network-pane" type="button" role="tab"
+							aria-controls="target-network-pane" aria-selected="false" tabindex="-1">
+							<span class="material-icons me-1" aria-hidden="true">lan</span> Network
+						</button>
+					</li>
+					<li class="nav-item" role="presentation">
+						<button class="nav-link" id="target-alerts-tab" data-bs-toggle="tab"
+							data-bs-target="#target-alerts-pane" type="button" role="tab"
+							aria-controls="target-alerts-pane" aria-selected="false" tabindex="-1">
+							<span class="material-icons me-1" aria-hidden="true">notifications</span> Alerts &amp; SLA
+						</button>
+					</li>
+				</ul>
+				<div class="tab-content" id="target-edit-tab-content">
+					<div class="tab-pane fade show active" id="target-general-pane" role="tabpanel"
+						aria-labelledby="target-general-tab" tabindex="0">
 				<!-- ═══════════════════════════════════════════════════════════════════
 			     SECTION 1: Identity
 			     ═══════════════════════════════════════════════════════════════════ -->
@@ -252,19 +300,19 @@
 					<div class="col-md-5 mb-3 mb-md-0">
 						<label for="name" class="form-label">Monitor Name *</label>
 						<input type="text" class="form-control" id="name" name="name" required
-							value="{{ target.name if target else '' }}" maxlength="200" placeholder="e.g. My Website">
+							value="{{ target.name }}" maxlength="200" placeholder="e.g. My Website">
 					</div>
 					<div class="col-md-4 mb-3 mb-md-0">
 						<label for="host-input" class="form-label">Host / Domain *</label>
 						<input type="text" class="form-control" name="host" id="host-input" required
-							value="{{ target.host if target else '' }}" maxlength="255" placeholder="e.g. example.com">
+							value="{{ target.host }}" maxlength="255" placeholder="e.g. example.com">
 					</div>
 					<div class="col-md-3">
 						<label for="group" class="form-label">Group</label>
 						<select class="form-select" id="group" name="group">
 							<option value="">-- No Group --</option>
 							{% for g in groups %}
-							<option value="{{ g.name }}" {{ 'selected' if target and target.group==g.name else '' }}>{{
+							<option value="{{ g.name }}" {{ 'selected' if target.group==g.name else '' }}>{{
 								g.name }}</option>
 							{% endfor %}
 						</select>
@@ -283,30 +331,30 @@
 						<label for="interval_seconds" class="form-label">Check Interval</label>
 						<div class="input-group">
 							<input type="number" class="form-control" id="interval_seconds" name="interval_seconds"
-								value="{{ target.interval_seconds if target else 60 }}" min="{{ limits.interval_seconds.min }}" max="{{ limits.interval_seconds.max }}">
+								value="{{ target.interval_seconds }}" min="{{ limits.interval_seconds.min }}" max="{{ limits.interval_seconds.max }}">
 							<span class="input-group-text">sec</span>
 						</div>
 					</div>
 					<div class="col-md-2 mb-3 mb-md-0">
 						<label for="max_retries" class="form-label">Retries</label>
 						<input type="number" class="form-control" id="max_retries" name="max_retries"
-							value="{{ target.max_retries if target else 5 }}" min="{{ limits.max_retries.min }}" max="{{ limits.max_retries.max }}">
+							value="{{ target.max_retries }}" min="{{ limits.max_retries.min }}" max="{{ limits.max_retries.max }}">
 					</div>
 					<div class="col-md-2 mb-3 mb-md-0">
 						<label for="retention_days" class="form-label">Retention</label>
 						<div class="input-group">
 							<input type="number" class="form-control" id="retention_days" name="retention_days"
-								value="{{ target.retention_days if target else 365 }}" min="{{ limits.retention_days.min }}" max="{{ limits.retention_days.max }}"
+								value="{{ target.retention_days }}" min="{{ limits.retention_days.min }}" max="{{ limits.retention_days.max }}"
 								aria-describedby="retention_days_hint">
 							<span class="input-group-text">days</span>
 						</div>
-						<div class="form-text" id="retention_days_hint">Maximum history for this target. Raw data is kept for up to 30 days, 5-minute rollups for up to 180 days, and hourly rollups for up to this setting (maximum 10 years). Rollups and compression run automatically.</div>
+						<div class="form-text" id="retention_days_hint">Raw: 30d · 5-min: 180d · hourly: up to limit (max. 10y).</div>
 					</div>
 					<div class="col-md-2" role="group" aria-labelledby="is_enabled-group-label">
 						<span class="form-label d-inline-block" id="is_enabled-group-label">Status</span>
 						<div class="form-check form-switch mt-2">
 							<input class="form-check-input" type="checkbox" role="switch" name="is_enabled"
-								id="is_enabled" {{ 'checked' if (not target or target.is_enabled) else '' }}>
+								id="is_enabled" {{ 'checked' if target.is_enabled else '' }}>
 							<label class="form-check-label" for="is_enabled">Enabled</label>
 						</div>
 					</div>
@@ -314,18 +362,21 @@
 						<span class="form-label d-inline-block" id="auto_close_alert-group-label">Alerts</span>
 						<div class="form-check form-switch mt-2">
 							<input class="form-check-input" type="checkbox" role="switch" name="auto_close_alert"
-								id="auto_close_alert" {{ 'checked' if (not target or target.auto_close_alert) else ''
+								id="auto_close_alert" {{ 'checked' if target.auto_close_alert else ''
 								}}>
 							<label class="form-check-label" for="auto_close_alert">Auto-Close</label>
 						</div>
 					</div>
 				</div>
+					</div>
 
 				<!-- ═══════════════════════════════════════════════════════════════════
 			     SECTION 3: Monitoring Checks (Card Pattern)
 			     ═══════════════════════════════════════════════════════════════════ -->
+					<div class="tab-pane fade" id="target-http-pane" role="tabpanel"
+						aria-labelledby="target-http-tab" tabindex="0">
 				<div class="section-header">
-					<span class="material-icons me-1" aria-hidden="true">trending_up</span> Monitoring Checks
+					<span class="material-icons me-1" aria-hidden="true">public</span> HTTP Monitoring
 				</div>
 
 				<!-- HTTP Check Card -->
@@ -338,7 +389,7 @@
 						</div>
 						<div class="form-check form-switch">
 							<input class="form-check-input" type="checkbox" role="switch" aria-label="Enable HTTP check" id="enable_http_check"
-								name="enable_http_check" {{ 'checked' if target and target.enable_http_check else '' }}>
+								name="enable_http_check" {{ 'checked' if target.enable_http_check else '' }}>
 						</div>
 					</div>
 
@@ -347,8 +398,8 @@
 						<div class="mb-3">
 						<label for="http-url-input" class="form-label">Full URL or path</label>
 							<input type="text" class="form-control" id="http-url-input" name="http_url"
-								value="{{ target.http_url if target and target.http_url else '' }}"
-								data-default-scheme="{{ 'http' if target and target.http_url and target.http_url.startswith('http://') else 'https' }}"
+								value="{{ target.http_url if target.http_url else '' }}"
+								data-default-scheme="{{ 'http' if target.http_url and target.http_url.startswith('http://') else 'https' }}"
 								placeholder="e.g. /health or /api/status" autocomplete="off" data-lpignore="true"
 								data-form-type="other" data-1p-ignore="true" data-bwignore="true">
 							<div class="form-text mt-2">
@@ -356,11 +407,11 @@
 							</div>
 						</div>
 
-						{% set http_req_open = target and (target.http_port or (target.http_success_codes and target.http_success_codes != '200-399') or
+						{% set http_req_open = (target.http_port or (target.http_success_codes and target.http_success_codes != '200-399') or
 						(target.http_prefer_head is not none and not target.http_prefer_head)) %}
-						{% set http_auth_open = target and (target.http_basic_auth_enabled or target.http_username or
+						{% set http_auth_open = (target.http_basic_auth_enabled or target.http_username or
 						target.has_http_password) %}
-						{% set http_tls_open = target and (target.ignore_cert_errors or target.enable_cert_expiration or target.cert_port or target.cert_host) %}
+						{% set http_tls_open = (target.ignore_cert_errors or target.enable_cert_expiration or target.cert_port or target.cert_host) %}
 
 						<div class="accordion accordion-flush" id="http-options-accordion">
 							<!-- Request -->
@@ -383,7 +434,7 @@
 													(optional)</label>
 												<input type="number" class="form-control" id="http_port"
 													name="http_port"
-													value="{{ target.http_port if target and target.http_port is not none else '' }}"
+													value="{{ target.http_port if target.http_port is not none else '' }}"
 													min="1" max="65535" placeholder="80 / 443">
 												<div class="form-text">Overrides the port if the URL has no explicit
 													port.</div>
@@ -393,7 +444,7 @@
 												<div class="form-check form-switch">
 													<input class="form-check-input" type="checkbox" role="switch"
 														name="http_prefer_head" id="http_prefer_head" {{ 'checked' if
-														not target or target.http_prefer_head else '' }}>
+														target.http_prefer_head else '' }}>
 													<label class="form-check-label" for="http_prefer_head">Use HEAD
 														request</label>
 												</div>
@@ -405,16 +456,15 @@
 													Mode</label>
 												<select class="form-select" id="http_success_codes"
 													name="http_success_codes">
-													<option value="200-399" {{ 'selected' if (not target) or
-														(target.http_success_codes in [none, '' , '200-399' ]) else ''
+													<option value="200-399" {{ 'selected' if (target.http_success_codes in [none, '' , '200-399' ]) else ''
 														}}>
 														Standard (200–399) – 2xx + Redirects
 													</option>
-													<option value="200-499" {{ 'selected' if target and
+													<option value="200-499" {{ 'selected' if
 														target.http_success_codes=='200-499' else '' }}>
 														Lenient (200–499) – also counts 4xx as UP
 													</option>
-													{% if target and target.http_success_codes and target.http_success_codes not in ['200-399', '200-499'] %}
+													{% if target.http_success_codes and target.http_success_codes not in ['200-399', '200-499'] %}
 													<option value="{{ target.http_success_codes }}" selected>{{ target.http_success_codes }} (current)</option>
 													{% endif %}
 												</select>
@@ -450,13 +500,13 @@
 												<div class="form-check form-switch">
 													<input class="form-check-input" type="checkbox" role="switch"
 														name="http_basic_auth_enabled" id="http_basic_auth_enabled"
-														autocomplete="off" data-lpignore="true" {{ 'checked' if target
-														and target.http_basic_auth_enabled else '' }}>
+														autocomplete="off" data-lpignore="true" {{ 'checked' if
+														target.http_basic_auth_enabled else '' }}>
 													<label class="form-check-label" for="http_basic_auth_enabled">
 														Send HTTP Basic Authentication
 													</label>
 												</div>
-												{% if target and (target.http_username or target.has_http_password) and
+												{% if (target.http_username or target.has_http_password) and
 												not target.http_basic_auth_enabled %}
 												<div class="form-text text-body-secondary">Credentials are stored but currently
 													disabled.</div>
@@ -469,7 +519,7 @@
 												<input type="text" class="form-control" id="http_username"
 													name="http_username" autocomplete="off" data-lpignore="true"
 													data-form-type="other"
-													placeholder="{{ 'Stored; leave empty to keep' if target and target.http_username else '' }}">
+													placeholder="{{ 'Stored; leave empty to keep' if target.http_username else '' }}">
 											</div>
 											<div class="col-md-7 auth-field" style="display:none;">
 												<label for="http_password" class="form-label">Password</label>
@@ -477,15 +527,15 @@
 													<input type="password" class="form-control" id="http_password"
 														name="http_password" autocomplete="new-password"
 														data-lpignore="true" data-form-type="other"
-														placeholder="{{ '••••••••' if target and target.has_http_password else '' }}">
-													{% if target and target.has_http_password %}
+														placeholder="{{ '••••••••' if target.has_http_password else '' }}">
+													{% if target.has_http_password %}
 													<button type="button" class="btn btn-outline-danger"
 														id="clear-credentials-btn" title="Clear credentials" aria-label="Clear credentials">
 														<span class="material-icons" aria-hidden="true">delete</span>
 													</button>
 													{% endif %}
 												</div>
-												{% if target and target.has_http_password %}
+												{% if target.has_http_password %}
 												<div class="form-text text-success">
 													<span class="material-icons me-1" aria-hidden="true">lock</span> Encrypted. Leave empty
 													to keep.
@@ -515,14 +565,14 @@
 										<div class="form-check form-switch mb-3">
 											<input class="form-check-input" type="checkbox" role="switch"
 												name="enable_cert_expiration" id="enable_cert_expiration"
-												{{ 'checked' if target and target.enable_cert_expiration else '' }}>
+												{{ 'checked' if target.enable_cert_expiration else '' }}>
 											<label class="form-check-label" for="enable_cert_expiration">Monitor certificate expiry</label>
 										</div>
 										<div class="row g-3 mb-3">
 											<div class="col-md-8"><label for="cert_host" class="form-label">Certificate host</label>
-												<input type="text" id="cert_host" name="cert_host" class="form-control" value="{{ target.cert_host or '' if target else '' }}" placeholder="Uses target host if empty"></div>
+												<input type="text" id="cert_host" name="cert_host" class="form-control" value="{{ target.cert_host or '' }}" placeholder="Uses target host if empty"></div>
 											<div class="col-md-4"><label for="cert_port" class="form-label">Certificate port</label>
-												<input type="number" id="cert_port" name="cert_port" class="form-control" min="1" max="65535" value="{{ target.cert_port or '' if target else '' }}"></div>
+												<input type="number" id="cert_port" name="cert_port" class="form-control" min="1" max="65535" value="{{ target.cert_port or '' }}"></div>
 										</div>
 
 										<div class="small text-uppercase text-warning fw-semibold mb-2 mt-3">
@@ -540,9 +590,9 @@
 												<div class="form-check form-switch d-flex align-items-center gap-2">
 													<input class="form-check-input" type="checkbox" role="switch"
 														name="ignore_cert_errors" id="ignore_cert_errors" aria-label="Ignore certificate errors" {{ 'checked'
-														if target and target.ignore_cert_errors else '' }}>
+														if target.ignore_cert_errors else '' }}>
 													<span class="material-icons text-warning" id="ignore_cert_warning"
-														style="display: {{ 'inline' if target and target.ignore_cert_errors else 'none' }};" aria-hidden="true">warning</span>
+														style="display: {{ 'inline' if target.ignore_cert_errors else 'none' }};" aria-hidden="true">warning</span>
 												</div>
 											</div>
 										</div>
@@ -552,6 +602,13 @@
 						</div>
 					</div>
 				</div>
+
+					</div>
+					<div class="tab-pane fade" id="target-network-pane" role="tabpanel"
+						aria-labelledby="target-network-tab" tabindex="0">
+					<div class="section-header">
+						<span class="material-icons me-1" aria-hidden="true">lan</span> Network Checks
+					</div>
 
 				<!-- Ping Check Card -->
 				<div class="card mb-3 check-card" data-check="ping">
@@ -563,12 +620,12 @@
 						</div>
 						<div class="form-check form-switch">
 							<input class="form-check-input" type="checkbox" role="switch" aria-label="Enable ping check" id="enable_ping"
-								name="enable_ping" {{ 'checked' if target and target.enable_ping else '' }}>
+								name="enable_ping" {{ 'checked' if target.enable_ping else '' }}>
 						</div>
 					</div>
 					<div class="check-body" id="ping-check-body">
 						<label for="ping_host" class="form-label">Ping host</label>
-						<input type="text" id="ping_host" name="ping_host" class="form-control" value="{{ target.ping_host or '' if target else '' }}" placeholder="Uses target host if empty">
+						<input type="text" id="ping_host" name="ping_host" class="form-control" value="{{ target.ping_host or '' }}" placeholder="Uses target host if empty">
 					</div>
 				</div>
 
@@ -582,7 +639,7 @@
 						</div>
 						<div class="form-check form-switch">
 							<input class="form-check-input" type="checkbox" role="switch" aria-label="Enable TCP connect check" id="enable_tcp_connect"
-								name="enable_tcp_connect" {{ 'checked' if target and target.enable_tcp_connect else ''
+								name="enable_tcp_connect" {{ 'checked' if target.enable_tcp_connect else ''
 								}}>
 						</div>
 					</div>
@@ -590,7 +647,7 @@
 						<div class="row">
 							<div class="col-md-4">
 								<label for="tcp_host" class="form-label">TCP host</label>
-								<input type="text" id="tcp_host" name="tcp_host" class="form-control" value="{{ target.tcp_host or '' if target else '' }}" placeholder="Uses target host if empty">
+								<input type="text" id="tcp_host" name="tcp_host" class="form-control" value="{{ target.tcp_host or '' }}" placeholder="Uses target host if empty">
 							</div>
 							<div class="col-md-8">
 								<label for="tcp_ports_input" class="form-label">Ports *</label>
@@ -602,12 +659,15 @@
 										placeholder="Enter port and press Enter or Space" autocomplete="off">
 								</div>
 								<input type="hidden" id="tcp_ports" name="tcp_ports"
-									value="{{ target.tcp_ports if target and target.tcp_ports else '' }}">
+									value="{{ target.tcp_ports if target.tcp_ports else '' }}">
 							</div>
 						</div>
 					</div>
 				</div>
 
+					</div>
+					<div class="tab-pane fade" id="target-alerts-pane" role="tabpanel"
+						aria-labelledby="target-alerts-tab" tabindex="0">
 				<!-- ═══════════════════════════════════════════════════════════════════
 			     SECTION 5: Alert Users
 			     ═══════════════════════════════════════════════════════════════════ -->
@@ -629,13 +689,13 @@
 					<span><span class="material-icons me-1" aria-hidden="true">trending_up</span> SLA Targets</span>
 					<div class="form-check form-switch mb-0">
 						<input class="form-check-input" type="checkbox" role="switch" name="sla_enabled"
-							id="sla_enabled" {{ 'checked' if target and target.sla_enabled else '' }}>
+							id="sla_enabled" {{ 'checked' if target.sla_enabled else '' }}>
 						<label class="form-check-label" for="sla_enabled">Enable</label>
 					</div>
 				</div>
 
 				<div id="sla-fields" class="mb-4"
-					style="{{ '' if target and target.sla_enabled else 'display: none;' }}">
+					style="{{ '' if target.sla_enabled else 'display: none;' }}">
 					<div class="alert alert-light border small mb-3 py-2">
 						<span class="material-icons me-1" aria-hidden="true">info</span>
 						Affects <strong>reports & charts only</strong> – does not trigger alerts.
@@ -648,7 +708,7 @@
 							<div class="input-group">
 								<input type="number" class="form-control" id="sla_availability_pct"
 									name="sla_availability_pct"
-									value="{{ target.sla_availability_pct if target and target.sla_availability_pct is not none else '' }}"
+									value="{{ target.sla_availability_pct if target.sla_availability_pct is not none else '' }}"
 									min="0" max="100" step="0.001" placeholder="99.9">
 								<span class="input-group-text">%</span>
 							</div>
@@ -660,7 +720,7 @@
 							<div class="input-group">
 								<input type="number" class="form-control" id="sla_response_time_ms"
 									name="sla_response_time_ms"
-									value="{{ target.sla_response_time_ms if target and target.sla_response_time_ms is not none else '' }}"
+									value="{{ target.sla_response_time_ms if target.sla_response_time_ms is not none else '' }}"
 									min="0" step="1" placeholder="200">
 								<span class="input-group-text">ms</span>
 							</div>
@@ -672,13 +732,15 @@
 							<div class="input-group">
 								<input type="number" class="form-control" id="sla_ping_latency_ms"
 									name="sla_ping_latency_ms"
-									value="{{ target.sla_ping_latency_ms if target and target.sla_ping_latency_ms is not none else '' }}"
+									value="{{ target.sla_ping_latency_ms if target.sla_ping_latency_ms is not none else '' }}"
 									min="0" step="0.1" placeholder="50">
 								<span class="input-group-text">ms</span>
 							</div>
 						</div>
 					</div>
 				</div>
+						</div>
+					</div>
 
 				<!-- ═══════════════════════════════════════════════════════════════════
 			     ACTIONS
@@ -897,7 +959,7 @@
 		// Fix browser form-state restore oddities: the checkbox can come back checked
 		// even when no credentials exist (e.g. after reload/navigation).
 		// For new targets (no existing data), always start with auth OFF.
-		{% if target and target.http_basic_auth_enabled %}
+		{% if target.http_basic_auth_enabled %}
 		_applyBasicAuthUiState(true);
 		{% else %}
 		_applyBasicAuthUiState(false);
@@ -932,8 +994,8 @@
 	// ═══════════════════════════════════════════════════════════════════════════════
 	const clearBtn = document.getElementById('clear-credentials-btn');
 	if (clearBtn) {
-		clearBtn.addEventListener('click', () => {
-			if (confirm('Really clear credentials?')) {
+		clearBtn.addEventListener('click', async () => {
+			if (await window.confirmAction({ title: 'Clear credentials', message: 'The stored username and password are removed when you save.', confirmLabel: 'Clear' })) {
 				clearCredentials = true;
 				_applyBasicAuthUiState(false);
 				document.getElementById('http_username').value = '';

@@ -34,6 +34,7 @@ from typing import Any
 
 from ..services import event_bus
 from ..utils.time import utcnow
+from . import sqlite as sqlite_db
 from .sqlite import run_after_commit, transaction
 
 _log = logging.getLogger(__name__)
@@ -159,21 +160,32 @@ def _channel_label(channel: str) -> str:
     return "Email" if channel == "email" else "Signal"
 
 
+def _sent_texts(channel: str) -> tuple[str, str]:
+    """(title, body) of a successful hand-off. Email says "accepted": only the SMTP server's receipt is known."""
+    label = _channel_label(channel)
+    if channel == "email":
+        return (
+            f"{label} notifications accepted by SMTP server",
+            f"Channel: {label} · accepted by the SMTP server; delivery not verifiable",
+        )
+    return f"{label} notifications sent", f"Channel: {label} · sent"
+
+
 def emit_delivery_sent(conn: sqlite3.Connection, channel: str, *, now: datetime | None = None) -> None:
     """Record one successful delivery, grouped per channel and time window to cap the volume."""
     now = now or utcnow()
     key = f"delivery.{channel}.sent:{int(now.timestamp()) // SENT_GROUP_SECONDS}"
-    label = _channel_label(channel)
+    title, body = _sent_texts(channel)
     try:
-        if _bump_grouped_delivery(conn, key, label):
+        if _bump_grouped_delivery(conn, key, title):
             return
         created = emit(
             conn,
             event_type=f"delivery.{channel}.sent",
             category="delivery",
             severity="success",
-            title=f"{label} notifications sent",
-            body=f"Channel: {label} · delivered",
+            title=title,
+            body=body,
             idempotency_key=key,
             audience=AUDIENCE_ADMINS,
             resource_type="queue",
@@ -181,19 +193,19 @@ def emit_delivery_sent(conn: sqlite3.Connection, channel: str, *, now: datetime 
         )
         if created is None:
             # A concurrent delivery inserted the group first; count this one on its row.
-            _bump_grouped_delivery(conn, key, label)
+            _bump_grouped_delivery(conn, key, title)
     except sqlite3.Error as exc:
         _log.warning("Delivery notification (%s) could not be stored: %s", channel, exc)
 
 
-def _bump_grouped_delivery(conn: sqlite3.Connection, key: str, label: str) -> bool:
+def _bump_grouped_delivery(conn: sqlite3.Connection, key: str, title: str) -> bool:
     """Increment an existing grouped delivery row atomically; False if none exists yet."""
     with transaction(conn):
         # SET expressions read the old row, so event_count + 1 is the new total.
         cur = conn.execute(
             "UPDATE notifications SET event_count = event_count + 1, "
             "title = ? || ' (' || (event_count + 1) || ')' WHERE idempotency_key = ?",
-            (f"{label} notifications sent", key),
+            (title, key),
         )
         if not cur.rowcount:
             return False
@@ -558,19 +570,166 @@ def notify_target_created(conn: sqlite3.Connection, *, target_id: int, name: str
     )
 
 
-def notify_delivery_failed(conn: sqlite3.Connection, *, queue_id: int, channel: str, target_id: int | None) -> None:
-    """Permanent delivery failure. No message content, recipient address or error text is stored."""
+def notify_delivery_failed(
+    conn: sqlite3.Connection, *, queue_id: int, channel: str, target_id: int | None, reason: str = ""
+) -> None:
+    """Final delivery failure (once per queue row). No message content, recipient address or error text is stored.
+
+    ``reason`` is a short fixed phrase chosen by the caller (e.g. "rejected by the server").
+    """
     label = _channel_label(channel)
+    what = "SMTP handoff failed" if channel == "email" else "delivery failed"
     emit(
         conn,
         event_type=f"delivery.{channel}.failed",
         category="delivery",
         severity="error",
-        title=f"{label} delivery failed",
-        body=f"Channel: {label} · not delivered after all retries; see the spooler log",
+        title=f"{label} {what}",
+        body=f"Channel: {label} · {reason or 'not handed over'}; see the spooler log",
         idempotency_key=f"delivery.{channel}.failed:{queue_id}",
         audience=AUDIENCE_ADMINS,
         resource_type="queue",
         resource_id=queue_id,
         target_id=target_id,
     )
+
+
+# ─── Incidents: one deduplicated inbox row per continuous disturbance ────────────
+#
+# Generic so other subsystems (e.g. the supervisor) can reuse it. The open/closed state lives in the
+# ``settings`` table, so a container restart neither loses an open incident nor invents a recovery.
+
+INCIDENT_UPDATE_MIN_SECONDS = 1800
+
+
+def _incident_state_key(name: str) -> str:
+    return f"inbox_incident.{name}"
+
+
+def get_incident(conn: sqlite3.Connection, name: str) -> dict[str, Any] | None:
+    """The open incident state ({since, notification_id, last_update, count}), or None."""
+    state = sqlite_db.get_setting(conn, _incident_state_key(name))
+    return state if isinstance(state, dict) and "notification_id" in state else None
+
+
+def report_incident(
+    conn: sqlite3.Connection,
+    name: str,
+    *,
+    title: str,
+    body: str,
+    severity: str = "warning",
+    now: datetime | None = None,
+    update_after_seconds: int = INCIDENT_UPDATE_MIN_SECONDS,
+    category: str = "delivery",
+    resource_type: str | None = "queue",
+) -> int | None:
+    """Open the incident (one admin row) or refresh its row at most every ``update_after_seconds``.
+
+    Returns the id of a newly created row, otherwise None. A refresh rewrites the same row without
+    marking it unread again, so repeated failures never flood the inbox. ``category`` and
+    ``resource_type`` apply to the row created here; the category is kept in the incident state.
+    """
+    now = now or utcnow()
+    try:
+        with transaction(conn):
+            state = get_incident(conn, name)
+            if state is None:
+                new_id = emit(
+                    conn,
+                    event_type=f"incident.{name}",
+                    category=category,
+                    severity=severity,
+                    title=title,
+                    body=body,
+                    idempotency_key=f"incident.{name}:{int(now.timestamp())}",
+                    audience=AUDIENCE_ADMINS,
+                    resource_type=resource_type,
+                    created_at=now,
+                )
+                if new_id is not None:
+                    sqlite_db.set_setting(
+                        conn,
+                        _incident_state_key(name),
+                        {
+                            "since": now.isoformat(),
+                            "notification_id": new_id,
+                            "last_update": now.isoformat(),
+                            "count": 1,
+                            "category": category,
+                            "resource_type": resource_type,
+                        },
+                        auto_commit=False,
+                    )
+                return new_id
+            last = datetime.fromisoformat(state["last_update"])
+            state["count"] = int(state.get("count", 1)) + 1
+            if (now - last).total_seconds() >= update_after_seconds:
+                _rewrite_incident_row(conn, state, title, body, severity)
+                state["last_update"] = now.isoformat()
+            sqlite_db.set_setting(conn, _incident_state_key(name), state, auto_commit=False)
+            return None
+    except (sqlite3.Error, ValueError, KeyError) as exc:
+        _log.warning("Incident %s could not be recorded: %s", name, exc)
+        return None
+
+
+def _rewrite_incident_row(
+    conn: sqlite3.Connection, state: Mapping[str, Any], title: str, body: str, severity: str, *, renotify: bool = False
+) -> None:
+    notification_id = int(state["notification_id"])
+    conn.execute(
+        "UPDATE notifications SET title = ?, body = ?, severity = ? WHERE id = ?",
+        (_clean(title, TITLE_MAX), _clean(body, BODY_MAX), severity, notification_id),
+    )
+    if renotify:  # an escalation must be seen again, also by admins who read or hid the first notice
+        conn.execute("DELETE FROM notification_reads WHERE notification_id = ?", (notification_id,))
+        conn.execute("DELETE FROM notification_dismissals WHERE notification_id = ?", (notification_id,))
+    _publish_after_commit(conn, notification_id, state.get("category", "delivery"), AUDIENCE_ADMINS, None, None)
+
+
+def update_incident(
+    conn: sqlite3.Connection, name: str, *, title: str, body: str, severity: str, renotify: bool = False
+) -> bool:
+    """Rewrite the row of an open incident now (e.g. to its final state); False when none is open.
+
+    ``renotify`` marks the row unread again (and visible again) for every admin.
+    """
+    try:
+        with transaction(conn):
+            state = get_incident(conn, name)
+            if state is None:
+                return False
+            _rewrite_incident_row(conn, state, title, body, severity, renotify=renotify)
+            return True
+    except sqlite3.Error as exc:
+        _log.warning("Incident %s could not be updated: %s", name, exc)
+        return False
+
+
+def resolve_incident(
+    conn: sqlite3.Connection, name: str, *, title: str, body: str, now: datetime | None = None
+) -> int | None:
+    """Close an open incident with exactly one recovery row; None when nothing was open."""
+    now = now or utcnow()
+    try:
+        with transaction(conn):
+            state = get_incident(conn, name)
+            if state is None:
+                return None
+            sqlite_db.delete_setting(conn, _incident_state_key(name))
+            return emit(
+                conn,
+                event_type=f"incident.{name}.recovered",
+                category=state.get("category", "delivery"),
+                severity="success",
+                title=title,
+                body=body,
+                idempotency_key=f"incident.{name}.recovered:{state['notification_id']}",
+                audience=AUDIENCE_ADMINS,
+                resource_type=state.get("resource_type", "queue"),
+                created_at=now,
+            )
+    except sqlite3.Error as exc:
+        _log.warning("Incident %s could not be resolved: %s", name, exc)
+        return None

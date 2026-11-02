@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parent.parent
 TEMPLATE = ROOT / "app" / "templates" / "fragments" / "target_detail" / "charts_and_downtime.html"
 PAGE = ROOT / "app" / "templates" / "target_detail.html"
 DATA_JS = ROOT / "app" / "static" / "js" / "charts" / "combined-chart-data.js"
+PALETTE_JS = ROOT / "app" / "static" / "js" / "charts" / "combined-chart.js"
 
 
 @pytest.mark.parametrize(
@@ -36,13 +37,23 @@ def test_latency_source_priority_matches_uptime_metric_selection() -> None:
     assert js_up == [metric for _flag, metric in _PRIORITY]
 
 
+@pytest.mark.parametrize("theme", ["light", "dark"])
+def test_redirect_status_codes_use_success_color(theme: str) -> None:
+    js = PALETTE_JS.read_text(encoding="utf-8")
+    palette = re.search(rf"{theme}: \{{(.*?)\n  \}}", js, re.DOTALL)
+    assert palette
+    colors = dict(re.findall(r'"([^\"]+)":\s*"(#[0-9a-fA-F]{6})"', palette.group(1)))
+    assert colors["3xx"] == colors["2xx"]
+
+
 def test_canvas_has_image_role_accessible_name_and_text_alternatives() -> None:
     html = TEMPLATE.read_text(encoding="utf-8")
     canvas = re.search(r'<canvas\b[^>]*id="chart-combined"[^>]*>', html)
     assert canvas, "combined chart canvas missing"
     assert 'role="img"' in canvas.group(0) and "aria-label=" in canvas.group(0)
-    for anchor in ('id="combined-summary"', 'id="combined-data-details"', 'id="combined-table-body"'):
-        assert anchor in html
+    assert 'id="combined-summary"' in html
+    assert "combined-data-details" not in html
+    assert "combined-table-body" not in html
     assert 'role="group"' in html and 'id="combined-legend"' in html
 
 

@@ -8,11 +8,12 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
 from ..utils.constants import (
     DEFAULT_METRICS_TIMEOUT_MINUTES,
     DEFAULT_ONLINE_GEO_FALLBACK_ENABLED,
+    DEFAULT_SMTP_USE_TLS,
     METRICS_TIMEOUT_MINUTES_MAX,
     METRICS_TIMEOUT_MINUTES_MIN,
     PROVIDER_LOOKUP_CACHE_TTL_DEFAULT,
@@ -65,6 +66,16 @@ class Settings(BaseModel):
         le=PROVIDER_LOOKUP_CACHE_TTL_MAX,
     )
     ip_api_key_set: bool = Field(default=False, description="Whether an ip-api key is stored (value is never returned)")
+    # SMTP: non-secret values only (admin-only endpoint). The password is reduced to a flag.
+    smtp_enabled: bool = False
+    smtp_host: str = ""
+    smtp_port: int | None = None
+    smtp_from: str = ""
+    smtp_user: str = ""
+    smtp_use_tls: bool = Field(
+        default=DEFAULT_SMTP_USE_TLS, description="Effective STARTTLS requirement; true unless explicitly stored false"
+    )
+    smtp_password_set: bool = Field(default=False, description="Whether an SMTP password is stored (never returned)")
 
 
 class SettingsUpdate(BaseModel):
@@ -109,5 +120,5 @@ class SettingsUpdate(BaseModel):
     smtp_port: int | None = Field(default=None, ge=1, le=65535)
     smtp_user: str | None = None
     smtp_password: str | None = None
-    smtp_use_tls: bool | None = None
+    smtp_use_tls: StrictBool | None = None  # only a JSON boolean; "off"/0/"no" must not switch encryption off
     smtp_from: str | None = None

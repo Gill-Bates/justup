@@ -36,6 +36,16 @@ IPv4 entries of `UPMON_TRUSTED_PROXIES`.
     directly is treated as an ordinary untrusted peer, which is safe, but it
     bypasses any filtering the proxy does.
 
+## Authentication at the proxy
+
+justUp! treats any `Authorization` header as an explicit login attempt and never
+falls back to the session cookie for that request. A proxy that authenticates
+users itself (HTTP basic auth, forward auth) must therefore not pass its
+`Authorization` header on to justUp!, or page loads end at the sign-in page
+although the session cookie is valid. Strip it, for example in Nginx with
+`proxy_set_header Authorization "";` (this also blocks Bearer API clients on
+that route).
+
 ## Response security headers
 
 justUp! adds these headers to every response, including static files and error

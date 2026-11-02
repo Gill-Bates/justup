@@ -18,6 +18,42 @@
 	margin-block-end: calc(-1 * var(--gs-item-margin-bottom, var(--ju-dash-gutter)));
 }
 
+.dashboard-grid #quality-score {
+	font-size: 2.5rem;
+}
+
+.quality-targets-tooltip {
+	--bs-tooltip-bg: var(--ju-panel-bg);
+	--bs-tooltip-color: var(--bs-body-color);
+}
+
+.quality-targets-tooltip .tooltip-inner {
+	max-width: 20rem;
+	border: 1px solid var(--ju-panel-line);
+}
+
+.quality-targets-tooltip-content {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: center;
+	gap: 0.25rem;
+}
+
+.dashboard-grid #quality-label,
+.dashboard-grid #downtime-success p,
+.dashboard-grid #downtime-success small,
+.dashboard-grid #downtime-empty p,
+.dashboard-grid #downtime-empty small,
+.dashboard-grid #downtime-error p,
+.dashboard-grid #downtime-error small {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	overflow: hidden;
+	clip-path: inset(50%);
+	white-space: nowrap;
+}
+
 /* Hidden until dashboard-grid.js applied the stored layout; the delayed keyframe is the failsafe
    (no JS, failed script, stalled request) and shows the grid after 4s regardless. */
 .dashboard-grid--loading {
@@ -177,8 +213,7 @@
 		margin-block-end: 0;
 	}
 
-	.dashboard-grid>.grid-stack-item[data-widget-id="quality"],
-	.dashboard-grid>.grid-stack-item[data-widget-id="downtime"] {
+	.dashboard-grid>.grid-stack-item:not([data-widget-id^="status-"]) {
 		grid-column: 1 / -1;
 	}
 
@@ -194,6 +229,72 @@
 		inset: auto;
 		margin: 0 !important;
 		overflow: visible !important;
+	}
+}
+
+.dashboard-monitor-card {
+	container-type: inline-size;
+}
+
+.dashboard-monitor-title {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.dashboard-monitor-body {
+	display: flex;
+	flex-direction: column;
+	gap: 0.5rem;
+	min-width: 0;
+	font-variant-numeric: tabular-nums;
+}
+
+.dashboard-monitor-number {
+	font-size: 1.75rem;
+	font-weight: 600;
+	line-height: 1.1;
+}
+
+.dashboard-monitor-row {
+	display: flex;
+	justify-content: space-between;
+	align-items: baseline;
+	flex-wrap: wrap;
+	gap: 0.25rem 0.5rem;
+	min-width: 0;
+	font-size: 0.8125rem;
+}
+
+.dashboard-monitor-row a {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.dashboard-monitor-metrics {
+	display: grid;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	gap: 0.5rem;
+	font-size: 0.75rem;
+}
+
+.dashboard-monitor-metrics strong {
+	display: block;
+	font-size: 1rem;
+}
+
+.dashboard-monitor-chart {
+	position: relative;
+	height: 8rem;
+	min-width: 0;
+}
+
+.dashboard-monitor-extra {
+	display: none;
+}
+
+@container (min-width: 26rem) {
+	.dashboard-monitor-extra {
+		display: flex;
 	}
 }
 

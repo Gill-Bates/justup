@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -21,6 +22,7 @@ from app.utils.time import utcnow
 from tests import _support  # noqa: F401 - imported for its sys.path side effect
 
 EXPECTED_TABLES = {
+    "alert_dispatch_outbox",
     "alerts",
     "auth_tokens",
     "dashboard_layouts",
@@ -47,6 +49,7 @@ EXPECTED_TABLES = {
     "users",
 }
 EXPECTED_INDEXES = {
+    "idx_alert_dispatch_outbox_pending",
     "idx_targets_group_id",
     "idx_targets_identity_signature",
     "idx_report_jobs_user",
@@ -103,7 +106,7 @@ def test_new_file_is_initialised_as_baseline(db_path: Path):
     _init(db_path)
     conn = sqlite_db.connect(db_path)
     try:
-        assert sqlite_db.SCHEMA_VERSION == 1  # the v1.0.0 baseline
+        assert sqlite_db.SCHEMA_VERSION == 3  # v1.0.0 baseline + spooler resilience + alert outbox
         assert sqlite_db.get_schema_version(conn) == sqlite_db.SCHEMA_VERSION
         tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         assert tables >= EXPECTED_TABLES
@@ -124,6 +127,51 @@ def test_empty_existing_file_counts_as_a_new_database(db_path: Path):
     conn = sqlite_db.connect(db_path)
     try:
         assert sqlite_db.get_schema_version(conn) == sqlite_db.SCHEMA_VERSION
+    finally:
+        sqlite_db.close_connection(conn)
+
+
+def test_v2_migration_restores_only_the_currently_active_alert(db_path: Path):
+    _init(db_path)
+    conn = sqlite_db.connect(db_path)
+    try:
+        down_target = _target(conn, "down")
+        up_target = _target(conn, "up")
+        conn.commit()
+        started = utcnow()
+        for alert_id, target_id, alert_started in (
+            ("old-down", down_target, started - timedelta(minutes=5)),
+            ("current-down", down_target, started),
+            ("historical-up", up_target, started),
+        ):
+            sqlite_db.create_alert(
+                conn,
+                alert_id=alert_id,
+                target_id=target_id,
+                target_name="target",
+                failed_service="http",
+                started_at=alert_started,
+                recipients_notified=[],
+            )
+        conn.execute(
+            "INSERT INTO target_status(target_id, overall_status, updated_at) VALUES (?, 'down', ?)",
+            (down_target, started),
+        )
+        conn.execute(
+            "INSERT INTO target_status(target_id, overall_status, updated_at) VALUES (?, 'up', ?)",
+            (up_target, started),
+        )
+        conn.commit()
+        conn.execute("DROP TABLE alert_dispatch_outbox")
+        conn.execute("ALTER TABLE alerts DROP COLUMN active_incident")
+        conn.execute("PRAGMA user_version = 2")
+        sqlite_db.init_schema(conn)
+
+        active = {row["id"] for row in conn.execute("SELECT id FROM alerts WHERE active_incident = 1")}
+        assert active == {"current-down"}
+        pending = {row["alert_id"] for row in sqlite_db.list_pending_alert_dispatches(conn)}
+        assert pending == {"current-down"}
+        assert sqlite_db.get_schema_version(conn) == 3
     finally:
         sqlite_db.close_connection(conn)
 

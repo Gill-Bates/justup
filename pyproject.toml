@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=77.0.3", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "justup"
-version = "1.0.0"
+version = "1.0.1"
 description = "justUp! - Lightweight Uptime Monitor"
 requires-python = ">=3.13"
 license = "MIT"
@@ -44,15 +44,15 @@ dependencies = [
 # commit, not a side effect of a release.
 dev = [
     "pytest==9.2.0",
-    "pytest-asyncio==1.4.1",
+    "pytest-asyncio==1.4.1.post1",
     "pytest-cov==7.1.0",
     "pytest-xdist==3.8.0",
     "ruff==0.17.3",
 ]
-# Documentation toolchain (MkDocs + Material). Direct dependencies only and
-# intentionally unpinned: docs-build.yml resolves them, freezes the result with
-# `pip freeze --all`, and Trivy-scans that frozen set, so the lock lives in CI,
-# not here. Keep this list to direct deps; transitive ones come from the freeze.
+# Documentation toolchain (MkDocs + Material). Direct dependencies are pinned
+# here; transitive ones are resolved by docs-build.yml, frozen with
+# `pip freeze --all` and Trivy-scanned as that frozen set. Keep this list to
+# direct deps.
 docs = [
     "mkdocs==1.6.1",
     "mkdocs-material==9.8.0",
@@ -60,7 +60,7 @@ docs = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["app*"]
+include = ["app", "app.*"]
 namespaces = false
 
 [tool.pytest.ini_options]
@@ -74,6 +74,8 @@ asyncio_default_fixture_loop_scope = "function"
 [tool.ruff]
 line-length = 120
 target-version = "py313"
+# app/justup-cli has no .py extension, so ruff would skip it during discovery.
+extend-include = ["app/justup-cli"]
 # node_modules, .venv, build/ and dist/ are already in ruff's default
 # excludes; these are the trees specific to this repo.
 extend-exclude = ["data", "app/static/vendor", ".worktrees"]
@@ -149,8 +151,8 @@ ignore = [
     "PLR0913",
     "PLR0915",
     # ping/mtr/signal-cli/whatweb are resolved from PATH on purpose - the image
-    # provides them, and hardcoding /usr/bin would break local dev. Every call
-    # passes a list argv with a "--" option terminator; no shell is used.
+    # provides them, and hardcoding /usr/bin would break local dev (S607). Every
+    # call passes a list argv with a "--" option terminator and no shell (S603).
     "S603",
     "S607",
     # Docstrings and comments use en dashes and typographic quotes.

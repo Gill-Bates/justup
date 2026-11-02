@@ -225,9 +225,9 @@ def verify_signal_numbers(
 
 
 def _raise_duplicate_phone(exc: sqlite3.IntegrityError) -> NoReturn:
-    """Map a unique-index violation to the same 400 as the duplicate pre-check; re-raise anything else."""
+    """Map a unique-index violation to the same conflict as the duplicate pre-check."""
     if "UNIQUE constraint failed" in str(exc):
-        raise HTTPException(status_code=400, detail="Phone number already exists") from exc
+        raise HTTPException(status_code=409, detail="Phone number already exists") from exc
     raise exc
 
 
@@ -255,7 +255,7 @@ def create_recipient(payload: RecipientCreate, conn=Depends(get_conn), _user=Dep
 
         existing = sqlite_db.get_recipient_by_phone(conn, normalized_phone)
         if existing:
-            raise HTTPException(status_code=400, detail="Phone number already exists")
+            raise HTTPException(status_code=409, detail="Phone number already exists")
 
         signal_warning = _check_signal_registration(normalized_phone)
         if signal_warning:
@@ -271,7 +271,7 @@ def create_recipient(payload: RecipientCreate, conn=Depends(get_conn), _user=Dep
         )
     except sqlite_db.DuplicatePhoneError as exc:
         # The pre-check above is racy (signal lookup in between); the write itself re-checks atomically.
-        raise HTTPException(status_code=400, detail="Phone number already exists") from exc
+        raise HTTPException(status_code=409, detail="Phone number already exists") from exc
     except sqlite3.IntegrityError as exc:
         _raise_duplicate_phone(exc)
     row = sqlite_db.get_recipient(conn, new_id)
@@ -298,7 +298,7 @@ def update_recipient(recipient_id: int, payload: RecipientUpdate, conn=Depends(g
             if normalized_phone != existing["phone"]:
                 dup = sqlite_db.get_recipient_by_phone(conn, normalized_phone)
                 if dup and dup["id"] != recipient_id:
-                    raise HTTPException(status_code=400, detail="Phone number already exists")
+                    raise HTTPException(status_code=409, detail="Phone number already exists")
 
                 signal_warning = _check_signal_registration(normalized_phone)
                 if signal_warning:
@@ -324,7 +324,7 @@ def update_recipient(recipient_id: int, payload: RecipientUpdate, conn=Depends(g
                 conn, recipient_id, clear_phone=clear_phone, clear_email=clear_email, **update_data
             )
         except sqlite_db.DuplicatePhoneError as exc:
-            raise HTTPException(status_code=400, detail="Phone number already exists") from exc
+            raise HTTPException(status_code=409, detail="Phone number already exists") from exc
         except sqlite3.IntegrityError as exc:
             _raise_duplicate_phone(exc)
 

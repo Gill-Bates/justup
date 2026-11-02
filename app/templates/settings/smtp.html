@@ -1,4 +1,5 @@
 {# Settings: SMTP Tab Content #}
+{% from "settings/_secret_field.html" import secret_field %}
 <div class="ui-grid ui-grid--sidebar settings-editor settings-editor--fill">
 	{# Left Column: SMTP Configuration (1/3) #}
 		<div class="card shadow-sm">
@@ -40,10 +41,18 @@
 									inputmode="numeric" autocomplete="off">
 							</div>
 							<div class="col-6 d-flex align-items-end">
+								{# Implicit-TLS port (from the transport): switch locked on and relabelled. data-stored-value keeps the saved choice for other ports. #}
+								{% set implicit_tls = smtp.smtp_port == implicit_tls_port %}
+								{% set label_implicit = "Implicit TLS (SMTPS)" %}
+								{% set label_starttls = "Use STARTTLS" %}
 								<div class="form-check form-switch">
 									<input type="checkbox" class="form-check-input" role="switch" id="smtp_use_tls"
-										name="smtp_use_tls" {% if smtp.smtp_use_tls %}checked{% endif %}>
-									<label class="form-check-label" for="smtp_use_tls">Use STARTTLS</label>
+										name="smtp_use_tls" data-stored-value="{{ 'true' if smtp.smtp_use_tls else 'false' }}"
+										data-implicit-port="{{ implicit_tls_port }}"
+										{% if smtp.smtp_use_tls or implicit_tls %}checked{% endif %}
+										{% if implicit_tls %}disabled{% endif %}>
+									<label class="form-check-label" for="smtp_use_tls" id="smtp_use_tls_label"
+										data-label-implicit="{{ label_implicit }}" data-label-starttls="{{ label_starttls }}">{{ label_implicit if implicit_tls else label_starttls }}</label>
 								</div>
 							</div>
 						</div>
@@ -61,10 +70,10 @@
 						</div>
 
 						<div class="mb-0">
-							<label class="form-label" for="smtp_password">Password</label>
-							<input type="password" class="form-control" id="smtp_password" name="smtp_password" value=""
-								placeholder="(unchanged)" autocomplete="new-password">
-							<div class="form-text">Leave blank to keep the current password.</div>
+							{{ secret_field("smtp_password", "smtp_password", "Password", smtp.smtp_password_set,
+								"A password is stored. Enter a new password to replace it.",
+								"No password stored.",
+								"clear-smtp-password", "Remove stored password") }}
 						</div>
 					</fieldset>
 
@@ -150,7 +159,13 @@
 				</div>
 
 				<div id="preview-container" class="mb-3">
-					<span class="form-label d-inline-block">Preview</span>
+					<div class="d-flex justify-content-between align-items-center mb-1">
+						<span class="form-label d-inline-block mb-0">Preview</span>
+						<div class="btn-group btn-group-sm" role="group" aria-label="Preview example">
+							<button type="button" class="btn btn-outline-secondary active" id="btn-preview-down">DOWN</button>
+							<button type="button" class="btn btn-outline-secondary" id="btn-preview-resolved">RESOLVED</button>
+						</div>
+					</div>
 					<iframe id="email_preview_frame" class="w-100 border rounded bg-white smtp-editor-frame"
 						sandbox="allow-same-origin" title="Email template preview"></iframe>
 				</div>
@@ -188,7 +203,11 @@
 									</tr>
 									<tr>
 										<td><code>{{"{{"}}status.text{{"}}"}}</code></td>
-										<td>DOWN / RESOLVED</td>
+										<td>Service DOWN / Service RESOLVED</td>
+									</tr>
+									<tr>
+										<td><code>{{"{{"}}status.label{{"}}"}}</code></td>
+										<td>Short status pill: DOWN / RESOLVED</td>
 									</tr>
 									<tr>
 										<td><code>{{"{{"}}target.name{{"}}"}}</code></td>

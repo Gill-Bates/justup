@@ -161,6 +161,18 @@ def test_layouts_are_isolated_per_user(env):
     assert alice.call("GET").json() == {"layout": _VALID}
 
 
+def test_admin_widget_is_rejected_and_filtered_after_role_change(env):
+    alice = env["alice"]
+    queue = {**_STATUS, "id": "delivery-queue"}
+    assert alice.call("PUT", {"version": 1, "widgets": [queue]}).status_code == 403
+    connection = sqlite_db.connect(env["app"].state.db_path)
+    try:
+        layouts.set_dashboard_layout(connection, env["ids"][0], {"version": 1, "widgets": [_STATUS, queue]})
+    finally:
+        sqlite_db.close_connection(connection)
+    assert alice.call("GET").json() == {"layout": {"version": 1, "widgets": [_STATUS]}}
+
+
 @pytest.mark.parametrize(
     "layout",
     [
@@ -200,3 +212,49 @@ def test_widget_allowlist_matches_client_registry_and_template():
     assert set(re.findall(r'id="(dashboard-status-[a-z]+)"', status_fragment)) == hero_ids
     assert status_fragment.count('hx-swap-oob="outerHTML"') == 4
     assert len(re.findall(r'data-widget-id="', template)) == len(DASHBOARD_WIDGETS)
+
+
+def test_uptime_summary_excludes_unknown_time_and_disabled_targets(env, monkeypatch):
+    from datetime import UTC, datetime, timedelta
+
+    from app.api import dashboard_layout as api
+
+    now = datetime(2026, 11, 1, 12, tzinfo=UTC)
+    monkeypatch.setattr(api, "utcnow", lambda: now)
+    monkeypatch.setattr(
+        api.sqlite_db,
+        "list_targets",
+        lambda _conn: [
+            {"id": 1, "is_enabled": True, "enable_http_check": True, "interval_seconds": 60},
+            {"id": 2, "is_enabled": False, "enable_http_check": True, "interval_seconds": 60},
+        ],
+    )
+    calls = []
+
+    def availability(_directory, **kwargs):
+        calls.append(kwargs)
+        return {
+            "HTTP": [
+                {"ts": (now - timedelta(hours=24)).isoformat(), "up": 1},
+                {"ts": (now - timedelta(hours=12)).isoformat(), "up": None},
+            ]
+        }
+
+    monkeypatch.setattr(api.tsdb_db, "query_availability_series", availability)
+    alice = env["alice"]
+    response = alice.client.get(URL + "/uptime", headers={"Authorization": f"Bearer {alice.token}"})
+    assert response.status_code == 200
+    assert response.json() == {"uptime_percent": 100, "coverage_percent": 50}
+    assert len(calls) == 1
+    assert calls[0]["target_id"] == 1
+    assert calls[0]["enabled_services"] == {"HTTP"}
+
+
+def test_uptime_summary_without_measurements_is_unknown(env, monkeypatch):
+    from app.api import dashboard_layout as api
+
+    monkeypatch.setattr(api.sqlite_db, "list_targets", lambda _conn: [])
+    alice = env["alice"]
+    response = alice.client.get(URL + "/uptime", headers={"Authorization": f"Bearer {alice.token}"})
+    assert response.status_code == 200
+    assert response.json() == {"uptime_percent": None, "coverage_percent": 0}

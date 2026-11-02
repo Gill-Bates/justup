@@ -158,7 +158,7 @@ async function loadRecipients() {
 		}
 		
 		let html = `
-			<table class="table table-sm table-hover align-middle mb-0">
+			<table class="table table-sm table-hover align-middle rtable ju-data-table mb-0">
 				<thead class="table-light">
 					<tr>
 						<th>Name</th>
@@ -214,16 +214,16 @@ async function loadRecipients() {
 			
 				html += `
 					<tr data-recipient-id="${r.id}">
-						<td data-label="Name">
+						<td data-label="Name" class="ju-cell-text">
 							<span class="d-flex align-items-center gap-2">
 								<span class="material-icons" style="font-size: 20px;">person</span>
 								<strong>${escapeHtml(r.name)}</strong>
 						</span>
 					</td>
 					<td data-label="Signal">${signalCell}</td>
-					<td data-label="Email">${emailCell}</td>
+					<td data-label="Email" class="ju-cell-text">${emailCell}</td>
 					<td data-label="Status" class="text-center">${statusBadge}</td>
-					<td class="text-end">
+					<td data-label="" class="text-end actions-cell">
 						<div class="d-flex justify-content-end gap-1 flex-nowrap">
 							<button class="btn btn-sm btn-icon btn-outline-secondary toggle-recipient-btn"
 								data-recipient-id="${r.id}"

@@ -12,6 +12,7 @@
 
 	var POLL_MS = 15000;
 	var MAX_BACKOFF_MS = 120000;
+	var TICK_MS = 60000;
 
 	var CATEGORY_ICONS = {
 		monitoring: 'monitor_heart', reports: 'picture_as_pdf', delivery: 'forward_to_inbox',
@@ -22,10 +23,66 @@
 		return CATEGORY_ICONS[category] || 'notifications';
 	}
 
-	// Second line: what the event says about its object/actor, then when. Never prints null/undefined.
-	function detailLine(n, when) {
+	// Second line context only: what the event says about its object/actor. The time is rendered
+	// separately as its own <time> element so a long context never truncates it away.
+	function detailLine(n) {
 		var context = (n && (n.body || n.actor)) || '';
-		return [String(context).trim(), when || ''].filter(Boolean).join(' · ');
+		return String(context).trim();
+	}
+
+	// Short English relative age with correct singular/plural. Returns '' for a missing or
+	// unparseable timestamp (and for a time in the future) so a bad value is never shown as "Now".
+	function relTime(iso, nowMs) {
+		var then = Date.parse(iso);
+		if (isNaN(then)) return '';
+		var s = Math.floor(((typeof nowMs === 'number' ? nowMs : Date.now()) - then) / 1000);
+		if (s < 0) return '';
+		if (s < 60) return 'Now';
+		var m = Math.floor(s / 60);
+		if (m < 60) return m + ' min ago';
+		var h = Math.floor(s / 3600);
+		if (h < 24) return h + (h === 1 ? ' hour ago' : ' hours ago');
+		var d = Math.floor(s / 86400);
+		return d + (d === 1 ? ' day ago' : ' days ago');
+	}
+
+	// Full, readable absolute timestamp for the <time> tooltip/title, honouring the page's
+	// UTC-vs-local mode (same contract as app.js .local-time). Empty for an unparseable value.
+	function absTime(iso, useUtc) {
+		var d = new Date(iso);
+		if (isNaN(d.getTime())) return '';
+		var options = {
+			year: 'numeric', month: '2-digit', day: '2-digit',
+			hour: '2-digit', minute: '2-digit'
+		};
+		if (useUtc) options.timeZone = 'UTC';
+		return d.toLocaleString(undefined, options) + (useUtc ? ' UTC' : '');
+	}
+
+	function useUtcMode(documentRef) {
+		var el = documentRef && documentRef.documentElement;
+		return !!(el && el.dataset && el.dataset.useUtc === 'true');
+	}
+
+	// Writes the relative age into a <time> element, keeping the original ISO in datetime and the
+	// full absolute timestamp in title. An unparseable value leaves the element empty and
+	// hidden rather than showing a misleading "Now".
+	function applyTime(timeEl, iso, documentRef) {
+		if (!timeEl) return;
+		var rel = relTime(iso);
+		if (!rel) {
+			timeEl.textContent = '';
+			timeEl.hidden = true;
+			timeEl.removeAttribute('datetime');
+			timeEl.removeAttribute('title');
+			return;
+		}
+		timeEl.hidden = false;
+		timeEl.textContent = rel;
+		timeEl.setAttribute('datetime', String(iso));
+		var abs = absTime(iso, useUtcMode(documentRef));
+		if (abs) timeEl.title = 'Created: ' + abs;
+		else timeEl.removeAttribute('title');
 	}
 
 	function formatBadge(count) {
@@ -58,6 +115,10 @@
 		}
 
 		container.addEventListener('pointerdown', function (event) {
+			if (event.pointerType !== 'touch') {
+				start = null;
+				return;
+			}
 			var target = event.target;
 			var item = target && target.closest && target.closest('.ju-notif-swipe-item');
 			if (!item || !container.contains(item) || target.closest('.ju-notif-dismiss-button')) {
@@ -174,11 +235,14 @@
 		POLL_MS: POLL_MS,
 		categoryIcon: categoryIcon,
 		detailLine: detailLine,
+		relTime: relTime,
+		absTime: absTime,
 		formatBadge: formatBadge,
 		ariaLabel: ariaLabel,
 		shouldShake: shouldShake,
 		createPoller: createPoller,
 		renderPreview: renderPreview,
+		refreshRelativeTimes: refreshRelativeTimes,
 		bindSwipeRows: bindSwipeRows,
 	};
 
@@ -255,6 +319,12 @@
 				title.appendChild(titleText);
 				var detail = documentRef.createElement('small');
 				detail.className = 'ju-notif-pop-detail text-body-secondary';
+				var detailContext = documentRef.createElement('span');
+				detailContext.className = 'ju-notif-pop-context';
+				var detailTime = documentRef.createElement('time');
+				detailTime.className = 'ju-notif-pop-time';
+				detail.appendChild(detailContext);
+				detail.appendChild(detailTime);
 				main.appendChild(title);
 				main.appendChild(detail);
 				button.appendChild(icon);
@@ -288,7 +358,11 @@
 			var text = button.querySelector('.ju-notif-pop-text');
 			text.textContent = n.title || '';
 			text.title = n.title || '';
-			button.querySelector('.ju-notif-pop-detail').textContent = detailLine(n, relTime(n.created_at));
+			var contextSpan = button.querySelector('.ju-notif-pop-context');
+			var context = detailLine(n);
+			contextSpan.textContent = context;
+			contextSpan.hidden = context === '';
+			applyTime(button.querySelector('.ju-notif-pop-time'), n.created_at, documentRef);
 			desired.push(li);
 		});
 
@@ -334,13 +408,18 @@
 		}
 	}
 
-	function relTime(iso) {
-		var s = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 1000));
-		if (isNaN(s)) return '';
-		if (s < 60) return 'just now';
-		if (s < 3600) return Math.floor(s / 60) + ' min ago';
-		if (s < 86400) return Math.floor(s / 3600) + ' h ago';
-		return Math.floor(s / 86400) + ' d ago';
+	// Re-computes the visible age of every time element inside root from its own datetime attribute.
+	// No API call and no DOM rebuild: it only rewrites the text of elements that are already present,
+	// so keyboard focus and the swipe state are untouched.
+	function refreshRelativeTimes(rootEl, documentRef, nowMs) {
+		if (!rootEl || !rootEl.querySelectorAll) return;
+		var times = rootEl.querySelectorAll('.ju-notif-pop-time');
+		Array.prototype.forEach.call(times, function (timeEl) {
+			var iso = timeEl.getAttribute && timeEl.getAttribute('datetime');
+			if (!iso) return;
+			var rel = relTime(iso, nowMs);
+			if (rel && timeEl.textContent !== rel) timeEl.textContent = rel;
+		});
 	}
 
 	function onData(data) {
@@ -357,10 +436,29 @@
 		});
 	}
 
+	// Minute ticker: keeps the visible ages current while the popover is open and the tab is shown,
+	// without any network traffic. A single timer, (re)armed only from one place, cannot leak.
+	var timeTimer = null;
+	function timesTicking() { return !pop.hidden && !doc.hidden; }
+	function updateTimes() { refreshRelativeTimes(list, doc); }
+	function stopTimeTicker() {
+		if (timeTimer !== null) { root.clearInterval(timeTimer); timeTimer = null; }
+	}
+	function syncTimeTicker() {
+		if (timesTicking()) {
+			updateTimes();
+			if (timeTimer === null) timeTimer = root.setInterval(updateTimes, TICK_MS);
+		} else {
+			stopTimeTicker();
+		}
+	}
+
 	function setOpen(open) {
 		pop.hidden = !open;
 		bell.setAttribute('aria-expanded', open ? 'true' : 'false');
 		if (open) { var first = pop.querySelector('button, a'); if (first) first.focus(); }
+		// Refresh the ages the moment the popover opens, and drop the timer when it closes.
+		syncTimeTicker();
 	}
 
 	bell.addEventListener('click', function () { setOpen(pop.hidden); });
@@ -425,7 +523,9 @@
 		setTimer: function (fn, ms) { return root.setTimeout(fn, ms); },
 		clearTimer: function (t) { root.clearTimeout(t); }
 	});
-	doc.addEventListener('visibilitychange', function () { poller.onVisibility(); });
+	doc.addEventListener('visibilitychange', function () { poller.onVisibility(); syncTimeTicker(); });
+	// Leaving or backgrounding the page stops the ticker; pagehide also covers the bfcache case.
+	root.addEventListener('pagehide', stopTimeTicker);
 	root.addEventListener('justup:notifications-changed', function () { poller.refresh(); });
 	if (liveClient) {
 		// Push replaces the 15 s poll while the stream is healthy; the poller resumes as the fallback.

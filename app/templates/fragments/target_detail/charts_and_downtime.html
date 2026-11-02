@@ -20,21 +20,11 @@
 				</div>
 				<div class="combined-footer">
 					<div id="combined-status-key" class="combined-status-key" aria-label="Status code markers"></div>
-				<details id="combined-data-details" class="combined-data">
-					<summary>Data summary as table</summary>
-					<div class="table-responsive" role="region" aria-label="Chart data summary" tabindex="0">
-						<table class="table table-sm mb-0">
-							<caption class="visually-hidden">Summary of the response time, status codes and outages in the selected range</caption>
-							<thead><tr><th scope="col">Item</th><th scope="col">Value</th></tr></thead>
-							<tbody id="combined-table-body"></tbody>
-						</table>
-					</div>
-				</details>
 				</div>
 			</div>
 			{% if target.enable_http_check %}
 			<section class="combined-donut" aria-labelledby="status-donut-title">
-				<h3 id="status-donut-title" class="combined-donut-title">HTTP status codes</h3>
+				<h2 id="status-donut-title" class="combined-donut-title">HTTP status codes</h2>
 				<p id="status-donut-total" class="combined-donut-total" hidden></p>
 				<div id="status-donut-plot" class="combined-donut-plot">
 					<canvas id="chart-status-code" role="img" aria-label="HTTP status code distribution. Loading data."></canvas>

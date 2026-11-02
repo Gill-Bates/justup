@@ -10,11 +10,15 @@ Every service is a coroutine function run as one asyncio task under its own supe
 An exception, an unexpected return, or (optionally) a missed heartbeat counts as a crash and is
 answered with a restart after exponential backoff with jitter. Too many crashes inside a window
 put the service into the ``degraded`` state: one ERROR log, then a slow retry instead of a tight
-loop. Repeated detected hangs (three within 24 h) also degrade the service; that history
+loop. Services that survive their own iteration errors report them with ``report_failure`` /
+``report_success``; a long enough failure series degrades them the same way. Repeated detected hangs
+(three within 24 h) also degrade the service; that history
 survives a short stable run and clears only after a long error-free run. Shutdown
 (``begin_shutdown``/``stop``) and maintenance (``utils.maintenance``) are intended
 stops, never crashes: nothing is restarted while either is in effect.
 
+Crash, degraded and recovered transitions are handed to an optional ``notifier`` as ``ServiceAlert``
+(exception class name only, never a message); a failing notifier is logged and never affects a restart.
 The supervisor starts no threads. Log lines carry ``service=... event=...`` and the crash
 traceback is logged once per crash; secrets and payloads are never part of the structured line.
 """
@@ -69,6 +73,8 @@ class SupervisionPolicy:
     hang_window: float = 86400.0  # long window for repeated hangs (a short stable run does not clear it)
     hang_limit: int = 3  # detected hangs inside hang_window that mark the service degraded
     hang_recovery_after: float = 3600.0  # error-free uptime that clears the hang history and degraded state
+    failure_limit: int = 5  # consecutive failed iterations of a running service that mark it degraded ...
+    failure_min_span: float = 120.0  # ... once the series also lasted this long (a burst of retries is no outage)
     maintenance_poll: float = 0.5
     check_interval: float = 1.0  # granularity of the stability/heartbeat checks
 
@@ -86,6 +92,22 @@ class ServiceSpec:
     run: Callable[[], Awaitable[None]]
     request_stop: Callable[[], None] | None = None
     heartbeat_timeout: float | None = None
+    label: str | None = None  # human-readable name for notifications
+    failure_limit: int | None = None  # overrides the policy for slow services (few attempts per day)
+
+
+@dataclass(frozen=True)
+class ServiceAlert:
+    """A state transition worth an administrator's attention; carries no exception message."""
+
+    service: str
+    label: str
+    kind: str  # "crashed" | "degraded" | "recovered"
+    at: datetime
+    state: str = ""  # service state when the alert was raised
+    exc_type: str | None = None
+    crashes_total: int = 0
+    reason: str = ""  # "crash_loop" | "hangs" | "failure_series" | ""
 
 
 @dataclass
@@ -102,6 +124,11 @@ class _Service:
     last_crash_at: datetime | None = None
     last_beat: float = 0.0
     needs_recovery_log: bool = False
+    settled: bool = False  # the first stable run of this process was checked for a stale open incident
+    fail_streak: int = 0  # consecutive failed iterations reported by the running service
+    fail_since: float | None = None
+    fail_degraded: bool = False
+    ok_since: float | None = None  # first success after a failure series that degraded the service
 
 
 class ServiceSupervisor:
@@ -114,6 +141,7 @@ class ServiceSupervisor:
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], Awaitable[Any]] = asyncio.sleep,
         rng: random.Random | None = None,
+        notifier: Callable[[ServiceAlert], None] | None = None,
     ) -> None:
         self._policy = policy or SupervisionPolicy()
         self._clock = clock
@@ -121,6 +149,7 @@ class ServiceSupervisor:
         self._rng = rng or random.Random()  # noqa: S311 - jitter only, not security relevant
         self._services: dict[str, _Service] = {}
         self._stopping = False
+        self._notifier = notifier
 
     # ─── Public API ──────────────────────────────────────────────────────────
 
@@ -139,6 +168,37 @@ class ServiceSupervisor:
         svc = self._services.get(name)
         if svc is not None:
             svc.last_beat = self._clock()
+
+    def report_failure(self, name: str, exc_type: str) -> None:
+        """A running service survived a failed iteration; a long enough series degrades it."""
+        svc = self._services.get(name)
+        if svc is None or self._stopping or maintenance.is_active():
+            return  # intended stops and restores are no failures
+        now = self._clock()
+        if svc.fail_streak == 0:
+            svc.fail_since = now
+        svc.fail_streak += 1
+        svc.ok_since = None
+        svc.last_exc_type = exc_type
+        limit = svc.spec.failure_limit or self._policy.failure_limit
+        span = now - (svc.fail_since if svc.fail_since is not None else now)
+        if svc.fail_streak >= limit and span >= self._policy.failure_min_span and not svc.fail_degraded:
+            svc.fail_degraded = True
+            already = svc.state is ServiceState.DEGRADED
+            svc.state = ServiceState.DEGRADED
+            self._event(logging.ERROR, svc, "degraded", reason="failure_series", failures=svc.fail_streak)
+            if not already:
+                self._notify(svc, "degraded", reason="failure_series")
+
+    def report_success(self, name: str) -> None:
+        """A running service finished an iteration; ends a failure series."""
+        svc = self._services.get(name)
+        if svc is None:
+            return
+        svc.fail_streak = 0
+        svc.fail_since = None
+        if svc.fail_degraded and svc.ok_since is None:
+            svc.ok_since = self._clock()
 
     def begin_shutdown(self) -> None:
         """Forbid any further restart; running services are left to the owners' stop events."""
@@ -179,6 +239,7 @@ class ServiceSupervisor:
                 "starts": svc.starts,
                 "crashes_total": svc.crashes_total,
                 "hangs_in_window": self._recent_hangs(svc),
+                "failure_streak": svc.fail_streak,
                 "last_exception_type": svc.last_exc_type,
                 "last_crash_at": svc.last_crash_at.isoformat() if svc.last_crash_at else None,
                 "heartbeat_age_seconds": round(now - svc.last_beat, 1) if hb else None,
@@ -202,6 +263,30 @@ class ServiceSupervisor:
             exc_info=exc_info,
             extra={"service": svc.spec.name, "service_event": event},
         )
+
+    def _notify(self, svc: _Service, kind: str, **fields: Any) -> None:
+        """Hand a transition to the notifier; the alarm path may fail without touching supervision."""
+        if self._notifier is None:
+            return
+        alert = ServiceAlert(
+            service=svc.spec.name,
+            label=svc.spec.label or svc.spec.name,
+            kind=kind,
+            at=datetime.now(UTC),
+            state=svc.state.value,
+            exc_type=svc.last_exc_type,
+            crashes_total=svc.crashes_total,
+            **fields,
+        )
+        try:
+            self._notifier(alert)
+        except Exception:  # noqa: BLE001 - alarm boundary: a broken notifier must never prevent a restart
+            _log.warning("service=%s event=notify_failed kind=%s", svc.spec.name, kind, exc_info=True)
+
+    def _recovered(self, svc: _Service, **fields: Any) -> None:
+        svc.state = ServiceState.RUNNING
+        self._event(logging.INFO, svc, "recovered", **fields)
+        self._notify(svc, "recovered")
 
     def _backoff(self, attempt: int) -> float:
         p = self._policy
@@ -230,6 +315,7 @@ class ServiceSupervisor:
                 if self._stopping:
                     break
                 svc.starts += 1
+                svc.fail_streak, svc.fail_since, svc.ok_since = 0, None, None  # a series belongs to one run
                 if svc.state is not ServiceState.DEGRADED:
                     svc.state = ServiceState.STARTING
                 self._event(logging.INFO, svc, "started", attempt=svc.attempt + 1, starts=svc.starts)
@@ -263,13 +349,24 @@ class ServiceSupervisor:
         hb_timeout = svc.spec.heartbeat_timeout
         try:
             while True:
-                watching = hb_timeout is not None or svc.needs_recovery_log or svc.attempt > 0 or bool(svc.hangs)
+                watching = (
+                    hb_timeout is not None
+                    or svc.needs_recovery_log
+                    or svc.attempt > 0
+                    or bool(svc.hangs)
+                    or svc.fail_degraded
+                    or (self._notifier is not None and not svc.settled)
+                )
                 done, _ = await asyncio.wait({task}, timeout=p.check_interval if watching else None)
                 if done:
                     break
                 now = self._clock()
-                if (svc.attempt > 0 or svc.needs_recovery_log) and now - started >= p.stable_after:
+                if (
+                    svc.attempt > 0 or svc.needs_recovery_log or (self._notifier is not None and not svc.settled)
+                ) and now - started >= p.stable_after:
                     self._mark_stable(svc)
+                if svc.fail_degraded and svc.ok_since is not None and now - svc.ok_since >= p.stable_after:
+                    self._clear_failure_series(svc)
                 if svc.hangs and now - started >= p.hang_recovery_after:
                     self._clear_hangs(svc)
                 if hb_timeout is not None and now - svc.last_beat > hb_timeout:
@@ -290,14 +387,28 @@ class ServiceSupervisor:
         return ServiceExitedError("service returned without a stop request")
 
     def _mark_stable(self, svc: _Service) -> None:
+        if svc.fail_streak > 0:
+            return
         svc.attempt = 0
         svc.crashes.clear()
+        if svc.fail_degraded:
+            return  # still inside a failure series: a running task alone is no proof of health
         if svc.needs_recovery_log:
             svc.needs_recovery_log = False
+            svc.settled = True
             # Repeated hangs keep the service degraded until the long error-free window passes.
             if self._recent_hangs(svc) < self._policy.hang_limit:
-                svc.state = ServiceState.RUNNING
-                self._event(logging.INFO, svc, "recovered")
+                self._recovered(svc)
+        elif not svc.settled:
+            # First stable run of this process: closes an incident left open by a previous process.
+            svc.settled = True
+            self._notify(svc, "recovered")
+
+    def _clear_failure_series(self, svc: _Service) -> None:
+        svc.fail_degraded = False
+        svc.ok_since = None
+        if svc.state is ServiceState.DEGRADED and not svc.crashes and self._recent_hangs(svc) < self._policy.hang_limit:
+            self._recovered(svc, reason="failure_series_ended")
 
     def _recent_hangs(self, svc: _Service) -> int:
         now = self._clock()
@@ -307,9 +418,10 @@ class ServiceSupervisor:
 
     def _clear_hangs(self, svc: _Service) -> None:
         svc.hangs.clear()
-        if svc.state is ServiceState.DEGRADED and not svc.crashes:
-            svc.state = ServiceState.RUNNING
-        self._event(logging.INFO, svc, "recovered", reason="long_error_free_run")
+        if svc.state is ServiceState.DEGRADED and not svc.crashes and not svc.fail_degraded:
+            self._recovered(svc, reason="long_error_free_run")
+        else:
+            self._event(logging.INFO, svc, "recovered", reason="long_error_free_run")
 
     def _record_crash(self, svc: _Service, exc: BaseException | None, *, ran_for: float) -> None:
         p = self._policy
@@ -328,6 +440,7 @@ class ServiceSupervisor:
         while svc.crashes and now - svc.crashes[0] > p.crash_window:
             svc.crashes.popleft()
         svc.needs_recovery_log = True
+        svc.settled = True
         if svc.state is not ServiceState.DEGRADED:  # degraded is sticky until a run turns out stable
             svc.state = ServiceState.BACKOFF
         self._event(
@@ -339,6 +452,7 @@ class ServiceSupervisor:
             ran_for=f"{ran_for:.1f}s",
             exc_info=exc if exc is not None and exc.__traceback__ is not None else None,
         )
+        self._notify(svc, "crashed")
 
     def _next_delay(self, svc: _Service) -> float:
         p = self._policy
@@ -355,11 +469,13 @@ class ServiceSupervisor:
                     window=f"{p.crash_window:.0f}s",
                     retry_in=f"{p.degraded_retry:.0f}s",
                 )
+                self._notify(svc, "degraded", reason="hangs" if hang_degraded else "crash_loop")
             return p.degraded_retry
         return self._backoff(svc.attempt)
 
 
 __all__ = [
+    "ServiceAlert",
     "ServiceExitedError",
     "ServiceHungError",
     "ServiceSpec",

@@ -1,3 +1,9 @@
+#!/usr/bin/env python3
+#
+# tests/test_dockerhub.py
+# Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
+#
+
 """Docker Hub helper used by the release workflow, with HTTP mocked."""
 
 import importlib.util

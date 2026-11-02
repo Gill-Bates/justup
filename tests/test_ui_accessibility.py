@@ -109,4 +109,8 @@ def test_network_diagnostics_fit_mode_shares_the_dashboard_viewport_condition() 
     page = (TEMPLATES / "target_detail.html").read_text(encoding="utf-8")
     fragment = (TEMPLATES / "fragments/traceroute_map.html").read_text(encoding="utf-8")
     assert 'id="target-network-diagnostics-pane"' in page
-    assert 'class="table-responsive tr-table-scroll" tabindex="0" role="region" aria-labelledby' in fragment
+    # The scroll region must stay keyboard-focusable and carry an accessible name.
+    assert re.search(
+        r'class="table-responsive tr-table-scroll" tabindex="0" role="region" aria-label(?:ledby)?=',
+        fragment,
+    )

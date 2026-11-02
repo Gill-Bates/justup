@@ -23,6 +23,7 @@ from urllib.parse import urlparse
 
 from ..db import sqlite as sqlite_db
 from ..models.users import hash_token
+from .client_ip import request_is_https
 from .settings_cache import is_auth_disabled
 
 if TYPE_CHECKING:
@@ -146,7 +147,9 @@ def _extract_bearer_token(request: Request) -> str | None:
     return None
 
 
-def _extract_cookie_token(request: Request, *, cookie_name: str = "token") -> str | None:
+def _extract_cookie_token(request: Request, *, cookie_name: str | None = None) -> str | None:
+    if cookie_name is None:
+        cookie_name = "__Host-token" if request_is_https(request) else "token"
     token = request.cookies.get(cookie_name)
     if not token:
         return None
@@ -161,7 +164,7 @@ def resolve_user_optional(
     conn,
     *,
     allow_cookie: bool = False,
-    cookie_name: str = "token",
+    cookie_name: str | None = None,
 ) -> User | None:
     """Resolve the authenticated user or return None.
 

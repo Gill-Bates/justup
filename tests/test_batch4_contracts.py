@@ -114,6 +114,68 @@ def test_dispatcher_sets_alert_event_in_both_payloads(status):
     assert all(p["alert_id"] == "x" for p in captured)
 
 
+def test_dispatch_retry_reuses_queued_recipients_and_adds_only_missing_channel(spooler):
+    sp, db_path = spooler
+    rows = [
+        {
+            "id": recipient_id,
+            "name": f"R{recipient_id}",
+            "phone": None,
+            "email": f"r{recipient_id}@example.org",
+            "is_enabled": 1,
+        }
+        for recipient_id in (1, 2, 3)
+    ]
+    dispatcher = dispatcher_mod.NotificationDispatcher(mock.Mock(), lambda: sqlite_db.connect(db_path))
+    alert = dispatcher_mod.AlertPayload(
+        alert_id="partial-dispatch",
+        target_id=1,
+        target_name="target",
+        failed_service="http",
+        status="open",
+        started_at=datetime.now(UTC),
+    )
+    real_enqueue = sp.enqueue
+    failed_once = False
+
+    def enqueue(**kwargs):
+        nonlocal failed_once
+        if kwargs["recipient_id"] == 3 and not failed_once:
+            failed_once = True
+            raise sqlite3.OperationalError("queue unavailable")
+        return real_enqueue(**kwargs)
+
+    with (
+        mock.patch.object(dispatcher_mod.sqlite_db, "get_target_recipients", return_value=rows),
+        mock.patch.object(
+            dispatcher_mod.sqlite_db,
+            "get_setting",
+            side_effect=lambda _conn, key, default=None: key == "smtp_enabled",
+        ),
+        mock.patch.object(dispatcher, "_render_email_content", return_value=("subject", "<p>body</p>")),
+        mock.patch("app.services.notifications.spooler.get_spooler", return_value=sp),
+        mock.patch.object(sp, "enqueue", side_effect=enqueue),
+    ):
+        first = dispatcher.dispatch_alert(alert)
+        assert first.channels_attempted == 3 and first.channels_succeeded == 2
+        first_ids = {result.channel_address: result.queue_id for result in first.send_results if result.success}
+
+        second = dispatcher.dispatch_alert(alert)
+        assert second.all_succeeded
+        second_ids = {result.channel_address: result.queue_id for result in second.send_results if result.success}
+
+    assert second_ids["r1@example.org"] == first_ids["r1@example.org"]
+    assert second_ids["r2@example.org"] == first_ids["r2@example.org"]
+    assert len({second_ids[f"r{i}@example.org"] for i in (1, 2, 3)}) == 3
+    conn = sqlite_db.connect(db_path)
+    try:
+        assert (
+            conn.execute("SELECT COUNT(*) FROM notification_queue WHERE notification_type = 'alert'").fetchone()[0] == 3
+        )
+    finally:
+        sqlite_db.close_connection(conn)
+
+
 # ---------------------------------------------------------------------------
 # B4-C06: connection is closed when setup fails
 # ---------------------------------------------------------------------------

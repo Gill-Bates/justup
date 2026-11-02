@@ -183,9 +183,10 @@ def test_general_settings_have_unique_form_ids_and_keep_all_fields():
         "quality_rtt_threshold_ms",
         "provider_lookup_enabled",
         "provider_lookup_cache_ttl_seconds",
-        "ip_api_key",
     }
     assert all(f'name="{field}"' in html for field in expected_fields)
+    # The ip-api key is a write-only secret field rendered by the shared macro.
+    assert 'secret_field("ip_api_key", "ip_api_key"' in html
     # The online geolocation fallback switch lives in the Geolocation card next to the privacy line.
     assert 'name="online_geo_fallback_enabled"' in html
     assert 'name="online_geo_enabled"' not in html
@@ -254,8 +255,8 @@ def test_settings_tabs_are_one_strip_for_all_viewports_and_match_panes():
 
 def test_ip_api_key_clear_action_is_explicit_and_untouched_field_stays_empty():
     html = (Path(__file__).resolve().parent.parent / "app/templates/settings/network.html").read_text(encoding="utf-8")
-    assert "Remove stored key" in html
-    assert "Stored — enter a new key to replace" in html
+    assert '"clear-ip-api-key", "Remove stored key"' in html
+    assert "Enter a new key to replace it." in html
 
 
 def test_about_page_hides_third_party_design_and_uses_theme_text_color():

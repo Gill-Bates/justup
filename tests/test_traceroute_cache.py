@@ -285,8 +285,9 @@ def test_fragment_counts_collapsed_hops_and_renders_panels(tmp_path: Path, monke
     assert text.count("data-tr-group") == 1 and 'aria-expanded="false"' in text
     assert 'aria-controls="tr-group-2-5"' in text and 'id="tr-group-2-5"' in text
     assert text.count("data-tr-hop") == 7  # every hop stays reachable, grouped ones inside the group
-    for hop in range(2, 6):
-        assert f'aria-label="Hop {hop}, location unknown, estimated (interpolated)"' in text
+    # Visible text names each step; an aria-label would trip axe's label-content-name-mismatch.
+    assert not re.search(r"<button[^>]*tr-step-btn[^>]*aria-label", text)
+    assert text.count(">Location unknown · Estimated (interpolated)<") == 4
     assert "15.7 ms" in text and "0%" in text and "Frankfurt am Main, DE" in text
     assert "Geolocated route for 2 of 7 hops" in text
     for header in ("IP address", "Hostname", "Location", "Latency", "Loss", "Status"):
@@ -585,8 +586,9 @@ def test_fragment_renders_single_timeline(tmp_path: Path, monkeypatch) -> None:
     assert text.count('<ol class="tr-timeline"') == 1
     assert text.count("tr-step--first") == 1 and text.count("tr-step--destination") == 1
     assert "Start / Destination" not in text and ">Start<" not in text
-    assert 'aria-label="First hop, location unknown, measured, 10.0.0.1"' in text
-    assert 'aria-label="Hop 5, DE, located on map, measured, 10.0.0.5"' in text
+    assert not re.search(r"<button[^>]*tr-step-btn[^>]*aria-label", text)
+    assert 'data-hop-first="1"' in text and 'data-country="DE"' in text
+    assert "10.0.0.1" in text and "10.0.0.5" in text
     assert 'aria-controls="tr-group-2-3"' not in text  # 2 hops are below the group threshold
     assert 'class="tr-route-legend"' in text and "No map location" in text
     assert "Hop 1–7" in text and "7 hops" in text

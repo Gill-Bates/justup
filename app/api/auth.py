@@ -34,16 +34,6 @@ __all__ = [
 ]
 
 
-def _allow_cookie_auth_for_path(path: str) -> bool:
-    """Return True if cookie-based auth is allowed for this request path.
-
-    Security: cookie tokens are only allowed on the UI/root routes to avoid
-    CSRF exposure via ambient cookies on API routes.
-    """
-    normalized = path.rstrip("/") or "/"
-    return normalized in {"/", "/ui", "/me/theme", "/me/complete-required-change"} or normalized.startswith("/ui/")
-
-
 def _enforce_password_change(request: Request, user: User) -> None:
     """Reject API use while a mandatory password change is pending."""
     if is_password_change_pending(user) and not is_password_change_exempt_path(request.url.path):
@@ -69,9 +59,8 @@ def get_current_user(
 ) -> User:
     """FastAPI dependency that enforces authentication for API routes.
 
-    NOTE: Rate-limiting for failed auth attempts must be handled by
-    middleware or reverse proxy (e.g. fail2ban, nginx rate-limit).
-    This function does NOT throttle brute-force attempts.
+    This dependency does not rate-limit attempts itself. Sensitive routes must
+    apply an appropriate route-level or upstream limit.
 
     WARNING: Token comparison in get_user_by_token() must use
     hmac.compare_digest() or hash-based lookup to prevent timing attacks.
@@ -80,9 +69,8 @@ def get_current_user(
     own token and yields 401 when it is malformed/invalid/expired/revoked,
     never silently falling back to the session cookie. A well-formed bearer
     takes the explicit path below; a present-but-malformed header is caught by
-    resolve_user_optional (no cookie fallback). Cookie auth is only reached on
-    UI/root and the CSRF-protected theme route when no Authorization header is
-    sent.
+    resolve_user_optional (no cookie fallback). Unsafe cookie-authenticated
+    requests are protected by CSRFMiddleware.
     """
 
     def _finalize(user: User) -> User:
@@ -100,12 +88,9 @@ def get_current_user(
             return _finalize(user)
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
-    # 2. No well-formed bearer. resolve_user_optional fail-closes on a present
-    #    (malformed) header and only reads the cookie when no header is present
-    #    (and only on the allow-listed UI/root routes).
-    path = request.url.path
-    allow_cookie = _allow_cookie_auth_for_path(path)
-    user = resolve_user_optional(request, conn, allow_cookie=allow_cookie)
+    # 2. No well-formed bearer. resolve_user_optional fails closed on a present
+    #    malformed header and only reads the cookie when no header is present.
+    user = resolve_user_optional(request, conn, allow_cookie=True)
     if user:
         return _finalize(user)
 

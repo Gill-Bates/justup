@@ -18,12 +18,16 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from ..utils.client_ip import request_is_https
+from ..utils.constants import SESSION_MAX_DAYS_MAX
+from .security_headers import CSP_REPORT_PATH
 
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 
 # UI paths and the cookie-authenticated /me routes require CSRF protection.
 UI_PREFIXES = ("/ui/", "/login")
+# The token must outlive the longest session; a shorter cookie would make writes of a still valid session fail with 403.
+CSRF_COOKIE_MAX_AGE = SESSION_MAX_DAYS_MAX * 24 * 3600
 
 
 class CSRFMiddleware(BaseHTTPMiddleware):
@@ -41,7 +45,7 @@ class CSRFMiddleware(BaseHTTPMiddleware):
         # Normalize path to prevent bypass via //ui/, /UI/, /ui/../ui/, etc.
         normalized = posixpath.normpath(path).lower()
 
-        if normalized in {"/me/theme", "/me/complete-required-change", "/me/dashboard-layout"}:
+        if normalized in {"/me/theme", "/me/complete-required-change", "/me/dashboard-layout", "/logout"}:
             return True
 
         for prefix in UI_PREFIXES:
@@ -50,7 +54,7 @@ class CSRFMiddleware(BaseHTTPMiddleware):
                 return True
         return False
 
-    def _check_origin(self, request: Request) -> bool:
+    def _check_origin(self, request: Request, *, required: bool = False) -> bool:
         """
         Validate Origin header matches Host (hardened against spoofing).
 
@@ -61,7 +65,7 @@ class CSRFMiddleware(BaseHTTPMiddleware):
         """
         origin = request.headers.get("Origin")
         if not origin:
-            return True  # No Origin header = not a cross-origin request
+            return not required
 
         # Use only Host header (set by server, not spoofable by client)
         host = request.headers.get("Host", "")
@@ -93,8 +97,15 @@ class CSRFMiddleware(BaseHTTPMiddleware):
 
         request.state.csrf_token = csrf_token
 
-        if request.method not in SAFE_METHODS and self._requires_csrf(request.url.path):
-            if not self._check_origin(request):
+        cookie_name = "__Host-token" if request_is_https(request) else "token"
+        # The CSP report sink ignores the session; browsers send reports with cookies but never with a CSRF header.
+        cookie_auth = (
+            bool(request.cookies.get(cookie_name))
+            and not request.headers.get("Authorization", "").strip()
+            and request.url.path != CSP_REPORT_PATH
+        )
+        if request.method not in SAFE_METHODS and (self._requires_csrf(request.url.path) or cookie_auth):
+            if not self._check_origin(request, required=cookie_auth):
                 return JSONResponse(content={"detail": "Cross-origin request blocked"}, status_code=403)
 
             submitted_token = request.headers.get("X-CSRF-Token")
@@ -113,7 +124,7 @@ class CSRFMiddleware(BaseHTTPMiddleware):
             # Secure=True for HTTPS (X-Forwarded-Proto only from trusted proxies)
             is_secure = request_is_https(request)
             response.set_cookie(
-                "csrf_token", csrf_token, max_age=3600, httponly=False, samesite="lax", secure=is_secure
+                "csrf_token", csrf_token, max_age=CSRF_COOKIE_MAX_AGE, httponly=False, samesite="lax", secure=is_secure
             )
 
         return response

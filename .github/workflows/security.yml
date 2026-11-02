@@ -1,0 +1,126 @@
+#
+# .github/workflows/security.yml
+# Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
+#
+# Weekly rescan of the published `latest` image. The release gate in docker-build.yml
+# answers "was the image acceptable when it was built"; this answers "is it acceptable
+# today". Read-only: it scans by digest and never builds, tags, pushes or deletes anything.
+# A red run means the published image needs a new release (tag a new version).
+# Related: docker-build.yml (release gate and scan policy), ci.yml (source secret scan).
+#
+name: Security rescan
+
+on:
+  schedule:
+    # Weekly is enough; a daily run mostly re-reports the same finding.
+    - cron: '23 4 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: security-rescan
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  # Must equal the platforms of the docker-build.yml matrix (tests/test_workflow_contracts.py
+  # checks it). The index may not lose a child silently, so the list is explicit.
+  EXPECTED_PLATFORMS: 'linux/amd64 linux/arm64'
+
+jobs:
+  # `latest` is the newest stable release; the version tag points at the same index except
+  # while a newer prerelease exists, which `latest` never follows and this job does not scan.
+  resolve:
+    name: Resolve published digests
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    env:
+      IMAGE_NAME: ${{ format('docker.io/{0}/justup', secrets.DOCKERHUB_USERNAME) }}
+    outputs:
+      matrix: ${{ steps.resolve.outputs.matrix }}
+      index_digest: ${{ steps.resolve.outputs.index_digest }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      # The image is public: no registry login is needed, and none is made.
+      - name: Resolve latest index and platform digests
+        id: resolve
+        run: |
+          set -euo pipefail
+          index_digest="$(docker buildx imagetools inspect "${IMAGE_NAME}:latest" --format '{{.Manifest.Digest}}')"
+          case "$index_digest" in
+            sha256:*) ;;
+            *) echo "ERROR: no published 'latest' index could be resolved" >&2; exit 1 ;;
+          esac
+          docker buildx imagetools inspect --raw "${IMAGE_NAME}@${index_digest}" > index.json
+          # The platform set must equal the expected one: a missing child is a failure, not a shorter scan.
+          # shellcheck disable=SC2086 # EXPECTED_PLATFORMS is a space-separated list
+          python3 tools/verify-manifest.py children index.json $EXPECTED_PLATFORMS | tee children.txt
+          matrix="$(jq -Rnc '{include: [inputs | split(" ") | {arch: (.[0] | split("/")[1]), digest: .[1]}]}' children.txt)"
+          {
+            echo "index_digest=${index_digest}"
+            echo "matrix=${matrix}"
+          } >> "$GITHUB_OUTPUT"
+          echo "### Rescan of latest (${index_digest})" >> "$GITHUB_STEP_SUMMARY"
+
+  scan:
+    name: Rescan ${{ matrix.arch }} digest
+    needs: resolve
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.resolve.outputs.matrix) }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      # Same policy as the release gate in docker-build.yml (action revision, scanners,
+      # severity, ignore-unfixed, .trivyignore); the platform child is addressed by digest.
+      - name: Trivy vulnerability scan
+        id: trivy
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          cache: 'false'
+          image-ref: ${{ format('docker.io/{0}/justup@{1}', secrets.DOCKERHUB_USERNAME, matrix.digest) }}
+          format: 'json'
+          output: 'trivy-${{ matrix.arch }}.json'
+          exit-code: '1'
+          ignore-unfixed: true
+          # Source secrets and misconfiguration are gated in ci.yml.
+          scanners: 'vuln'
+          vuln-type: 'os,library'
+          severity: 'CRITICAL,HIGH'
+          timeout: '10m'
+          trivyignores: '.trivyignore'
+
+      # Scanner failure (no valid report) and findings (valid report, counts > 0) are separate.
+      - name: Summarize Trivy report
+        if: ${{ !cancelled() && steps.trivy.conclusion != 'skipped' }}
+        env:
+          ARCH: ${{ matrix.arch }}
+          DIGEST: ${{ matrix.digest }}
+        run: |
+          set -euo pipefail
+          if ! python3 tools/trivy-report.py summary "trivy-${ARCH}.json" "${ARCH} ${DIGEST}" \
+              --expect-ref "$DIGEST" >> "$GITHUB_STEP_SUMMARY"; then
+            echo "### Trivy (${ARCH}): scanner failure, no valid report for ${DIGEST}" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+      - name: Upload Trivy report (${{ matrix.arch }})
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: trivy-rescan-${{ matrix.arch }}
+          path: trivy-${{ matrix.arch }}.json
+          retention-days: 30
+          if-no-files-found: warn

@@ -358,6 +358,7 @@ class NotificationDispatcher:
 
         signal_enabled = sqlite_db.get_setting(self.conn, SettingKeys.SIGNAL_CHANNEL_ENABLED, False)
         has_signal_recipients = any(r.phone and r.is_enabled for r in recipients)
+        signal_render_error = None
 
         if signal_enabled and has_signal_recipients:
             try:
@@ -367,15 +368,20 @@ class NotificationDispatcher:
                     signal_sender = signal_sender_number
             except Exception as e:  # noqa: BLE001 - dispatch boundary: one recipient/render failure must not abort the whole alert
                 _log.error("Failed to render Signal message: %s", e)
+                signal_render_error = type(e).__name__
+            if signal_message and not signal_sender:
+                signal_render_error = "MissingSender"
 
         smtp_enabled = sqlite_db.get_setting(self.conn, SettingKeys.SMTP_ENABLED, False)
         has_email_recipients = any(r.email and r.is_enabled for r in recipients)
+        email_render_error = None
 
         if smtp_enabled and has_email_recipients:
             try:
                 email_subject, email_html = self._render_email_content(alert)
             except Exception as e:  # noqa: BLE001 - dispatch boundary: one recipient/render failure must not abort the whole alert
                 _log.error("Failed to render email content: %s", e)
+                email_render_error = type(e).__name__
 
         spooler = get_spooler(self._db_conn_factory)
         send_results: list[SendResult] = []
@@ -388,7 +394,16 @@ class NotificationDispatcher:
 
             recipient_queued = False
 
-            if recipient.phone and signal_message and signal_sender:
+            if recipient.phone and signal_enabled and signal_render_error:
+                send_results.append(
+                    SendResult(
+                        success=False,
+                        channel_type="signal",
+                        channel_address=recipient.phone,
+                        error=signal_render_error,
+                    )
+                )
+            elif recipient.phone and signal_message and signal_sender:
                 try:
                     queue_id = spooler.enqueue(
                         notification_type=NotificationType.ALERT,
@@ -427,7 +442,16 @@ class NotificationDispatcher:
                         )
                     )
 
-            if recipient.email and email_subject and email_html:
+            if recipient.email and smtp_enabled and email_render_error:
+                send_results.append(
+                    SendResult(
+                        success=False,
+                        channel_type="email",
+                        channel_address=recipient.email,
+                        error=email_render_error,
+                    )
+                )
+            elif recipient.email and email_subject and email_html:
                 try:
                     queue_id = spooler.enqueue(
                         notification_type=NotificationType.ALERT,

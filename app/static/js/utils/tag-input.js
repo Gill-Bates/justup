@@ -143,6 +143,7 @@ function setupTagInput(root) {
 	});
 
 	entry.addEventListener("keydown", (e) => {
+		if (e.isComposing) return;
 		const hasText = entry.value.trim() !== "";
 		if (e.key === "Backspace" && entry.value === "" && list.length) {
 			e.preventDefault();
@@ -163,8 +164,6 @@ function setupTagInput(root) {
 			e.preventDefault();
 			commitEntry();
 		} else if (e.key === "Tab" && !e.shiftKey && hasText) {
-			// Only trap Tab while text is pending; an empty field must move focus on.
-			e.preventDefault();
 			commitEntry();
 		}
 	});

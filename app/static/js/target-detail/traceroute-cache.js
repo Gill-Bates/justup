@@ -269,6 +269,19 @@
     let timer = null;
     let autoBlockedUntil = 0;
     let manualBlockedUntil = 0;
+    let destroyed = false;
+
+    const scheduleRetry = (error = {}) => {
+      if (destroyed) return;
+      autoBlockedUntil =
+        now() + Math.max(error.retryAfterMs || 0, AUTO_RETRY_BACKOFF_MS);
+      clearTimer(timer);
+      timer = setTimer(() => {
+        timer = null;
+        if (isHidden() || !isActive()) return undefined;
+        return recheck();
+      }, autoBlockedUntil - now());
+    };
 
     const display = (html, measuredAt) => {
       render({ html, measuredAt });
@@ -284,7 +297,7 @@
     const scheduleExpiry = () => {
       clearTimer(timer);
       timer = null;
-      if (renderedAt === null) return;
+      if (destroyed || renderedAt === null) return;
       const delay = Math.max(renderedAt + TTL_MS - now(), 0) + 1000;
       timer = setTimer(() => {
         timer = null;
@@ -396,8 +409,7 @@
           if (result.redirected) return;
           if (!commit(result)) throw new ScanError(SCAN_FAILED_MESSAGE);
         } catch (error) {
-          autoBlockedUntil =
-            now() + Math.max(error.retryAfterMs || 0, AUTO_RETRY_BACKOFF_MS);
+          scheduleRetry(error);
           setStatus({ kind: "outdated" });
         } finally {
           setBusy(false);
@@ -412,7 +424,7 @@
       if (!loaded || inFlight) return undefined;
       const entry = store.read(scope);
       if (fresh(entry)) display(entry.html, entry.measuredAt); // newer result from another tab
-      if (renderedAt === null) return undefined;
+      if (renderedAt === null) return autoScan();
       if (now() - renderedAt < TTL_MS) {
         scheduleExpiry();
         return undefined;
@@ -439,8 +451,12 @@
         try {
           const result = await request(false);
           if (result.redirected) return;
-          if (!commit(result)) display(result.html, null); // unsuccessful scan: shown, never cached
+          if (!commit(result)) {
+            display(result.html, null);
+            scheduleRetry();
+          }
         } catch (error) {
+          scheduleRetry(error);
           setLoadError(
             error instanceof Error ? error.message : SCAN_FAILED_MESSAGE,
           );
@@ -499,6 +515,7 @@
       recheck,
       isLoaded: () => loaded,
       destroy: () => {
+        destroyed = true;
         clearTimer(timer);
         timer = null;
       },

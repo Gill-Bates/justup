@@ -140,7 +140,7 @@ host="$(rustc -vV | sed -n 's|host: ||p')"
 # The cross toolchain is only needed when the build host is not the target architecture.
 if [ "$host" = "$target" ]; then cross_pkgs=""; fi
 
-apt-get update
+apt-get update && apt-get upgrade -y # Keep this! This is wanted!
 # shellcheck disable=SC2086  # cross_pkgs is a deliberate word list
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     ca-certificates git clang libclang-dev cmake make protobuf-compiler libprotobuf-dev python3 file \
@@ -376,15 +376,18 @@ RUN apt-get update && apt-get upgrade -y && DEBIAN_FRONTEND=noninteractive apt-g
 
 # Trimmed Java runtime (jlink) built from the verified Temurin JDK; no JDK in this image.
 COPY --from=jre-builder /opt/java /opt/java
+# The JVM leaves /tmp/hsperfdata_* behind after each start; removed in the same layer.
 RUN ln -s /opt/java/bin/java /usr/local/bin/java \
- && java -version
+ && java -version \
+ && rm -rf /tmp/hsperfdata_*
 
 # signal-cli arrives pre-trimmed from the signal-cli-dist stage (symlink + smoke test here).
 COPY --from=signal-cli-dist /opt/signal-cli /opt/signal-cli
 RUN ln -s /opt/signal-cli/bin/signal-cli /usr/local/bin/signal-cli \
  && signal-cli --version \
  && { grep '^JAVA_VERSION=' /opt/java/release; signal-cli --version; \
-      ls /opt/signal-cli/lib | grep '^libsignal-client-'; } > /opt/COMPONENTS.txt
+      ls /opt/signal-cli/lib | grep '^libsignal-client-'; } > /opt/COMPONENTS.txt \
+ && rm -rf /tmp/hsperfdata_*
 
 # Non-root user with dedicated home directory (security: avoid HOME=/tmp)
 RUN groupadd -r justup && useradd -r -g justup justup \

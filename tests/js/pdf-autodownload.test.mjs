@@ -146,12 +146,15 @@ test("a transient HEAD failure does not use up the claim", async () => {
   t.window.fetch = async () => { throw new TypeError("network"); };
   t.window.justUpPdfJobs.add("j1", 7);
   await t.poll();
+  await new Promise(setImmediate);
   assert.equal(t.frames.length, 0);
   assert.deepEqual(Object.keys(t.local).filter(k => k.includes("pdf_auto_done")), []);
   t.window.fetch = ok;
-  t.window.justUpPdfJobs.add("j2", 7);
+  t.window.justUpPdfJobs.add("j1", 7);
   await t.poll();
+  assert.deepEqual(t.heads, [[URL_OF("j1"), "HEAD"]]);
   assert.equal(t.frames.length, 1);
+  assert.equal(t.frames[0].src, URL_OF("j1"));
 });
 
 test("a claim that cannot be stored starts no download", async () => {

@@ -324,49 +324,59 @@ def test_target_identity_constraint_rejects_exact_checks_but_allows_other_servic
 
 
 def test_future_migrations_apply_once_in_order_and_are_idempotent(db_path: Path, monkeypatch: pytest.MonkeyPatch):
+    base = sqlite_db.SCHEMA_VERSION
     calls: list[int] = []
 
     def add_table(conn):
-        calls.append(2)
+        calls.append(base + 1)
         conn.execute("CREATE TABLE future_a (x INTEGER)")
 
     def add_index(conn):
-        calls.append(3)
+        calls.append(base + 2)
         conn.execute("CREATE INDEX idx_future_a ON future_a(x)")
 
-    monkeypatch.setattr(sqlite_db, "SCHEMA_VERSION", 3)
+    monkeypatch.setattr(sqlite_db, "SCHEMA_VERSION", base + 2)
     monkeypatch.setattr(
         sqlite_db,
         "MIGRATIONS",
-        (sqlite_db.Migration(3, "index", add_index), sqlite_db.Migration(2, "table", add_table)),
+        (
+            *sqlite_db.MIGRATIONS,
+            sqlite_db.Migration(base + 2, "index", add_index),
+            sqlite_db.Migration(base + 1, "table", add_table),
+        ),
     )
     conn = sqlite_db.connect(db_path)
     sqlite_db.init_schema(conn)
     sqlite_db.init_schema(conn)
-    assert calls == [2, 3]
-    assert sqlite_db.get_schema_version(conn) == 3
+    assert calls == [base + 1, base + 2]
+    assert sqlite_db.get_schema_version(conn) == base + 2
     sqlite_db.close_connection(conn)
 
 
 def test_failing_future_migration_rolls_back_schema_and_version(db_path: Path, monkeypatch: pytest.MonkeyPatch):
+    base = sqlite_db.SCHEMA_VERSION
+
     def broken(conn):
         conn.execute("CREATE TABLE half_done (x INTEGER)")
         raise RuntimeError("migration failed")
 
-    monkeypatch.setattr(sqlite_db, "SCHEMA_VERSION", 2)
-    monkeypatch.setattr(sqlite_db, "MIGRATIONS", (sqlite_db.Migration(2, "broken", broken),))
+    monkeypatch.setattr(sqlite_db, "SCHEMA_VERSION", base + 1)
+    monkeypatch.setattr(
+        sqlite_db, "MIGRATIONS", (*sqlite_db.MIGRATIONS, sqlite_db.Migration(base + 1, "broken", broken))
+    )
     conn = sqlite_db.connect(db_path)
     with pytest.raises(RuntimeError, match="migration failed"):
         sqlite_db.init_schema(conn)
-    assert sqlite_db.get_schema_version(conn) == 1
+    assert sqlite_db.get_schema_version(conn) == base
     assert conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'half_done'").fetchone() is None
     sqlite_db.close_connection(conn)
 
 
 def test_database_without_migration_path_is_refused(db_path: Path, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(sqlite_db, "SCHEMA_VERSION", 2)  # no Migration(2) registered
+    base = sqlite_db.SCHEMA_VERSION
+    monkeypatch.setattr(sqlite_db, "SCHEMA_VERSION", base + 1)  # no Migration(base + 1) registered
     conn = sqlite_db.connect(db_path)
-    with pytest.raises(sqlite_db.IncompatibleSchemaError, match="supports 2"):
+    with pytest.raises(sqlite_db.IncompatibleSchemaError, match=f"supports {base + 1}"):
         sqlite_db.init_schema(conn)
     sqlite_db.close_connection(conn)
 

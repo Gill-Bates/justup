@@ -38,7 +38,6 @@
 		Chart.defaults.font.family = "'IBM Plex Sans', sans-serif";
 		Chart.defaults.color = theme.text;
 		Chart.defaults.borderColor = theme.grid;
-		Chart.defaults.plugins = Chart.defaults.plugins || {};
 		Chart.defaults.plugins.legend = Chart.defaults.plugins.legend || {};
 		Chart.defaults.plugins.legend.labels = Chart.defaults.plugins.legend.labels || {};
 		Chart.defaults.plugins.legend.labels.color = theme.text;

@@ -1737,6 +1737,9 @@ def query_display_series(
     }
 
 
+_ALL_POINTS_LIMIT = 2**63 - 1
+
+
 @dataclass
 class DowntimePeriod:
     """Represents a downtime period with start, end, and duration."""
@@ -1786,7 +1789,7 @@ def query_downtime_periods(
             metric=metric,
             since=since,
             until=until,
-            limit=50000,  # Read all points in range
+            limit=_ALL_POINTS_LIMIT,  # a head-limited read would drop the newest points
             latest=False,
         )
         for point in points:

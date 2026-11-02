@@ -29,7 +29,10 @@ data.
 SECRET_KEYS=<new-primary-key>,<old-key>
 ```
 
-Session tokens depend on the first key: after you change it, all users sign in again.
+Session tokens depend on the first key only: after you change it, all users sign in
+again, and an old key in second place does not keep sessions valid (it still decrypts
+stored secrets). The shipped `docker/docker-compose.yml` forwards `SECRET_KEYS` to the
+container; a Compose file without that line ignores the variable.
 
 ### Backup key
 
@@ -44,9 +47,9 @@ signed with it is needed. See [Backup & restore](../features/backup.md).
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `JUSTUP_HOST` | `0.0.0.0` | Bind address in the container |
-| `JUSTUP_PORT` | `8000` | Bind port in the container |
+| `JUSTUP_PORT` | `8000` | Bind port in the container; an invalid value falls back to `8000` with a warning |
 | `UPMON_TRUSTED_PROXIES` | empty | Proxy addresses trusted for `X-Forwarded-For`, `X-Real-IP`, and `X-Forwarded-Proto` |
-| `LOG_LEVEL` | `INFO` | Log level; access lines appear only at `DEBUG` |
+| `LOG_LEVEL` | `INFO` | Log level (`CRITICAL`, `ERROR`, `WARNING`, `INFO`, `DEBUG`); access lines appear only at `DEBUG`. An invalid value falls back to `INFO` with a warning |
 
 justUp! supports exactly one app process per data directory. There is no
 `WORKERS` variable.

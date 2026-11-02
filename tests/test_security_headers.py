@@ -141,6 +141,14 @@ def test_report_sink_requires_no_auth_or_csrf_but_rejects_abuse(app, caplog):
     assert not any("CSP_VIOLATION" in r.getMessage() for r in caplog.records)
 
 
+def test_report_sink_accepts_browser_reports_that_carry_a_session_cookie(app):
+    # Browsers attach cookies to same-origin report POSTs but cannot add X-CSRF-Token.
+    client = TestClient(app)
+    client.cookies.set("token", "any-session-value")
+    response = client.post("/csp-report", content=b"{}", headers={"Content-Type": "application/csp-report"})
+    assert response.status_code == 204
+
+
 def test_report_log_injection_is_neutralized(app, caplog):
     forged = {"csp-report": {"violated-directive": "x\nCRITICAL forged line\r", "blocked-uri": "y" * 5000}}
     with caplog.at_level(logging.WARNING, logger=csp_report.__name__):

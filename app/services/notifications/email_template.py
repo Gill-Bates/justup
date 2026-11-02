@@ -13,12 +13,16 @@ Uses explicit whitelist-based replacement:
 - No eval, no Jinja, no runtime code execution
 - Unknown/invalid placeholders are replaced with empty strings (safe fallback)
 - No access to attributes, methods, or callables
+- Optional sections use named, whitelisted conditional blocks (no expressions)
 
 Design Notes:
 - DEFAULT_HTML_TEMPLATE uses table-based layout for max email client compatibility
 - Works in Gmail, Outlook (including Win32), Apple Mail
-- Inline styles only, no external assets
-- Status display (emoji, color, text) is auto-mapped from alert status
+- Native design is LIGHT; colours are chosen so client auto-dark-mode stays legible
+  (``color-scheme``/``supported-color-schemes`` are set, see the template head)
+- The logo is embedded in the message as an inline image referenced by ``cid:`` so it
+  renders without any external server; see LOGO_CID / build_email_message()
+- Status display (colour, text) is auto-mapped from alert status; never colour alone
 """
 
 from __future__ import annotations
@@ -26,23 +30,43 @@ from __future__ import annotations
 import html
 import logging
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from email.message import EmailMessage
+from pathlib import Path
 from typing import Any
 
 from ...utils.formatters import format_duration
 
 _log = logging.getLogger(__name__)
 
-# Logo URL for emails (hosted on GitHub, always reachable, no dependency on instance URL)
-LOGO_URL = "https://raw.githubusercontent.com/Gill-Bates/justUp/f41b710f4d4a9bdbfc164f630338c478864631e0/static/img/justup_sw_email.png"
+# ── Inline (CID) logo embedding ──────────────────────────────────────────────
+# The real message embeds the logo as a related MIME part referenced by this
+# Content-ID. {{logo_url}} resolves to LOGO_SRC at render time, so the sent mail
+# never depends on GitHub, the instance URL or a client's permission to load
+# remote images. build_email_message() attaches the asset when the rendered HTML
+# references it.
+LOGO_CID = "justup-logo"
+LOGO_SRC = f"cid:{LOGO_CID}"
 
-# Logo URL for TinyMCE preview (local static file, works in browser preview)
-LOGO_URL_PREVIEW = "/static/justup_1c.png"
+# Inline logo asset: white wordmark baked onto a dark brand chip so it stays legible
+# both on the light card and after a mail client recolours the background for dark mode.
+LOGO_ASSET_PATH = Path(__file__).resolve().parent.parent.parent / "static" / "img" / "justup_email_logo.png"
+
+# Browser-editor preview of {{logo_url}}: a local static file the preview iframe can load.
+LOGO_URL_PREVIEW = "/static/img/justup_email_logo.png"
+
+# Backwards-compatible export: the send path no longer depends on this external URL,
+# but the name stays importable. It now points at the inline reference.
+LOGO_URL = LOGO_SRC
 
 
 def template_to_preview(text: str) -> str:
-    """Replace the {{logo_url}} placeholder with the local preview URL for the editor."""
-    return text.replace("{{logo_url}}", LOGO_URL_PREVIEW)
+    """Rewrite logo references to the local preview URL for the browser editor.
+
+    Replaces both the ``{{logo_url}}`` placeholder and an already-rendered ``cid:``
+    reference, so the editor preview shows the logo without a mail client.
+    """
+    return text.replace("{{logo_url}}", LOGO_URL_PREVIEW).replace(LOGO_SRC, LOGO_URL_PREVIEW)
 
 
 # Setting keys of the stored SMTP mail template
@@ -72,10 +96,16 @@ __all__ = [
     "DEFAULT_SUBJECT",
     "EMAIL_TEMPLATE_HTML_KEY",
     "EMAIL_TEMPLATE_SUBJECT_KEY",
+    "LOGO_ASSET_PATH",
+    "LOGO_CID",
+    "LOGO_SRC",
     "LOGO_URL",
     "LOGO_URL_PREVIEW",
     "STATUS_DISPLAY_MAP",
     "build_alert_context",
+    "build_email_message",
+    "build_test_alert_sample",
+    "html_to_text",
     "load_email_templates",
     "load_template_preview",
     "render_template",
@@ -101,10 +131,11 @@ ALLOWED_PLACEHOLDERS = frozenset(
         "alert.resolved_at",
         "alert.duration",
         "alert.reason",
-        # Status display (emoji, color, text for templates)
+        # Status display (colour, text, short label for templates)
         "status.emoji",
         "status.color",
         "status.text",
+        "status.label",  # short status word for a redundant text pill (DOWN / RESOLVED / ...)
         # Downtime
         "downtime.minutes",
         "downtime.human",
@@ -131,6 +162,50 @@ _RAW_HTML_PLACEHOLDERS = frozenset(
     }
 )
 
+# ── Conditional sections ─────────────────────────────────────────────────────
+# Optional parts of the template (SLA panel, call-to-action, resolved/ongoing row,
+# group row) are wrapped in named blocks of the form "open-if NAME ... close-if NAME",
+# written with the same double-brace markers as placeholders (see _CONDITIONAL_RE).
+# This is NOT a general template engine: the flag name is matched against a fixed
+# whitelist, there are no expressions, no negation and no nesting of the same flag.
+# A block whose flag is truthy in the context's "flags" dict is kept (its inner
+# text is still placeholder-rendered); otherwise the whole block is removed. An
+# unknown flag removes the block (safe default) and is logged.
+CONDITIONAL_FLAGS = frozenset(
+    {
+        "sla",  # SLA panel (threshold/actual available and relevant)
+        "cta",  # "Open in justUp!" button (valid instance URL)
+        "resolved",  # alert has an end time (RESOLVED); else the "Ongoing" row shows
+        "group",  # target has a non-default group
+    }
+)
+
+_CONDITIONAL_RE = re.compile(
+    r"\{\{#if\s+([a-zA-Z0-9_]+)\s*\}\}(.*?)\{\{/if\s+\1\s*\}\}",
+    re.DOTALL,
+)
+
+
+def _apply_conditionals(template: str, flags: dict[str, bool]) -> str:
+    """Keep or drop each ``{{#if name}}...{{/if name}}`` block by its whitelisted flag.
+
+    Runs before placeholder replacement. Unknown flags drop their block.
+    """
+    if "{{#if" not in template:
+        return template
+
+    def repl(match: re.Match) -> str:
+        name = match.group(1)
+        body = match.group(2)
+        if name not in CONDITIONAL_FLAGS:
+            _log.debug("Unknown conditional flag %r; dropping block", name)
+            return ""
+        return body if flags.get(name) else ""
+
+    # One pass is enough: no same-flag nesting is supported by design.
+    return _CONDITIONAL_RE.sub(repl, template)
+
+
 # Default email subject template (emoji for clear status visibility)
 DEFAULT_SUBJECT = "{{status.emoji}} {{target.name}} – {{status.text}}"
 
@@ -138,414 +213,356 @@ DEFAULT_SUBJECT = "{{status.emoji}} {{target.name}} – {{status.text}}"
 # Mobile-first responsive design - works in Gmail, Outlook, Apple Mail
 # Uses display:block on mobile for stacked layout
 DEFAULT_HTML_TEMPLATE = """<!DOCTYPE html>
-<html xmlns="http://www.w3.org/1999/xhtml" lang="en"
+<html lang="en" xmlns="http://www.w3.org/1999/xhtml"
       xmlns:v="urn:schemas-microsoft-com:vml"
       xmlns:o="urn:schemas-microsoft-com:office:office">
 <head>
   <meta charset="UTF-8">
-
-  <!-- iOS Mail essentials -->
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="color-scheme" content="light dark">
-  <meta name="supported-color-schemes" content="light dark">
+  <!-- Native design is LIGHT. Declaring light tells well-behaved clients not to
+       auto-invert; colours below are still chosen to survive clients that do. -->
+  <meta name="color-scheme" content="light">
+  <meta name="supported-color-schemes" content="light">
   <meta name="format-detection" content="telephone=no,date=no,address=no,email=no">
   <meta http-equiv="X-UA-Compatible" content="IE=edge">
-
-  <title>Status Notification</title>
+  <title>justUp! Monitoring alert</title>
 
   <!--[if mso]>
-  <noscript>
-    <xml>
-      <o:OfficeDocumentSettings>
-        <o:PixelsPerInch>96</o:PixelsPerInch>
-      </o:OfficeDocumentSettings>
-    </xml>
-  </noscript>
+  <noscript><xml><o:OfficeDocumentSettings>
+    <o:PixelsPerInch>96</o:PixelsPerInch>
+  </o:OfficeDocumentSettings></xml></noscript>
   <![endif]-->
 
   <style>
-    /* ====== RESETS ====== */
-    body, table, td, a {
-      -webkit-text-size-adjust: 100%;
-      -ms-text-size-adjust: 100%;
-    }
-    table, td {
-      mso-table-lspace: 0pt;
-      mso-table-rspace: 0pt;
-    }
+    :root { color-scheme: light; supported-color-schemes: light; }
+    body, table, td, a { -webkit-text-size-adjust:100%; -ms-text-size-adjust:100%; }
+    table, td { mso-table-lspace:0pt; mso-table-rspace:0pt; }
     img {
-      -ms-interpolation-mode: bicubic;
-      border: 0; height: auto;
-      line-height: 100%; outline: none;
-      text-decoration: none;
+      -ms-interpolation-mode:bicubic; border:0; line-height:100%;
+      outline:none; text-decoration:none;
     }
-    body {
-      margin: 0; padding: 0;
-      width: 100% !important;
-      -webkit-font-smoothing: antialiased;
-    }
+    body { margin:0; padding:0; width:100% !important; -webkit-font-smoothing:antialiased; }
+    a { color:#0e7a65; }
 
-    /* ====== DARK MODE – Apple Mail ====== */
+    /* Keep the dark logo chip and status colours stable if a client recolours for
+       dark mode: the surfaces that must stay as designed are pinned. */
     @media (prefers-color-scheme: dark) {
-      body, .mail-bg {
-        background-color: #2b2d31 !important;
-        color: #f9fafb !important;
-      }
-      .mail-card {
-        background-color: #1f2937 !important;
-        color: #f9fafb !important;
-      }
-      .mail-label { color: #9ca3af !important; }
-      .mail-divider { border-top-color: #374151 !important; }
-      .mail-footer {
-        background-color: #111827 !important;
-        color: #9ca3af !important;
-      }
-      a { color: #93c5fd !important; }
-      .badge-check {
-        background-color: #166534 !important;
-        color: #bbf7d0 !important;
-      }
+      .ju-card { background-color:#ffffff !important; }
+      .ju-panel { background-color:#f7f9fb !important; }
+      .ju-title, .ju-value { color:#1b2733 !important; }
+      .ju-muted, .ju-label { color:#5b6b7b !important; }
     }
+    [data-ogsc] .ju-card { background-color:#ffffff !important; }
+    [data-ogsc] .ju-panel { background-color:#f7f9fb !important; }
+    [data-ogsc] .ju-title, [data-ogsc] .ju-value { color:#1b2733 !important; }
+    [data-ogsc] .ju-muted, [data-ogsc] .ju-label { color:#5b6b7b !important; }
 
-    /* ====== DARK MODE – Outlook.com / Office 365 ====== */
-    [data-ogsc] body, [data-ogsc] .mail-bg {
-      background-color: #2b2d31 !important;
-      color: #f9fafb !important;
-    }
-    [data-ogsc] .mail-card {
-      background-color: #1f2937 !important;
-      color: #f9fafb !important;
-    }
-    [data-ogsc] .mail-label { color: #9ca3af !important; }
-    [data-ogsc] .mail-divider { border-top-color: #374151 !important; }
-    [data-ogsc] .mail-footer {
-      background-color: #111827 !important;
-      color: #9ca3af !important;
-    }
-    [data-ogsc] a { color: #93c5fd !important; }
-    [data-ogsc] .badge-check {
-      background-color: #166534 !important;
-      color: #bbf7d0 !important;
-    }
-
-    /* ====== MOBILE ====== */
-    @media only screen and (max-width: 600px) {
-
-      /* Card randlos auf Mobile */
-      .wrapper-td {
-        padding: 0 !important;
-      }
-      .mail-card {
-        border-radius: 0 !important;
-      }
-
-      /* weniger Innenabstand in der Card */
-      .card-padding {
-        padding-left: 14px !important;
-        padding-right: 14px !important;
-      }
-
-      /* Label / Value Zeilen stapeln */
-      .stack .mail-value {
-        display: block !important;
-        width: 100% !important;
-        max-width: 100% !important;
-        min-width: 100% !important;
-        box-sizing: border-box !important;
-        padding-left: 0 !important;
-        padding-right: 0 !important;
-      }
-      .stack .mail-label {
-        display: block !important;
-        width: 100% !important;
-        padding-bottom: 0 !important;
-        font-weight: 600 !important;
-      }
-
-      /* Badges: wrappen auf Mobile */
-      .badge-check {
-        font-size: 11px !important;
-        padding: 3px 8px !important;
-      }
-
-      /* Footer stapeln */
-      .footer-stack td {
-        display: block !important;
-        width: 100% !important;
-        text-align: center !important;
-        padding: 4px 0 !important;
-      }
-      .footer-logo {
-        margin: 6px auto 0 auto !important;
-      }
-
-      /* Top/Bottom Spacer auf Mobile minimal */
-      .spacer-top td { height: 8px !important; }
-      .spacer-bottom td { height: 8px !important; }
+    @media only screen and (max-width:600px) {
+      .ju-wrap-td { padding:0 !important; }
+      .ju-card { border-radius:0 !important; }
+      .ju-pad { padding-left:18px !important; padding-right:18px !important; }
+      .ju-stack, .ju-stack tr, .ju-stack td { display:block !important; width:100% !important; }
+      .ju-stack .ju-col { padding:10px 0 !important; border:0 !important; }
+      .ju-sep-v { display:none !important; }
+      .ju-cta a { display:block !important; }
     }
   </style>
 </head>
 
-<body style="margin:0;padding:0;word-spacing:normal;background-color:#f5f7fa;">
+<body class="ju-bg" style="margin:0;padding:0;word-spacing:normal;background-color:#eef1f5;">
 
-<!-- OUTER BACKGROUND -->
-<table role="presentation" width="100%" cellspacing="0" cellpadding="0"
-       class="mail-bg"
-       style="background-color:#f5f7fa;color:#1f2937;">
+<!-- preheader: shown in the inbox list, hidden in the body -->
+<div style="display:none;max-height:0;overflow:hidden;opacity:0;mso-hide:all;
+            font-size:1px;line-height:1px;color:#eef1f5;">
+  {{status.text}} &ndash; {{target.name}} ({{target.host}}) &middot; {{alert.reason}}
+</div>
+
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" class="ju-bg"
+       style="background-color:#eef1f5;">
   <tr>
-    <td align="center" style="padding:0;">
+    <td align="center" style="padding:24px 12px;">
 
-      <!-- TOP SPACER (iOS safe-area) -->
-      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" class="spacer-top">
-        <tr><td height="20" style="font-size:0;line-height:0;">&nbsp;</td></tr>
-      </table>
+      <!--[if mso]>
+      <table role="presentation" align="center" width="600" cellspacing="0" cellpadding="0" border="0">
+      <tr><td>
+      <![endif]-->
+      <table role="presentation" cellspacing="0" cellpadding="0" border="0" class="ju-card"
+             style="max-width:600px;width:100%;background-color:#ffffff;
+                    border:1px solid #e2e7ee;border-radius:14px;overflow:hidden;
+                    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+                    color:#1b2733;">
 
-      <!-- WRAPPER -->
-      <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
+        <!-- HEADER: logo + Monitoring alert -->
         <tr>
-          <td align="center" class="wrapper-td" style="padding:16px;">
-
-            <!-- CARD (max 600 px, shrinks to 100 %) -->
-            <!--[if mso]>
-            <table role="presentation" align="center" width="600" cellspacing="0" cellpadding="0" border="0">
-            <tr><td>
-            <![endif]-->
-            <table role="presentation" cellspacing="0" cellpadding="0" border="0"
-                   class="mail-card"
-                   style="max-width:600px;width:100%;background-color:#fafafa;
-                          border-radius:8px;overflow:hidden;color:#1f2937;">
-
-              <!-- STATUS BANNER -->
+          <td class="ju-pad" style="padding:22px 28px 16px 28px;">
+            <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
               <tr>
-                <td style="height:6px;background-color:{{status.color}};
-                           font-size:1px;line-height:1px;">&nbsp;</td>
-              </tr>
-
-              <!-- HEADER -->
-              <tr>
-                <td class="card-padding"
-                    style="padding:16px 20px;
-                           font-size:18px;font-weight:bold;line-height:1.3;">
-                  {{status.emoji}} {{status.text}}
+                <td valign="middle" style="padding:0;">
+                  <img src="{{logo_url}}" width="150" alt="justUp!"
+                       style="display:inline-block;height:auto;width:150px;
+                              max-width:60vw;vertical-align:middle;">
+                </td>
+                <td valign="middle" align="right" class="ju-muted"
+                    style="padding:0;font-size:13px;color:#5b6b7b;white-space:nowrap;">
+                  <span style="display:inline-block;border-left:1px solid #e2e7ee;padding-left:14px;">
+                    &#128276; Monitoring alert
+                  </span>
                 </td>
               </tr>
-
-              <!-- CONTENT -->
-              <tr>
-                <td class="card-padding"
-                    style="padding:16px 20px;font-size:14px;line-height:1.6;">
-
-                  <!-- ===== TARGET ===== -->
-                  <strong style="display:block;margin-bottom:8px;">Target</strong>
-
-                  <table role="presentation" width="100%" cellspacing="0"
-                         cellpadding="0" class="stack" style="table-layout:fixed;">
-                    <tr>
-                      <td valign="top" width="140" class="mail-label"
-                          style="width:140px;color:#9ca3af;
-                                 font-size:13px;padding:4px 0;white-space:nowrap;">
-                        Name
-                      </td>
-                      <td valign="top" class="mail-value"
-                          style="padding:4px 0;font-weight:500;overflow-wrap:break-word;">
-                        {{target.name}}
-                      </td>
-                    </tr>
-                    <tr>
-                      <td valign="top" width="140" class="mail-label"
-                          style="width:140px;color:#9ca3af;
-                                 font-size:13px;padding:4px 0;white-space:nowrap;">
-                        Host
-                      </td>
-                      <td valign="top" class="mail-value"
-                          style="padding:4px 0;font-weight:500;overflow-wrap:break-word;">
-                        {{target.host}}
-                      </td>
-                    </tr>
-                    <tr>
-                      <td valign="top" width="140" class="mail-label"
-                          style="width:140px;color:#9ca3af;
-                                 font-size:13px;padding:4px 0;white-space:nowrap;">
-                        Group
-                      </td>
-                      <td valign="top" class="mail-value"
-                          style="padding:4px 0;font-weight:500;overflow-wrap:break-word;">
-                        {{target.group}}
-                      </td>
-                    </tr>
-                    <tr>
-                      <td valign="top" width="140" class="mail-label"
-                          style="width:140px;color:#9ca3af;
-                                 font-size:13px;padding:6px 0;white-space:nowrap;">
-                        Check
-                      </td>
-                      <td valign="top" class="mail-value" style="padding:4px 0;">
-                        {{target.check_badges}}
-                      </td>
-                    </tr>
-                  </table>
-
-                  <hr class="mail-divider"
-                      style="border:none;border-top:1px solid #d1d5db;margin:16px 0;">
-
-                  <!-- ===== INCIDENT ===== -->
-                  <strong style="display:block;margin-bottom:8px;">Incident</strong>
-
-                  <table role="presentation" width="100%" cellspacing="0"
-                         cellpadding="0" class="stack" style="table-layout:fixed;">
-                    <tr>
-                      <td valign="top" width="140" class="mail-label"
-                          style="width:140px;color:#9ca3af;
-                                 font-size:13px;padding:4px 0;white-space:nowrap;">
-                        Status
-                      </td>
-                      <td valign="top" class="mail-value"
-                          style="padding:4px 0;font-weight:500;overflow-wrap:break-word;">
-                        {{alert.status}}
-                      </td>
-                    </tr>
-                    <tr>
-                      <td valign="top" width="140" class="mail-label"
-                          style="width:140px;color:#9ca3af;
-                                 font-size:13px;padding:4px 0;white-space:nowrap;">
-                        Started
-                      </td>
-                      <td valign="top" class="mail-value"
-                          style="padding:4px 0;font-weight:500;overflow-wrap:break-word;">
-                        {{alert.started_at}}
-                      </td>
-                    </tr>
-                    <tr>
-                      <td valign="top" width="140" class="mail-label"
-                          style="width:140px;color:#9ca3af;
-                                 font-size:13px;padding:4px 0;white-space:nowrap;">
-                        Resolved
-                      </td>
-                      <td valign="top" class="mail-value"
-                          style="padding:4px 0;font-weight:500;overflow-wrap:break-word;">
-                        {{alert.resolved_at}}
-                      </td>
-                    </tr>
-                    <tr>
-                      <td valign="top" width="140" class="mail-label"
-                          style="width:140px;color:#9ca3af;
-                                 font-size:13px;padding:4px 0;white-space:nowrap;">
-                        Duration
-                      </td>
-                      <td valign="top" class="mail-value"
-                          style="padding:4px 0;font-weight:500;overflow-wrap:break-word;">
-                        {{alert.duration}}
-                      </td>
-                    </tr>
-                    <tr>
-                      <td valign="top" width="140" class="mail-label"
-                          style="width:140px;color:#9ca3af;
-                                 font-size:13px;padding:4px 0;white-space:nowrap;">
-                        Reason
-                      </td>
-                      <td valign="top" class="mail-value"
-                          style="padding:4px 0;font-weight:500;overflow-wrap:break-word;">
-                        {{alert.reason}}
-                      </td>
-                    </tr>
-                  </table>
-
-                  <hr class="mail-divider"
-                      style="border:none;border-top:1px solid #d1d5db;margin:16px 0;">
-
-                  <!-- ===== SLA ===== -->
-                  <strong style="display:block;margin-bottom:8px;">SLA</strong>
-
-                  <table role="presentation" width="100%" cellspacing="0"
-                         cellpadding="0" class="stack" style="table-layout:fixed;">
-                    <tr>
-                      <td valign="top" width="140" class="mail-label"
-                          style="width:140px;color:#9ca3af;
-                                 font-size:13px;padding:4px 0;white-space:nowrap;">
-                        Downtime
-                      </td>
-                      <td valign="top" class="mail-value"
-                          style="padding:4px 0;font-weight:500;overflow-wrap:break-word;">
-                        {{downtime.human}}
-                      </td>
-                    </tr>
-                    <tr>
-                      <td valign="top" width="140" class="mail-label"
-                          style="width:140px;color:#9ca3af;
-                                 font-size:13px;padding:4px 0;white-space:nowrap;">
-                        Threshold
-                      </td>
-                      <td valign="top" class="mail-value"
-                          style="padding:4px 0;font-weight:500;overflow-wrap:break-word;">
-                        {{sla.threshold}}
-                      </td>
-                    </tr>
-                    <tr>
-                      <td valign="top" width="140" class="mail-label"
-                          style="width:140px;color:#9ca3af;
-                                 font-size:13px;padding:4px 0;white-space:nowrap;">
-                        Actual
-                      </td>
-                      <td valign="top" class="mail-value"
-                          style="padding:4px 0;font-weight:500;overflow-wrap:break-word;">
-                        {{sla.actual}}
-                      </td>
-                    </tr>
-                  </table>
-
-                </td>
-              </tr>
-
-              <!-- FOOTER -->
-              <tr>
-                <td class="mail-footer"
-                    style="padding:14px 16px;
-                           background-color:#f1f3f6;
-                           color:#9ca3af;
-                           font-size:12px;
-                           line-height:1.6;">
-                  <table role="presentation" width="100%" cellspacing="0"
-                         cellpadding="0" class="footer-stack">
-                    <tr>
-                      <td style="text-align:left;vertical-align:middle;">
-                        justUp! &copy; 2026 Gill-Bates &middot;
-                        <a href="{{system.github_url}}"
-                           style="color:#9ca3af;text-decoration:underline;">
-                          GitHub
-                        </a>
-                      </td>
-                      <td style="text-align:right;vertical-align:middle;width:60px;">
-                        <img src="{{logo_url}}" alt="justUp! Logo"
-                             class="footer-logo"
-                             style="height:35px;width:auto;display:block;
-                                    margin-left:auto;">
-                      </td>
-                    </tr>
-                  </table>
-                </td>
-              </tr>
-
             </table>
-            <!-- /CARD -->
-            <!--[if mso]>
-            </td></tr></table>
-            <![endif]-->
-
           </td>
         </tr>
-      </table>
-      <!-- /WRAPPER -->
 
-      <!-- BOTTOM SPACER -->
-      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" class="spacer-bottom">
-        <tr><td height="24" style="font-size:0;line-height:0;">&nbsp;</td></tr>
+        <!-- STATUS ACCENT LINE -->
+        <tr><td style="padding:0 28px;">
+          <div style="height:4px;background-color:{{status.color}};border-radius:4px;
+                      font-size:1px;line-height:1px;">&nbsp;</div>
+        </td></tr>
+
+        <!-- PRIMARY EVENT -->
+        <tr>
+          <td class="ju-pad" style="padding:20px 28px 6px 28px;">
+            <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
+              <tr>
+                <td valign="middle" style="padding:0;">
+                  <span style="display:inline-block;width:12px;height:12px;border-radius:50%;
+                               background-color:{{status.color}};vertical-align:middle;">&nbsp;</span>
+                  <span class="ju-title"
+                        style="vertical-align:middle;padding-left:10px;font-size:24px;
+                               font-weight:700;color:#1b2733;letter-spacing:-0.01em;">
+                    {{status.text}}
+                  </span>
+                </td>
+                <td valign="middle" align="right" style="padding:0;">
+                  <span style="display:inline-block;font-size:12px;font-weight:700;
+                               letter-spacing:0.04em;color:{{status.color}};
+                               border:1px solid {{status.color}};border-radius:999px;
+                               padding:4px 12px;white-space:nowrap;">{{status.label}}</span>
+                </td>
+              </tr>
+            </table>
+            <div class="ju-muted"
+                 style="padding-top:8px;font-size:14px;color:#5b6b7b;
+                        line-height:1.5;overflow-wrap:break-word;">
+              {{alert.reason}}
+            </div>
+          </td>
+        </tr>
+
+        <!-- TARGET / HOST -->
+        <tr>
+          <td class="ju-pad" style="padding:14px 28px 4px 28px;">
+            <table role="presentation" width="100%" cellspacing="0" cellpadding="0"
+                   class="ju-stack" style="table-layout:fixed;">
+              <tr>
+                <td valign="top" width="50%" class="ju-col"
+                    style="padding:4px 16px 4px 0;vertical-align:top;">
+                  <div class="ju-label"
+                       style="font-size:11px;font-weight:700;letter-spacing:0.08em;
+                              color:#8a98a8;text-transform:uppercase;">Target</div>
+                  <div class="ju-value"
+                       style="padding-top:3px;font-size:16px;font-weight:600;color:#1b2733;
+                              overflow-wrap:break-word;word-break:break-word;">{{target.name}}</div>
+                </td>
+                <td class="ju-sep-v" width="1"
+                    style="width:1px;background-color:#e2e7ee;font-size:1px;line-height:1px;">&nbsp;</td>
+                <td valign="top" width="50%" class="ju-col"
+                    style="padding:4px 0 4px 16px;vertical-align:top;">
+                  <div class="ju-label"
+                       style="font-size:11px;font-weight:700;letter-spacing:0.08em;
+                              color:#8a98a8;text-transform:uppercase;">Host</div>
+                  <div class="ju-value"
+                       style="padding-top:3px;font-size:16px;font-weight:600;color:#1b2733;
+                              overflow-wrap:break-word;word-break:break-word;">{{target.host}}</div>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+
+        <!-- INCIDENT DETAILS -->
+        <tr>
+          <td class="ju-pad" style="padding:14px 28px 4px 28px;">
+            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" class="ju-panel"
+                   style="background-color:#f7f9fb;border:1px solid #e9eef4;border-radius:10px;">
+              <tr><td style="padding:14px 16px 6px 16px;">
+                <span style="color:{{status.color}};font-weight:700;">&#9650;</span>
+                <span class="ju-title"
+                      style="padding-left:6px;font-size:15px;font-weight:700;color:#1b2733;">
+                  Incident Details
+                </span>
+              </td></tr>
+              <tr><td style="padding:0 16px 10px 16px;">
+                <table role="presentation" width="100%" cellspacing="0" cellpadding="0"
+                       style="font-size:14px;">
+                  <tr>
+                    <td class="ju-label"
+                        style="padding:7px 0;color:#5b6b7b;border-top:1px solid #e9eef4;">Status</td>
+                    <td align="right" style="padding:7px 0;border-top:1px solid #e9eef4;">
+                      <span style="display:inline-block;font-size:12px;font-weight:700;
+                                   color:#ffffff;background-color:{{status.color}};
+                                   border-radius:999px;padding:3px 11px;">{{alert.status}}</span>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td class="ju-label"
+                        style="padding:7px 0;color:#5b6b7b;border-top:1px solid #e9eef4;">Started</td>
+                    <td class="ju-value" align="right"
+                        style="padding:7px 0;font-weight:600;color:#1b2733;
+                               border-top:1px solid #e9eef4;overflow-wrap:break-word;">{{alert.started_at}}</td>
+                  </tr>
+                  <tr>
+                    <td class="ju-label"
+                        style="padding:7px 0;color:#5b6b7b;border-top:1px solid #e9eef4;">Resolved</td>
+                    <td class="ju-value" align="right"
+                        style="padding:7px 0;font-weight:600;color:#1b2733;
+                               border-top:1px solid #e9eef4;overflow-wrap:break-word;">{{alert.resolved_at}}</td>
+                  </tr>
+                  <tr>
+                    <td class="ju-label"
+                        style="padding:7px 0;color:#5b6b7b;border-top:1px solid #e9eef4;">Duration</td>
+                    <td class="ju-value" align="right"
+                        style="padding:7px 0;font-weight:600;color:#1b2733;
+                               border-top:1px solid #e9eef4;">{{alert.duration}}</td>
+                  </tr>
+                </table>
+              </td></tr>
+            </table>
+          </td>
+        </tr>
+
+        <!-- TARGET DETAILS -->
+        <tr>
+          <td class="ju-pad" style="padding:8px 28px 4px 28px;">
+            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" class="ju-panel"
+                   style="background-color:#f7f9fb;border:1px solid #e9eef4;border-radius:10px;">
+              <tr><td style="padding:14px 16px 6px 16px;">
+                <span style="color:#16815c;font-weight:700;">&#9678;</span>
+                <span class="ju-title"
+                      style="padding-left:6px;font-size:15px;font-weight:700;color:#1b2733;">
+                  Target Details
+                </span>
+              </td></tr>
+              <tr><td style="padding:0 16px 10px 16px;">
+                <table role="presentation" width="100%" cellspacing="0" cellpadding="0"
+                       style="font-size:14px;">
+                  <tr>
+                    <td class="ju-label"
+                        style="padding:7px 0;color:#5b6b7b;border-top:1px solid #e9eef4;">Check</td>
+                    <td align="right"
+                        style="padding:7px 0;border-top:1px solid #e9eef4;">{{target.check_badges}}</td>
+                  </tr>
+                  {{#if group}}
+                  <tr>
+                    <td class="ju-label"
+                        style="padding:7px 0;color:#5b6b7b;border-top:1px solid #e9eef4;">Group</td>
+                    <td class="ju-value" align="right"
+                        style="padding:7px 0;font-weight:600;color:#1b2733;
+                               border-top:1px solid #e9eef4;overflow-wrap:break-word;">{{target.group}}</td>
+                  </tr>
+                  {{/if group}}
+                </table>
+              </td></tr>
+            </table>
+          </td>
+        </tr>
+
+        {{#if sla}}
+        <!-- SLA -->
+        <tr>
+          <td class="ju-pad" style="padding:8px 28px 4px 28px;">
+            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" class="ju-panel"
+                   style="background-color:#f7f9fb;border:1px solid #e9eef4;border-radius:10px;">
+              <tr><td style="padding:14px 16px 6px 16px;">
+                <span style="color:#16815c;font-weight:700;">&#9707;</span>
+                <span class="ju-title"
+                      style="padding-left:6px;font-size:15px;font-weight:700;color:#1b2733;">SLA</span>
+              </td></tr>
+              <tr><td style="padding:0 16px 10px 16px;">
+                <table role="presentation" width="100%" cellspacing="0" cellpadding="0"
+                       style="font-size:14px;">
+                  <tr>
+                    <td class="ju-label"
+                        style="padding:7px 0;color:#5b6b7b;border-top:1px solid #e9eef4;">Downtime</td>
+                    <td class="ju-value" align="right"
+                        style="padding:7px 0;font-weight:600;color:#1b2733;
+                               border-top:1px solid #e9eef4;">{{downtime.human}}</td>
+                  </tr>
+                  <tr>
+                    <td class="ju-label"
+                        style="padding:7px 0;color:#5b6b7b;border-top:1px solid #e9eef4;">Threshold</td>
+                    <td class="ju-value" align="right"
+                        style="padding:7px 0;font-weight:600;color:#1b2733;
+                               border-top:1px solid #e9eef4;">{{sla.threshold}}</td>
+                  </tr>
+                  <tr>
+                    <td class="ju-label"
+                        style="padding:7px 0;color:#5b6b7b;border-top:1px solid #e9eef4;">Actual</td>
+                    <td class="ju-value" align="right"
+                        style="padding:7px 0;font-weight:600;color:#1b2733;
+                               border-top:1px solid #e9eef4;">{{sla.actual}}</td>
+                  </tr>
+                </table>
+              </td></tr>
+            </table>
+          </td>
+        </tr>
+        {{/if sla}}
+
+        {{#if cta}}
+        <!-- CALL TO ACTION -->
+        <tr>
+          <td class="ju-pad ju-cta" align="center" style="padding:20px 28px 8px 28px;">
+            <!--[if mso]>
+            <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml"
+              xmlns:w="urn:schemas-microsoft-com:office:word" href="{{system.url}}"
+              style="height:46px;v-text-anchor:middle;width:280px;" arcsize="26%"
+              fillcolor="#16815c" stroke="f">
+              <center style="color:#ffffff;font-family:sans-serif;font-size:16px;font-weight:bold;">
+                Open in justUp!
+              </center>
+            </v:roundrect>
+            <![endif]-->
+            <!--[if !mso]><!-- -->
+            <a href="{{system.url}}"
+               style="display:inline-block;background-color:#16815c;color:#ffffff;
+                      text-decoration:none;font-size:16px;font-weight:700;line-height:46px;
+                      border-radius:10px;padding:0 28px;">
+              Open in justUp!
+            </a>
+            <!--<![endif]-->
+          </td>
+        </tr>
+        {{/if cta}}
+
+        <!-- FOOTER -->
+        <tr>
+          <td class="ju-pad" style="padding:18px 28px 22px 28px;">
+            <div style="border-top:1px solid #e9eef4;padding-top:16px;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" class="ju-stack">
+                <tr>
+                  <td valign="middle" class="ju-muted ju-col"
+                      style="font-size:12px;color:#8a98a8;line-height:1.6;">
+                    Monitoring and uptime for your services. &middot;
+                    <a href="{{system.github_url}}"
+                       style="color:#5b6b7b;text-decoration:underline;">GitHub</a>
+                  </td>
+                  <td valign="middle" align="right" class="ju-col" style="width:120px;">
+                    <img src="{{logo_url}}" width="96" alt="justUp!"
+                         style="display:inline-block;height:auto;width:96px;vertical-align:middle;">
+                  </td>
+                </tr>
+              </table>
+            </div>
+          </td>
+        </tr>
+
       </table>
+      <!--[if mso]></td></tr></table><![endif]-->
 
     </td>
   </tr>
 </table>
-<!-- /OUTER -->
 
 </body>
 </html>
@@ -572,6 +589,11 @@ def render_template(template: str, context: dict[str, Any], *, mode: str = "html
     if mode not in ("html", "plain_text"):
         raise ValueError(f"Unknown render mode: {mode!r}")
     plain = mode == "plain_text"
+
+    # Keep or drop named optional sections before any placeholder replacement, so a
+    # dropped block never leaves an unreplaced {{placeholder}} behind.
+    flags = context.get("flags") if isinstance(context, dict) else None
+    template = _apply_conditionals(template, flags if isinstance(flags, dict) else {})
 
     # Early exit: no placeholders to replace
     if "{{" not in template:
@@ -690,19 +712,31 @@ def _format_sla(value: float | str | None) -> str:
 
 
 # Status display mapping: status -> (emoji, color, text)
-# Used for visual distinction in email subject and HTML header
+# Used for visual distinction in email subject and HTML header. Colours match the app
+# status palette; status is never conveyed by colour alone (text + short label carry it).
 STATUS_DISPLAY_MAP: dict[str, tuple[str, str, str]] = {
-    "DOWN": ("🔴", "#dc2626", "Service DOWN"),
-    "OPEN": ("🔴", "#dc2626", "Service DOWN"),
-    "UP": ("🟢", "#16a34a", "Service UP"),
-    "RESOLVED": ("🟢", "#16a34a", "Service RESOLVED"),
-    "WARN": ("🟡", "#ca8a04", "Degraded"),
-    "WARNING": ("🟡", "#ca8a04", "Degraded"),
-    "UNKNOWN": ("⚪", "#6b7280", "Unknown"),
+    "DOWN": ("🔴", "#c43427", "Service DOWN"),
+    "OPEN": ("🔴", "#c43427", "Service DOWN"),
+    "UP": ("🟢", "#16815c", "Service UP"),
+    "RESOLVED": ("🟢", "#16815c", "Service RESOLVED"),
+    "WARN": ("🟡", "#926e06", "Degraded"),
+    "WARNING": ("🟡", "#926e06", "Degraded"),
+    "UNKNOWN": ("⚪", "#5b6b7b", "Unknown"),
 }
 
 # Default fallback for unknown status values
-_DEFAULT_STATUS_DISPLAY = ("⚪", "#6b7280", "Unknown")
+_DEFAULT_STATUS_DISPLAY = ("⚪", "#5b6b7b", "Unknown")
+
+# Short, upper-case status word for the redundant text pill (never colour alone).
+STATUS_LABEL_MAP: dict[str, str] = {
+    "DOWN": "DOWN",
+    "OPEN": "DOWN",
+    "UP": "UP",
+    "RESOLVED": "RESOLVED",
+    "WARN": "WARNING",
+    "WARNING": "WARNING",
+    "UNKNOWN": "UNKNOWN",
+}
 
 # Check badge colors: check_type -> (background, text_color)
 CHECK_BADGE_COLORS: dict[str, tuple[str, str]] = {
@@ -878,9 +912,10 @@ def build_alert_context(alert_data: dict[str, Any], target_data: dict[str, Any])
         downtime_minutes = 0
         downtime_human = "N/A"
 
-    # Get status display values (emoji, color, text)
+    # Get status display values (emoji, color, text, short label)
     alert_status = str(alert_data.get("status", "UNKNOWN")).upper()
     status_emoji, status_color, status_text = STATUS_DISPLAY_MAP.get(alert_status, _DEFAULT_STATUS_DISPLAY)
+    status_label = STATUS_LABEL_MAP.get(alert_status, "UNKNOWN")
 
     # Sanitize reason and render check badges
     reason_raw = alert_data.get("reason", "N/A")
@@ -889,16 +924,30 @@ def build_alert_context(alert_data: dict[str, Any], target_data: dict[str, Any])
     reason = _sanitize_reason(reason_raw, target_host=target_host, check_type=check_type_raw)
     check_badges = _render_check_badges(check_type_raw)
 
+    group_name = target_data.get("group", "Default")
+    system_url = alert_data.get("system_url", "#")
+
+    # Flags for the template's optional sections. No user input decides HTML structure here;
+    # each flag is a plain presence/relevance check and is whitelisted in CONDITIONAL_FLAGS.
+    sla_visible = not (sla_threshold == "N/A" and sla_actual == "N/A")
+    flags = {
+        "sla": sla_visible,
+        "cta": _is_valid_cta_url(system_url),
+        "resolved": bool(resolved_at_raw),
+        "group": bool(group_name) and str(group_name).strip().lower() not in ("", "default", "n/a"),
+    }
+
     return {
         "status": {
             "emoji": status_emoji,
             "color": status_color,
             "text": status_text,
+            "label": status_label,
         },
         "target": {
             "name": target_data.get("name", "Unknown"),
             "host": target_data.get("host", "N/A"),
-            "group": target_data.get("group", "Default"),
+            "group": group_name,
             "check_type": check_type_raw,  # Plain text (for subject)
             "check_badges": check_badges,  # Pre-rendered HTML
         },
@@ -919,9 +968,152 @@ def build_alert_context(alert_data: dict[str, Any], target_data: dict[str, Any])
         },
         "system": {
             "name": "justUp",
-            "url": alert_data.get("system_url", "#"),
+            "url": system_url,
             "timestamp": datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC"),
             "github_url": "https://github.com/Gill-Bates/justup",
         },
         "logo_url": LOGO_URL,
+        "flags": flags,
     }
+
+
+# ── Call-to-action URL validation ────────────────────────────────────────────
+# Only a real http(s) instance URL earns the "Open in justUp!" button. A missing,
+# placeholder ("#") or non-http URL drops the button rather than linking nowhere.
+_CTA_URL_RE = re.compile(r"^https?://[^\s/$.?#].[^\s]*$", re.IGNORECASE)
+
+
+def _is_valid_cta_url(url: str | None) -> bool:
+    """True only for a plausible absolute http(s) URL (not ``#``, empty or a scheme-only value)."""
+    if not url:
+        return False
+    return bool(_CTA_URL_RE.match(str(url).strip()))
+
+
+def html_to_text(html_body: str) -> str:
+    """Derive a readable plain-text part from rendered HTML.
+
+    Not a full HTML renderer: it drops head/script/style, turns block boundaries into
+    newlines, unescapes entities and collapses whitespace. Good enough for the
+    text/plain alternative so a client without HTML still shows a sensible message.
+    """
+    text = html_body or ""
+    # Drop non-content elements entirely (including the hidden preheader's siblings are kept).
+    text = re.sub(r"(?is)<(head|style|script)\b.*?</\1>", " ", text)
+    # Block-level boundaries become line breaks.
+    text = re.sub(r"(?i)<(br|/p|/div|/tr|/table|/h[1-6]|/li)\s*>", "\n", text)
+    text = re.sub(r"(?i)<li\b[^>]*>", "- ", text)
+    # Strip every remaining tag, then unescape entities.
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = html.unescape(text)
+    # Collapse runs of spaces/tabs, trim each line, drop empty-line runs.
+    lines = [re.sub(r"[ \t\u00a0]+", " ", ln).strip() for ln in text.splitlines()]
+    out: list[str] = []
+    blank = False
+    for ln in lines:
+        if ln:
+            out.append(ln)
+            blank = False
+        elif not blank:
+            out.append("")
+            blank = True
+    return "\n".join(out).strip()
+
+
+def build_email_message(
+    *,
+    subject: str,
+    html_body: str,
+    text_body: str | None = None,
+    from_addr: str,
+    to_addr: str,
+    message_id: str | None = None,
+    logo_path: Path | None = None,
+) -> EmailMessage:
+    """Compose the alert email as a single MIME message, shared by every send path.
+
+    Structure (RFC 2387 / 2046):
+    - ``multipart/alternative`` carrying a text/plain part and a text/html part, so a
+      client without HTML still shows the plain-text version.
+    - When the HTML references the inline logo (``cid:LOGO_CID``) and the asset exists,
+      the whole alternative is wrapped in ``multipart/related`` and the PNG is attached
+      as a related part with ``Content-ID: <LOGO_CID>`` and ``Content-Disposition: inline``.
+
+    The text part is derived from the HTML when no explicit ``text_body`` is given, so the
+    message never ships an empty text/plain part.
+    """
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = from_addr
+    msg["To"] = to_addr
+    if message_id:
+        msg["Message-ID"] = message_id
+
+    text = text_body if (text_body and text_body.strip()) else html_to_text(html_body)
+    msg.set_content(text)
+    msg.add_alternative(html_body or "", subtype="html")
+
+    # Attach the inline logo only when the HTML actually references it and the asset is present.
+    asset = logo_path or LOGO_ASSET_PATH
+    if html_body and LOGO_SRC in html_body:
+        try:
+            data = asset.read_bytes()
+        except OSError as exc:
+            # A missing asset must not fail the send: the HTML keeps its alt text and the
+            # client shows the broken-image placeholder, which is still a deliverable mail.
+            _log.warning("Inline logo asset unavailable (%s); sending without embedded logo", exc)
+        else:
+            # add_related() on the HTML part promotes it to multipart/related and attaches the
+            # image with the given Content-ID. disposition="inline" marks it as an embedded image
+            # (referenced by cid:) rather than a download attachment.
+            html_part = msg.get_payload()[1]
+            html_part.add_related(
+                data,
+                maintype="image",
+                subtype="png",
+                cid=f"<{LOGO_CID}>",
+                disposition="inline",
+                filename="justup-logo.png",
+            )
+
+    return msg
+
+
+# ── Test-mail sample data ────────────────────────────────────────────────────
+# Realistic, self-consistent example for the "Send Test Email" button and the
+# template preview: a test outage that opened ~15 minutes ago and is still open,
+# clearly marked as a test notification. The outage age is derived from ``now`` so
+# the duration always reads "15m (ongoing)" and never a stale hard-coded date; the
+# ``now`` parameter keeps automated tests deterministic. Production alert data is
+# built from live targets and is not affected by this helper.
+TEST_SAMPLE_DOWNTIME_MINUTES = 15
+
+
+def build_test_alert_sample(now: datetime | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Return ``(alert_data, target_data)`` for a deterministic test notification.
+
+    The outage started ``TEST_SAMPLE_DOWNTIME_MINUTES`` before ``now`` (default: current
+    UTC time) and is still open, so Started/Duration/Downtime stay consistent.
+    """
+    reference = now or datetime.now(UTC)
+    started_at = reference - timedelta(minutes=TEST_SAMPLE_DOWNTIME_MINUTES)
+
+    alert_data = {
+        "status": "OPEN",
+        "started_at": started_at.isoformat(),
+        "resolved_at": None,
+        "reason": "HTTP 503 Service Unavailable (justUp! test notification)",
+        "downtime_minutes": TEST_SAMPLE_DOWNTIME_MINUTES,
+        "sla_threshold": 99.9,
+        "sla_actual": 99.7,
+        # Example instance URL so the sample shows the complete template incl. the CTA button
+        # (matches the mock). Real alerts only get a button when a real instance URL is stored.
+        "system_url": "https://justup.example.com",
+    }
+    target_data = {
+        "name": "Test Target",
+        "host": "example.com",
+        "group": "Production",
+        "check_type": "HTTP",
+    }
+    return alert_data, target_data

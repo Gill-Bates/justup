@@ -11,24 +11,19 @@
 (function () {
 	'use strict';
 
+	try { localStorage.removeItem('token'); } catch (e) { /* storage unavailable */ }
+
 	// ─────────────────────────────────────────────────────────────────────────
 	// Global Fetch Helper (available immediately)
 	// ─────────────────────────────────────────────────────────────────────────
 
 	/**
-	 * Fetch wrapper with automatic Authorization and CSRF headers.
+	 * Fetch wrapper with automatic CSRF headers and same-origin cookies.
 	 * Use this instead of raw fetch() in templates to avoid auth/CSRF drift.
 	 */
 	window.apiFetch = function apiFetch(url, options) {
 		var opts = options ? Object.assign({}, options) : {};
 		var headers = new Headers(opts.headers || {});
-
-		try {
-			var token = localStorage.getItem('token');
-			if (token && !headers.has('Authorization')) {
-				headers.set('Authorization', 'Bearer ' + token);
-			}
-		} catch (e) { /* localStorage unavailable */ }
 
 		var csrf = getCsrfToken();
 		if (csrf && !headers.has('X-CSRF-Token')) {
@@ -69,7 +64,6 @@
 			var elt = evt.detail.elt;
 
 			if (elt.id === 'logout-btn') {
-				try { localStorage.removeItem('token'); } catch (e) { /* localStorage unavailable */ }
 				if (window.TracerouteCache) window.TracerouteCache.clearAll(); // cached diagnostics hold internal hosts
 				if (window.JustUpUserStorage) window.JustUpUserStorage.clearUserScoped(); // e.g. PDF file names
 				var logoutRedirect = elt.getAttribute('data-success-redirect') || '/ui/login';
@@ -115,19 +109,9 @@
 			}
 		});
 
-		// Global HTMX Configuration (Authorization + CSRF)
+		// Global HTMX Configuration (CSRF; authentication uses same-origin cookies)
 		document.body.addEventListener('htmx:configRequest', function (evt) {
-			// 1. Authorization Bearer Token (with Safari Tracking Prevention fallback)
-			try {
-				var token = localStorage.getItem('token');
-				if (token) {
-					evt.detail.headers['Authorization'] = 'Bearer ' + token;
-				}
-			} catch (e) {
-				// localStorage blocked by Tracking Prevention - user will be redirected to login
-			}
-
-			// 2. CSRF Token
+			// CSRF Token
 			var csrfToken = getCsrfToken();
 			if (csrfToken) {
 				evt.detail.headers['X-CSRF-Token'] = csrfToken;
@@ -396,26 +380,39 @@
 
 				var labelEl = document.getElementById('quality-label');
 				var badgeEl = document.getElementById('quality-state-badge');
-				var targetsContainer = document.getElementById('quality-targets-container');
-				var targetsEl = document.getElementById('quality-targets');
-				if (!labelEl || !badgeEl || !targetsContainer || !targetsEl) return;
+				var updatedEl = document.getElementById('quality-updated');
+				var targetsTrigger = document.getElementById('quality-targets-tooltip-trigger');
+				var targetsCount = document.getElementById('quality-target-count');
+				if (!labelEl || !badgeEl || !updatedEl || !targetsTrigger || !targetsCount) return;
+
+				var consecutiveFailures = 0;
+				var loadingQuality = false;
+				var failureLimit = 2;
+				var requestTimeoutMs = 10000;
+				var targetsContent = document.createElement('div');
+				targetsContent.className = 'quality-targets-tooltip-content';
+				var targetsTooltip = null;
+				function hideTargetsTooltipIfPointerLeaves() {
+					if (targetsTooltip && !targetsTrigger.matches(':hover')) targetsTooltip.hide();
+				}
+				targetsTrigger.addEventListener('show.bs.tooltip', function () {
+					document.addEventListener('pointermove', hideTargetsTooltipIfPointerLeaves);
+				});
+				targetsTrigger.addEventListener('hidden.bs.tooltip', function () {
+					document.removeEventListener('pointermove', hideTargetsTooltipIfPointerLeaves);
+				});
 
 				function renderTargets(list) {
-					if (!Array.isArray(list) || list.length === 0) {
-						targetsContainer.style.display = 'none';
+					targetsContent.textContent = '';
+					if (!Array.isArray(list)) {
+						targetsTrigger.hidden = true;
+						if (targetsTooltip) targetsTooltip.hide();
 						return;
 					}
-					targetsContainer.style.display = 'block';
-					targetsEl.textContent = '';
+					var targetCount = 0;
 					for (var i = 0; i < list.length; i++) {
 						var t = String(list[i] || '');
 						if (!t) continue;
-
-						if (i > 0 && i % 3 === 0) {
-							var br = document.createElement('div');
-							br.className = 'w-100';
-							targetsEl.appendChild(br);
-						}
 
 						var isHttp = t.indexOf('http://') === 0 || t.indexOf('https://') === 0;
 						var icon = isHttp ? 'public' : 'dns';
@@ -429,15 +426,39 @@
 						iconEl.textContent = icon;
 						badge.appendChild(iconEl);
 						badge.appendChild(document.createTextNode(label));
-						targetsEl.appendChild(badge);
+						targetsContent.appendChild(badge);
+						targetCount++;
 					}
+					if (targetCount === 0) {
+						targetsTrigger.hidden = true;
+						if (targetsTooltip) targetsTooltip.hide();
+						return;
+					}
+					if (!window.bootstrap || !window.bootstrap.Tooltip) {
+						targetsTrigger.hidden = true;
+						return;
+					}
+					targetsTrigger.hidden = false;
+					targetsCount.textContent = targetCount + (targetCount === 1 ? ' target' : ' targets');
+					targetsTooltip = window.bootstrap.Tooltip.getOrCreateInstance(targetsTrigger, {
+						container: 'body',
+						html: true,
+						title: function () { return targetsContent.cloneNode(true); },
+					});
 				}
 
 				async function loadQuality() {
-					if (typeof window.apiFetch !== 'function' || !window.QualityState) return;
+					if (typeof window.apiFetch !== 'function' || !window.QualityState || loadingQuality) return;
+					loadingQuality = true;
+					var controller = new AbortController();
+					var timeout = window.setTimeout(function () { controller.abort(); }, requestTimeoutMs);
 					try {
-						var resp = await window.apiFetch('/quality/current');
-						if (!resp.ok) return;
+						var resp = await window.apiFetch('/quality/current', { signal: controller.signal });
+						if (!resp.ok) {
+							consecutiveFailures++;
+						if (consecutiveFailures >= failureLimit) showQualityUnavailable();
+						return;
+						}
 						var data = await resp.json();
 
 						var view = window.QualityState.describe(data);
@@ -446,10 +467,30 @@
 						badgeEl.className = 'badge ' + view.badgeClass;
 						badgeEl.textContent = view.badgeText;
 						labelEl.textContent = view.label;
+						var measuredAt = data && data.updated_at ? new Date(data.updated_at) : null;
+						updatedEl.textContent = measuredAt && !isNaN(measuredAt.getTime())
+							? 'Last measurement: ' + measuredAt.toLocaleString()
+							: 'No successful measurement yet';
+						consecutiveFailures = 0;
 						renderTargets(data && data.targets);
 					} catch (e) {
+						consecutiveFailures++;
+						if (consecutiveFailures >= failureLimit) showQualityUnavailable();
 						console.warn('Failed to load quality:', e);
+					} finally {
+						window.clearTimeout(timeout);
+						loadingQuality = false;
 					}
+				}
+
+				function showQualityUnavailable() {
+					var view = window.QualityState.describe({ state: 'unknown' });
+					scoreEl.textContent = view.scoreText;
+					scoreEl.className = view.scoreClass;
+					badgeEl.className = 'badge ' + view.badgeClass;
+					badgeEl.textContent = view.badgeText;
+					labelEl.textContent = 'Data unavailable';
+					renderTargets([]);
 				}
 
 				loadQuality();
@@ -460,6 +501,7 @@
 							window.clearInterval(card._qualityPollInterval);
 							document.removeEventListener('visibilitychange', refreshIfShown);
 							document.removeEventListener('dashboard:widget-shown', refreshIfShown);
+							document.body.removeEventListener('dashboard-refresh', refreshIfShown);
 							return;
 						}
 						if (document.hidden || card.closest('.d-none')) return;
@@ -469,6 +511,7 @@
 					// Reload immediately when the tab or the widget becomes visible again.
 					document.addEventListener('visibilitychange', refreshIfShown);
 					document.addEventListener('dashboard:widget-shown', refreshIfShown);
+					document.body.addEventListener('dashboard-refresh', refreshIfShown);
 				}
 			}
 
@@ -621,6 +664,12 @@
 	'use strict';
 
 	var openers = new WeakMap();
+	// Central policy: a click or tap outside the dialog never dismisses a modal.
+	// Escape and explicit close/cancel controls still do (keyboard stays true).
+	if (window.bootstrap && window.bootstrap.Modal) {
+		window.bootstrap.Modal.Default.backdrop = 'static';
+		window.bootstrap.Modal.Default.keyboard = true;
+	}
 
 	// Remember the opener, also for modals opened via bootstrap.Modal#show().
 	document.addEventListener('show.bs.modal', function (event) {

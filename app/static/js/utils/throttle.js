@@ -20,10 +20,19 @@
 function throttle(fn, delay) {
 	var lastCall = 0;
 	var timeoutId = null;
+	var latestContext;
+	var latestArgs;
+
+	function invokeLatest() {
+		var context = latestContext;
+		var args = latestArgs;
+		latestContext = latestArgs = null;
+		fn.apply(context, args);
+	}
 
 	function throttled() {
-		var context = this;
-		var args = arguments;
+		latestContext = this;
+		latestArgs = arguments;
 		var now = Date.now();
 		var remaining = delay - (now - lastCall);
 		
@@ -34,12 +43,12 @@ function throttle(fn, delay) {
 				timeoutId = null;
 			}
 			lastCall = now;
-			fn.apply(context, args);
+			invokeLatest();
 		} else if (!timeoutId) {
 			timeoutId = setTimeout(function () {
 				lastCall = Date.now();
 				timeoutId = null;
-				fn.apply(context, args);
+				invokeLatest();
 			}, remaining);
 		}
 	}
@@ -51,6 +60,7 @@ function throttle(fn, delay) {
 			timeoutId = null;
 		}
 		lastCall = 0;
+		latestContext = latestArgs = null;
 	};
 
 	return throttled;

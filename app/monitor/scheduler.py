@@ -36,6 +36,7 @@ from app.services.notifications import (
     AlertPayload,
     NotificationDispatcher,
     get_spooler,
+    smtp_settings,
     smtp_transport,
 )
 from app.services.notifications.signal_backend import get_signal_backend
@@ -102,6 +103,7 @@ HOUSEKEEPING_JITTER_SECONDS = 300  # 5 minutes
 
 # Maximum backoff for retries (prevents unbounded growth if max_retries is high)
 MAX_BACKOFF_SECONDS = 30
+ALERT_DISPATCH_MAX_BACKOFF_SECONDS = 300
 
 
 # Epoch of the scheduler run a coroutine belongs to; inherited by its tasks and worker threads.
@@ -217,6 +219,14 @@ def _parse_tcp_ports(value: str | int | None) -> list[int]:
             continue
 
     return sorted(ports) if ports else [80]
+
+
+def _stored_datetime(value: datetime | str | None) -> datetime | None:
+    if value is None:
+        return None
+    normalized = value[:-1] + "+00:00" if isinstance(value, str) and value.endswith("Z") else value
+    parsed = normalized if isinstance(normalized, datetime) else datetime.fromisoformat(normalized)
+    return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
 
 
 def _apply_http_port_override(url: str, port: int | None) -> str:
@@ -338,6 +348,7 @@ class MonitorScheduler:
         self._tsdb_dir = tsdb_dir
         self._refresh_seconds = max(5, int(refresh_seconds))
         self._stop = asyncio.Event()
+        self._notification_stop = asyncio.Event()
         self._task: asyncio.Task | None = None
         self._targets: dict[int, dict[str, Any]] = {}
         self._rt: dict[int, TargetRuntime] = {}
@@ -374,6 +385,16 @@ class MonitorScheduler:
         self._heartbeat_interval_seconds: int = 30
         # Liveness hook for the service supervisor; called once per loop iteration.
         self.on_heartbeat: Callable[[], None] | None = None
+        # Iteration outcome hooks for the supervisor (failure series -> degraded); exc class name only.
+        self.on_iteration_failed: Callable[[str], None] | None = None
+        self.on_iteration_ok: Callable[[], None] | None = None
+        self.on_notification_heartbeat: Callable[[], None] | None = None
+        self.on_notification_failed: Callable[[str], None] | None = None
+        self.on_notification_ok: Callable[[], None] | None = None
+        self._notification_failure_active = False
+        self._quality_probe_failed = False
+        self._persistence_failures: set[tuple[int, str]] = set()
+        self._failed_iterations = 0
         # Run epoch: a supervisor restart (e.g. after a hang) bumps it, so worker threads that
         # belong to the abandoned run refuse to start work and the new run waits for them.
         self._run_epoch = 0
@@ -480,9 +501,55 @@ class MonitorScheduler:
         finally:
             self._task = None
 
+    async def run_notification_worker(self) -> None:
+        """Process alert outbox and delivery queue independently of monitoring and housekeeping."""
+        while not self._notification_stop.is_set():
+            if self.on_notification_heartbeat is not None:
+                self.on_notification_heartbeat()
+            try:
+                if self._run_epoch == 0:
+                    await asyncio.sleep(0.05)
+                    continue
+                generation = maintenance.current_generation()
+                failure: Exception | None = None
+                try:
+                    await self._process_alert_dispatch_outbox(generation)
+                except maintenance.MaintenanceActiveError:
+                    raise
+                except Exception as exc:  # noqa: BLE001 - worker boundary: isolate the independent loop
+                    failure = exc
+                try:
+                    await self._process_notification_spooler(utcnow(), generation, raise_errors=True)
+                except maintenance.MaintenanceActiveError:
+                    raise
+                except Exception as exc:  # noqa: BLE001 - worker boundary: report persistent processing errors
+                    failure = failure or exc
+                if failure is not None:
+                    raise failure
+                with maintenance.work_section(generation), self._db_conn() as conn:
+                    has_pending = sqlite_db.has_pending_alert_dispatches(conn)
+                if not has_pending:
+                    self._notification_failure_active = False
+                if not self._notification_failure_active and self.on_notification_ok is not None:
+                    self.on_notification_ok()
+            except maintenance.MaintenanceActiveError:
+                pass
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - worker boundary: keep it alive and supervised
+                self._notification_failure_active = True
+                _log.exception("Notification worker iteration failed")
+                if self.on_notification_failed is not None:
+                    self.on_notification_failed(type(exc).__name__)
+            with suppress(TimeoutError):
+                await asyncio.wait_for(self._notification_stop.wait(), timeout=1.0)
+
     def request_stop(self) -> None:
         """Ask the loop to end without waiting for it."""
         self._stop.set()
+
+    def request_notification_stop(self) -> None:
+        self._notification_stop.set()
 
     async def stop(self) -> None:
         self._stop.set()
@@ -501,6 +568,7 @@ class MonitorScheduler:
         self._inflight.discard(target_id)
         self._housekeeping_due.pop(target_id, None)
         self._last_alert_at.pop(target_id, None)
+        self._persistence_failures = {item for item in self._persistence_failures if item[0] != target_id}
 
     async def _run_loop(self) -> None:
         loop = asyncio.get_running_loop()
@@ -509,17 +577,32 @@ class MonitorScheduler:
                 self.on_heartbeat()
             try:
                 generation = maintenance.current_generation()
-                await self._run_iteration(loop, generation)
+                iteration_ok = await self._run_iteration(loop, generation)
             except maintenance.MaintenanceActiveError:
+                if self.on_heartbeat is not None:
+                    self.on_heartbeat()  # a restore is an intended pause, not a hang
                 await asyncio.sleep(0.5)
                 continue
             except asyncio.CancelledError:
                 raise
-            except Exception:  # noqa: BLE001 - loop resilience: one bad iteration must not kill the scheduler
+            except Exception as exc:  # noqa: BLE001 - loop resilience: one bad iteration must not kill the scheduler
                 _log.exception("Scheduler iteration failed; continuing")
+                self._failed_iterations += 1
+                if self.on_iteration_failed is not None:
+                    self.on_iteration_failed(type(exc).__name__)
+            else:
+                if not iteration_ok:
+                    self._failed_iterations += 1
+                    if self.on_iteration_failed is not None:
+                        self.on_iteration_failed("SchedulerIterationFailed")
+                    await self._idle_sleep()
+                    continue
+                self._failed_iterations = 0
+                if self.on_iteration_ok is not None:
+                    self.on_iteration_ok()
             await self._idle_sleep()
 
-    async def _run_iteration(self, loop: asyncio.AbstractEventLoop, generation: int | None = None) -> None:
+    async def _run_iteration(self, loop: asyncio.AbstractEventLoop, generation: int | None = None) -> bool:
         generation = maintenance.current_generation() if generation is None else generation
         now = utcnow()
         # Production safety: explicit check instead of assert (assert is stripped in -O mode)
@@ -527,10 +610,9 @@ class MonitorScheduler:
         if offset is None or offset.total_seconds() != 0:
             raise RuntimeError("Scheduler requires UTC timestamps with timezone info")
         if self._refresh_requested or loop.time() - self._last_refresh >= self._refresh_seconds:
-            with maintenance.work_section(generation):
-                self._refresh_requested = False
-                self._refresh_targets(now)
-                self._last_refresh = loop.time()
+            self._refresh_requested = False
+            await self._refresh_targets_async(now, generation)
+            self._last_refresh = loop.time()
 
         # Heartbeat to keep run active
         if (
@@ -557,6 +639,7 @@ class MonitorScheduler:
 
         # Only run targets that are due AND not already inflight
         due_ids = [tid for tid, rt in self._rt.items() if rt.next_due <= now and tid not in self._inflight]
+        target_check_failed = False
         if due_ids:
             # QUALITY GATE: Check quality state before running checks
             if quality_state_snapshot != QualityState.OK:
@@ -574,14 +657,15 @@ class MonitorScheduler:
                 # Log any exceptions and remove from inflight
                 for tid, result in zip(due_ids, results, strict=False):
                     self._inflight.discard(tid)
+                    if isinstance(result, maintenance.MaintenanceActiveError):
+                        raise result
                     if isinstance(result, Exception):
                         _log.error("Target %s check failed: %s", tid, result, exc_info=result)
+                        target_check_failed = True
 
         # Run housekeeping for targets that are due
         await self._run_housekeeping(now, generation)
-
-        # Process notification spooler queue (retries for failed notifications)
-        await self._process_notification_spooler(now, generation)
+        return not self._quality_probe_failed and not self._persistence_failures and not target_check_failed
 
     async def _idle_sleep(self) -> None:
         # Adaptive sleep: wait until next target is due (min 0.5s, max 1.0s)
@@ -622,6 +706,7 @@ class MonitorScheduler:
 
                 old_state = self._quality_state
                 self._quality_state = result.state  # result.state is already a string
+                self._quality_probe_failed = False
                 self._last_quality_probe_at = now
 
             if old_state != result.state:
@@ -648,9 +733,50 @@ class MonitorScheduler:
             _log.warning("Quality probe failed: %s", e)
             # On probe failure, assume degraded to be safe
             self._quality_state = QualityState.DEGRADED
+            self._quality_probe_failed = True
             self._last_quality_probe_at = now
 
-    async def _process_notification_spooler(self, now: datetime, generation: int | None = None) -> None:
+    def _send_spooler_email(
+        self,
+        generation: int,
+        to_addr: str,
+        subject: str,
+        text_body: str,
+        html_body: str,
+        message_id_key: str | None = None,
+    ) -> bool:
+        """Send one spooled email, returns True on success.
+
+        Builds the MIME message with the shared composer (plain-text + HTML
+        alternative, inline CID logo) and routes it through the shared
+        smtp_transport so the DECISIONS B6 encryption rules apply (implicit
+        TLS on 465, mandatory STARTTLS otherwise, AUTH only over a protected
+        connection). Alert and test mail both arrive here.
+        """
+        from app.services.notifications.email_template import build_email_message
+
+        # Settings read is a short DB phase; the SMTP I/O below runs outside any section.
+        with maintenance.work_section(generation), self._db_conn() as conn:
+            config, smtp_from = smtp_settings.load_connection(conn)
+        message_id = None
+        if message_id_key:
+            # Same queue row -> same Message-ID on every retry, so receivers can drop duplicates.
+            domain = str(smtp_from).rpartition("@")[2].strip(" >") or "justup.invalid"
+            message_id = f"<{message_id_key}@{domain}>"
+        msg = build_email_message(
+            subject=subject,
+            html_body=html_body,
+            text_body=text_body,
+            from_addr=smtp_from,
+            to_addr=to_addr,
+            message_id=message_id,
+        )
+        smtp_transport.send_message(msg, config, timeout=30)
+        return True
+
+    async def _process_notification_spooler(
+        self, now: datetime, generation: int | None = None, *, raise_errors: bool = False
+    ) -> None:
         """
         Process the notification spooler queue (retries for failed notifications).
 
@@ -678,62 +804,8 @@ class MonitorScheduler:
             def send_email(
                 to_addr: str, subject: str, text_body: str, html_body: str, message_id_key: str | None = None
             ) -> bool:
-                """Send email, returns True on success.
-
-                Routes through the shared smtp_transport so the DECISIONS B6
-                encryption rules apply (implicit TLS on 465, mandatory STARTTLS
-                otherwise, AUTH only over a protected connection).
-                """
-                from email.message import EmailMessage
-
-                # Settings read is a short DB phase; the SMTP I/O below runs outside any section.
-                with maintenance.work_section(generation), self._db_conn() as conn:
-                    smtp_enabled = sqlite_db.get_setting(conn, SettingKeys.SMTP_ENABLED, False)
-                    if not smtp_enabled:
-                        raise RuntimeError("SMTP not enabled")
-
-                    smtp_host = sqlite_db.get_setting(conn, SettingKeys.SMTP_HOST)
-                    smtp_port = sqlite_db.get_setting(conn, SettingKeys.SMTP_PORT, 587)
-                    smtp_tls = sqlite_db.get_setting(conn, SettingKeys.SMTP_USE_TLS, False)
-                    smtp_user = sqlite_db.get_setting(conn, SettingKeys.SMTP_USER)
-                    smtp_pass_enc = sqlite_db.get_setting(conn, SettingKeys.SMTP_PASSWORD)
-                    smtp_from = sqlite_db.get_setting(conn, SettingKeys.SMTP_FROM)
-
-                    if not smtp_host or not smtp_from:
-                        raise RuntimeError("SMTP not configured")
-
-                    smtp_pass = None
-                    if smtp_pass_enc:
-                        with suppress(Exception):
-                            smtp_pass = decrypt_secret(smtp_pass_enc)
-
-                try:
-                    smtp_port = int(smtp_port)
-                except (TypeError, ValueError):
-                    smtp_port = 587
-
-                msg = EmailMessage()
-                msg["Subject"] = subject
-                msg["From"] = smtp_from
-                msg["To"] = to_addr
-                if message_id_key:
-                    # Same queue row -> same Message-ID on every retry, so receivers can drop duplicates.
-                    domain = str(smtp_from).rpartition("@")[2].strip(" >") or "justup.invalid"
-                    msg["Message-ID"] = f"<{message_id_key}@{domain}>"
-                msg.set_content(text_body)
-                if html_body:
-                    msg.add_alternative(html_body, subtype="html")
-
-                config = smtp_transport.SMTPConnection(
-                    host=smtp_host,
-                    port=smtp_port,
-                    user=smtp_user,
-                    password=smtp_pass,
-                    use_tls=bool(smtp_tls),
-                )
-                smtp_transport.send_message(msg, config, timeout=30)
-
-                return True
+                """Send email, returns True on success (the spooler inspects this signature)."""
+                return self._send_spooler_email(generation, to_addr, subject, text_body, html_body, message_id_key)
 
             # Process queue in a worker thread (SMTP/Signal I/O blocks). Only the claim and finalize
             # DB phases run in generation-tagged work sections; the network send runs outside, so a
@@ -756,10 +828,70 @@ class MonitorScheduler:
 
             # Retention of sent/failed entries runs in the hourly DB maintenance, not on every spooler pass.
 
-        except Exception as e:  # noqa: BLE001 - scheduler-loop resilience boundary: log and continue
+        except maintenance.MaintenanceActiveError:
+            if raise_errors:
+                raise
+            return
+        except Exception as e:
             _log.warning("Notification spooler error: %s", e)
+            if raise_errors:
+                raise
 
         self._last_spooler_run_at = now
+
+    async def _process_alert_dispatch_outbox(self, generation: int | None = None) -> None:
+        generation = maintenance.current_generation() if generation is None else generation
+        with maintenance.work_section(generation), self._db_conn() as conn:
+            rows = sqlite_db.list_pending_alert_dispatches(conn, limit=20)
+
+        failed = False
+        for row in rows:
+            payload = AlertPayload(
+                alert_id=row["alert_id"],
+                target_id=int(row["target_id"]),
+                target_name=row["target_name"],
+                failed_service=row["failed_service"],
+                status=AlertStatus.RESOLVED if row["event_type"] == "resolved" else AlertStatus.OPEN,
+                started_at=_stored_datetime(row["started_at"]) or utcnow(),
+                ended_at=_stored_datetime(row["ended_at"]),
+                duration_seconds=row["duration_seconds"],
+            )
+            error_type = None
+            try:
+
+                def dispatch(alert_payload: AlertPayload = payload) -> Any:
+                    with maintenance.work_section(generation), self._db_conn() as conn:
+                        return self._get_dispatcher(conn).dispatch_alert(alert_payload)
+
+                result = await asyncio.to_thread(self._thread_call(self._epoch_for_thread(), dispatch))
+                succeeded = result.channels_attempted == 0 or result.all_succeeded
+                if not succeeded:
+                    error_type = "DispatchIncomplete"
+            except maintenance.MaintenanceActiveError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - durable outbox retries the whole idempotent event
+                succeeded = False
+                error_type = type(exc).__name__
+
+            retry_delay = 0
+            if not succeeded:
+                retry_delay = min(
+                    5 * (2 ** min(int(row["attempts"]), 6)),
+                    ALERT_DISPATCH_MAX_BACKOFF_SECONDS,
+                )
+                failed = True
+            with maintenance.work_section(generation), self._db_conn() as conn:
+                sqlite_db.record_alert_dispatch_attempt(
+                    conn,
+                    alert_id=payload.alert_id,
+                    event_type=row["event_type"],
+                    succeeded=succeeded,
+                    retry_delay_seconds=retry_delay,
+                    error=error_type,
+                )
+
+        if failed:
+            raise RuntimeError("AlertDispatchPendingError")
 
     async def _handle_connectivity_issue(self, target_id: int, now: datetime, generation: int | None = None) -> None:
         """
@@ -814,51 +946,69 @@ class MonitorScheduler:
                 )
                 conn.commit()
                 event_bus.publish("target.status", {"target_id": target_id, "status": "unknown"})
+            self._persistence_failures.discard((target_id, "status"))
         except maintenance.MaintenanceActiveError:
             return
         except Exception as e:  # noqa: BLE001 - scheduler-loop resilience boundary: log and continue
+            self._persistence_failures.add((target_id, "status"))
             _log.warning("Failed to set unknown status for target %s (connectivity issue): %s", target_id, e)
 
-    def _refresh_targets(self, now: datetime) -> None:
-        with self._db_conn() as conn:
+    def _load_target_refresh_snapshot(self, generation: int):
+        with maintenance.work_section(generation), self._db_conn() as conn:
             rows = sqlite_db.list_targets(conn)
             try:
                 mt = (
                     sqlite_db.get_setting(conn, SettingKeys.METRICS_TIMEOUT_MINUTES, DEFAULT_METRICS_TIMEOUT_MINUTES)
                     or DEFAULT_METRICS_TIMEOUT_MINUTES
                 )
-                self._metrics_timeout_minutes = max(
-                    METRICS_TIMEOUT_MINUTES_MIN, min(METRICS_TIMEOUT_MINUTES_MAX, int(mt))
-                )
             except (ValueError, TypeError):
-                self._metrics_timeout_minutes = DEFAULT_METRICS_TIMEOUT_MINUTES
-
-            # Load open alerts for all targets (idempotency: restore state on restart)
-            # Use list to support multiple alerts per target (cert + availability)
-            # NOTE: Use regular dict with setdefault().
-            open_alerts: dict[int, list[dict]] = {}
+                mt = DEFAULT_METRICS_TIMEOUT_MINUTES
             try:
-                alert_rows = sqlite_db.list_open_alerts(conn)
-                for row in alert_rows:
-                    tid = row[0]
-                    started_at = row[2]
-                    # Handle both string and datetime types from SQLite
-                    if started_at:
-                        if isinstance(started_at, str):
-                            started_at = datetime.fromisoformat(started_at).replace(tzinfo=UTC)
-                        elif isinstance(started_at, datetime):
-                            started_at = started_at.replace(tzinfo=UTC) if started_at.tzinfo is None else started_at
-                        else:
-                            started_at = None
-                    open_alerts.setdefault(tid, []).append(
-                        {
-                            "alert_id": row[1],
-                            "started_at": started_at,
-                            "failed_service": row[3],
-                        }
-                    )
+                alert_rows = sqlite_db.list_active_alerts(conn)
             except Exception as e:  # noqa: BLE001 - scheduler-loop resilience boundary: log and continue
                 _log.warning("Failed to load open alerts: %s", e)
+                alert_rows = []
+        return rows, mt, alert_rows
+
+    async def _refresh_targets_async(self, now: datetime, generation: int) -> None:
+        snapshot = await asyncio.to_thread(
+            self._thread_call(self._epoch_for_thread(), self._load_target_refresh_snapshot), generation
+        )
+        self._apply_target_refresh_snapshot(now, snapshot)
+
+    def _refresh_targets(self, now: datetime) -> None:
+        snapshot = self._load_target_refresh_snapshot(maintenance.current_generation())
+        self._apply_target_refresh_snapshot(now, snapshot)
+
+    def _apply_target_refresh_snapshot(self, now: datetime, snapshot) -> None:
+        rows, mt, alert_rows = snapshot
+        try:
+            self._metrics_timeout_minutes = max(METRICS_TIMEOUT_MINUTES_MIN, min(METRICS_TIMEOUT_MINUTES_MAX, int(mt)))
+        except (ValueError, TypeError):
+            self._metrics_timeout_minutes = DEFAULT_METRICS_TIMEOUT_MINUTES
+
+        # Use a regular dict to support multiple alerts per target (cert + availability).
+        open_alerts: dict[int, list[dict]] = {}
+        try:
+            for row in alert_rows:
+                tid = row[0]
+                started_at = row[2]
+                if started_at:
+                    if isinstance(started_at, str):
+                        started_at = datetime.fromisoformat(started_at).replace(tzinfo=UTC)
+                    elif isinstance(started_at, datetime):
+                        started_at = started_at.replace(tzinfo=UTC) if started_at.tzinfo is None else started_at
+                    else:
+                        started_at = None
+                open_alerts.setdefault(tid, []).append(
+                    {
+                        "alert_id": row[1],
+                        "started_at": started_at,
+                        "failed_service": row[3],
+                    }
+                )
+        except Exception as e:  # noqa: BLE001 - scheduler-loop resilience boundary: log and continue
+            _log.warning("Failed to load open alerts: %s", e)
 
         seen: set[int] = set()
         for r in rows:
@@ -1318,7 +1468,10 @@ class MonitorScheduler:
             except maintenance.MaintenanceActiveError:
                 return
             except Exception as e:  # noqa: BLE001 - scheduler-loop resilience boundary: log and continue
+                self._persistence_failures.add((target_id, "tsdb"))
                 _log.warning("Failed to write TSDB metrics for target %s: %s", target_id, e)
+            else:
+                self._persistence_failures.discard((target_id, "tsdb"))
 
             # Cert expiry alert (threshold and recovery handled in _maybe_cert_alert)
             if cfg["enable_cert_expiration"] and snapshot.get("cert_days_left") is not None and cert_host:
@@ -1448,7 +1601,10 @@ class MonitorScheduler:
             except maintenance.MaintenanceActiveError:
                 return
             except Exception as e:  # noqa: BLE001 - scheduler-loop resilience boundary: log and continue
+                self._persistence_failures.add((target_id, "status"))
                 _log.warning("Failed to update status cache for target %s: %s", target_id, e)
+            else:
+                self._persistence_failures.discard((target_id, "status"))
 
             # Points are already appended to the TSDB here, so charts are stale even if the status write failed.
             event_bus.publish("target.measurement", {"target_id": target_id})
@@ -1605,6 +1761,7 @@ class MonitorScheduler:
                                 failed_service=failed_service_str,
                                 started_at=now,
                                 recipients_notified=[],
+                                dispatch_outbox=True,
                             )
                             conn.commit()
                     except maintenance.MaintenanceActiveError:
@@ -1641,9 +1798,13 @@ class MonitorScheduler:
                             elif isinstance(db_started, datetime):
                                 started_at = db_started.replace(tzinfo=UTC) if db_started.tzinfo is None else db_started
                         duration_seconds = int((now - started_at).total_seconds())
-                        sqlite_db.resolve_alert(conn, rt.current_alert_id, now)
+                        sqlite_db.resolve_alert(conn, rt.current_alert_id, now, dispatch_outbox=True)
                         conn.commit()
                         event_bus.publish("alert.changed", {"target_id": target_id})
+                elif rt.current_alert_id:
+                    with self._db_conn() as conn:
+                        sqlite_db.deactivate_alert(conn, rt.current_alert_id)
+                        conn.commit()
 
                 ended_at = now
 
@@ -1744,7 +1905,7 @@ class MonitorScheduler:
                 if days_left > CERT_EXPIRY_ALERT_DAYS:
                     if rt.cert_alert_sent and rt.cert_alert_id:
                         with self._db_conn() as conn:
-                            sqlite_db.resolve_alert(conn, rt.cert_alert_id, now)
+                            sqlite_db.resolve_alert(conn, rt.cert_alert_id, now, dispatch_outbox=True)
                             conn.commit()
                             event_bus.publish("alert.changed", {"target_id": target_id})
                         _log.info(
@@ -1779,6 +1940,7 @@ class MonitorScheduler:
                         failed_service=failed_service,
                         started_at=now,
                         recipients_notified=[],
+                        dispatch_outbox=True,
                     )
                     conn.commit()
                     event_bus.publish("alert.changed", {"target_id": target_id})

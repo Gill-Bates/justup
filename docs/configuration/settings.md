@@ -27,9 +27,11 @@ values are [environment variables](environment.md).
 - **Login Rate Limit** (`rate_limit_auth`, default `10/minute`): maximum login
   requests per client IP and window. Units: `second`, `minute`, `hour`, `day`.
 - **Session Lifetime** (`session_max_days`, 1-7, default 1): absolute lifetime
-  from sign-in. It applies to new sign-ins only.
+  from sign-in, regardless of activity. It applies to new sign-ins only.
 - **Probe Targets** (`quality_targets`): hosts probed for connection quality, at
-  least 3. Separate entries with comma, Tab, or Enter. Defaults: `https://1.1.1.1`,
+  least 3. A URL (`https://host:port/path`) is requested with HEAD; an entry
+  without scheme must be a bare host name or IP address and is pinged, so
+  `host:80` or `host/path` are rejected. Separate entries with comma, Tab, or Enter. Defaults: `https://1.1.1.1`,
   `8.8.8.8`, `9.9.9.9`, `https://www.de-cix.net`, `https://cloudflare.com`.
   **Reset to defaults** restores them. Invalid entries and fewer than 3 targets
   are not saved.
@@ -55,4 +57,6 @@ values are [environment variables](environment.md).
   it only on a network you fully trust.
 
 Credentials such as the SMTP password are stored encrypted with a key derived from
-`SECRET_KEY`.
+`SECRET_KEY`. The UI never shows them: a stored secret appears as a fixed mask of dots (the
+length does not match the secret). Leave the field untouched to keep it, type to replace it, or
+use **Remove stored password** / **Remove stored key** to delete it.

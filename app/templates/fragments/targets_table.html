@@ -26,46 +26,32 @@
 				data-group-key="targets_group_{{ group_id }}">
 				<div class="accordion-body p-0">
 					<div class="ui-card">
-						<table class="table table-hover align-middle rtable targets-table mb-0">
-						<colgroup>
-							<col class="col-status">
-							<col class="col-name">
-							<col class="col-checks">
-							<col class="col-uptime">
-							<col class="col-lastchk">
-							<col class="col-lastdown">
-							<col class="col-http">
-							<col class="col-interval">
-							<col class="col-actions">
-						</colgroup>
+						<div class="ju-table-viewport" role="region" tabindex="0" aria-label="Targets in group {{ group_name }}">
+						<table class="table table-hover align-middle rtable ju-data-table targets-table mb-0">
 						<thead>
 							<tr>
-								<th scope="col" class="text-center"><span class="visually-hidden">Status</span></th>
-								<th scope="col">Name</th>
+								<th scope="col" class="text-center ju-cell-icon"><span class="visually-hidden">Status</span></th>
+								<th scope="col" class="ju-cell-text">Name</th>
 								<th scope="col">Checks</th>
 								<th scope="col">Uptime</th>
-								<th scope="col">Last Check</th>
-								<th scope="col">Last Downtime</th>
-								<th scope="col">HTTP</th>
-								<th scope="col">Interval</th>
 								<th scope="col" class="text-end"><span class="visually-hidden">Actions</span></th>
 							</tr>
 						</thead>
 						<tbody>
 							{% for t in group_targets %}
 							<tr>
-								<td data-label="Status" class="text-center">
+								<td data-label="Status" class="text-center ju-cell-icon">
 									<span hx-get="/ui/fragments/target-status/{{ t.id }}" hx-trigger="load, justup-target-{{ t.id }} from:body throttle:1s"
 										hx-swap="innerHTML">
 										<span class="material-icons fs-5 status-unknown" aria-hidden="true">circle</span>
 									</span>
 								</td>
-								<td data-label="Name">
+								<td data-label="Name" class="ju-cell-text">
 									<a href="/ui/targets/{{ t.id }}" class="text-decoration-none" title="{{ t.name }}">
 										{{ t.name }}
 									</a>
 								</td>
-								<td data-label="Checks" class="checks-cell">
+								<td data-label="Checks">
 									<div class="check-badges">
 									{% if t.enable_ping %}
 									<span class="badge {% if t.ping_status == 'up' %}bg-success{% elif t.ping_status == 'down' %}bg-danger{% else %}bg-secondary{% endif %}">Ping</span>
@@ -102,35 +88,6 @@
 										hx-trigger="load" hx-swap="outerHTML" aria-label="Loading uptime">…</span>
 									{% endif %}
 								</td>
-								<td data-label="Last Check">
-									{% if t.last_check %}
-									{# Backend should provide ISO string; template just renders #}
-									{% set last_check_iso = t.last_check.isoformat() if t.last_check.isoformat is callable else t.last_check %}
-									<small class="text-body-secondary local-time" data-utc="{{ last_check_iso }}">
-										{{ last_check_iso[:16] | replace('T', ' ') }} UTC
-									</small>
-									{% else %}
-									<span class="text-body-secondary">–</span>
-									{% endif %}
-								</td>
-								<td data-label="Last Downtime">
-									{% if t.last_downtime %}
-									{% set last_downtime_iso = t.last_downtime.isoformat() if t.last_downtime.isoformat is callable else t.last_downtime %}
-									<small class="text-body-secondary local-time" data-utc="{{ last_downtime_iso }}">
-										{{ last_downtime_iso[:16] | replace('T', ' ') }} UTC
-									</small>
-									{% else %}
-									<span class="text-success"><span class="material-icons fs-5" aria-hidden="true">check_circle</span></span>
-									{% endif %}
-								</td>
-								<td data-label="HTTP">
-									{% if t.enable_http_check and t.http_response_code is not none %}
-									<span class="badge badge-http">{{ t.http_response_code }}</span>
-									{% else %}
-									<span class="text-body-secondary">–</span>
-									{% endif %}
-								</td>
-								<td data-label="Interval"><span class="badge badge-interval">{{ t.interval_seconds }}s</span></td>
 									<td data-label="Actions" class="text-end actions-cell">
 										<div class="action-buttons">
 											<a href="/ui/targets/{{ t.id }}" class="btn btn-sm btn-icon btn-outline-secondary" title="View Details" aria-label="View details">
@@ -167,6 +124,7 @@
 							{% endfor %}
 						</tbody>
 					</table>
+					</div>
 				</div>
 			</div>
 		</div>

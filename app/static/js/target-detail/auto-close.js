@@ -10,6 +10,8 @@
  * @module target-detail/auto-close
  */
 
+const _autoCloseUpdates = new Map();
+
 /**
  * Persist the auto-close toggle; revert the toggle on failure.
  * @param {HTMLInputElement} toggle
@@ -19,18 +21,28 @@
 async function saveAutoCloseAlert(toggle, targetId) {
   if (toggle.disabled) return;
   const wanted = toggle.checked;
-  try {
-    const res = await apiFetch(`/targets/${targetId}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ auto_close_alert: wanted }),
-    });
-    if (!res.ok) {
-      toggle.checked = !wanted;
-      console.error("Failed to update auto_close_alert:", res.status);
-    }
-  } catch (err) {
-    toggle.checked = !wanted;
-    console.error("Failed to update auto_close_alert:", err);
+  const key = String(targetId);
+  let state = _autoCloseUpdates.get(key);
+  if (!state) {
+    state = { pending: Promise.resolve(), confirmed: !wanted, version: 0 };
+    _autoCloseUpdates.set(key, state);
   }
+  const version = ++state.version;
+  state.pending = state.pending.then(async () => {
+    try {
+      const res = await apiFetch(`/targets/${targetId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ auto_close_alert: wanted }),
+      });
+      if (!res.ok) throw new Error(`Request failed: ${res.status}`);
+      state.confirmed = wanted;
+    } catch (err) {
+      if (state.version === version) toggle.checked = state.confirmed;
+      console.error("Failed to update auto_close_alert:", err);
+    } finally {
+      if (state.version === version) _autoCloseUpdates.delete(key);
+    }
+  });
+  return state.pending;
 }

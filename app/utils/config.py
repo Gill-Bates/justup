@@ -122,12 +122,14 @@ def load_config() -> Config:
     allowed_levels = {"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"}
     log_level = os.getenv("LOG_LEVEL", "INFO").upper()
     if log_level not in allowed_levels:
+        _log.warning("Ignoring invalid LOG_LEVEL %r, using INFO", log_level)
         log_level = "INFO"
 
     host = os.getenv("JUSTUP_HOST", "0.0.0.0")  # noqa: S104 - documented default bind for a containerised server
     try:
         port = int(os.getenv("JUSTUP_PORT", "8000"))
     except ValueError:
+        _log.warning("Ignoring invalid JUSTUP_PORT %r, using 8000", os.getenv("JUSTUP_PORT"))
         port = 8000
 
     return Config(

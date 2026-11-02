@@ -46,12 +46,9 @@ same request. If the files cannot be removed completely, the row is kept and the
 request fails with `500`; nothing is lost and a repeat succeeds.
 
 !!! warning "Known limitation (1.0)"
-    Deletion is not fully atomic. If the database commit fails after the files
-    were removed, the target stays in the list with an empty history. The request
-    answers `500` and the error is logged (`delete failed at commit`). The history
-    cannot be restored except from a backup. This is accepted for 1.0 because the
-    user asked to delete the target anyway and the case needs a database I/O
-    failure. Repeating the delete removes the remaining row and finishes the job.
+    If the database commit fails after file removal, the target remains with an
+    empty history. The request returns `500` and logs `delete failed at commit`;
+    only a backup can restore the history. Repeating the delete removes the row.
 
 ## Freeing storage
 

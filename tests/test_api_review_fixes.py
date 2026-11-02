@@ -301,10 +301,13 @@ def test_notification_queue_endpoints_call_spooler_off_event_loop(conn, monkeypa
             _assert_off_event_loop()
             return {
                 "by_status": {},
+                "channels": {},
+                "cooldowns": [],
                 "oldest_pending": None,
                 "max_retry_count": 0,
                 "next_retry_at": None,
                 "stuck_processing": 0,
+                "failed_recent": 0,
                 "processing_timeout_seconds": 0,
             }
 
@@ -681,6 +684,82 @@ def test_smtp_template_preview_roundtrip_replaces_logo_placeholder(conn):
     assert body["subject"] == f"S {LOGO_URL_PREVIEW}"
     assert body["html"] == f"<img src='{LOGO_URL_PREVIEW}'>"
     assert "{{logo_url}}" not in body["html"]
+
+
+def test_smtp_template_preview_renders_sample_without_placeholders(conn):
+    from app.services.notifications.email_template import LOGO_URL_PREVIEW
+
+    client = _client(conn, settings.router, user=_mk_user(conn, "adm", admin=True))
+
+    down = client.post("/settings/smtp/template/preview", json={"variant": "down"})
+    assert down.status_code == 200
+    data = down.json()
+    assert "{{" not in data["html"] and "{{" not in data["subject"]
+    assert "Service DOWN" in data["html"]
+    # Logo is shown via the loadable preview URL, never the raw cid: reference.
+    assert LOGO_URL_PREVIEW in data["html"]
+    assert "cid:" not in data["html"]
+
+    resolved = client.post("/settings/smtp/template/preview", json={"variant": "resolved"})
+    assert resolved.status_code == 200
+    assert "Service RESOLVED" in resolved.json()["html"]
+
+
+def test_smtp_template_preview_uses_unsaved_editor_html(conn):
+    client = _client(conn, settings.router, user=_mk_user(conn, "adm", admin=True))
+    resp = client.post(
+        "/settings/smtp/template/preview",
+        json={"subject": "X", "html": "<p>custom {{target.name}}</p>", "variant": "down"},
+    )
+    assert resp.status_code == 200
+    html = resp.json()["html"]
+    assert "custom Test Target" in html
+    assert "{{" not in html
+
+
+def test_smtp_template_reset_returns_the_new_default(conn):
+    from app.services.notifications.email_template import DEFAULT_HTML_TEMPLATE
+
+    client = _client(conn, settings.router, user=_mk_user(conn, "adm", admin=True))
+    # A custom template is stored first, then reset clears it back to the default.
+    sqlite_db.set_setting(conn, "smtp_mail_template_html", "<p>mine</p>")
+    resp = client.post("/settings/smtp/template/reset")
+    assert resp.status_code == 200
+    assert resp.json()["html"] == DEFAULT_HTML_TEMPLATE
+    assert sqlite_db.get_setting(conn, "smtp_mail_template_html", None) is None
+
+
+def test_test_mail_enqueues_a_non_empty_text_body(conn, monkeypatch):
+    from app.services.notifications import spooler as spooler_module
+    from app.utils.constants import SettingKeys
+
+    for key, value in (
+        (SettingKeys.SMTP_ENABLED, True),
+        (SettingKeys.SMTP_HOST, "smtp.example.com"),
+        (SettingKeys.SMTP_FROM, "alerts@example.com"),
+    ):
+        sqlite_db.set_setting(conn, key, value)
+
+    queued: list[tuple[tuple, dict]] = []
+
+    class FakeSpooler:
+        def enqueue(self, *args, **kwargs):
+            queued.append((args, kwargs))
+            return 1
+
+    monkeypatch.setattr(spooler_module, "get_spooler", lambda _factory: FakeSpooler())
+    client = _client(conn, settings.router, user=_mk_user(conn, "adm", admin=True))
+    client.app.state.db_path = Path(conn.execute("PRAGMA database_list").fetchone()[2])
+
+    resp = client.post("/settings/smtp/test-mail", json={"recipient": "you@example.com"})
+    assert resp.status_code == 200, resp.text
+
+    payload = queued[0][1]["payload"]
+    assert payload["text_body"].strip(), "test mail must carry a non-empty plain-text part"
+    assert "Service DOWN" in payload["text_body"]
+    # Realistic sample data, not the old hard-coded 2026-01-29 outage.
+    assert "2026-01-29" not in payload["html_body"]
+    assert payload["html_body"].count("{{") == 0
 
 
 def test_smtp_fragment_shows_preview_url_instead_of_placeholder(conn, monkeypatch):
@@ -1195,6 +1274,15 @@ def test_signal_verify_accepts_only_six_digits(conn, monkeypatch, code, status):
     assert seen == (["123456"] if status == 204 else [])
 
 
+def test_signal_verify_normalizes_number():
+    from app.api.signal import RegisterRequest, VerifyRequest
+
+    assert (
+        VerifyRequest(number="+49 151 12345678", code="123456").number
+        == RegisterRequest(number="+49 151 12345678").number
+    )
+
+
 @pytest.mark.parametrize(
     ("stored", "shown"),
     [
@@ -1383,7 +1471,7 @@ def test_verify_signal_answers_cached_numbers_without_backend(conn, monkeypatch)
 # --- recipients: the unique phone index is the authority --------------------------------------
 
 
-def test_duplicate_phone_create_race_maps_to_400(conn, monkeypatch):
+def test_duplicate_phone_create_race_maps_to_409(conn, monkeypatch):
     client = _client(conn, recipients.router, user=_mk_user(conn, "adm", admin=True))
     monkeypatch.setattr(recipients, "_check_signal_registration", lambda phone: None)
     body = {"name": "A", "phone": "+4915112345678"}
@@ -1391,19 +1479,19 @@ def test_duplicate_phone_create_race_maps_to_400(conn, monkeypatch):
     # Simulate the lost race: the pre-check no longer sees the first row.
     monkeypatch.setattr(sqlite_db, "get_recipient_by_phone", lambda c, p: None)
     resp = client.post("/recipients", json={**body, "name": "B"})
-    assert resp.status_code == 400
+    assert resp.status_code == 409
     assert resp.json()["detail"] == "Phone number already exists"
     assert conn.execute("SELECT COUNT(*) FROM recipients").fetchone()[0] == 1
 
 
-def test_duplicate_phone_update_race_maps_to_400(conn, monkeypatch):
+def test_duplicate_phone_update_race_maps_to_409(conn, monkeypatch):
     client = _client(conn, recipients.router, user=_mk_user(conn, "adm", admin=True))
     monkeypatch.setattr(recipients, "_check_signal_registration", lambda phone: None)
     sqlite_db.create_recipient(conn, name="A", phone="+4915112345678")
     other = sqlite_db.create_recipient(conn, name="B", phone="+4915187654321")
     monkeypatch.setattr(sqlite_db, "get_recipient_by_phone", lambda c, p: None)
     resp = client.patch(f"/recipients/{other}", json={"phone": "+4915112345678"})
-    assert resp.status_code == 400
+    assert resp.status_code == 409
     assert sqlite_db.get_recipient(conn, other)["phone"] == "+4915187654321"
 
 

@@ -13,6 +13,7 @@ import threading
 from datetime import timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest import mock
 
 import pytest
 from cryptography.fernet import Fernet
@@ -21,8 +22,10 @@ from fastapi.testclient import TestClient
 from app.db import notifications as inbox
 from app.db import sqlite as sqlite_db
 from app.models.users import hash_password, hash_token, new_token
+from app.services.notifications.dispatcher import AlertPayload, NotificationDispatcher
 from app.services.notifications.spooler import NotificationSpooler
 from app.utils import crypto
+from app.utils.constants import SettingKeys
 from app.utils.time import utcnow
 from tests import _support  # noqa: F401 - imported for its sys.path side effect
 
@@ -76,6 +79,32 @@ def test_alert_opened_and_resolved_create_one_notification_each(db):
     items, total = inbox.list_notifications(conn, admin)
     assert total == 2
     assert {i["event_type"] for i in items} == {"monitoring.alert.opened", "monitoring.alert.resolved"}
+
+
+def test_dispatcher_reports_configured_signal_render_failure_for_outbox_retry(db):
+    conn, _ = db
+    target_id = _target(conn)
+    recipient_id = sqlite_db.create_recipient(conn, name="Receiver", phone="+15555550100")
+    sqlite_db.set_target_recipients(conn, target_id, [recipient_id])
+    sqlite_db.set_setting(conn, SettingKeys.SIGNAL_CHANNEL_ENABLED, True)
+    sqlite_db.set_setting(conn, SettingKeys.SIGNAL_API_SENDER_NUMBER, "+15555550101")
+    dispatcher = NotificationDispatcher(conn, db_conn_factory=lambda: sqlite_db.connect(db[1]))
+    alert = AlertPayload(
+        alert_id="dispatch-render-failure",
+        target_id=target_id,
+        target_name="T1",
+        failed_service="PING",
+        status="open",
+        started_at=utcnow(),
+    )
+    with (
+        mock.patch.object(dispatcher, "_render_signal_message", side_effect=ValueError("template failure")),
+        mock.patch("app.services.notifications.spooler.get_spooler"),
+    ):
+        result = dispatcher.dispatch_alert(alert)
+    assert result.channels_attempted == 1
+    assert result.channels_succeeded == 0
+    assert result.send_results[0].error == "ValueError"
 
 
 def test_no_notification_when_the_transaction_fails(db):
@@ -416,21 +445,21 @@ def test_admin_login_is_silent_but_required_password_change_notifies(client):
     first_login = c.post(
         "/login",
         json={"username": "boss", "password": "Passw0rd!x1"},
-        headers={"X-CSRF-Token": _csrf(c)},
+        headers={"Origin": "http://testserver", "X-CSRF-Token": _csrf(c)},
     )
     assert first_login.status_code == 200 and first_login.json()["must_change_password"] is True
 
     changed = c.post(
         "/me/complete-required-change",
         json={"new_password": "Admin-New-pass-2!"},
-        headers={"X-CSRF-Token": _csrf(c)},
+        headers={"Origin": "http://testserver", "X-CSRF-Token": _csrf(c)},
     )
     assert changed.status_code == 200
 
     second_login = c.post(
         "/login",
         json={"username": "boss", "password": "Admin-New-pass-2!"},
-        headers={"X-CSRF-Token": _csrf(c)},
+        headers={"Origin": "http://testserver", "X-CSRF-Token": _csrf(c)},
     )
     assert second_login.status_code == 200
 

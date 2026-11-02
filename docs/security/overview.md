@@ -7,8 +7,9 @@ Details: [Authentication](authentication.md), [Rate limiting](rate-limiting.md),
 
 - A [session token](../api/authentication.md#session-token) is stored in an `HttpOnly`, `SameSite=Lax` cookie
   (`Secure` behind HTTPS). API clients send the same token as a bearer token.
-- The session lasts 1-7 days (setting) and also expires after six hours of
-  inactivity.
+- The session lasts the configured 1-7 days (setting `session_max_days`, default 1),
+  counted from sign-in with no separate inactivity timeout. See
+  [Authentication](authentication.md).
 - CSRF protection applies to browser routes. See [Authentication](authentication.md).
 - An admin can disable authentication; every request then runs as administrator.
   Keep it off on any reachable instance.

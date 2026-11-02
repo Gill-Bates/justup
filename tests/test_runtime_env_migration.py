@@ -124,6 +124,11 @@ def test_quality_targets_validation() -> None:
     with pytest.raises(HTTPException):
         validate_quality_targets("1.1.1.1,8.8.8.8,bad host!")
 
+    assert validate_quality_targets("1.1.1.1,2606:4700:4700::1111,https://example.org:8443/x")
+    for unreachable in ("host:80", "a/b", "abc:80", "example.org/path"):
+        with pytest.raises(HTTPException):
+            validate_quality_targets(f"1.1.1.1,8.8.8.8,{unreachable}")
+
 
 def test_runtime_change_applies_without_restart(conn) -> None:
     from app.monitor import quality_probe

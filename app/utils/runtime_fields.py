@@ -37,7 +37,12 @@ NON_NULL_RUNTIME_KEYS = frozenset(
 )
 
 # Also handed to the settings UI (tag input) so client and server validate alike.
-QUALITY_TARGET_PATTERN = r"^(https?://)?[A-Za-z0-9][A-Za-z0-9.:\[\]-]{0,252}(/[^\s]*)?$"
+# A URL may carry port and path; a schemeless entry is pinged and must be a bare host or IPv6 literal.
+QUALITY_TARGET_PATTERN = (
+    r"^(https?://[A-Za-z0-9\[][A-Za-z0-9.:\[\]-]{0,252}(/[^\s]*)?"
+    r"|[A-Za-z0-9][A-Za-z0-9.-]{0,252}"
+    r"|(?:[0-9A-Fa-f]{0,4}:){2,7}[0-9A-Fa-f.]{0,15})$"
+)
 QUALITY_TARGET_MAX_LENGTH = 300
 _TARGET_RE = re.compile(QUALITY_TARGET_PATTERN)
 
@@ -55,6 +60,11 @@ def validate_quality_targets(raw: str) -> str:
     return ",".join(items)
 
 
+def is_secret_set(conn, key: SettingKeys) -> bool:
+    """Return whether a secret setting holds a value, without exposing the value itself."""
+    return bool(sqlite_db.get_setting(conn, key, None))
+
+
 def load_runtime_fields(conn) -> dict:
     """Return the runtime settings as Settings-model kwargs (never the ip-api key itself)."""
     get = sqlite_db.get_setting
@@ -70,5 +80,5 @@ def load_runtime_fields(conn) -> dict:
         "provider_lookup_cache_ttl_seconds": get(
             conn, SettingKeys.PROVIDER_LOOKUP_CACHE_TTL_SECONDS, PROVIDER_LOOKUP_CACHE_TTL_DEFAULT
         ),
-        "ip_api_key_set": bool(get(conn, SettingKeys.IP_API_KEY, None)),
+        "ip_api_key_set": is_secret_set(conn, SettingKeys.IP_API_KEY),
     }

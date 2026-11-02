@@ -103,10 +103,6 @@
 	letter-spacing: -0.02em;
 }
 
-.wizard-step-intro h2:focus {
-	outline: none;
-}
-
 .wizard-step-intro p {
 	margin: 0.55rem 0 0;
 	color: var(--bs-secondary-color);
@@ -277,8 +273,7 @@
 /* Short viewports: drop the page chrome so the step keeps usable room. */
 @media (height <=800px) {
 	.target-wizard-page .breadcrumb,
-	.target-wizard-page .ui-page-eyebrow,
-	.target-wizard-page .ui-page-lead {
+	.target-wizard-page .ui-page-eyebrow {
 		display: none;
 	}
 
