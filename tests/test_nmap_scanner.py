@@ -3,6 +3,7 @@
 # tests/test_nmap_scanner.py
 # Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 #
+
 """Nmap adapter: XML parsing, argument construction, bounded and cancellable process handling.
 
 No real Nmap and no network: a stand-in executable replaces the binary.

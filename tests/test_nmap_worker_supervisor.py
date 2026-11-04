@@ -3,6 +3,7 @@
 # tests/test_nmap_worker_supervisor.py
 # Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 #
+
 """docker/nmap-worker.sh: readiness handshake, bounded restarts and the published status."""
 
 from __future__ import annotations

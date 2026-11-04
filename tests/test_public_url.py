@@ -3,6 +3,7 @@
 # tests/test_public_url.py
 # Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 #
+
 """Public hostname: validation, the settings API, and the links it puts into alert mails and Signal texts."""
 
 from __future__ import annotations

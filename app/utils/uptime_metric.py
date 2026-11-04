@@ -14,12 +14,9 @@ from typing import Any
 
 from .constants import UPTIME_THRESHOLD_GREEN, UPTIME_THRESHOLD_YELLOW
 
-_PRIORITY = (
-    ("enable_http_check", "http_up"),
-    ("enable_ping", "ping_up"),
-    ("enable_tcp_connect", "tcp_up"),
-    ("enable_udp_scan", "udp_up"),
-)
+_PRIORITY = (("enable_http_check", "http_up"), ("enable_ping", "ping_up"), ("enable_tcp_connect", "tcp_up"))
+# UDP only counts when no other check is enabled for the chart/uptime source; it is a plain extra metric.
+_UDP = ("enable_udp_scan", "udp_up")
 
 
 def _flag(target: Mapping[str, Any] | Any, key: str) -> bool:
@@ -32,7 +29,7 @@ def _flag(target: Mapping[str, Any] | Any, key: str) -> bool:
 
 def enabled_availability_metrics(target: Mapping[str, Any] | Any) -> tuple[str, ...]:
     """Return the availability metrics of the checks currently enabled for a target."""
-    return tuple(metric for flag, metric in _PRIORITY if _flag(target, flag))
+    return tuple(metric for flag, metric in (*_PRIORITY, _UDP) if _flag(target, flag))
 
 
 # Points written by the scheduler carry one shared timestamp per check cycle (``cycle_at``), so they
@@ -62,8 +59,8 @@ def combine_availability(events: Iterable[tuple[datetime, str, int]]) -> Iterato
 
 
 def select_uptime_metric(target: Mapping[str, Any] | Any) -> str | None:
-    """Return the uptime metric for a target. Priority: HTTP > Ping > TCP > UDP; None if no check is enabled."""
-    for flag, metric in _PRIORITY:
+    """Return the uptime metric for a target. Priority: HTTP > Ping > TCP, then UDP; None if no check is enabled."""
+    for flag, metric in (*_PRIORITY, _UDP):
         if _flag(target, flag):
             return metric
     return None

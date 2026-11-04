@@ -3,6 +3,7 @@
 # docker/nmap-worker.sh
 # Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 #
+
 # Runs the privileged Nmap worker (the only process holding CAP_NET_RAW) next to the web
 # process and keeps it available: readiness handshake on every start, bounded restarts with
 # exponential backoff, and a status file the web process can read. A worker failure never

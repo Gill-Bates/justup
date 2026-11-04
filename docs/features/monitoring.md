@@ -16,7 +16,7 @@ A four-step wizard suggests checks by profile and shows a summary before saving.
 | Website | HTTP GET, success codes 200-399; TLS expiry for HTTPS |
 | API / health endpoint | HTTP GET, success codes 200-299; TLS expiry for HTTPS |
 | Server / host | ICMP ping |
-| TCP service | TCP to the ports you enter |
+| TCP/UDP service | TCP or UDP to the ports you enter |
 | Custom | Any combination and advanced settings |
 
 Defaults: 60 s interval, two retries, 365 days retention, auto-close. You can

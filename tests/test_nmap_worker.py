@@ -3,6 +3,7 @@
 # tests/test_nmap_worker.py
 # Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 #
+
 """Nmap worker socket protocol and client: request validation, errors, disconnect cancellation.
 
 A stand-in executable replaces Nmap; the Unix socket lives in a private temporary directory.

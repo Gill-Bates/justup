@@ -359,6 +359,8 @@ FAIL_WINDOW_SECONDS = 300  # Sliding window: FAILs must occur within this time t
 
 # Simultaneous UDP scans across all targets; a slow scan never delays the check cycle of its target.
 UDP_MAX_PARALLEL_SCANS = 2
+# Hard cap added on top of the scan timeout, so a hung worker connection cannot keep a target's scan slot.
+UDP_HARD_TIMEOUT_MARGIN_SECONDS = 15.0
 # Explicit re-detection of services is not scheduled by default (0 = off, set a large interval to enable).
 SERVICE_REDETECT_INTERVAL_SECONDS = 0
 
@@ -1791,7 +1793,8 @@ class MonitorScheduler:
         try:
             async with self._udp_slots:
                 outcome = await asyncio.wait_for(
-                    checks.udp_scan_ports(host, ports, timeout_seconds=timeout), timeout=timeout + 15
+                    checks.udp_scan_ports(host, ports, timeout_seconds=timeout),
+                    timeout=timeout + UDP_HARD_TIMEOUT_MARGIN_SECONDS,
                 )
         except TimeoutError:
             outcome = {p: checks.PortCheck("udp", p, PortStatus.UNKNOWN, None, "scan timeout") for p in ports}
@@ -1839,7 +1842,9 @@ class MonitorScheduler:
             result = await request_scan(host, tcp_ports=tcp or None, udp_ports=udp or None, detect_services=True)
         except Exception as exc:  # noqa: BLE001 - a failed detection says nothing about the target
             _log.warning(
-                "Target %s: service re-detection failed: %s", target_id, getattr(exc, "code", type(exc).__name__)
+                "Target %s: service re-detection failed: %s",
+                target_id,
+                getattr(getattr(exc, "error", None), "code", type(exc).__name__),
             )
             return {}
         observed = {(p.protocol, p.port): p for h in result.hosts for p in h.ports}

@@ -3,6 +3,7 @@
 # app/utils/public_url.py
 # Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 #
+
 """Operator-configured public hostname and the instance URLs derived from it.
 
 Notifications leave the host, so their links must not depend on the request that happens to

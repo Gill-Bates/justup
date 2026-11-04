@@ -3,6 +3,8 @@
 # tests/test_downtime_periods.py
 # Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 #
+
+# ruff: noqa: SLF001
 """Downtime from confirmed measurements only: one gap rule for history, graph, widget, uptime and PDF."""
 
 from __future__ import annotations
@@ -118,7 +120,13 @@ def test_disabled_check_with_old_data_is_not_downtime(tmp_path):
     row = {"enable_http_check": 0, "enable_ping": 0, "enable_tcp_connect": 0, "enable_udp_scan": 0}
     assert downtime_series(row) == []
     assert periods(tmp_path, series=downtime_series(row)) == []
-    row = {"enable_http_check": 1, "enable_tcp_connect": 1, "tcp_ports": "25,587", "enable_udp_scan": 1, "udp_ports": "53"}
+    row = {
+        "enable_http_check": 1,
+        "enable_tcp_connect": 1,
+        "tcp_ports": "25,587",
+        "enable_udp_scan": 1,
+        "udp_ports": "53",
+    }
     assert downtime_series(row) == [
         ("http_up", "HTTP"),
         ("tcp_up_25", "TCP:25"),
@@ -222,3 +230,56 @@ def test_measured_outages_rule_edge_cases():
     out = measured_outages(pts, interval_seconds=60, now=base + timedelta(minutes=2, seconds=30))
     assert [(o.start, o.end) for o in out] == [(base + timedelta(minutes=2), None)]
     assert measured_outages([], interval_seconds=60) == []
+
+
+# ── TSDB metric model for the ternary UDP state ──────────────────────────────
+
+
+def test_udp_metrics_are_binary_or_flag_and_protocol_specific():
+    assert tsdb.is_binary_metric("udp_up") and tsdb.is_binary_metric("udp_up_53") and tsdb.is_binary_metric("tcp_up_53")
+    assert not tsdb.is_binary_metric("udp_up_0") and not tsdb.is_binary_metric("udp_up_65536")
+    assert tsdb.is_flag_metric("udp_unknown_53") and not tsdb.is_flag_metric("udp_up_53")
+    assert tsdb._series_path(Path("/x"), 1, "tcp_up_53") != tsdb._series_path(Path("/x"), 1, "udp_up_53")
+
+
+def test_rollup_keeps_unknown_visible_and_down_dominant(tmp_path):
+    for minute, up, unknown in [(0, 1, 0), (1, 0, 0), (2, 1, 1)]:
+        tsdb.append_point(tmp_path, target_id=1, metric="udp_up_53", value=up, retention_days=365, at=at(minute))
+        tsdb.append_point(
+            tmp_path, target_id=1, metric="udp_unknown_53", value=unknown, retention_days=365, at=at(minute)
+        )
+    for metric, expected in (("udp_up_53", 0), ("udp_unknown_53", 1)):
+        points = tsdb.query(tmp_path, target_id=1, metric=metric, limit=10)
+        [bucket] = tsdb._resample_points(points, metric=metric, since=at(0), until=at(10), max_points=1)
+        assert bucket.value == expected  # min() for 0/1 state, max() for the UNKNOWN flag
+
+
+def test_udp_only_target_has_an_uptime_metric_and_availability_series(tmp_path):
+    from app.utils.uptime_metric import enabled_availability_metrics, select_uptime_metric
+
+    row = {"enable_udp_scan": 1}
+    assert select_uptime_metric(row) == "udp_up" and enabled_availability_metrics(row) == ("udp_up",)
+    put(tmp_path, "udp_up_53", [(1, 1), (2, 0), (3, 1)])
+    series = tsdb.query_availability_series(
+        tmp_path,
+        target_id=1,
+        since=at(0),
+        until=at(10),
+        enabled_services={"UDP"},
+        udp_ports=[53],
+        check_interval_seconds=60,
+    )
+    assert list(series) == ["UDP:53"] and [p["up"] for p in series["UDP:53"]] == [1, 0, 1]
+
+
+def test_dashboard_widget_groups_the_ports_of_one_service_but_not_other_services():
+    row = {
+        "enable_http_check": 1,
+        "enable_tcp_connect": 1,
+        "tcp_ports": "25,587",
+        "enable_udp_scan": 1,
+        "udp_ports": "53",
+    }
+    groups = metrics._service_groups(row)
+    assert list(groups) == ["http_up", "tcp_up", "udp_up"]
+    assert [label for _m, label in groups["tcp_up"]] == ["TCP:25", "TCP:587"]

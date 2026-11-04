@@ -1455,6 +1455,24 @@ def _coverage_pct(report_data: ReportData, total_checks: int, interval_seconds: 
     return round(min(100.0, total_checks * interval_seconds / window * 100), 1)
 
 
+def _downtime_minutes(uptime_data: list[dict], interval_seconds: float) -> int:
+    """Whole minutes of the downtime table; an ongoing outage counts up to its last sample."""
+    stamps = []
+    for p in uptime_data or []:
+        try:
+            stamps.append(datetime.fromisoformat(p["ts"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+    last = max(stamps, default=None)
+    total = 0
+    for event in _extract_downtime_events(uptime_data, interval_seconds):
+        if event.end is not None:
+            total += event.duration_minutes or 0
+        elif last is not None:
+            total += int(max(0.0, (last - event.start).total_seconds()) / 60)
+    return total
+
+
 def _compute_kpis(report_data: ReportData) -> KPIMetrics:
     """Compute KPI metrics; a metric without measurements stays None (never 0).
 
@@ -1473,10 +1491,7 @@ def _compute_kpis(report_data: ReportData) -> KPIMetrics:
         uptime_percent=_availability_pct(up_count, total_checks),
         avg_response_ms=round(sum(response) / len(response)) if response else None,
         max_response_ms=round(max(response)) if response else None,
-        downtime_minutes=sum(
-            e.duration_minutes or 0
-            for e in _extract_downtime_events(report_data.uptime_data, interval_seconds, report_data.to_date)
-        ),
+        downtime_minutes=_downtime_minutes(report_data.uptime_data, interval_seconds),
         total_checks=total_checks,
         up_count=up_count,
         down_count=down_count,
@@ -2255,7 +2270,6 @@ class PDFReportBuilder:
         self.downtime_events = _extract_downtime_events(
             report_data.uptime_data,
             report_data.target.get("interval_seconds") or 60,
-            report_data.to_date,
         )
         self.chapter_pages: dict[str, int] = {}
         self.page_count = 0

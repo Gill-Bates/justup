@@ -3,6 +3,7 @@
 # tools/verify-nmap-worker.py
 # Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 #
+
 """Check the Nmap worker's privilege separation and scans inside a running justUp container.
 
 ``capabilities``: the worker runs as UID 10001 with CAP_NET_RAW as its only capability, the web

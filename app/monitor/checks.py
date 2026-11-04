@@ -975,7 +975,7 @@ async def udp_scan_ports(
     except asyncio.CancelledError:
         raise
     except Exception as exc:  # noqa: BLE001 - any scan-engine failure is UNKNOWN, never a target outage
-        code = getattr(exc, "code", None) or type(exc).__name__
+        code = getattr(getattr(exc, "error", None), "code", None) or type(exc).__name__
         _log.warning("UDP scan engine failure for %s: %s", host, code)
         return unknown_all(f"scan {code}")
     observed = {(p.protocol, p.port): p for h in result.hosts for p in h.ports}

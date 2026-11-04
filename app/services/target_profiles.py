@@ -17,7 +17,7 @@ PROFILE_LABELS = {
     "website": "Website",
     "api": "API / health endpoint",
     "server": "Server / host",
-    "tcp": "TCP service",
+    "tcp": "TCP/UDP service",
     "custom": "Custom",
 }
 

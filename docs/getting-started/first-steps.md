@@ -15,7 +15,7 @@ earlier output stays in the container log until the log is rotated.
 ## 2. Create a target
 
 Select **New Target**. Choose a profile (website, API/health endpoint,
-server/host, TCP service, or custom), enter the URL or host, adjust the
+server/host, TCP/UDP service, or custom), enter the URL or host, adjust the
 suggested checks, and review the summary. For TCP, enter the ports yourself.
 Exact duplicates are blocked. **Edit** opens the full editor.
 

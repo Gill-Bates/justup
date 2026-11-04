@@ -3,6 +3,7 @@
 # tests/test_network_ports_persistence.py
 # Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 #
+
 """Multi-protocol target persistence: schema 6 -> 8 migration, port identity and server-derived service metadata."""
 
 # ruff: noqa: SLF001  # white-box access to the migration table

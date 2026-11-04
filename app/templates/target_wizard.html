@@ -35,7 +35,7 @@
             ('website', 'Website', 'Availability, response time and TLS certificate expiry.', 'language'),
             ('api', 'API / health endpoint', 'A specific HTTP endpoint and its expected status.', 'api'),
             ('server', 'Server / host', 'Reachability through ICMP ping.', 'dns'),
-            ('tcp', 'TCP service', 'Connectivity to ports that you choose.', 'settings_ethernet'),
+            ('tcp', 'TCP/UDP service', 'Connectivity to TCP or UDP ports that you choose.', 'settings_ethernet'),
             ('custom', 'Custom', 'Combine checks and fine-tune every setting.', 'tune')
           ] %}
           <label class="target-type-card {{ 'target-type-card--custom' if kind == 'custom' else '' }}">
@@ -51,19 +51,19 @@
       <section class="target-wizard-step" data-step="1" aria-labelledby="step-address-title" hidden>
         <div class="wizard-step-intro"><h2 id="step-address-title" tabindex="-1">Where is the target?</h2><p>Enter the address you want us to check. You can add a familiar name and group.</p></div>
         <div class="row g-3">
-          <div class="col-12 col-lg-7">
+          <div class="col-12">
             <label for="wizard-address" class="form-label" id="wizard-address-label">Full URL or domain *</label>
             <input id="wizard-address" name="address" class="form-control" type="text" required maxlength="2048" autocomplete="url" aria-describedby="wizard-address-help wizard-address-error">
             <div id="wizard-address-help" class="form-text">A domain without a scheme suggests HTTPS. Enter http:// explicitly to keep HTTP.</div>
             <div id="wizard-address-error" class="invalid-feedback" role="alert"></div>
           </div>
-          <div class="col-12 col-lg-5 wizard-kind" data-kinds="tcp custom" hidden>
+          <div class="col-12 col-md-6 wizard-kind" data-kinds="tcp custom" hidden>
             <label for="wizard-ports" class="form-label">TCP ports <span class="wizard-kind" data-kinds="tcp" hidden>*</span></label>
             <input id="wizard-ports" name="tcp_ports" class="form-control" type="text" maxlength="200" placeholder="e.g. 22,443" aria-describedby="wizard-ports-help wizard-ports-error">
             <div id="wizard-ports-help" class="form-text">Choose ports explicitly; no port is assumed.</div>
             <div id="wizard-ports-error" class="invalid-feedback" role="alert"></div>
           </div>
-          <div class="col-12 col-lg-5 wizard-kind" data-kinds="tcp custom" hidden>
+          <div class="col-12 col-md-6 wizard-kind" data-kinds="tcp custom" hidden>
             <label for="wizard-udp-ports" class="form-label">UDP ports</label>
             <input id="wizard-udp-ports" name="udp_ports" class="form-control" type="text" inputmode="numeric" maxlength="200" placeholder="e.g. 53,161" aria-describedby="wizard-udp-ports-help">
             <div id="wizard-udp-ports-help" class="form-text">Enter ports manually or add them from a scan.</div>
