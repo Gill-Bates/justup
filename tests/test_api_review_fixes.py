@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import importlib.util
+import sqlite3
 import threading
 import time
 from datetime import UTC, datetime, timedelta
@@ -1680,3 +1681,84 @@ def test_signal_qr_fragment_is_not_cacheable(conn, monkeypatch):
     assert resp.status_code == 200
     assert "data:image/png;base64" in resp.text
     assert resp.headers["Cache-Control"] == "private, no-store"
+
+
+# --- template handlers: validate everything first, then save atomically ------------------------
+
+
+def _fail_on_second_set_setting(monkeypatch):
+    real = sqlite_db.set_setting
+    calls = {"n": 0}
+
+    def flaky(conn, key, value, **kwargs):
+        calls["n"] += 1
+        real(conn, key, value, **kwargs)
+        if calls["n"] == 2:
+            raise sqlite3.OperationalError("injected write failure")
+
+    monkeypatch.setattr(sqlite_db, "set_setting", flaky)
+
+
+@pytest.mark.parametrize(
+    ("path", "valid", "invalid", "keys"),
+    [
+        ("/settings/signal/template", "down", "up", ("signal_message_template_down", "signal_message_template_up")),
+        ("/settings/smtp/template", "subject", "html", ("smtp_mail_template_subject", "smtp_mail_template_html")),
+    ],
+)
+def test_template_update_with_one_invalid_field_saves_nothing(conn, path, valid, invalid, keys):
+    from app.utils.constants import SettingKeys
+
+    keys = tuple(getattr(SettingKeys, k.upper(), k) for k in keys)
+    client = _client(conn, settings.router, user=_mk_user(conn, "adm", admin=True))
+    resp = client.post(path, json={valid: "valid text", invalid: "   "})
+    assert resp.status_code == 400
+    assert [sqlite_db.get_setting(conn, k, None) for k in keys] == [None, None]
+
+
+@pytest.mark.parametrize(
+    ("path", "body", "keys"),
+    [
+        (
+            "/settings/signal/template",
+            {"down": "d", "up": "u"},
+            ("signal_message_template_down", "signal_message_template_up"),
+        ),
+        (
+            "/settings/smtp/template",
+            {"subject": "s", "html": "<p>h</p>"},
+            ("smtp_mail_template_subject", "smtp_mail_template_html"),
+        ),
+    ],
+)
+def test_template_update_write_failure_rolls_back_first_field(conn, monkeypatch, path, body, keys):
+    from app.utils.constants import SettingKeys
+
+    keys = tuple(getattr(SettingKeys, k.upper(), k) for k in keys)
+    _fail_on_second_set_setting(monkeypatch)
+    client = TestClient(
+        _client(conn, settings.router, user=_mk_user(conn, "adm", admin=True)).app, raise_server_exceptions=False
+    )
+    assert client.post(path, json=body).status_code == 500
+    assert [sqlite_db.get_setting(conn, k, None) for k in keys] == [None, None]
+
+
+@pytest.mark.parametrize(
+    ("path", "keys"),
+    [
+        ("/settings/signal/template/reset", ("signal_message_template_down", "signal_message_template_up")),
+        ("/settings/smtp/template/reset", ("smtp_mail_template_subject", "smtp_mail_template_html")),
+    ],
+)
+def test_template_reset_write_failure_rolls_back_first_field(conn, monkeypatch, path, keys):
+    from app.utils.constants import SettingKeys
+
+    keys = tuple(getattr(SettingKeys, k.upper(), k) for k in keys)
+    for k in keys:
+        sqlite_db.set_setting(conn, k, "custom")
+    _fail_on_second_set_setting(monkeypatch)
+    client = TestClient(
+        _client(conn, settings.router, user=_mk_user(conn, "adm", admin=True)).app, raise_server_exceptions=False
+    )
+    assert client.post(path).status_code == 500
+    assert [sqlite_db.get_setting(conn, k, None) for k in keys] == ["custom", "custom"]

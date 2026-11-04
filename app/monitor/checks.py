@@ -506,6 +506,12 @@ def _pinned_request(
     return url, ssl_extensions, {**base_headers, "Host": host_header}
 
 
+async def _fetch_headers(client, method: str, url: str, extensions, headers):
+    """Return status and headers without reading the body; the connection is closed on return."""
+    async with client.stream(method, url, extensions=extensions, headers=headers) as response:
+        return response
+
+
 async def http_head(
     url: str,
     timeout_seconds: float = 5.0,
@@ -610,11 +616,11 @@ async def http_head(
                         # Use HEAD if preferred (avoids affecting visitor counters)
                         # Fallback to GET if HEAD returns 4xx/5xx (some servers don't support HEAD)
                         if prefer_head:
-                            resp = await client.head(current_url, extensions=current_ext, headers=current_headers)
+                            resp = await _fetch_headers(client, "HEAD", current_url, current_ext, current_headers)
                             if resp.status_code >= 400:
-                                resp = await client.get(current_url, extensions=current_ext, headers=current_headers)
+                                resp = await _fetch_headers(client, "GET", current_url, current_ext, current_headers)
                         else:
-                            resp = await client.get(current_url, extensions=current_ext, headers=current_headers)
+                            resp = await _fetch_headers(client, "GET", current_url, current_ext, current_headers)
 
                         # Redirects: validate target for SSRF, but do not follow.
                         if resp.status_code in (301, 302, 303, 307, 308):

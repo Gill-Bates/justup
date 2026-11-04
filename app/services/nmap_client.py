@@ -20,10 +20,14 @@ SOCKET_PATH = os.environ.get("JUSTUP_NMAP_SOCKET", "/run/justup/nmap.sock")
 MAX_RESPONSE_BYTES = 1_100_000
 # Published by docker/nmap-worker.sh: {"state": starting|ready|restarting|failed, "detail", "restarts", "since"}
 WORKER_STATUS_PATH = Path(os.environ.get("JUSTUP_NMAP_STATUS", "/run/justup-nmap.status"))
+# Set by app.services.nmap_local when the web process supervises the worker itself (no status file then).
+LOCAL_STATUS: dict[str, object] | None = None
 
 
 def worker_status() -> dict[str, object]:
     """Return the supervisor's worker state; ``{"state": "unknown"}`` when nobody publishes one."""
+    if LOCAL_STATUS is not None:
+        return dict(LOCAL_STATUS)
     try:
         status = json.loads(WORKER_STATUS_PATH.read_text(encoding="utf-8"))
     except (OSError, ValueError):

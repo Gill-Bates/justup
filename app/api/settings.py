@@ -366,15 +366,17 @@ def get_signal_template(conn=Depends(get_conn), _admin=Depends(require_admin)):
 @router.post("/signal/template")
 def update_signal_template(payload: SignalTemplateUpdate, conn=Depends(get_conn), _admin=Depends(require_admin)):
     """Update Signal templates (DOWN and/or UP)."""
-    if payload.down is not None:
-        if not payload.down.strip():
-            raise HTTPException(status_code=400, detail="DOWN template must not be empty")
-        sqlite_db.set_setting(conn, SettingKeys.SIGNAL_MESSAGE_TEMPLATE_DOWN, payload.down)
+    if payload.down is not None and not payload.down.strip():
+        raise HTTPException(status_code=400, detail="DOWN template must not be empty")
+    if payload.up is not None and not payload.up.strip():
+        raise HTTPException(status_code=400, detail="UP template must not be empty")
 
-    if payload.up is not None:
-        if not payload.up.strip():
-            raise HTTPException(status_code=400, detail="UP template must not be empty")
-        sqlite_db.set_setting(conn, SettingKeys.SIGNAL_MESSAGE_TEMPLATE_UP, payload.up)
+    # Validate everything first, then save both fields in one transaction (no partial update).
+    with sqlite_db.transaction(conn):
+        if payload.down is not None:
+            sqlite_db.set_setting(conn, SettingKeys.SIGNAL_MESSAGE_TEMPLATE_DOWN, payload.down, auto_commit=False)
+        if payload.up is not None:
+            sqlite_db.set_setting(conn, SettingKeys.SIGNAL_MESSAGE_TEMPLATE_UP, payload.up, auto_commit=False)
 
     return {"ok": True}
 
@@ -387,8 +389,9 @@ def reset_signal_template(conn=Depends(get_conn), _admin=Depends(require_admin))
         DEFAULT_SIGNAL_TEMPLATE_UP,
     )
 
-    sqlite_db.set_setting(conn, SettingKeys.SIGNAL_MESSAGE_TEMPLATE_DOWN, None)
-    sqlite_db.set_setting(conn, SettingKeys.SIGNAL_MESSAGE_TEMPLATE_UP, None)
+    with sqlite_db.transaction(conn):
+        sqlite_db.set_setting(conn, SettingKeys.SIGNAL_MESSAGE_TEMPLATE_DOWN, None, auto_commit=False)
+        sqlite_db.set_setting(conn, SettingKeys.SIGNAL_MESSAGE_TEMPLATE_UP, None, auto_commit=False)
 
     return SignalTemplateResponse(down=DEFAULT_SIGNAL_TEMPLATE_DOWN, up=DEFAULT_SIGNAL_TEMPLATE_UP)
 
@@ -973,19 +976,19 @@ def update_email_template(payload: EmailTemplateUpdate, conn=Depends(get_conn), 
     """
     from ..services.notifications.email_template import LOGO_URL_PREVIEW
 
-    # Validate: subject must not be empty or whitespace-only
-    if payload.subject is not None:
-        if not payload.subject.strip():
-            raise HTTPException(status_code=400, detail="Subject must not be empty")
-        subject_save = payload.subject.replace(LOGO_URL_PREVIEW, "{{logo_url}}")
-        sqlite_db.set_setting(conn, "smtp_mail_template_subject", subject_save)
+    # Validate everything first, then save both fields in one transaction (no partial update).
+    if payload.subject is not None and not payload.subject.strip():
+        raise HTTPException(status_code=400, detail="Subject must not be empty")
+    if payload.html is not None and not payload.html.strip():
+        raise HTTPException(status_code=400, detail="HTML body must not be empty")
 
-    # Validate: HTML must not be empty or whitespace-only
-    if payload.html is not None:
-        if not payload.html.strip():
-            raise HTTPException(status_code=400, detail="HTML body must not be empty")
-        html_save = payload.html.replace(LOGO_URL_PREVIEW, "{{logo_url}}")
-        sqlite_db.set_setting(conn, "smtp_mail_template_html", html_save)
+    with sqlite_db.transaction(conn):
+        if payload.subject is not None:
+            subject_save = payload.subject.replace(LOGO_URL_PREVIEW, "{{logo_url}}")
+            sqlite_db.set_setting(conn, "smtp_mail_template_subject", subject_save, auto_commit=False)
+        if payload.html is not None:
+            html_save = payload.html.replace(LOGO_URL_PREVIEW, "{{logo_url}}")
+            sqlite_db.set_setting(conn, "smtp_mail_template_html", html_save, auto_commit=False)
 
     return {"ok": True}
 
@@ -997,8 +1000,9 @@ def reset_email_template(conn=Depends(get_conn), _admin=Depends(require_admin)):
     Sets template values to NULL so defaults are used on read.
     This allows distinguishing between 'user accepted default' and 'never changed'.
     """
-    sqlite_db.set_setting(conn, "smtp_mail_template_subject", None)
-    sqlite_db.set_setting(conn, "smtp_mail_template_html", None)
+    with sqlite_db.transaction(conn):
+        sqlite_db.set_setting(conn, "smtp_mail_template_subject", None, auto_commit=False)
+        sqlite_db.set_setting(conn, "smtp_mail_template_html", None, auto_commit=False)
 
     return EmailTemplateResponse(
         subject=DEFAULT_SUBJECT,

@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import ipaddress
 import socket
 import subprocess
@@ -90,18 +91,55 @@ def _run_http_head(url: str, getaddrinfo, *, public_answer: str | None = None, *
     seen: list[tuple[str, dict]] = []
     public_dns = mock.AsyncMock(return_value=public_answer)
 
-    async def fake_request(self, url, **kw):  # noqa: ARG001
+    @contextlib.asynccontextmanager
+    async def fake_stream(self, method, url, **kw):  # noqa: ARG001
         seen.append((str(url), kw))
         raise httpx.ConnectError("refused")
+        yield  # pragma: no cover - makes this an async generator
 
     with (
         mock.patch("socket.getaddrinfo", getaddrinfo),
         mock.patch.object(checks, "_resolve_host_via_public_dns_first_answer", public_dns),
-        mock.patch.object(httpx.AsyncClient, "head", fake_request),
-        mock.patch.object(httpx.AsyncClient, "get", fake_request),
+        mock.patch.object(httpx.AsyncClient, "stream", fake_stream),
     ):
         result = asyncio.run(checks.http_head(url, **kwargs))
     return result, seen
+
+
+def test_http_head_returns_after_the_headers_and_never_reads_an_endless_body():
+    """The monitor needs status and headers only; a huge or endless body must not hold the check."""
+    requests: list[str] = []
+
+    async def handle(reader, writer):
+        requests.append((await reader.readuntil(b"\r\n\r\n")).split(b" ", 1)[0].decode())
+        writer.write(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n")
+        try:
+            while True:
+                writer.write(b"400\r\n" + b"x" * 1024 + b"\r\n")
+                await writer.drain()
+                await asyncio.sleep(0)
+        except (ConnectionError, asyncio.CancelledError):
+            pass
+        finally:
+            writer.close()
+
+    async def scenario():
+        server = await asyncio.start_server(handle, "127.0.0.1", 0)
+        port = server.sockets[0].getsockname()[1]
+        try:
+            return await asyncio.wait_for(
+                checks.http_head(
+                    f"http://127.0.0.1:{port}/", timeout_seconds=5, skip_ssrf_check=True, prefer_head=False
+                ),
+                timeout=3,
+            )
+        finally:
+            server.close()
+
+    with mock.patch.object(checks, "_resolve_host_via_public_dns_first_answer", mock.AsyncMock(return_value=None)):
+        result = asyncio.run(scenario())
+    assert result.ok and result.value == {"status": 200}
+    assert requests == ["GET"]
 
 
 @pytest.mark.parametrize("public_answer", [None, "93.184.216.35"])

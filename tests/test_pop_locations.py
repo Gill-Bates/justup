@@ -114,3 +114,21 @@ def test_import_upsert_updates_its_own_rows(conn) -> None:
     assert pop_locations.upsert_pop_location(conn, "ams", "ams", "Amsterdam", "NL", 52.3, 4.9, "peeringdb", 100, 10)
     assert pop_locations.upsert_pop_location(conn, "ams", "ams", "Amsterdam", "NL", 52.4, 4.8, "peeringdb", 100, 10)
     assert _row(conn, "ams")[:5] == ("peeringdb", 52.4, 4.8, 10, 100)
+
+
+def _upsert(conn, lat: float, lon: float, alias: str = "zzz") -> bool:
+    return pop_locations.upsert_pop_location(
+        conn, "zzz", alias, "Testcity", "DE", lat, lon, pop_locations.SOURCE_PEERINGDB, 70, 10
+    )
+
+
+@pytest.mark.parametrize(("lat", "lon"), [(float("nan"), 8.0), (50.0, float("inf")), (float("-inf"), 8.0)])
+def test_upsert_rejects_non_finite_coordinates(conn, lat, lon) -> None:
+    assert _upsert(conn, lat, lon) is False
+    assert conn.execute("SELECT COUNT(*) FROM pop_locations WHERE alias_code = 'zzz'").fetchone()[0] == 0
+
+
+def test_upsert_still_clamps_finite_out_of_range_coordinates(conn) -> None:
+    assert _upsert(conn, 123.0, -999.0) is True
+    row = conn.execute("SELECT lat, lon FROM pop_locations WHERE alias_code = 'zzz'").fetchone()
+    assert (row[0], row[1]) == (90.0, -180.0)

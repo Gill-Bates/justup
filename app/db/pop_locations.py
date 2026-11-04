@@ -19,6 +19,7 @@ Lifecycle:
 from __future__ import annotations
 
 import logging
+import math
 import sqlite3
 import uuid
 from typing import Any
@@ -84,6 +85,7 @@ SOURCE_PEERINGDB = "peeringdb"  # Imported from PeeringDB API
 SOURCE_UNLOCODE = "unlocode"  # Imported from UN/LOCODE database
 SOURCE_SEED = "seed"  # Built-in seed data (stable, curated)
 SOURCE_MANUAL = "manual"  # Manually added via admin API
+SOURCE_LEARNED = "learned"  # Approved through explicit candidate review (pop_candidates.review)
 _PROTECTED_SOURCES = (SOURCE_MANUAL, SOURCE_SEED)  # never overwritten or retired by imports
 
 # Confidence levels (how certain are we about this mapping?)
@@ -341,7 +343,11 @@ def upsert_pop_location(
     city = _normalize_city(city)
     country = _normalize_country(country)
 
-    # Clamp coordinates to valid range
+    # NaN/inf would pass clamping as a pole/meridian value; refuse to persist them.
+    # Finite out-of-range values keep being clamped (unchanged behaviour).
+    if not (math.isfinite(float(lat)) and math.isfinite(float(lon))):
+        _log.debug("Skipping POP location %s/%s: non-finite coordinates", canonical_code, alias_code)
+        return False
     lat = max(-90.0, min(90.0, float(lat)))
     lon = max(-180.0, min(180.0, float(lon)))
 
@@ -352,13 +358,14 @@ def upsert_pop_location(
     # Check if a protected (manual or seed) entry exists
     existing = conn.execute(
         """
-        SELECT source FROM pop_locations
+        SELECT source, retired FROM pop_locations
         WHERE alias_code = ? AND canonical_code = ?
         """,
         (alias_code, canonical_code),
     ).fetchone()
 
-    if existing and existing[0] in _PROTECTED_SOURCES:
+    # An active reviewed ('learned') row is protected too; once revoked (retired) imports may reclaim it.
+    if existing and (existing[0] in _PROTECTED_SOURCES or (existing[0] == SOURCE_LEARNED and not existing[1])):
         # Never overwrite curated entries, but update last_seen
         if import_run_id:
             conn.execute(
@@ -392,6 +399,7 @@ def upsert_pop_location(
                 import_run_id = excluded.import_run_id,
                 retired = 0
             WHERE pop_locations.source NOT IN ('manual', 'seed')
+              AND NOT (pop_locations.source = 'learned' AND pop_locations.retired = 0)
             """,
             (
                 canonical_code,

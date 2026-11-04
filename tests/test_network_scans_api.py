@@ -435,3 +435,41 @@ class TestAvailability:
         assert _start(client).status_code == 503
         stub.availability = {"available": True, "state": "ready", "message": "", "detail": ""}
         assert _start(client).status_code == 202
+
+
+def test_late_cleanup_of_an_expired_job_keeps_the_reservation_of_its_successor(monkeypatch):
+    """A cancelled-but-still-unwinding task must not release the address a newer job now owns."""
+    import ipaddress
+
+    monkeypatch.setattr(nmap_jobs, "resolve_validated", lambda host, allow_private: [ipaddress.ip_address("10.9.9.9")])
+
+    async def scenario():
+        slow_unwind = asyncio.Event()
+        first_call = True
+
+        async def fake_request_scan(address, **kwargs):
+            nonlocal first_call
+            hold = first_call
+            first_call = False
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                if hold:
+                    await slow_unwind.wait()  # the old worker call needs time to unwind
+                raise
+
+        monkeypatch.setattr(nmap_jobs, "request_scan", fake_request_scan)
+        request = nmap_jobs.NmapScanRequest(host="10.9.9.9", protocols={"tcp"})
+        first = await nmap_jobs.create_job(request, owner_id=1)
+        await asyncio.sleep(0)
+        nmap_jobs._jobs[first.id].job.expires_at = nmap_jobs.utcnow() - timedelta(seconds=1)
+        second = await nmap_jobs.create_job(request, owner_id=2)  # prunes the old job, takes the address
+        slow_unwind.set()
+        await asyncio.sleep(0.05)  # the old task finishes its cleanup now
+        with pytest.raises(nmap_jobs.NmapScannerError) as busy:
+            await nmap_jobs.create_job(request, owner_id=3)
+        assert busy.value.error.code == "busy"
+        await nmap_jobs.cancel_job(second.id, 2)
+        await nmap_jobs.shutdown_jobs()
+
+    asyncio.run(scenario())

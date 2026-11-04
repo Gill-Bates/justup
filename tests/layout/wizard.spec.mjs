@@ -131,6 +131,8 @@ test("the submitted payload keeps tcp_ports and udp_ports from the address step 
 	await page.locator("#wizard-udp-ports").fill("53");
 	await page.getByRole("button", { name: "Continue" }).click();
 	await page.locator("#step-checks-title").waitFor({ state: "visible" });
+	await page.locator(TOGGLES.tcp).setChecked(true, { force: true });
+	await page.locator("#wizard-udp").setChecked(true, { force: true });
 	await page.getByRole("button", { name: "Continue" }).click();
 	await page.locator("#step-recipients-title").waitFor({ state: "visible" });
 	await page.getByRole("button", { name: "Continue" }).click();
@@ -256,10 +258,10 @@ function countScanStarts(page) {
 }
 async function openScanStep(page, app, address = "mail.example.org") {
 	await page.goto(`${app.base}/ui/targets/new`);
-	await page.locator('input[name="profile"][value="custom"]').check({ force: true });
+	await page.locator('input[name="profile"][value="tcp"]').check({ force: true });
 	await page.getByRole("button", { name: "Continue" }).click();
 	await page.locator("#wizard-address").fill(address);
-	await page.locator("#wizard-ports").fill("22");
+	await page.locator("#wizard-ports").fill("22,443");
 }
 test("wizard: scan button is disabled with a visible, announced reason while the worker is down, manual ports still save @wizard", async ({ app, page }) => {
 	const worker = { current: WORKER_DOWN };
@@ -295,15 +297,15 @@ test("wizard: scan button is disabled with a visible, announced reason while the
 	});
 	await page.getByRole("button", { name: "Start monitoring" }).click();
 	await page.locator("#wizard-error:not(.d-none)").waitFor();
-	assert.equal(body.tcp_ports, "22");
-	assert.equal(body.udp_ports, "161");
+	assert.equal(body.tcp_ports, "22,443", "manual TCP ports are saved without any scan");
+	assert.equal(body.udp_ports, "161", "the manual UDP port is saved without any scan");
 });
 test("wizard: scan button is enabled and no reason is shown while the worker is available @wizard", async ({ app, page }) => {
 	await stubPortScan(page);
 	await stubWorkerStatus(page, { current: WORKER_UP });
+	const statusSeen = page.waitForResponse("**/network-scans/status");
 	await openScanStep(page, app);
-	await page.getByRole("button", { name: "Scan ports" }).waitFor();
-	await page.waitForResponse("**/network-scans/status");
+	await statusSeen;
 	assert.equal(await page.getByRole("button", { name: "Scan ports" }).isEnabled(), true);
 	assert.equal(await page.locator("[data-scan-unavailable]").isHidden(), true);
 	assert.equal(await page.getByRole("button", { name: "Scan ports" }).getAttribute("aria-describedby"), null);
@@ -335,8 +337,9 @@ test("wizard: a refused scan start disables the button with the server reason @w
 		if (route.request().method() !== "POST") return route.fallback();
 		return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: { code: "unavailable", message: "Nmap scan worker is restarting" } }) });
 	});
+	const statusSeen = page.waitForResponse("**/network-scans/status");
 	await openScanStep(page, app);
-	await page.waitForResponse("**/network-scans/status");
+	await statusSeen;
 	await page.getByRole("button", { name: "Scan ports" }).click();
 	await page.locator('[data-scan-action="start"]:disabled').waitFor();
 	assert.match(await page.locator("[data-scan-unavailable]").innerText(), /Nmap scan worker is restarting/);
@@ -346,6 +349,7 @@ test("target edit: scan button is disabled while the worker is down, manual port
 	await stubWorkerStatus(page, { current: WORKER_DOWN });
 	const starts = countScanStarts(page);
 	await page.goto(`${app.base}/ui/targets/1/edit`);
+	await page.locator("#host-input").fill("mail.example.org");
 	await page.locator("#target-network-tab").click();
 	await page.locator('[data-scan-action="start"]:disabled').waitFor();
 	assert.equal(await page.locator("[data-scan-unavailable]").isVisible(), true);
@@ -362,8 +366,9 @@ test("target edit: scan button is disabled while the worker is down, manual port
 		body = route.request().postDataJSON();
 		return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ detail: "stop" }) });
 	});
+	const saved = page.waitForRequest(request => request.url().endsWith("/targets/1") && request.method() !== "GET");
 	await page.locator('#target-form button[type="submit"]').click();
-	await page.waitForRequest(request => request.url().endsWith("/targets/1") && request.method() !== "GET");
+	await saved;
 	assert.match(body.tcp_ports, /(?:^|,)22(?:,|$)/);
 	assert.equal(body.udp_ports, "161");
 	assert.equal(starts.count, 0);

@@ -16,7 +16,6 @@ no capability: TCP scans work, UDP scans need CAP_NET_RAW and report ``permissio
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 import shutil
@@ -60,14 +59,13 @@ class LocalWorker:
         self._restarts = 0
 
     async def start(self) -> None:
-        # The private 0700 directory keeps the socket and the status file away from other local users.
-        self._directory = Path(tempfile.mkdtemp(prefix="justup-nmap-"))
-        nmap_client.SOCKET_PATH = str(self._directory / "nmap.sock")
-        nmap_client.WORKER_STATUS_PATH = self._directory / "status.json"
         if nmap_scanner.locate_binary() is None:
             self._status("failed", "nmap binary not found", NOT_INSTALLED)
             _log.warning("%s Port discovery stays unavailable.", NOT_INSTALLED)
             return
+        # The private 0700 directory keeps the socket away from other local users.
+        self._directory = Path(tempfile.mkdtemp(prefix="justup-nmap-"))
+        nmap_client.SOCKET_PATH = str(self._directory / "nmap.sock")
         self._task = asyncio.create_task(self._supervise(), name="nmap-local-worker")
 
     async def stop(self) -> None:
@@ -77,23 +75,18 @@ class LocalWorker:
                 await self._task
             self._task = None
         await self._terminate()
+        nmap_client.LOCAL_STATUS = None
         if self._directory is not None:
             shutil.rmtree(self._directory, ignore_errors=True)
 
     def _status(self, state: str, detail: str = "", message: str = "") -> None:
-        if self._directory is None:
-            return
-        payload = {
+        nmap_client.LOCAL_STATUS = {
             "state": state,
             "detail": detail,
             "message": message,
             "restarts": self._restarts,
             "since": utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
-        target = self._directory / "status.json"
-        temporary = target.with_suffix(".tmp")
-        temporary.write_text(json.dumps(payload), encoding="utf-8")
-        temporary.replace(target)
 
     def _environment(self) -> dict[str, str]:
         env = {
@@ -104,6 +97,7 @@ class LocalWorker:
             "PYTHONUNBUFFERED": "1",
             "PYTHONDONTWRITEBYTECODE": "1",
             "JUSTUP_NMAP_SOCKET": nmap_client.SOCKET_PATH,
+            "JUSTUP_NMAP_PARENT_PID": str(os.getpid()),
             "LOG_LEVEL": os.environ.get("LOG_LEVEL", "INFO"),
         }
         if os.environ.get("NMAPDIR"):

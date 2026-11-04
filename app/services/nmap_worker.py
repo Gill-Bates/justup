@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 import os
+import signal
 import socket
 import stat
 from contextlib import suppress
@@ -129,14 +130,26 @@ def _prepare_socket() -> None:
             probe.close()
 
 
+async def _exit_with_parent(parent_pid: int) -> None:
+    """Stop when the supervising web process is gone, so a killed server leaves no worker behind."""
+    while os.getppid() == parent_pid:  # noqa: ASYNC110 - a parent's death has no event to wait for
+        await asyncio.sleep(5)
+    _log.info("Supervising process ended, stopping the Nmap worker")
+    os.kill(os.getpid(), signal.SIGTERM)
+
+
 async def main() -> None:
     _prepare_socket()
+    parent = os.environ.get("JUSTUP_NMAP_PARENT_PID", "")
+    watcher = asyncio.create_task(_exit_with_parent(int(parent))) if parent.isdigit() else None
     server = await asyncio.start_unix_server(_handle, path=str(SOCKET_PATH), limit=MAX_REQUEST_BYTES)
     await asyncio.to_thread(SOCKET_PATH.chmod, 0o660)
     try:
         async with server:
             await server.serve_forever()
     finally:
+        if watcher is not None:
+            watcher.cancel()
         await asyncio.to_thread(SOCKET_PATH.unlink, missing_ok=True)
 
 

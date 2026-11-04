@@ -404,6 +404,15 @@ def _preview_target(env, profile: str, address: str, **extra):
     return response.json()
 
 
+def test_tcp_profile_builds_from_udp_ports_alone():
+    from app.services.target_profiles import build_profile
+
+    target, _ = build_profile(profile="tcp", address="example.com", udp_ports="53")
+    assert (target.enable_tcp_connect, target.enable_udp_scan, target.udp_ports) == (False, True, "53")
+    with pytest.raises(ValueError):
+        build_profile(profile="tcp", address="example.com")
+
+
 class TestTargetWizardContracts:
     @pytest.mark.parametrize(
         ("profile", "address", "checks", "cert_enabled", "expected_url"),

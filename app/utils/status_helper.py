@@ -41,6 +41,7 @@ def get_status_defaults() -> dict[str, Any]:
     """
     return {
         "ping_status": "unknown",
+        "ping_checked_at": None,
         "http_status": "unknown",
         "http_response_code": None,
         "tcp_status": "unknown",
@@ -109,11 +110,10 @@ def build_target_status(row: sqlite3.Row, cached: sqlite3.Row | None) -> dict[st
     if not cached:
         return result
 
-    if cached["overall_status"] == "unknown":
-        return result
-
+    # An UNKNOWN overall status (for example an unconfirmed UDP port) must not hide the checks that were measured.
     if bool(row["enable_ping"]) and cached["ping_up"] is not None:
         result["ping_status"] = "up" if cached["ping_up"] == 1 else "down"
+        result["ping_checked_at"] = _col(cached, "ping_checked_at")
 
     if bool(row["enable_http_check"]) and cached["http_up"] is not None:
         result["http_status"] = "up" if cached["http_up"] == 1 else "down"

@@ -96,7 +96,8 @@
     // Scanning needs the Nmap worker. While it is down the button stays disabled and the visible reason is its description.
     function markUnavailable(reason) {
       unavailable = true;
-      noticeText.textContent = `${String(reason || 'Nmap scan worker is unavailable').replace(/[.\s]+$/, '')}. Port scanning is disabled; you can still enter ports manually.`;
+      const text = String(reason || 'Nmap scan worker is unavailable').trim();
+      noticeText.textContent = `${text}${/[.!?]$/.test(text) ? '' : '.'} Port scanning is disabled; you can still enter ports manually.`;
       notice.hidden = false;
       start.setAttribute('aria-describedby', noticeText.id);
       if (cancel.hidden) start.disabled = true;

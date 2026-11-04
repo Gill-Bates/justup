@@ -33,7 +33,7 @@ def local(monkeypatch, tmp_path):
     fake.chmod(0o755)
     monkeypatch.setattr(nmap_scanner, "locate_binary", lambda: str(fake))
     monkeypatch.setattr(nmap_client, "SOCKET_PATH", "/nonexistent/before.sock")
-    monkeypatch.setattr(nmap_client, "WORKER_STATUS_PATH", tmp_path / "before.status")
+    monkeypatch.setattr(nmap_client, "LOCAL_STATUS", None)
     return nmap_local.LocalWorker(ready_timeout=15, max_backoff=1)
 
 

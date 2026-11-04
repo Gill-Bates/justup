@@ -73,11 +73,13 @@ class _Record:
 
 
 _jobs: dict[str, _Record] = {}
-_active_addresses: set[str] = set()
+_active_addresses: dict[str, str] = {}  # address -> id of the job that reserved it
 
 
 def _release(record: _Record) -> None:
-    _active_addresses.discard(record.address)
+    # Only the owning job may release: a pruned job unwinds late, after a successor took the address.
+    if _active_addresses.get(record.address) == record.job.id:
+        del _active_addresses[record.address]
 
 
 def _prune() -> None:
@@ -139,7 +141,7 @@ async def create_job(request: NmapScanRequest, owner_id: int) -> NmapScanJob:
     )
     record = _Record(job=job, owner_id=owner_id, address=address)
     _jobs[job.id] = record
-    _active_addresses.add(address)
+    _active_addresses[address] = job.id
     record.task = asyncio.create_task(_run(record))
     return job.model_copy(deep=True)
 

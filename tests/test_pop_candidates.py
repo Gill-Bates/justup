@@ -262,3 +262,30 @@ def test_route_capture_is_inert_and_candidate_failures_do_not_break_monitoring(t
         traceroute_geo, "observe_unknown_pop", lambda *_args: (_ for _ in ()).throw(sqlite3.Error("disk"))
     )
     assert traceroute_geo.mtr_hops_to_geo_points(hop) == []
+
+
+def test_import_cannot_overwrite_approved_learned_row_but_may_after_revocation(conn) -> None:
+    from app.db import pop_locations
+
+    _observe(conn, "8.8.8.8", "route-a")
+    _observe(conn, "1.1.1.1", "route-b")
+    pop_candidates.review(
+        conn, "xyz", action="approve", actor="alice", evidence="route evidence", city="Frankfurt", country="DE",
+        lat=50.1, lon=8.6,
+    )  # fmt: skip
+
+    def _import(lat: float) -> bool:
+        return pop_locations.upsert_pop_location(
+            conn, canonical_code="xyz", alias_code="xyz", city="Elsewhere", country="DE", lat=lat, lon=8.6,
+            source=pop_locations.SOURCE_PEERINGDB, confidence=100, priority=0, import_run_id="run-1",
+        )  # fmt: skip
+
+    assert _import(40.0) is False
+    row = conn.execute("SELECT source, lat, city, retired FROM pop_locations WHERE alias_code='xyz'").fetchone()
+    assert (row[0], row[1], row[2], row[3]) == ("learned", 50.1, "Frankfurt", 0)
+
+    conn.commit()  # review() opens its own immediate transaction
+    pop_candidates.review(conn, "xyz", action="revoke", actor="bob", evidence="contradicting route")
+    assert _import(40.0) is True
+    row = conn.execute("SELECT source, lat, retired FROM pop_locations WHERE alias_code='xyz'").fetchone()
+    assert (row[0], row[1], row[2]) == ("peeringdb", 40.0, 0)
