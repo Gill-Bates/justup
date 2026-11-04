@@ -2,6 +2,7 @@
 // tests/layout/recipient-channels.spec.mjs
 // Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 //
+
 // DESIGN.md "Optional field groups": a switched-off notification channel hides its whole field group
 // (not just disables it) in the Edit Recipient dialog; the switch keeps focus; validation skips it.
 import assert from "node:assert/strict";

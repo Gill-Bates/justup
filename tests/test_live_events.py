@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 import threading
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -437,6 +438,7 @@ def test_real_uvicorn_stop_with_open_sse_stream_logs_no_error(caplog: pytest.Log
         sub = bus_holder["bus"].subscribe(1, True)
         return StreamingResponse(events_api.stream_frames(sub, valid), media_type="text/event-stream")
 
+    @asynccontextmanager
     async def lifespan(app):
         bus = EventBus()
         bus.start()

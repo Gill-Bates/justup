@@ -2,6 +2,7 @@
 // tests/layout/load-stability.spec.mjs
 // Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 //
+
 // Load stability of the target detail page (DESIGN.md, "Load stability"): the page must not flicker
 // while it loads or refreshes. Theme and sidebar state are right in the first frame, no shell
 // element is dimmed or animated, the page structure is never replaced, and nothing that is visible

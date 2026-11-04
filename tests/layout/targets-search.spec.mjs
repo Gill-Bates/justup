@@ -2,6 +2,7 @@
 // tests/layout/targets-search.spec.mjs
 // Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 //
+
 // Targets page search: filters while typing, opens groups with hits for the duration of the search,
 // restores the manual state afterwards and survives fragment polling (DESIGN.md,
 // "Filter-as-you-type search"). Seeded targets: Production (1) and Websites (3).

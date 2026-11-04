@@ -2,6 +2,7 @@
 // tests/layout/focus-style.spec.mjs
 // Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 //
+
 // DESIGN.md "Focus indication" and "Controls: cursor and switch geometry": a quiet but always visible focus
 // indicator (no blue glow ring), switches with equal geometry in both states and a visible off state,
 // and one cursor convention for every operable control. Measured with getComputedStyle, not by eye.

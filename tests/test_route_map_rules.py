@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 #
 # tests/test_route_map_rules.py
 # Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates

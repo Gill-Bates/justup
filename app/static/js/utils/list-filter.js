@@ -2,6 +2,7 @@
 // app/static/js/utils/list-filter.js
 // Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 //
+
 // Pure helpers for filter-as-you-type lists (no DOM): query normalisation, substring matching,
 // result messages and the remembered open/closed state of collapsible groups.
 (function (root) {

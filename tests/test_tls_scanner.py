@@ -20,6 +20,7 @@ import logging
 import socket
 import ssl
 import threading
+import warnings
 from types import SimpleNamespace
 from unittest import mock
 
@@ -432,7 +433,7 @@ def test_hostname_matching_ip_san():
         .subject_name(name)
         .issuer_name(name)
         .public_key(key.public_key())
-        .serial_number(1)
+        .serial_number(x509.random_serial_number())
         .not_valid_before(now)
         .not_valid_after(now + dt.timedelta(days=1))
         .add_extension(x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address("2001:db8::1"))]), False)
@@ -870,7 +871,13 @@ def test_tls12_only_server(tls_server):
 def test_legacy_tls10_server_is_flagged(tls_server):
     def legacy(ctx):
         try:
-            ctx.minimum_version = ssl.TLSVersion.TLSv1
+            # OpenSSL reports TLS 1.0 as deprecated when configuring it. This fixture needs
+            # the legacy protocol to verify that the scanner flags it as insecure.
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore", message=r"ssl\.TLSVersion\.TLSv1 is deprecated", category=DeprecationWarning
+                )
+                ctx.minimum_version = ssl.TLSVersion(0x301)
             ctx.set_ciphers("ALL:@SECLEVEL=0")
         except (ssl.SSLError, ValueError):
             pytest.skip("local OpenSSL cannot offer TLS 1.0")

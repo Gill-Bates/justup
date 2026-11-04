@@ -2,6 +2,7 @@
 // app/static/js/targets-search.js
 // Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 //
+
 // Filter-as-you-type search of the Targets page (DESIGN.md, "Filter-as-you-type search").
 // Filters the rendered rows client-side; groups with hits open for the duration of the search.
 (function () {

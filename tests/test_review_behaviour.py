@@ -231,7 +231,8 @@ def _post(client, origin, host=None):
     headers = {"Origin": origin, "X-CSRF-Token": "tok"} if origin else {"X-CSRF-Token": "tok"}
     if host:
         headers["Host"] = host
-    return client.post("/ui/x", headers=headers, cookies={"csrf_token": "tok"})
+    client.cookies.set("csrf_token", "tok")
+    return client.post("/ui/x", headers=headers)
 
 
 @pytest.mark.parametrize(

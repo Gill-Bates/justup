@@ -3,6 +3,7 @@
 # tests/test_targets_search.py
 # Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 #
+
 """Targets page search: field markup and the unpaginated fragment the client-side filter needs."""
 
 from __future__ import annotations
