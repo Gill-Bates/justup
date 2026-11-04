@@ -12,6 +12,7 @@ import hashlib
 import re
 import subprocess
 import sys
+import urllib.error
 import urllib.request
 from html.parser import HTMLParser
 from pathlib import Path
@@ -20,6 +21,7 @@ DOWNLOAD_PAGE = "https://nmap.org/download.html"
 DIST = "https://nmap.org/dist"
 SIGNING_KEYS = "https://svn.nmap.org/nmap/docs/nmap_gpgkeys.txt"
 PROJECT_KEY = "436D66AB9A798425FDA0E3F801AF9F036B9355D0"
+BAD_STATUS = ("[GNUPG:] EXPKEYSIG", "[GNUPG:] REVKEYSIG", "[GNUPG:] EXPSIG", "[GNUPG:] BADSIG", "[GNUPG:] ERRSIG")
 VERSION_RE = re.compile(r"^[0-9]+(?:\.[0-9]+)+$")
 RPM_RE = re.compile(r"^nmap-([0-9]+(?:\.[0-9]+)+)-[0-9]+\.x86_64\.rpm$")
 
@@ -71,7 +73,11 @@ def latest_release(page: str) -> tuple[str, str]:
     if len(sources) != 1:
         raise ValueError("expected exactly one official stable Nmap source tarball")
     version = sources[0]
-    rpms = [url.rsplit("/", 1)[-1] for url in parser.rpm_links if RPM_RE.fullmatch(url.rsplit("/", 1)[-1]).group(1) == version]
+    rpms = [
+        url.rsplit("/", 1)[-1]
+        for url in parser.rpm_links
+        if RPM_RE.fullmatch(url.rsplit("/", 1)[-1]).group(1) == version
+    ]
     if len(rpms) > 1:
         raise ValueError("expected at most one official x86-64 RPM for the stable release")
     return version, rpms[0] if rpms else "-"
@@ -104,13 +110,26 @@ def verify_signature(artifact: Path, signature: Path, keyfile: Path, homedir: Pa
     if imported.returncode:
         raise ValueError("could not import the Nmap signing key")
     result = subprocess.run(
-        ["gpg", "--batch", "--no-tty", "--homedir", str(homedir), "--status-fd", "1", "--verify", str(signature), str(artifact)],
+        [
+            "gpg",
+            "--batch",
+            "--no-tty",
+            "--homedir",
+            str(homedir),
+            "--status-fd",
+            "1",
+            "--verify",
+            str(signature),
+            str(artifact),
+        ],
         capture_output=True,
         text=True,
         check=False,
     )
-    valid_signers = [line.split()[2] for line in result.stdout.splitlines() if line.startswith("[GNUPG:] VALIDSIG ")]
-    if result.returncode or valid_signers != [PROJECT_KEY]:
+    # VALIDSIG ends with the primary key fingerprint, also when a subkey signed.
+    valid_signers = [line.split()[-1] for line in result.stdout.splitlines() if line.startswith("[GNUPG:] VALIDSIG ")]
+    bad_status = any(line.startswith(BAD_STATUS) for line in result.stdout.splitlines())
+    if result.returncode or bad_status or valid_signers != [PROJECT_KEY]:
         raise ValueError(f"Nmap signature is invalid or was made by an untrusted key: {artifact.name}")
 
 
@@ -129,7 +148,12 @@ def fetch(version: str, rpm: str, output: Path) -> None:
     source_sig = output / f"{source_name}.asc"
     download(f"{DIST}/sigs/{source_name}.asc", source_sig, limit=100_000)
     verify_signature(source, source_sig, keyfile, output / "gnupg")
-    lines = [f"nmap_version={version}", f"source_url={source_url}", f"source_sha256={source_hash}"]
+    lines = [
+        f"nmap_version={version}",
+        f"signing_key_fingerprint={PROJECT_KEY}",
+        f"source_url={source_url}",
+        f"source_sha256={source_hash}",
+    ]
     if rpm != "-":
         rpm_url = f"{DIST}/{rpm}"
         rpm_hash = download(rpm_url, output / rpm, limit=100_000_000)

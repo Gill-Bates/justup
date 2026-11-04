@@ -35,6 +35,7 @@ from datetime import datetime
 
 from ...db import sqlite as sqlite_db
 from ...utils.constants import SettingKeys
+from ...utils.public_url import get_public_base_url, target_url
 
 _log = logging.getLogger(__name__)
 
@@ -198,7 +199,7 @@ class NotificationDispatcher:
             "check_type": alert.failed_service or "N/A",
         }
 
-        system_url = sqlite_db.get_setting(self.conn, SettingKeys.SYSTEM_BASE_URL, None) or "#"
+        system_url = target_url(get_public_base_url(self.conn), alert.target_id)
 
         alert_data = {
             "status": "RESOLVED" if alert.is_resolved else "OPEN",
@@ -287,7 +288,7 @@ class NotificationDispatcher:
             target_row["uptime_percent"] if target_row else None,
         )
 
-        system_url = sqlite_db.get_setting(self.conn, SettingKeys.SYSTEM_BASE_URL, None) or "#"
+        system_url = target_url(get_public_base_url(self.conn), alert.target_id)
 
         alert_data = {
             "status": "RESOLVED" if alert.is_resolved else "OPEN",

@@ -40,6 +40,6 @@ services:
       - FOWNER # usermod/groupmod rewrite /etc/passwd and /etc/group
       - SETUID # gosu drops to the service user
       - SETGID
-      - NET_RAW # ping and mtr carry file capabilities that must lie within the bounding set
+      - NET_RAW # ping/mtr file capabilities; the entrypoint also hands it, and only it, to the Nmap worker (UDP scans)
     security_opt:
       - no-new-privileges:true

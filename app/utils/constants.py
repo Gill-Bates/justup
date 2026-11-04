@@ -170,7 +170,7 @@ class SettingKeys(StrEnum):
     # System
     LAST_BACKUP_AT = "last_backup_at"
     AUTH_DISABLED = "auth_disabled"
-    SYSTEM_BASE_URL = "system_base_url"
+    PUBLIC_HOSTNAME = "public_hostname"  # bare host/IP; the instance URL https://<host> is derived from it
     RELEASE_CHECK_STATE = "release_check_state"  # JSON: schedule, ETag and failure streak of the release check
 
 

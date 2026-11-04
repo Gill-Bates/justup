@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -185,3 +186,95 @@ def test_trivy_cli_exit_codes(tmp_path, capsys):
     assert trivy.main(["x", "status", str(tmp_path / "absent.json")]) == 1
     assert "scanner failure" in capsys.readouterr().err
     assert trivy.main(["x", "status"]) == 2
+
+
+# --- nmap-release.py: stable-release resolution and signature policy ---------------------
+
+nmap_release = load("nmap-release")
+DIST = nmap_release.DIST
+STABLE_PAGE = (
+    "<b>Latest stable Nmap release tarball: "
+    f'<a href="{DIST}/nmap-7.993.tar.bz2">nmap-7.993.tar.bz2</a></b>'
+    f'<a href="{DIST}/nmap-7.993-1.x86_64.rpm">x86_64</a>'
+    f'<a href="{DIST}/nmap-7.992-1.x86_64.rpm">older</a>'
+    f'<b>Latest development: <a href="{DIST}/nmap-7.999BETA1.tar.bz2">beta</a></b>'
+)
+
+
+def test_nmap_latest_takes_only_the_stable_tarball_and_matching_rpm():
+    assert nmap_release.latest_release(STABLE_PAGE) == ("7.993", "nmap-7.993-1.x86_64.rpm")
+
+
+def test_nmap_latest_without_rpm_uses_placeholder():
+    page = STABLE_PAGE.replace("nmap-7.993-1.x86_64.rpm", "nmap-7.993-1.aarch64.rpm")
+    assert nmap_release.latest_release(page) == ("7.993", "-")
+
+
+@pytest.mark.parametrize("page", ["<p>nothing</p>", STABLE_PAGE + STABLE_PAGE])
+def test_nmap_latest_requires_exactly_one_stable_source(page):
+    with pytest.raises(ValueError, match="exactly one"):
+        nmap_release.latest_release(page)
+
+
+class FakeGpg:
+    def __init__(self, status: str, returncode: int = 0):
+        self.status, self.returncode = status, returncode
+
+    def __call__(self, command, **_kwargs):
+        if "--import" in command:
+            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+        return type("R", (), {"returncode": self.returncode, "stdout": self.status, "stderr": ""})()
+
+
+def validsig(signing: str, primary: str) -> str:
+    return f"[GNUPG:] VALIDSIG {signing} 2026-01-01 1 0 4 0 1 10 00 {primary}\n"
+
+
+def run_verify(monkeypatch, tmp_path, status: str, returncode: int = 0) -> None:
+    monkeypatch.setattr(nmap_release.subprocess, "run", FakeGpg(status, returncode))
+    nmap_release.verify_signature(tmp_path / "a.tar.bz2", tmp_path / "a.asc", tmp_path / "keys", tmp_path / "gnupg")
+
+
+def test_nmap_signature_accepts_the_pinned_key_also_for_a_subkey(monkeypatch, tmp_path):
+    run_verify(monkeypatch, tmp_path, validsig("A" * 40, nmap_release.PROJECT_KEY))
+
+
+@pytest.mark.parametrize(
+    ("status", "returncode"),
+    [
+        (validsig("B" * 40, "B" * 40), 0),
+        (validsig(nmap_release.PROJECT_KEY, nmap_release.PROJECT_KEY) * 2, 0),
+        (validsig(nmap_release.PROJECT_KEY, nmap_release.PROJECT_KEY), 1),
+        ("[GNUPG:] EXPKEYSIG X\n" + validsig(nmap_release.PROJECT_KEY, nmap_release.PROJECT_KEY), 0),
+        ("[GNUPG:] BADSIG X\n", 1),
+        ("", 0),
+    ],
+)
+def test_nmap_signature_rejects_untrusted_bad_or_ambiguous_results(monkeypatch, tmp_path, status, returncode):
+    with pytest.raises(ValueError, match="invalid or was made by an untrusted key"):
+        run_verify(monkeypatch, tmp_path, status, returncode)
+
+
+@pytest.mark.parametrize(
+    ("version", "rpm"),
+    [("7.993;rm", "-"), ("", "-"), ("7.993", "nmap-7.992-1.x86_64.rpm"), ("7.993", "../x.rpm")],
+)
+def test_nmap_fetch_rejects_malformed_inputs_before_any_download(tmp_path, version, rpm):
+    with pytest.raises(ValueError):
+        nmap_release.fetch(version, rpm, tmp_path / "out")
+    assert not (tmp_path / "out").exists()
+
+
+def test_nmap_cli_reports_usage_and_errors(capsys):
+    assert nmap_release.main(["bogus"]) == 2
+    assert nmap_release.main(["fetch", "bad version", "-", "/nonexistent-out"]) == 1
+    assert "invalid Nmap version" in capsys.readouterr().err
+
+
+def test_dockerfile_nmap_stage_has_no_fixed_version_package_or_default():
+    text = (ROOT / "docker" / "Dockerfile").read_text(encoding="utf-8")
+    stage = text[text.index("AS nmap-builder") : text.index("AS signal-cli-src")]
+    assert "\nARG NMAP_VERSION\n" in stage and "\nARG NMAP_RPM\n" in stage  # mandatory, no default
+    assert not re.search(r"nmap[-= ]\d+\.\d+", stage.replace("nmap-${version}", ""))
+    assert not re.search(r"apt-get install[^\n]*\bnmap\b", text)
+    assert "nmap-release.py latest" not in stage.split("RUN <<'EOF'", 1)[1]  # no resolution cached in a RUN

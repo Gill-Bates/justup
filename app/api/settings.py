@@ -71,6 +71,7 @@ from ..utils.constants import (
 )
 from ..utils.deps import get_conn, get_tsdb_dir
 from ..utils.phone import mask_phone
+from ..utils.public_url import get_public_hostname, normalize_public_hostname
 from ..utils.rate_limit import RATE_LIMIT_HEAVY, rate_limit
 from ..utils.runtime_fields import NON_NULL_RUNTIME_KEYS, load_runtime_fields, validate_quality_targets
 from ..utils.settings_cache import invalidate_settings_cache, is_purge_enabled
@@ -106,6 +107,7 @@ def _load(conn) -> Settings:
         geoip_auto_update=bool(sqlite_db.get_setting(conn, SettingKeys.GEOIP_AUTO_UPDATE, DEFAULT_GEOIP_AUTO_UPDATE)),
         use_utc_dashboard=bool(sqlite_db.get_setting(conn, SettingKeys.USE_UTC_DASHBOARD, False)),
         last_backup_at=sqlite_db.get_setting(conn, SettingKeys.LAST_BACKUP_AT, None),
+        public_hostname=get_public_hostname(conn),
         auth_disabled=bool(sqlite_db.get_setting(conn, SettingKeys.AUTH_DISABLED, False)),
         pdf_page_size=str(
             sqlite_db.get_setting(conn, SettingKeys.PDF_PAGE_SIZE, DEFAULT_PDF_PAGE_SIZE) or DEFAULT_PDF_PAGE_SIZE
@@ -159,6 +161,13 @@ def update_settings(payload: SettingsUpdate, conn=Depends(get_conn), _admin=Depe
             raise HTTPException(status_code=422, detail=f"{k} must not be null")
         if k == SettingKeys.QUALITY_TARGETS and value is not None:
             value = validate_quality_targets(value)
+        if k == SettingKeys.PUBLIC_HOSTNAME:
+            if value is None:
+                raise HTTPException(status_code=422, detail="public_hostname must not be null")
+            try:
+                value = normalize_public_hostname(value)
+            except ValueError as e:
+                raise HTTPException(status_code=422, detail=f"public_hostname: {e}") from e
         if k == SettingKeys.IP_API_KEY:
             value = _encrypt_ip_api_key(value, encrypt_secret)
         if k == SettingKeys.SESSION_MAX_DAYS and value is None:

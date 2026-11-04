@@ -64,12 +64,23 @@ COPY pyproject.toml ./
 # Remove __pycache__ directories
 RUN find app/ -type d -name "__pycache__" -prune -exec rm -rf {} + || true
 
-# The release workflow resolves Nmap once and supplies the same stable version
-# to both architectures; a local build resolves it from the official page.
+# ──────────────────────────────────────────────────────────────
+# Stage 2a: Nmap (official stable release, signature-verified, isolated from the runtime)
+# ──────────────────────────────────────────────────────────────
+# The release workflow resolves the latest stable Nmap once (tools/nmap-release.py latest)
+# and passes the same version to both architectures. The build args are mandatory: a
+# default resolved inside a RUN would keep an unchanged command text, so BuildKit could
+# serve an old Nmap binary from cache. The version is part of every cache key here.
+# Local build:
+#   read -r v r < <(python3 tools/nmap-release.py latest)
+#   docker build --target runtime --build-arg "NMAP_VERSION=$v" --build-arg "NMAP_RPM=$r" -f docker/Dockerfile .
+# linux/amd64 uses the official x86-64 RPM (binary only) when it runs on this Debian base;
+# otherwise, and always on linux/arm64, the same verified release is built from source.
+# Never a Debian package, never an older release.
 FROM ${PYTHON_BASE} AS nmap-builder
 ARG TARGETARCH
-ARG NMAP_VERSION=""
-ARG NMAP_RPM="-"
+ARG NMAP_VERSION
+ARG NMAP_RPM
 COPY tools/nmap-release.py /usr/local/bin/nmap-release.py
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       ca-certificates gnupg rpm2cpio cpio bzip2 \
@@ -77,17 +88,19 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 RUN <<'EOF'
 set -euo pipefail
-version="$NMAP_VERSION"
-rpm="$NMAP_RPM"
-if [[ -z "$version" ]]; then
-  release="$(python3 /usr/local/bin/nmap-release.py latest)"
-  read -r version rpm <<< "$release"
+version="${NMAP_VERSION:-}"
+rpm="${NMAP_RPM:-}"
+if [[ -z "$version" || -z "$rpm" || -z "${TARGETARCH:-}" ]]; then
+  echo "NMAP_VERSION, NMAP_RPM and TARGETARCH are required (see the stage comment)" >&2
+  exit 1
 fi
-[[ -n "$version" && -n "$TARGETARCH" ]] || { echo "Missing Nmap version or target architecture" >&2; exit 1; }
 python3 /usr/local/bin/nmap-release.py fetch "$version" "$rpm" /tmp/nmap
+prov() { sed -n "s/^$1=//p" /tmp/nmap/provenance.txt; }
 mkdir -p /out/usr/bin /out/usr/share/nmap /out/usr/share/doc/nmap
 tar -xOf "/tmp/nmap/nmap-${version}.tar.bz2" "nmap-${version}/LICENSE" > /out/usr/share/doc/nmap/LICENSE
 method=""
+artifact_url="$(prov source_url)"
+artifact_sha256="$(prov source_sha256)"
 if [[ "$TARGETARCH" == amd64 && "$rpm" != "-" ]]; then
   mkdir -p /tmp/nmap/rpm
   (cd /tmp/nmap/rpm && rpm2cpio "/tmp/nmap/${rpm}" | cpio -id --quiet)
@@ -97,6 +110,11 @@ if [[ "$TARGETARCH" == amd64 && "$rpm" != "-" ]]; then
     install -m 755 /tmp/nmap/rpm/usr/bin/nmap /out/usr/bin/nmap
     cp -a /tmp/nmap/rpm/usr/share/nmap/. /out/usr/share/nmap/
     method="official-rpm"
+    artifact_url="$(prov rpm_url)"
+    artifact_sha256="$(prov rpm_sha256)"
+  else
+    echo "Official RPM does not run on this Debian base; building the verified source of ${version}:" >&2
+    cat /tmp/nmap/rpm-libs.txt >&2 || true
   fi
 fi
 if [[ -z "$method" ]]; then
@@ -114,14 +132,26 @@ if [[ -z "$method" ]]; then
 fi
 find /out/usr/share/nmap -maxdepth 1 -type f \
   ! -name nmap-services ! -name nmap-service-probes ! -name nmap-protocols ! -name nmap-rpc -delete
-rm -rf /out/usr/share/nmap/scripts /out/usr/share/nmap/nselib
-rm -rf /out/usr/share/man
-cat /tmp/nmap/provenance.txt > /out/usr/share/doc/nmap/PROVENANCE.txt
-printf 'architecture=%s\nbuild_method=%s\n' "$TARGETARCH" "$method" >> /out/usr/share/doc/nmap/PROVENANCE.txt
+rm -rf /out/usr/share/nmap/scripts /out/usr/share/nmap/nselib /out/usr/share/man
 ldd /out/usr/bin/nmap > /out/usr/share/doc/nmap/DEPENDENCIES.txt
 ! grep -q 'not found' /out/usr/share/doc/nmap/DEPENDENCIES.txt
-NMAPDIR=/out/usr/share/nmap /out/usr/bin/nmap --version
+actual="$(NMAPDIR=/out/usr/share/nmap /out/usr/bin/nmap --version | sed -n 's/^Nmap version \([^ ]*\).*/\1/p')"
+[[ "$actual" == "$version" ]] || { echo "Built Nmap ${actual} differs from the resolved ${version}" >&2; exit 1; }
+{
+  cat /tmp/nmap/provenance.txt
+  printf 'artifact_url=%s\nartifact_sha256=%s\narchitecture=%s\nbuild_method=%s\n' \
+    "$artifact_url" "$artifact_sha256" "$TARGETARCH" "$method"
+  printf 'runtime_dependencies=%s\n' "$(awk '/=>/ {print $1}' /out/usr/share/doc/nmap/DEPENDENCIES.txt | sort | paste -sd, -)"
+} > /out/usr/share/doc/nmap/PROVENANCE.txt
+cat > /out/usr/share/doc/nmap/NOTICE.txt <<NOTICE
+This image redistributes Nmap ${version} (nmap binary, nmap-services, nmap-service-probes,
+nmap-protocols, nmap-rpc) under the Nmap Public Source License (NPSL), https://nmap.org/npsl/.
+The licence text is in LICENSE next to this file. Nmap is a registered trademark of Nmap Software LLC.
+Source of this release: https://nmap.org/dist/nmap-${version}.tar.bz2 (signature verified)
+Build method: ${method}; provenance: PROVENANCE.txt
+NOTICE
 EOF
+
 # ──────────────────────────────────────────────────────────────
 # Stage 2b: signal-cli release (download verified against the published SHA-256)
 # ──────────────────────────────────────────────────────────────
@@ -461,6 +491,12 @@ RUN test -s /usr/share/nmap/nmap-services \
 RUN groupadd -r justup && useradd -r -g justup justup \
  && mkdir -p /home/justup/.matplotlib \
  && chown -R justup:justup /home/justup
+# Dedicated identity of the Nmap worker (docker/entrypoint.sh): the only process that gets
+# CAP_NET_RAW. The web user joins its group solely to reach the worker's Unix socket.
+RUN groupadd -r -g 10001 justup-nmap \
+ && useradd -r -u 10001 -g justup-nmap -d /nonexistent -s /usr/sbin/nologin justup-nmap \
+ && usermod -aG justup-nmap justup \
+ && command -v setpriv >/dev/null
 
 WORKDIR /app
 

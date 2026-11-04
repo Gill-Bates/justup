@@ -88,6 +88,7 @@ from ..utils.constants import (
 )
 from ..utils.deps import get_conn, get_tsdb_dir
 from ..utils.formatters import format_compact_count, format_percent, row_to_alert_dict
+from ..utils.public_url import get_public_hostname
 from ..utils.rate_limit import rate_limit
 from ..utils.runtime_fields import (
     QUALITY_TARGET_MAX_LENGTH,
@@ -622,6 +623,7 @@ def fragment_settings_general(request: Request, conn=Depends(get_conn)):
             conn, SettingKeys.METRICS_TIMEOUT_MINUTES, DEFAULT_METRICS_TIMEOUT_MINUTES
         )
         or DEFAULT_METRICS_TIMEOUT_MINUTES,
+        "public_hostname": get_public_hostname(conn),
     }
 
     return templates.TemplateResponse(

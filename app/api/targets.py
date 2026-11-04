@@ -41,6 +41,7 @@ from ..services.target_profiles import PROFILE_LABELS, build_profile
 from ..utils import maintenance
 from ..utils.client_ip import audit_client_ip
 from ..utils.crypto import encrypt_secret
+from ..utils.public_url import get_public_base_url, target_url
 from ..utils.deps import get_conn, get_tsdb_dir
 from ..utils.http_status import DEFAULT_HTTP_SUCCESS_CODES
 from ..utils.rate_limit import rate_limit
@@ -957,7 +958,7 @@ def _notify_recipients_background_in_section(
             task_status["completed_at"] = time.monotonic()
             return
         target_name = str(target["name"])
-        system_url = sqlite_db.get_setting(conn, SettingKeys.SYSTEM_BASE_URL, None) or "#"
+        system_url = target_url(get_public_base_url(conn), None)
         github_url = "https://github.com/Gill-Bates/justup"
 
         signal_backend = get_signal_backend()
@@ -1033,7 +1034,8 @@ def _notify_recipients_background_in_section(
                     f"{email_message}\n\n"
                     f"From now on, you will receive notifications when the target '{target_name}' "
                     f"goes down or comes back up.\n\n"
-                    "This message was sent automatically.\n\n"
+                    + (f"Open justUp!: {system_url}\n\n" if system_url.startswith("https://") else "")
+                    + "This message was sent automatically.\n\n"
                     f"justUp! © 2026 Gill-Bates · GitHub: {github_url}\n"
                 )
 

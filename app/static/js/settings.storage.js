@@ -665,6 +665,7 @@ export async function loadSettings() {
         setChecked(DOM.useUtcDashboard(), data.use_utc_dashboard === true);
         setChecked(DOM.geoipAutoUpdate(), Boolean(data.geoip_auto_update ?? true));
         setValue(DOM.pdfPageSize(), data.pdf_page_size || 'a4');
+        if (typeof data.public_hostname === 'string') showPublicHostname(data.public_hostname);
         setChecked(DOM.authDisabled(), data.auth_disabled === true);
 
         // Metrics timeout slider
@@ -766,6 +767,12 @@ async function sendSetting(key, value) {
         });
 
         if (resp.ok) {
+            if (key === 'public_hostname') {
+                const saved = await resp.json().catch(() => null);
+                if (saved && typeof saved.public_hostname === 'string') showPublicHostname(saved.public_hostname);
+                notify('success', 'Public hostname updated');
+                return true;
+            }
             notify('success', 'Settings saved');
 
             // Keep SMTP UI in sync without a full reload
@@ -783,16 +790,48 @@ async function sendSetting(key, value) {
             }
             return true;
         } else {
-            throw new Error('Failed to save setting');
+            const error = new Error('Failed to save setting');
+            // A 422 carries a user-facing validation message (e.g. an invalid public hostname)
+            if (resp.status === 422) {
+                const payload = await resp.json().catch(() => null);
+                if (typeof payload?.detail === 'string') error.userMessage = payload.detail;
+            }
+            throw error;
         }
     } catch (e) {
         console.error('Setting save error:', e);
         revealSettingsSection(document.querySelector(`[name="${CSS.escape(key)}"]`));
-        notify('error', 'Failed to save setting');
+        notify('error', e.userMessage || 'Failed to save setting');
         return false;
     }
 }
 
+/** Show the stored public hostname (as normalised by the server) and the "no URL" hint when it is empty. */
+function showPublicHostname(value) {
+    const input = DOM.publicHostname();
+    if (input) {
+        input.value = value;
+        input.defaultValue = value;  // blur auto-save compares against it
+    }
+    const hint = document.getElementById('public_hostname_missing_hint');
+    if (hint) hint.hidden = value !== '';
+}
+/** Best guess at the public hostname: the address this page is loaded from, IPv6 brackets stripped. */
+function detectPublicHostname() {
+    return String(window.location.hostname || '').replace(/^\[|\]$/g, '');
+}
+async function applyDetectedPublicHostname() {
+    const input = DOM.publicHostname();
+    if (!input) return;
+    const detected = detectPublicHostname();
+    if (!detected) {
+        notify('warning', 'Could not detect a hostname from the current address');
+        return;
+    }
+    if (input.value.trim() === detected) return;
+    input.value = detected;
+    await saveSetting('public_hostname', detected);
+}
 function formatDurationSeconds(value) {
     const seconds = Number.parseInt(value, 10);
     if (!Number.isFinite(seconds) || seconds < 0) return '';
@@ -960,6 +999,9 @@ function initSettingsAutoSave() {
         }
     });
 
+    form.addEventListener('click', (e) => {
+        if (e.target.closest?.('#public_hostname_detect')) applyDetectedPublicHostname();
+    });
     // Explicit removal of a stored SMTP secret (ip-api key has its own queued handler)
     form.addEventListener('click', async (e) => {
         const button = e.target.closest?.('[data-secret-clear="smtp_password"]');

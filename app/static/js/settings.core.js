@@ -53,6 +53,7 @@ export const DOM = {
     useUtcDashboard: () => _cache.useUtcDashboard ??= document.getElementById('use_utc_dashboard'),
     geoipAutoUpdate: () => _cache.geoipAutoUpdate ??= document.getElementById('geoip_auto_update'),
     pdfPageSize: () => _cache.pdfPageSize ??= document.getElementById('pdf_page_size'),
+    publicHostname: () => _cache.publicHostname ??= document.getElementById('public_hostname'),
     authDisabled: () => _cache.authDisabled ??= document.getElementById('auth_disabled'),
     metricsTimeoutMinutes: () => _cache.metricsTimeoutMinutes ??= document.getElementById('metrics_timeout_minutes'),
     

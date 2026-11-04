@@ -50,6 +50,13 @@ if [[ "$PUID" =~ ^0+$ || "$PGID" =~ ^0+$ ]]; then
     exit 1
 fi
 
+# Fixed identity of the Nmap worker (docker/Dockerfile); the web user must never share it.
+NMAP_ID=10001
+if [ "$PUID" = "$NMAP_ID" ] || [ "$PGID" = "$NMAP_ID" ]; then
+    echo "Error: PUID and PGID must differ from the reserved Nmap worker id $NMAP_ID" >&2
+    exit 1
+fi
+
 if ! command -v gosu > /dev/null 2>&1; then
     echo "Error: gosu is required to drop privileges" >&2
     exit 1
@@ -116,6 +123,34 @@ fi
 echo ""
 echo "🚀 Starting justUp! on ${JUSTUP_HOST:-0.0.0.0}:${JUSTUP_PORT:-8000}"
 echo ""
+
+# ------------------------------------------------------------------
+# Nmap worker: the only process holding CAP_NET_RAW (UDP scans)
+# ------------------------------------------------------------------
+# Own UID, ambient capability set reduced to net_raw, no_new_privs, scrubbed environment
+# (no SECRET_KEY). The web process below runs without raw-socket rights and talks to the
+# worker over a Unix socket. It is not supervised: if the worker dies, scans report
+# "unavailable" and the container restart policy is not involved. pdeathsig ends the worker
+# together with the web process, which keeps this PID.
+NMAP_SOCKET_PATH=${JUSTUP_NMAP_SOCKET:-/run/justup/nmap.sock}
+
+start_nmap_worker() {
+    install -d -m 0750 -o justup-nmap -g justup-nmap "$(dirname "$NMAP_SOCKET_PATH")" || return 1
+    setpriv --reuid=justup-nmap --regid=justup-nmap --clear-groups \
+        --inh-caps=-all,+net_raw --ambient-caps=-all,+net_raw \
+        --no-new-privs --pdeathsig=TERM -- \
+        env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/nonexistent LANG="$LANG" \
+            PYTHONPATH=/src PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 \
+            NMAPDIR="${NMAPDIR:-/usr/share/nmap}" JUSTUP_NMAP_SOCKET="$NMAP_SOCKET_PATH" \
+            LOG_LEVEL="${LOG_LEVEL:-INFO}" \
+            python -m app.services.nmap_worker &
+}
+
+if start_nmap_worker; then
+    echo "🔎 Nmap worker started (UID $NMAP_ID, CAP_NET_RAW only)"
+else
+    echo "Warning: Nmap worker could not be started; port scans will report 'unavailable'" >&2
+fi
 
 # ------------------------------------------------------------------
 # Drop privileges and exec

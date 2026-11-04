@@ -1003,6 +1003,14 @@ def _is_valid_cta_url(url: str | None) -> bool:
     return bool(_CTA_URL_RE.match(str(url).strip()))
 
 
+_HTTP_LINK_RE = re.compile(r"""(?is)<a\b[^>]*?\bhref\s*=\s*"(https?://[^"\s]+)"[^>]*>(.*?)</a>""")
+
+
+def _link_with_url(match: re.Match) -> str:
+    url, label = match.group(1), match.group(2)
+    return f"{label} ({url})"
+
+
 def html_to_text(html_body: str) -> str:
     """Derive a readable plain-text part from rendered HTML.
 
@@ -1013,6 +1021,10 @@ def html_to_text(html_body: str) -> str:
     text = html_body or ""
     # Drop non-content elements entirely (including the hidden preheader's siblings are kept).
     text = re.sub(r"(?is)<(head|style|script)\b.*?</\1>", " ", text)
+    # Outlook-only fallback (VML button) would repeat the button label in the text part.
+    text = re.sub(r"(?is)<!--\[if mso\]>.*?<!\[endif\]-->", " ", text)
+    # An http(s) link keeps its URL as visible text; the href alone would vanish with the tags.
+    text = _HTTP_LINK_RE.sub(_link_with_url, text)
     # Block-level boundaries become line breaks.
     text = re.sub(r"(?i)<(br|/p|/div|/tr|/table|/h[1-6]|/li)\s*>", "\n", text)
     text = re.sub(r"(?i)<li\b[^>]*>", "- ", text)

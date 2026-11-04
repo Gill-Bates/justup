@@ -43,4 +43,28 @@
 					</div>
 				</div>
 			</section>
+			<section class="card shadow-sm settings-card">
+				<div class="card-header">
+					<h2 class="h6 mb-0">Instance</h2>
+				</div>
+				<div class="card-body settings-compact">
+					<div>
+						<label class="form-label" for="public_hostname">Public hostname</label>
+						<div class="input-group">
+							<input type="text" class="form-control" id="public_hostname" name="public_hostname"
+								value="{{ settings.public_hostname or '' }}" maxlength="253" inputmode="url"
+								autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"
+								placeholder="justup.example.com" aria-describedby="public_hostname_hint public_hostname_missing_hint">
+							<button type="button" class="btn btn-outline-secondary btn-icon" id="public_hostname_detect"
+								aria-label="Auto-detect from current address" title="Auto-detect from current address">
+								<span class="material-icons" aria-hidden="true">auto_fix_high</span>
+							</button>
+						</div>
+						<div class="form-text" id="public_hostname_hint">Hostname or IP only. Used for HTTPS links in notifications.</div>
+						<div class="form-text" id="public_hostname_missing_hint"{% if settings.public_hostname %} hidden{% endif %}>
+							Without a public hostname, alert mails have no "Open in justUp!" button and Signal messages have no link.
+						</div>
+					</div>
+				</div>
+			</section>
 </form>

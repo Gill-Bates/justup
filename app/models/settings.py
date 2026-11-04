@@ -37,6 +37,7 @@ class Settings(BaseModel):
     geoip_auto_update: bool = Field(default=True, description="Auto-update GeoLite2 database on startup")
     theme: str = Field(default="system", pattern="^(system|light|dark)$", description="UI theme")
     last_backup_at: str | None = Field(default=None, description="ISO timestamp of last backup")
+    public_hostname: str = Field(default="", description="Bare hostname or IP used for https links in notifications")
     auth_disabled: bool = Field(default=False, description="Disable authentication (public access)")
     pdf_page_size: str = Field(default="a4", pattern="^(a4|letter)$", description="PDF report paper size")
     metrics_timeout_minutes: int = Field(
@@ -93,6 +94,7 @@ class SettingsUpdate(BaseModel):
     use_utc_dashboard: bool | None = None
     geoip_auto_update: bool | None = None
     theme: str | None = Field(default=None, pattern="^(system|light|dark)$")
+    public_hostname: str | None = Field(default=None, max_length=300)  # validated in the PATCH handler
     pdf_page_size: str | None = Field(default=None, pattern="^(a4|letter)$")
     metrics_timeout_minutes: int | None = Field(
         default=None, ge=METRICS_TIMEOUT_MINUTES_MIN, le=METRICS_TIMEOUT_MINUTES_MAX
