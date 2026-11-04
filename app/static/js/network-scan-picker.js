@@ -22,7 +22,8 @@
     const value = input.value.trim();
     if (!value) return '';
     if (!value.includes('://')) return value;
-    try { return new URL(value).hostname; } catch (_) { return value; }
+    // URL.hostname wraps IPv6 in brackets, which the backend host validator rejects.
+    try { return new URL(value).hostname.replace(/^\[(.*)\]$/, '$1'); } catch (_) { return value; }
   }
 
   function errorMessage(detail, status) {

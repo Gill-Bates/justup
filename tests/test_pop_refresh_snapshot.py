@@ -13,6 +13,7 @@ import sqlite3
 import threading
 from contextlib import contextmanager
 
+import httpx
 import pytest
 
 from app.db import sqlite as sqlite_db
@@ -157,3 +158,128 @@ def test_run_full_refresh_returns_result_per_source_on_success(conn, monkeypatch
     assert unlocode.error is None
     assert unlocode.processed == 0
     assert unlocode.run_id
+
+
+# ---------------------------------------------------------------------------
+# validate_pop_record coordinate handling
+# ---------------------------------------------------------------------------
+
+
+def _validate(lat, lon):
+    return pop_refresh.validate_pop_record("fra", "fra", "Frankfurt", "DE", lat, lon)
+
+
+@pytest.mark.parametrize("lat,lon", [(True, 8.0), (50.0, False), (True, True)])
+def test_validate_rejects_boolean_coordinates(lat, lon) -> None:
+    result = _validate(lat, lon)
+    assert not result.valid
+    assert "numeric" in result.error
+
+
+@pytest.mark.parametrize("lat,lon", [("", 8.0), (50.0, "nan"), ("inf", 8.0), (95.0, 8.0)])
+def test_validate_rejects_non_finite_or_empty_coordinates(lat, lon) -> None:
+    assert not _validate(lat, lon).valid
+
+
+@pytest.mark.parametrize("lat,lon", [(50.11, 8.68), ("50.11", "8.68"), (0, 0)])
+def test_validate_accepts_numbers_and_numeric_strings(lat, lon) -> None:
+    result = _validate(lat, lon)
+    assert result.valid
+    assert result.lat == float(lat) and result.lon == float(lon)
+
+
+# ---------------------------------------------------------------------------
+# _fetch_with_retry: bounded streaming reads
+# ---------------------------------------------------------------------------
+
+
+class _Chunks(httpx.SyncByteStream):
+    def __init__(self, chunks, counter):
+        self._chunks = chunks
+        self._counter = counter
+
+    def __iter__(self):
+        for chunk in self._chunks:
+            self._counter.append(len(chunk))
+            yield chunk
+
+
+@pytest.fixture
+def fetch_env(monkeypatch):
+    """Route httpx.Client through a MockTransport and skip real sleeping."""
+    state = {"calls": 0, "read": []}
+    real_client = httpx.Client
+
+    def install(handler):
+        def factory(*args, **kwargs):
+            def counted(request):
+                state["calls"] += 1
+                return handler(request, state)
+
+            kwargs["transport"] = httpx.MockTransport(counted)
+            return real_client(*args, **kwargs)
+
+        monkeypatch.setattr(httpx, "Client", factory)
+
+    monkeypatch.setattr(pop_refresh.time, "sleep", lambda _s: None)
+    return install, state
+
+
+def test_fetch_rejects_oversized_body_without_content_length(fetch_env) -> None:
+    install, state = fetch_env
+    chunks = [b"x" * 10] * 100
+    install(lambda req, st: httpx.Response(200, stream=_Chunks(chunks, st["read"])))
+    with pytest.raises(RuntimeError, match="too large"):
+        pop_refresh._fetch_with_retry("https://example.test/x", max_response_bytes=25)
+    assert sum(state["read"]) < 1000, "reading stopped at the limit instead of buffering everything"
+
+
+def test_fetch_rejects_oversized_content_length_before_reading(fetch_env) -> None:
+    install, state = fetch_env
+    install(
+        lambda req, st: httpx.Response(200, headers={"content-length": "9999"}, stream=_Chunks([b"{}"], st["read"]))
+    )
+    with pytest.raises(RuntimeError, match="too large"):
+        pop_refresh._fetch_with_retry("https://example.test/x", max_response_bytes=100)
+    assert state["read"] == []
+
+
+def test_fetch_accepts_body_exactly_at_limit(fetch_env) -> None:
+    install, _ = fetch_env
+    body = b'{"a": 1}'
+    install(lambda req, st: httpx.Response(200, content=body))
+    assert pop_refresh._fetch_with_retry("https://example.test/x", max_response_bytes=len(body)) == {"a": 1}
+
+
+def test_fetch_4xx_reports_only_a_bounded_excerpt(fetch_env) -> None:
+    install, state = fetch_env
+    chunks = [b"e" * 100] * 1000
+    install(lambda req, st: httpx.Response(404, stream=_Chunks(chunks, st["read"])))
+    with pytest.raises(RuntimeError, match="HTTP 404") as err:
+        pop_refresh._fetch_with_retry("https://example.test/x", max_retries=2)
+    assert len(str(err.value)) < 300
+    assert sum(state["read"]) < 1000
+    assert state["calls"] == 1, "4xx is not retried"
+
+
+@pytest.mark.parametrize("status", [429, 503])
+def test_fetch_retries_transient_status_then_succeeds(fetch_env, status) -> None:
+    install, state = fetch_env
+
+    def handler(_req, st):
+        if st["calls"] == 1:
+            return httpx.Response(status, headers={"retry-after": "1"})
+        return httpx.Response(200, json={"ok": True})
+
+    install(handler)
+    assert pop_refresh._fetch_with_retry("https://example.test/x", max_retries=2) == {"ok": True}
+    assert state["calls"] == 2
+
+
+@pytest.mark.parametrize("status", [429, 503])
+def test_fetch_gives_up_after_retries_on_transient_status(fetch_env, status) -> None:
+    install, state = fetch_env
+    install(lambda req, st: httpx.Response(status))
+    with pytest.raises(RuntimeError):
+        pop_refresh._fetch_with_retry("https://example.test/x", max_retries=2)
+    assert state["calls"] == 3

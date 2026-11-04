@@ -180,3 +180,30 @@ test("status label 'Sent' is used in the template and 'Accepted by server' is go
   assert.match(tpl, /text-uppercase">Sent<\/div>/);
   assert.doesNotMatch(tpl + src, /Accepted by server/);
 });
+
+test("a log page beyond the shrunken total reloads the last valid page once", async () => {
+  const h = build();
+  const dom = h.fragment();
+  let onPageClick = null;
+  dom["spooler-pagination"].querySelectorAll = () => [{
+    getAttribute: () => "2",
+    addEventListener: (type, fn) => { onPageClick = fn; },
+  }];
+  vm.runInContext(src, h.ctx);
+  h.ctx._initSpoolerTab();
+  const logs = () => h.requests.filter((r) => r.url.includes("/log"));
+  const tick = () => new Promise((r) => setImmediate(r));
+  const entry = { notification_type: "alert", status: "sent", channel_type: "email", recipient_address: "ops@example", retry_count: 0 };
+  logs().at(-1).resolve({ ok: true, json: async () => ({ total: 150, entries: [entry] }) });
+  await tick();
+  onPageClick.call({ getAttribute: () => "2" }, { preventDefault() {} });
+  assert.match(logs().at(-1).url, /offset=100/);
+  logs().at(-1).resolve({ ok: true, json: async () => ({ total: 10, entries: [] }) });
+  await tick();
+  assert.match(logs().at(-1).url, /offset=0/);
+  const count = logs().length;
+  logs().at(-1).resolve({ ok: true, json: async () => ({ total: 10, entries: [entry] }) });
+  await tick();
+  assert.equal(logs().length, count, "no further reload");
+  assert.match(dom["spooler-log-body"].innerHTML, /ops@example/);
+});

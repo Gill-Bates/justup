@@ -9,11 +9,11 @@
 Principles:
 - Deterministic state model
 - No mixed semantics (status vs. flags)
-- O(n) processing where n is the number of hops
+- O(n + r log r) processing: n hops, r responding hops that get sorted
 - Clear separation: detection → interpolation → formatting
 
-Note: Bisect lookups add O(b·log r) where b=blocks, r=responding hops,
-but total complexity is dominated by linear scans → O(n) in practice.
+Note: Bisect lookups add O(b·log r) where b=blocks, r=responding hops;
+sorting the responding hops adds O(r log r).
 """
 
 from __future__ import annotations
@@ -23,15 +23,16 @@ import copy
 from typing import Any
 
 from app.services.route_timeline import NO_REPLY_LABEL, no_reply_run_label
+from app.utils.constants import HopStatus
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Constants / Types
 # ──────────────────────────────────────────────────────────────────────────────
 
-STATUS_OK = "ok"
+STATUS_OK = HopStatus.OK
 STATUS_PARTIAL = "partial"
-STATUS_TIMEOUT = "timeout"
-STATUS_INTERPOLATED = "interpolated"
+STATUS_TIMEOUT = HopStatus.TIMEOUT
+STATUS_INTERPOLATED = HopStatus.INTERPOLATED
 
 Hop = dict[str, Any]
 

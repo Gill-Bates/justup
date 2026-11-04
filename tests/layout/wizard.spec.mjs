@@ -283,6 +283,8 @@ test("wizard: scan button is disabled with a visible, announced reason while the
 	await page.locator("[data-scan-profile]").selectOption("extended");
 	await page.locator("#wizard-udp-ports").fill("161");
 	await page.getByRole("button", { name: "Continue" }).click();
+	await page.locator("#step-checks-title").waitFor({ state: "visible" });
+	await page.getByRole("button", { name: "Continue" }).click();
 	await page.locator("#step-recipients-title").waitFor({ state: "visible" });
 	await page.getByRole("button", { name: "Continue" }).click();
 	let body = null;

@@ -305,8 +305,8 @@ def test_resampled_pdf_series_gives_one_outage_of_the_true_duration():
         events = pdf_report._extract_downtime_events(data, 60, now=at(hours * 60 + 1))
         assert len(events) == 1, (step, events)
         expected = 180 if step != 3600 else 240
-        assert abs(events[0].duration_minutes - expected) <= step / 60, (step, events)
-        assert abs(pdf_report._downtime_minutes(data, 60) - expected) <= step / 60
+        assert abs(events[0].duration_minutes - expected) <= 2 * step / 60, (step, events)
+        assert abs(pdf_report._downtime_minutes(data, 60) - expected) <= 2 * step / 60
 
 
 def test_resampled_pdf_series_still_excludes_a_real_gap():

@@ -22,13 +22,17 @@ Lifecycle:
 2. Start import run
 3. Fetch and process external data with retries
 4. Validate and upsert locations
-5. Retire stale entries (only on success)
-6. Finish import run with statistics
-7. Release lock
+5. Finish import run with statistics
+6. Release lock
+
+Retirement of stale entries does not happen in any path yet: the PeeringDB
+path only maintains city evidence (retired stays 0) and the UN/LOCODE import
+is a placeholder.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import random
@@ -170,6 +174,9 @@ def validate_pop_record(
     if not isinstance(city, str) or not isinstance(country, str):
         return ValidationResult(valid=False, error="city/country must be string")
 
+    # bool is an int subclass, so float(True) would pass as a coordinate
+    if isinstance(lat, bool) or isinstance(lon, bool):
+        return ValidationResult(valid=False, error="lat/lon must be numeric")
     try:
         lat = float(lat)
         lon = float(lon)
@@ -231,6 +238,16 @@ def validate_pop_record(
 # ---------------------------------------------------------------------------
 
 
+def _read_bounded(response: Any, limit: int) -> bytes:
+    """Read at most ``limit`` bytes of a streaming response body."""
+    data = bytearray()
+    for chunk in response.iter_bytes():
+        data.extend(chunk)
+        if len(data) >= limit:
+            break
+    return bytes(data[:limit])
+
+
 def _fetch_with_retry(
     url: str,
     max_retries: int = HTTP_MAX_RETRIES,
@@ -261,9 +278,7 @@ def _fetch_with_retry(
 
     for attempt in range(max_retries + 1):
         try:
-            with httpx.Client(timeout=timeout) as client:
-                response = client.get(url)
-
+            with httpx.Client(timeout=timeout) as client, client.stream("GET", url) as response:
                 # 429 = rate limited, respect Retry-After and retry
                 if response.status_code == 429:
                     error_category = ErrorCategory.RATELIMIT
@@ -280,7 +295,8 @@ def _fetch_with_retry(
 
                 # 4xx (except 429) = permanent failure, don't retry
                 if 400 <= response.status_code < 500:
-                    raise RuntimeError(f"HTTP {response.status_code}: {response.text[:200]}")
+                    excerpt = _read_bounded(response, 200)
+                    raise RuntimeError(f"HTTP {response.status_code}: {excerpt.decode('utf-8', 'replace')}")
 
                 # 5xx = transient, retry
                 if response.status_code >= 500:
@@ -290,17 +306,18 @@ def _fetch_with_retry(
                         response=response,
                     )
 
-                # Response size protection
+                # Response size protection: check the header first, then the running total while streaming
                 content_length = response.headers.get("content-length")
                 if content_length and int(content_length) > max_response_bytes:
                     raise RuntimeError(f"Response too large: {int(content_length)} bytes (max {max_response_bytes})")
 
-                # Also check actual body size
-                body = response.content
-                if len(body) > max_response_bytes:
-                    raise RuntimeError(f"Response body too large: {len(body)} bytes (max {max_response_bytes})")
+                body = bytearray()
+                for chunk in response.iter_bytes():
+                    body.extend(chunk)
+                    if len(body) > max_response_bytes:
+                        raise RuntimeError(f"Response body too large: over {max_response_bytes} bytes")
 
-                return response.json()
+                return json.loads(bytes(body))
 
         except httpx.TimeoutException as e:
             last_error = f"Timeout: {e}"

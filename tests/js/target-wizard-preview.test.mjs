@@ -22,13 +22,13 @@ function el(extra = {}) {
     ...extra,
   };
 }
-function setup() {
+function setup(profileValue = 'website') {
   const ids = {};
   const get = (id) => (ids[id] ||= el());
   const sections = [0, 1, 2, 3, 4].map(() => el({ querySelector: () => el() }));
   const form = el({
     querySelectorAll: (sel) => (sel === '.target-wizard-step' ? sections : []),
-    querySelector: () => ({ value: 'website', focus() {} }),
+    querySelector: () => ({ value: profileValue, focus() {} }),
   });
   ids['target-wizard-form'] = form;
   ids['wizard-address'] = el({ value: 'example.org' });
@@ -119,4 +119,30 @@ test('the checks step mirrors the address-step ports and blocks a TCP check with
   assert.equal(visible(t.sections), 2);
   assert.equal(t.get('wizard-tcp-summary-error').textContent, 'Choose at least one TCP port.');
   assert.equal(t.pending.length, 1, 'no preview request was sent');
+});
+
+async function tcpProfileValidation(ports, udpPorts) {
+  const t = setup('tcp');
+  await t.get('wizard-next').fire('click'); // step 0 -> 1
+  t.get('wizard-ports').value = ports;
+  t.get('wizard-udp-ports').value = udpPorts;
+  const second = t.get('wizard-next').fire('click');
+  await tick();
+  return { requested: t.pending.length, message: t.get('wizard-error').textContent, second };
+}
+test('the TCP profile accepts UDP-only ports on the address step', async () => {
+  assert.equal((await tcpProfileValidation('', '53')).requested, 1);
+});
+test('the TCP profile accepts TCP-only ports on the address step', async () => {
+  assert.equal((await tcpProfileValidation('443', '')).requested, 1);
+});
+test('the TCP profile rejects an address step with neither TCP nor UDP ports', async () => {
+  const r = await tcpProfileValidation('', '');
+  assert.equal(r.requested, 0);
+  assert.equal(r.message, 'Choose at least one TCP or UDP port.');
+});
+test('the TCP profile rejects an invalid UDP port even without TCP ports', async () => {
+  const r = await tcpProfileValidation('', '70000');
+  assert.equal(r.requested, 0);
+  assert.match(r.message, /UDP port numbers/);
 });

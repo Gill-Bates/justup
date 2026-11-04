@@ -255,8 +255,8 @@
       showError('Enter a URL, hostname, or IP address.', fields.address);
       return false;
     }
-    if (profile() === 'tcp' && !fields.ports.value.trim()) {
-      showError('Choose at least one TCP port.', fields.ports);
+    if (profile() === 'tcp' && !fields.ports.value.trim() && !fields.udpPorts.value.trim()) {
+      showError('Choose at least one TCP or UDP port.', fields.ports);
       return false;
     }
     if (fields.ports.value.trim() && !validPorts(fields.ports.value)) {

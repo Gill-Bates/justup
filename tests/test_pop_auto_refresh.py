@@ -14,6 +14,7 @@ persisted state, so each scenario asserts the decision the scheduler would reach
 
 from __future__ import annotations
 
+import json
 import random
 import sqlite3
 import threading
@@ -357,11 +358,16 @@ def test_rate_limit_429_is_honored_with_retry_after(monkeypatch):
             self.status_code = status
             self.headers = headers or {}
             self._payload = payload or {}
-            self.content = b"{}"
             self.request = None
 
-        def json(self):
-            return self._payload
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def iter_bytes(self):
+            yield json.dumps(self._payload).encode()
 
     class _Client:
         def __init__(self, *a, **k):
@@ -373,7 +379,7 @@ def test_rate_limit_429_is_honored_with_retry_after(monkeypatch):
         def __exit__(self, *a):
             return False
 
-        def get(self, _url):
+        def stream(self, _method, _url):
             calls["n"] += 1
             if calls["n"] == 1:
                 return _Resp(429, headers={"retry-after": "7"})

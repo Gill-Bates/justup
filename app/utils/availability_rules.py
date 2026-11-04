@@ -113,7 +113,11 @@ def measured_outages(
                 start = ts
         elif value == 1:
             if start is not None:
-                outages.append(Outage(start, ts))
+                # Recovery proves the outage only up to the last DOWN point when the points are further
+                # apart than the check interval (thinned series): the time between is not measured.
+                unmeasured = last is not None and is_gap((ts - last).total_seconds(), interval_seconds)
+                end = min(measured_end(start, last), ts) if unmeasured and last is not None else ts
+                outages.append(Outage(start, end))
                 start = None
         else:
             close_unmeasured(ts)

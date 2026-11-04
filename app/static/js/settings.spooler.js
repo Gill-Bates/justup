@@ -114,6 +114,12 @@
 			const data = await res.json();
 			if (generation !== _logGeneration) return;
 
+			// The data shrank below the requested page; jump to the last valid page (strictly lower, so this runs once).
+			if (data.total > 0 && (!data.entries || data.entries.length === 0) && _currentPage > 0) {
+				_currentPage = Math.max(0, Math.ceil(data.total / PAGE_SIZE) - 1);
+				return loadLog();
+			}
+
 			_renderLogTable(data.entries);
 			_renderPagination(data.total);
 			_setText('spooler-log-info', data.total > 0 ? `(${data.total} entries)` : '');

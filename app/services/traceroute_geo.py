@@ -11,7 +11,8 @@ This module provides functionality to geolocate IP addresses from traceroute
 results. It only produces geo/route data; there is no server-side map
 rendering. The Web UI draws the route client-side with the vendored Leaflet
 (app/static/js/traceroute-map.js) on a local Natural Earth basemap, and the
-PDF report shows the hops as a table.
+PDF report shows the hops as a table and as an offline route map
+(app/services/pdf_route_map.py).
 """
 
 from __future__ import annotations
