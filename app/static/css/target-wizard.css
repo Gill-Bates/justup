@@ -223,6 +223,23 @@
 	display: none;
 }
 
+.wizard-port-summary {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	column-gap: 0.5rem;
+	margin: 0;
+	overflow-wrap: anywhere;
+}
+
+.wizard-port-summary-value {
+	min-width: 0;
+}
+
+.wizard-port-summary.is-invalid ~ .invalid-feedback {
+	display: block;
+}
+
 .wizard-advanced {
 	margin-top: 1.5rem;
 	padding: 0.9rem 1.1rem;

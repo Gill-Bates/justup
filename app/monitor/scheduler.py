@@ -361,8 +361,6 @@ FAIL_WINDOW_SECONDS = 300  # Sliding window: FAILs must occur within this time t
 UDP_MAX_PARALLEL_SCANS = 2
 # Hard cap added on top of the scan timeout, so a hung worker connection cannot keep a target's scan slot.
 UDP_HARD_TIMEOUT_MARGIN_SECONDS = 15.0
-# Explicit re-detection of services is not scheduled by default (0 = off, set a large interval to enable).
-SERVICE_REDETECT_INTERVAL_SECONDS = 0
 
 
 class MonitorScheduler:

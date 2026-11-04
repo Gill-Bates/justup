@@ -22,6 +22,7 @@ A four-step wizard suggests checks by profile and shows a summary before saving.
 Defaults: 60 s interval, two retries, 365 days retention, auto-close. You can
 change them before creation. A domain without scheme suggests HTTPS; an explicit
 `http://` stays HTTP. The summary does not contact the target.
+In the TCP/UDP service profile the **TCP ports** and **UDP ports** fields sit side by side below the address (stacked on narrow screens); enter at least one of them.
 In the checks step, settings appear only for active checks: the TCP port field with TCP, URL, method and success codes with HTTP, and the TLS option "Ignore TLS certificate errors" with HTTP or certificate expiry. Interval, retries, retention and auto-close are always shown. The summary lists only active checks.
 
 Exact duplicates are blocked. Different services on the same host are allowed;
@@ -40,10 +41,25 @@ partially overlapping checks show a warning. **Edit** opens the full editor.
 === "TCP"
     Several ports per target; status and latency per port.
 
+=== "UDP"
+    Several ports per target. An uncertain UDP result (no reply) stays `unknown` until a
+    later scan confirms it.
+
 === "Certificate"
     Remaining days of the TLS certificate. A configured certificate host and port always win.
     Without them the host comes from the HTTP URL (then the target host) and the port from
     the HTTP URL, then the HTTP port override, then 443 (80 for an `http` URL).
+
+## Port discovery
+
+The wizard and the target editor can scan the host for open ports and add the
+selected ones to the TCP or UDP port fields. Discovery uses the
+[Nmap Security Scanner](https://nmap.org/) bundled in the image. Choose TCP, UDP or
+both and a **Quick** or **Extended** scope, then select the ports to adopt.
+
+- Only administrators can scan. The host must pass the same validation as a check
+  target; at most 128 ports are scanned and two scans run at once (`429` when busy).
+- A scan times out after 90 s (Quick) or 180 s (Extended) and can be cancelled.
 
 ## Host rules
 

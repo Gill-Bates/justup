@@ -20,8 +20,6 @@
     address: document.getElementById('wizard-address'),
     ports: document.getElementById('wizard-ports'),
     udpPorts: document.getElementById('wizard-udp-ports'),
-    extraPorts: document.getElementById('wizard-extra-ports'),
-    extraUdpPorts: document.getElementById('wizard-extra-udp-ports'),
     name: document.getElementById('wizard-name'),
     group: document.getElementById('wizard-group'),
     http: document.getElementById('wizard-http'),
@@ -59,6 +57,11 @@
     http_prefer_head: 'http',
     http_success_codes: 'http',
     ignore_cert_errors: 'tls'
+  };
+  // Ports are entered once (step 2); the checks step only shows them and links back.
+  const portSummaries = {
+    tcp: { input: fields.ports, toggle: fields.tcp, label: 'TCP', summary: document.getElementById('wizard-tcp-summary'), value: document.getElementById('wizard-tcp-summary-value'), error: document.getElementById('wizard-tcp-summary-error') },
+    udp: { input: fields.udpPorts, toggle: fields.udp, label: 'UDP', summary: document.getElementById('wizard-udp-summary'), value: document.getElementById('wizard-udp-summary-value'), error: document.getElementById('wizard-udp-summary-error') }
   };
   const groupLabels = { http: 'HTTP settings', tls: 'TLS certificate option', tcp: 'TCP port field', udp: 'UDP port field' };
   const dirty = new Set();
@@ -125,6 +128,7 @@
     nextButton.hidden = step === steps.length - 1;
     saveButton.hidden = step !== steps.length - 1;
     clearError();
+    updatePortSummaries();
     const heading = steps[step].querySelector('h2');
     heading?.focus({ preventScroll: true });
     if (scroll) heading?.scrollIntoView({ block: 'nearest' });
@@ -132,8 +136,11 @@
 
   function updateKindFields() {
     const kind = profile();
+    // An active port check on another profile still needs the port fields in step 2.
+    const portsNeeded = fields.tcp.checked || fields.udp.checked;
     for (const element of form.querySelectorAll('.wizard-kind')) {
-      element.hidden = !element.dataset.kinds.split(' ').includes(kind);
+      const onDemand = 'portsOnDemand' in element.dataset && portsNeeded;
+      element.hidden = !onDemand && !element.dataset.kinds.split(' ').includes(kind);
     }
     document.getElementById('wizard-address-label').textContent =
       ['website', 'api'].includes(kind) ? 'Full URL or domain *' : 'Hostname or IP address *';
@@ -154,6 +161,30 @@
       document.getElementById('wizard-checks-status').textContent = changes.join('. ');
     }
     shownGroups = visible;
+  }
+
+  function updatePortSummaries() {
+    for (const { input, value } of Object.values(portSummaries)) {
+      value.textContent = input.value.trim().replace(/\s*,\s*/g, ', ') || 'None chosen yet';
+    }
+  }
+
+  function editPorts(protocol) {
+    updateKindFields();
+    setStep(1);
+    const input = portSummaries[protocol].input;
+    input.focus();
+    input.scrollIntoView?.({ block: 'center' });
+  }
+
+  // Reports a port problem at the summary of the checks step and focuses its Edit ports action.
+  function showPortsError(protocol, message) {
+    const { summary, error } = portSummaries[protocol];
+    errorBox.textContent = message;
+    errorBox.classList.remove('d-none');
+    summary.classList.add('is-invalid');
+    error.textContent = message;
+    form.querySelector(`[data-edit-ports="${protocol}"]`)?.focus();
   }
 
   function suggestName() {
@@ -257,21 +288,16 @@
       showError('Enable at least one monitoring check.');
       return false;
     }
-    if (fields.tcp.checked && !fields.ports.value.trim()) {
-      showError('Choose at least one TCP port.', fields.extraPorts);
-      return false;
-    }
-    if (fields.tcp.checked && !validPorts(fields.ports.value)) {
-      showError('Enter TCP port numbers from 1 to 65535, separated by commas.', fields.extraPorts);
-      return false;
-    }
-    if (fields.udp.checked && !fields.udpPorts.value.trim()) {
-      showError('Choose at least one UDP port.', fields.extraUdpPorts);
-      return false;
-    }
-    if (fields.udp.checked && !validPorts(fields.udpPorts.value)) {
-      showError('Enter UDP port numbers from 1 to 65535, separated by commas.', fields.extraUdpPorts);
-      return false;
+    for (const [protocol, { input, toggle, label }] of Object.entries(portSummaries)) {
+      if (!toggle.checked) continue;
+      if (!input.value.trim()) {
+        showPortsError(protocol, `Choose at least one ${label} port.`);
+        return false;
+      }
+      if (!validPorts(input.value)) {
+        showPortsError(protocol, `Enter ${label} port numbers from 1 to 65535, separated by commas.`);
+        return false;
+      }
     }
     return true;
   }
@@ -415,10 +441,10 @@
   for (const toggle of [fields.http, fields.ping, fields.tcp, fields.udp, fields.cert]) {
     toggle.addEventListener('change', () => updateCheckGroups({ announce: true }));
   }
-  fields.ports.addEventListener('input', () => { fields.extraPorts.value = fields.ports.value; });
-  fields.extraPorts.addEventListener('input', () => { fields.ports.value = fields.extraPorts.value; });
-  fields.udpPorts.addEventListener('input', () => { fields.extraUdpPorts.value = fields.udpPorts.value; });
-  fields.extraUdpPorts.addEventListener('input', () => { fields.udpPorts.value = fields.extraUdpPorts.value; });
+  for (const input of [fields.ports, fields.udpPorts]) input.addEventListener('input', updatePortSummaries);
+  for (const button of form.querySelectorAll('[data-edit-ports]')) {
+    button.addEventListener('click', () => editPorts(button.dataset.editPorts));
+  }
   fields.name.addEventListener('input', () => { fields.name.dataset.userEdited = 'true'; });
   fields.address.addEventListener('input', suggestName);
   form.querySelectorAll('input[name="profile"]').forEach(input => input.addEventListener('change', updateKindFields));

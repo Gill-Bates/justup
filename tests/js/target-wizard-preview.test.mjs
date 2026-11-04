@@ -28,7 +28,7 @@ function setup() {
   const sections = [0, 1, 2, 3, 4].map(() => el({ querySelector: () => el() }));
   const form = el({
     querySelectorAll: (sel) => (sel === '.target-wizard-step' ? sections : []),
-    querySelector: () => ({ value: 'website' }),
+    querySelector: () => ({ value: 'website', focus() {} }),
   });
   ids['target-wizard-form'] = form;
   ids['wizard-address'] = el({ value: 'example.org' });
@@ -96,4 +96,27 @@ test('a preview answer is discarded when the address changed meanwhile', async (
   t.answer(0, {});
   await second;
   assert.equal(visible(t.sections), 1);
+});
+test('the checks step mirrors the address-step ports and blocks a TCP check without one', async () => {
+  const t = setup();
+  const next = t.get('wizard-next');
+  await next.fire('click');
+  t.get('wizard-ports').value = '25,587';
+  await t.get('wizard-ports').fire('input');
+  assert.equal(t.get('wizard-tcp-summary-value').textContent, '25, 587');
+  t.get('wizard-ports').value = '';
+  await t.get('wizard-ports').fire('input');
+  assert.equal(t.get('wizard-tcp-summary-value').textContent, 'None chosen yet');
+  // Step 2 -> 3 with the TCP switch on and no port stays on the checks step.
+  const second = next.fire('click');
+  await tick();
+  t.answer(0, {});
+  await second;
+  assert.equal(visible(t.sections), 2);
+  t.get('wizard-tcp').checked = true;
+  t.get('wizard-interval').checkValidity = () => true;
+  await next.fire('click');
+  assert.equal(visible(t.sections), 2);
+  assert.equal(t.get('wizard-tcp-summary-error').textContent, 'Choose at least one TCP port.');
+  assert.equal(t.pending.length, 1, 'no preview request was sent');
 });

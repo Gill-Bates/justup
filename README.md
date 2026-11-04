@@ -25,7 +25,7 @@
 ---
 
 justUp! brings availability monitoring, network diagnostics, and PDF reporting
-together. Check hosts over ping, HTTP(S), and TCP, and track certificate expiry.
+together. Check hosts over ping, HTTP(S), TCP, and UDP, discover open ports with Nmap, and track certificate expiry.
 When something goes wrong, inspect the network route and share the findings
 without switching tools.
 

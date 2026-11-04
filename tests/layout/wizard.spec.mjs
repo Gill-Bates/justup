@@ -14,7 +14,7 @@ const test = baseTest.extend({
 // Check-step progressive disclosure of the target wizard: fields appear only for active checks.
 const HTTP_FIELDS = ["#wizard-http-url", "#wizard-method", "#wizard-codes"];
 const TLS_FIELDS = ["#wizard-ignore-cert"];
-const TCP_FIELDS = ["#wizard-extra-ports"];
+const TCP_FIELDS = ["#wizard-tcp-summary"];
 const TOGGLES = { http: "#wizard-http", ping: "#wizard-ping", tcp: "#wizard-tcp", cert: "#wizard-cert" };
 const VIEWPORTS = [{ name: "390x844", width: 390, height: 844 }, { name: "320x640", width: 320, height: 640 }, { name: "1280x720", width: 1280, height: 720 }];
 const SCAN_ID = "123e4567-e89b-12d3-a456-426614174000";
@@ -71,18 +71,74 @@ test("TCP target: HTTP and TLS fields are not rendered or reachable, the port fi
 		assert.equal(await page.locator(selector).isHidden(), true, `${selector} must be hidden`);
 	}
 	for (const selector of TCP_FIELDS) assert.equal(await page.locator(selector).isVisible(), true, `${selector} must be visible`);
-	assert.equal(await page.locator("#wizard-extra-ports").inputValue(), "22,443");
+	assert.equal(await page.locator("#wizard-group-tcp input[type=text]").count(), 0, "step 3 has no second port input");
+	assert.equal(await page.locator("#wizard-extra-ports").count(), 0);
+	assert.match(await page.locator("#wizard-tcp-summary").innerText(), /TCP ports:\s*22, 443/);
 	const reachable = await reachableIds(page);
 	for (const selector of [...HTTP_FIELDS, ...TLS_FIELDS]) {
 		assert.equal(reachable.has(selector.slice(1)), false, `${selector} must not be in the tab order`);
 	}
-	assert.equal(reachable.has("wizard-extra-ports"), true, "the port field is keyboard reachable");
+	assert.equal(await page.getByRole("button", { name: "Edit ports" }).first().isVisible(), true);
 	// Interval, retries, retention and auto-close stay available.
 	for (const id of ["wizard-interval", "wizard-retries", "wizard-retention", "wizard-auto-close"]) {
 		assert.equal(reachable.has(id), true, `${id} stays reachable`);
 	}
 });
 
+
+test("ports are entered once: the checks step shows a summary and an Edit ports action @wizard", async ({ app, page }) => {
+	await openChecksStep(page, app, { profile: "tcp", address: "once.example.org", ports: "25" });
+	assert.match(await page.locator("#wizard-tcp-summary").innerText(), /TCP ports:\s*25/);
+	await page.getByRole("button", { name: "Edit ports" }).click();
+	await page.locator("#step-address-title").waitFor({ state: "visible" });
+	assert.equal(await page.evaluate(() => document.activeElement?.id), "wizard-ports", "the source field is focused");
+	await page.locator("#wizard-ports").fill("25,587");
+	await page.getByRole("button", { name: "Continue" }).click();
+	await page.locator("#step-checks-title").waitFor({ state: "visible" });
+	assert.match(await page.locator("#wizard-tcp-summary").innerText(), /TCP ports:\s*25, 587/);
+	// Back keeps working and the ports survive the round trip.
+	await page.getByRole("button", { name: "Back" }).click();
+	assert.equal(await page.locator("#wizard-ports").inputValue(), "25,587");
+});
+
+test("TCP on without a port blocks Continue with an inline error and a jump action @wizard", async ({ app, page }) => {
+	await openChecksStep(page, app, { profile: "custom", address: "none.example.org" });
+	await page.locator(TOGGLES.tcp).setChecked(true, { force: true });
+	assert.match(await page.locator("#wizard-tcp-summary").innerText(), /None chosen yet/);
+	assert.equal(await page.locator("#wizard-ports").inputValue(), "", "no port is invented");
+	await page.getByRole("button", { name: "Continue" }).click();
+	assert.match(await page.locator("#wizard-tcp-summary-error").innerText(), /Choose at least one TCP port\./);
+	assert.equal(await page.locator("#step-checks-title").isVisible(), true, "still on the checks step");
+	assert.equal(await page.evaluate(() => document.activeElement?.dataset.editPorts), "tcp");
+	await page.getByRole("button", { name: "Edit ports" }).click();
+	assert.equal(await page.evaluate(() => document.activeElement?.id), "wizard-ports");
+});
+
+test("a port check on a website profile reveals the port fields from Edit ports @wizard", async ({ app, page }) => {
+	await openChecksStep(page, app, { profile: "website", address: "https://site.example.org/" });
+	await page.locator(TOGGLES.tcp).setChecked(true, { force: true });
+	await page.getByRole("button", { name: "Edit ports" }).click();
+	assert.equal(await page.locator("#wizard-ports").isVisible(), true);
+	assert.equal(await page.evaluate(() => document.activeElement?.id), "wizard-ports");
+});
+
+test("the submitted payload keeps tcp_ports and udp_ports from the address step @wizard", async ({ app, page }) => {
+	await openChecksStep(page, app, { profile: "custom", address: "payload.example.org", ports: "22,443" });
+	await page.locator("#wizard-udp-ports").fill("53");
+	await page.getByRole("button", { name: "Continue" }).click();
+	await page.locator("#step-recipients-title").waitFor({ state: "visible" });
+	await page.getByRole("button", { name: "Continue" }).click();
+	let body = null;
+	await page.route("**/targets", async route => {
+		if (route.request().method() !== "POST") return route.fallback();
+		body = route.request().postDataJSON();
+		return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ detail: "stop" }) });
+	});
+	await page.getByRole("button", { name: "Start monitoring" }).click();
+	await page.locator("#wizard-error:not(.d-none)").waitFor();
+	assert.equal(body.tcp_ports, "22,443");
+	assert.equal(body.udp_ports, "53");
+});
 
 test("toggles show and hide their field groups, with keyboard and announcement @wizard", async ({ app, page }) => {
 	await openChecksStep(page, app, { profile: "tcp", address: "toggle.example.org", ports: "443" });
@@ -134,14 +190,20 @@ test("discovered TCP and UDP ports can be selected without saving the wizard @wi
 	assert.equal(await page.locator("#wizard-udp-ports").inputValue(), "53,161");
 	assert.equal(await page.locator("#wizard-tcp").isChecked(), true);
 	assert.equal(await page.locator("#wizard-udp").isChecked(), true);
+	await page.getByRole("button", { name: "Continue" }).click();
+	await page.locator("#step-checks-title").waitFor({ state: "visible" });
+	assert.match(await page.locator("#wizard-tcp-summary").innerText(), /22, 443/);
+	assert.match(await page.locator("#wizard-udp-summary").innerText(), /53, 161/);
+	await page.getByRole("button", { name: "Back" }).click();
 	assert.equal(await page.locator('[name="network_scan_id"]').inputValue(), SCAN_ID);
 });
 
 test("discovered ports preserve manual entries in target edit @wizard", async ({ app, page }) => {
 	await stubPortScan(page);
 	await page.goto(`${app.base}/ui/targets/1/edit`);
-	await page.locator("#target-network-tab").click();
+	// The host lives on the General tab; the port settings on the Network tab.
 	await page.locator("#host-input").fill("mail.example.org");
+	await page.locator("#target-network-tab").click();
 	await page.locator("#enable_tcp_connect").check();
 	await page.locator("#tcp_ports_input").fill("22");
 	await page.locator("#tcp_ports_input").press("Enter");

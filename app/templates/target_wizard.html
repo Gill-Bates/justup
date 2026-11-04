@@ -57,18 +57,18 @@
             <div id="wizard-address-help" class="form-text">A domain without a scheme suggests HTTPS. Enter http:// explicitly to keep HTTP.</div>
             <div id="wizard-address-error" class="invalid-feedback" role="alert"></div>
           </div>
-          <div class="col-12 col-md-6 wizard-kind" data-kinds="tcp custom" hidden>
+          <div class="col-12 col-md-6 wizard-kind" data-kinds="tcp custom" data-ports-on-demand hidden>
             <label for="wizard-ports" class="form-label">TCP ports <span class="wizard-kind" data-kinds="tcp" hidden>*</span></label>
             <input id="wizard-ports" name="tcp_ports" class="form-control" type="text" maxlength="200" placeholder="e.g. 22,443" aria-describedby="wizard-ports-help wizard-ports-error">
             <div id="wizard-ports-help" class="form-text">Choose ports explicitly; no port is assumed.</div>
             <div id="wizard-ports-error" class="invalid-feedback" role="alert"></div>
           </div>
-          <div class="col-12 col-md-6 wizard-kind" data-kinds="tcp custom" hidden>
+          <div class="col-12 col-md-6 wizard-kind" data-kinds="tcp custom" data-ports-on-demand hidden>
             <label for="wizard-udp-ports" class="form-label">UDP ports</label>
             <input id="wizard-udp-ports" name="udp_ports" class="form-control" type="text" inputmode="numeric" maxlength="200" placeholder="e.g. 53,161" aria-describedby="wizard-udp-ports-help">
             <div id="wizard-udp-ports-help" class="form-text">Enter ports manually or add them from a scan.</div>
           </div>
-          <div class="col-12 wizard-kind" data-kinds="tcp custom" hidden>
+          <div class="col-12 wizard-kind" data-kinds="tcp custom" data-ports-on-demand hidden>
             {% set scan_prefix = 'wizard' %}
             {% set scan_host_id = 'wizard-address' %}
             {% set scan_tcp_id = 'wizard-ports' %}
@@ -98,8 +98,16 @@
           <div class="wizard-check-option"><div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="wizard-cert" name="enable_cert_expiration" aria-controls="wizard-group-ignore-cert"><label class="form-check-label" for="wizard-cert">Monitor certificate expiry</label></div></div>
         </div>
         <p id="wizard-checks-status" class="visually-hidden" role="status"></p>
-        <div class="wizard-check-detail" id="wizard-group-tcp" data-check-group="tcp" hidden><label for="wizard-extra-ports" class="form-label">TCP ports *</label><input id="wizard-extra-ports" class="form-control" type="text" maxlength="200" placeholder="e.g. 22,443" aria-describedby="wizard-extra-ports-help"><div id="wizard-extra-ports-help" class="form-text">Choose every TCP port explicitly. Each port is tested with its own connection on the host from the previous step.</div></div>
-        <div class="wizard-check-detail" id="wizard-group-udp" data-check-group="udp" hidden><label for="wizard-extra-udp-ports" class="form-label">UDP ports *</label><input id="wizard-extra-udp-ports" class="form-control" type="text" inputmode="numeric" maxlength="200" placeholder="e.g. 53,161" aria-describedby="wizard-extra-udp-ports-help"><div id="wizard-extra-udp-ports-help" class="form-text">An uncertain UDP result stays unknown until a later scan confirms it.</div></div>
+        <div class="wizard-check-detail" id="wizard-group-tcp" data-check-group="tcp" hidden>
+          <p class="wizard-port-summary" id="wizard-tcp-summary"><span class="wizard-port-summary-label" id="wizard-tcp-summary-label">TCP ports:</span> <strong class="wizard-port-summary-value" id="wizard-tcp-summary-value">None chosen yet</strong><button type="button" class="btn btn-link btn-sm wizard-port-edit" data-edit-ports="tcp" aria-describedby="wizard-tcp-summary-label wizard-tcp-summary-value">Edit ports</button></p>
+          <div id="wizard-tcp-summary-error" class="invalid-feedback" role="alert"></div>
+          <div id="wizard-tcp-summary-help" class="form-text">Each port is tested with its own connection on the host from the previous step.</div>
+        </div>
+        <div class="wizard-check-detail" id="wizard-group-udp" data-check-group="udp" hidden>
+          <p class="wizard-port-summary" id="wizard-udp-summary"><span class="wizard-port-summary-label" id="wizard-udp-summary-label">UDP ports:</span> <strong class="wizard-port-summary-value" id="wizard-udp-summary-value">None chosen yet</strong><button type="button" class="btn btn-link btn-sm wizard-port-edit" data-edit-ports="udp" aria-describedby="wizard-udp-summary-label wizard-udp-summary-value">Edit ports</button></p>
+          <div id="wizard-udp-summary-error" class="invalid-feedback" role="alert"></div>
+          <div id="wizard-udp-summary-help" class="form-text">An uncertain UDP result stays unknown until a later scan confirms it.</div>
+        </div>
         <details class="wizard-advanced" id="wizard-advanced"><summary><span class="material-icons" aria-hidden="true">tune</span>Advanced settings</summary>
           <div class="row g-3 mt-1">
             <div class="col-12 col-md-6" id="wizard-group-http-url" data-check-group="http" hidden><label for="wizard-http-url" class="form-label">Full HTTP URL</label><input id="wizard-http-url" name="http_url" class="form-control" type="url" maxlength="2048"></div>

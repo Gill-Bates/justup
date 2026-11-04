@@ -36,6 +36,8 @@ without a general `/api` prefix; exceptions are `/api/meta` and
 | `POST` | `/targets/{target_id}/test-alert` | trigger a test alert |
 | `GET` | `/targets/{target_id}/metrics/{metric}` | query one metric series |
 | `GET` | `/dashboard/uptime`, `/dashboard/downtime` | dashboard time series |
+| `POST` | `/network-scans` | start a port discovery scan (admin; `host`, `protocols` `tcp`/`udp`, `profile` `quick`/`extended`); `202`, `429` when busy |
+| `GET`, `DELETE` | `/network-scans/{scan_id}` | read status and result / cancel your own scan |
 
 Exact target duplicates respond with `409 Conflict`; different services on
 the same host remain allowed. Preview also classifies overlapping checks.

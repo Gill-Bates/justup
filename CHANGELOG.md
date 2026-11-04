@@ -5,6 +5,8 @@
 
 ## [Unreleased]
 
+- `New` The target wizard tile "TCP service" is now "TCP/UDP service"; its TCP and UDP port fields stand side by side (stacked on narrow screens) and the address uses the full width.
+- `New` Port discovery: the wizard and target editor scan a host with Nmap (TCP and/or UDP, Quick or Extended) and add the chosen ports. Targets can monitor UDP ports; uncertain UDP results stay unknown.
 - `Fix` The alert email header shows only the logo; the "Monitoring alert" label with bell and divider is gone. Templates you saved yourself are not changed.
 - `Fix` The Targets list no longer flickers on live updates: only changed cells are rewritten, so rows, status icons, focus, open groups and the search stay as they are.
 - `Fix` The route map is easier to read: the route is drawn between the markers with an outline, estimated sections are dashed, the basemap is calmer, only a few place names remain and the legend names every kind of node and link.
