@@ -1,15 +1,33 @@
-{# Downtime History Fragment (HTMX). Styles live in target-detail.css. #}
+{# Downtime History Fragment (HTMX). Styles live in target-detail.css.
+   Three kinds, told apart by text, icon and marker shape: measured downtime ("down"), a measurement gap
+   ("gap") and an UNKNOWN result ("unknown"). Only "down" is downtime. #}
+{% macro duration(seconds) -%}
+{%- set hours = seconds // 3600 %}{% set minutes = (seconds % 3600) // 60 %}{% set rest = seconds % 60 -%}
+{%- if hours > 0 %}{{ hours }}h {{ minutes }}m{% elif minutes > 0 %}{{ minutes }}m {{ rest }}s{% else %}{{ rest }}s{% endif -%}
+{%- endmacro %}
+{% set kinds = {
+	'down': ('Downtime', 'cancel', 'danger', ''),
+	'gap': ('No measurements', 'timer_off', 'neutral', 'Unmeasured gap, not counted as downtime or uptime.'),
+	'unknown': ('Unknown', 'help', 'neutral', 'Result could not be determined, not counted as downtime or uptime.')
+} %}
 {% if periods %}
+{% set downtimes = periods | selectattr('kind', 'equalto', 'down') | list %}
+{% set unmeasured = periods | length - downtimes | length %}
 <div class="downtime-scroll" role="region" aria-label="Downtime history" tabindex="0" data-range-label="{{ range_label | default('30d') }}">
 	<p class="downtime-summary">
-		<strong>{{ periods | length }}</strong> {{ 'downtime' if periods | length == 1 else 'downtimes' }}
-		{% if periods | selectattr('end', 'none') | list | length %}<span class="badge ju-status-badge--danger">Ongoing</span>{% endif %}
+		<strong>{{ downtimes | length }}</strong> {{ 'downtime' if downtimes | length == 1 else 'downtimes' }}
+		{% if unmeasured %}<span class="downtime-summary-note">+ {{ unmeasured }} unmeasured {{ 'period' if unmeasured == 1 else 'periods' }}, not counted as downtime</span>{% endif %}
+		{% if downtimes | selectattr('end', 'none') | list | length %}<span class="badge ju-status-badge--danger">Ongoing</span>{% endif %}
 	</p>
 	<ol class="downtime-list">
 		{% for p in periods %}
-		<li class="downtime-item{% if p.end is none %} downtime-item--ongoing{% endif %}">
+		{% set look = kinds[p.kind] %}
+		<li class="downtime-item downtime-item--{{ p.kind }}{% if p.end is none %} downtime-item--ongoing{% endif %}">
 			<span class="downtime-marker" aria-hidden="true"></span>
 			<div class="downtime-body">
+				<div class="downtime-kind downtime-kind--{{ p.kind }}">
+					<span class="material-icons" aria-hidden="true">{{ look[1] }}</span><strong>{{ look[0] }}</strong>
+				</div>
 				<div class="downtime-times">
 					<span class="local-time" data-utc="{{ p.start.isoformat() }}"
 						data-use-utc="{{ 'true' if use_utc else 'false' }}">
@@ -21,30 +39,24 @@
 						data-use-utc="{{ 'true' if use_utc else 'false' }}">
 						{{ p.end.strftime('%Y-%m-%d %H:%M:%S') }} UTC
 					</span>
-					{% else %}
+					{% elif p.kind == 'down' %}
 					<span class="badge ju-status-badge--danger">Ongoing</span>
+					{% else %}
+					<span class="badge ju-status-badge--neutral">No result since</span>
 					{% endif %}
 				</div>
+				{% if look[3] %}<div class="downtime-note">{{ look[3] }}</div>{% endif %}
 				<div class="downtime-services">
-					{% for svc in p.failed_services %}
-					<span class="badge ju-status-badge--danger">{{ svc }}</span>
+					{% for svc in p.services %}
+					<span class="badge {{ 'ju-status-badge--danger' if p.kind == 'down' else 'ju-status-badge--neutral' }}">{{ svc }}</span>
 					{% endfor %}
 				</div>
 			</div>
 			<div class="downtime-duration">
 				{% if p.duration_seconds is not none %}
-				{% set hours = p.duration_seconds // 3600 %}
-				{% set minutes = (p.duration_seconds % 3600) // 60 %}
-				{% set seconds = p.duration_seconds % 60 %}
-				{% if hours > 0 %}
-				{{ hours }}h {{ minutes }}m
-				{% elif minutes > 0 %}
-				{{ minutes }}m {{ seconds }}s
+				{{ duration(p.duration_seconds) }}
 				{% else %}
-				{{ seconds }}s
-				{% endif %}
-				{% else %}
-				<span class="text-danger">--</span>
+				<span class="{{ 'text-danger' if p.kind == 'down' else 'text-body-secondary' }}">--</span>
 				{% endif %}
 			</div>
 		</li>

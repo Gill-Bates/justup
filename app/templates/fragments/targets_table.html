@@ -1,3 +1,4 @@
+{% from "fragments/_state_badge.html" import state_badge %}
 {# Targets Table Fragment (HTMX) - Grouped by Group Name #}
 {# Out-of-band update of the page carrier in targets.html (hx-include of polling/refresh); rendered in every state #}
 <input type="hidden" id="targets-page-state" name="page" value="{{ page }}" hx-swap-oob="true">
@@ -55,34 +56,14 @@
 								</td>
 								<td data-label="Checks">
 									<div class="ju-badges check-badges">
-									{% if t.enable_ping %}
-									<span class="badge {% if t.ping_status == 'up' %}ju-status-badge--success{% elif t.ping_status == 'down' %}ju-status-badge--danger{% else %}ju-status-badge--neutral{% endif %}">Ping</span>
-									{% endif %}
-									{% if t.enable_http_check %}
-									<span class="badge {% if t.http_status == 'up' %}ju-status-badge--success{% elif t.http_status == 'down' %}ju-status-badge--danger{% else %}ju-status-badge--neutral{% endif %}">HTTP</span>
-									{% endif %}
+									{% if t.enable_ping %}{{ state_badge('Ping', t.ping_status) }}{% endif %}
+									{% if t.enable_http_check %}{{ state_badge('HTTP', t.http_status) }}{% endif %}
 									{% if t.enable_cert_expiration %}
 									<span class="badge {% if t.cert_status == 'ok' %}ju-status-badge--success{% elif t.cert_status == 'warning' %}ju-status-badge--warning{% elif t.cert_status in ('critical', 'expired') %}ju-status-badge--danger{% else %}ju-status-badge--neutral{% endif %}">Cert</span>
 									{% endif %}
-									{% if t.enable_tcp_connect %}
-									{% set port_status = t.tcp_port_status or {} %}
-									{% set ports = (t.tcp_ports or '80').split(',') %}
-									{% set up_count = port_status.values() | select('eq', 'up') | list | length %}
-									{% set total_count = ports | length %}
-									{% set has_data = port_status | length > 0 %}
-									{% if total_count == 1 %}
-									<span class="badge {% if t.tcp_status == 'up' %}ju-status-badge--success{% elif t.tcp_status == 'down' %}ju-status-badge--danger{% else %}ju-status-badge--neutral{% endif %}" title="TCP Port {{ ports[0] }}">TCP:{{ ports[0] }}</span>
-									{% else %}
-									{# Multiple ports: show individual port badges #}
-									{% for port in ports %}
-									{% set ps = port_status.get(port | trim, 'unknown') %}
-									<span class="badge {% if ps == 'up' %}ju-status-badge--success{% elif ps == 'down' %}ju-status-badge--danger{% else %}ju-status-badge--neutral{% endif %}" title="TCP Port {{ port | trim }}">TCP:{{ port | trim }}</span>
+									{% for endpoint in t.endpoints|default([]) if endpoint.kind == 'port' %}
+									{{ state_badge(endpoint.protocol|upper ~ ':' ~ endpoint.port, endpoint.status, endpoint.state_note or endpoint.name) }}
 									{% endfor %}
-									{% endif %}
-									{% endif %}
-									{% if t.enable_udp_scan %}
-									<span class="badge {% if t.udp_status == 'up' %}ju-status-badge--success{% elif t.udp_status == 'down' %}ju-status-badge--danger{% else %}ju-status-badge--neutral{% endif %}" title="UDP ports {{ t.udp_ports }}">UDP:{{ t.udp_ports }}<span class="visually-hidden">: {{ t.udp_status or 'unknown' }}</span></span>
-									{% endif %}
 									</div>
 								</td>
 								<td data-label="Uptime">

@@ -330,3 +330,36 @@ def test_udp_gap_beyond_three_udp_intervals_is_not_downtime(tmp_path):
     put(tmp_path, "udp_up_53", [(0, 1), (5, 0), (60, 1)])
     found = periods(tmp_path, [("udp_up_53", "UDP:53")])
     assert sum(p.duration_seconds or 0 for p in found) < 15 * 60
+def unmeasured(tmp: Path, series=HTTP, *, now: datetime | None = None):
+    return tsdb.query_unmeasured_periods(
+        tmp, target_id=1, series=series, check_interval_seconds=60, now=now or at(21)
+    )
+def test_gap_between_measurements_is_reported_as_unmeasured_not_downtime(tmp_path):
+    put(tmp_path, "http_up", [(4, 1), (5, 0), (20, 1)])
+    [gap] = unmeasured(tmp_path)
+    assert (gap.kind, gap.start, gap.end, gap.services) == ("gap", at(5), at(20), ["HTTP"])
+    assert gap.duration_seconds == 15 * 60
+def test_gap_threshold_is_the_shared_rule(tmp_path):
+    put(tmp_path, "http_up", [(1, 1), (4, 1), (8, 1)])  # 3 min is a normal spacing, 4 min is a gap
+    assert [(g.start, g.end) for g in unmeasured(tmp_path, now=at(9))] == [(at(4), at(8))]
+def test_unknown_marker_is_a_separate_kind_and_not_a_gap(tmp_path):
+    put(tmp_path, "udp_up_53", [(1, 1), (10, 1)])
+    put(tmp_path, "udp_unknown_53", [(5, 1)])
+    series = [("udp_up_53", "UDP:53")]
+    found = unmeasured(tmp_path, series)
+    assert [(p.kind, p.services) for p in found if p.kind == "unknown"] == [("unknown", ["UDP:53"])]
+    assert not [p for p in found if p.kind == "gap" and p.start == at(5)]
+def test_unmeasured_periods_of_several_ports_are_merged_per_kind(tmp_path):
+    put(tmp_path, "tcp_up_25", [(1, 1), (20, 1)])
+    put(tmp_path, "tcp_up_587", [(1, 1), (20, 1)])
+    [gap] = unmeasured(tmp_path, [("tcp_up_25", "TCP:25"), ("tcp_up_587", "TCP:587")])
+    assert gap.services == ["TCP:25", "TCP:587"]
+def test_unmeasured_periods_ignore_disabled_series_and_continuous_data(tmp_path):
+    put(tmp_path, "http_up", [(m, 1) for m in range(1, 10)])
+    put(tmp_path, "ping_up", [(1, 1), (30, 1)])
+    assert unmeasured(tmp_path, HTTP, now=at(10)) == []
+def test_silence_since_the_last_measurement_is_an_open_gap(tmp_path):
+    put(tmp_path, "http_up", [(1, 1), (2, 1)])
+    [gap] = unmeasured(tmp_path, now=at(30))
+    assert (gap.kind, gap.start, gap.end, gap.duration_seconds) == ("gap", at(2), None, None)
+    assert unmeasured(tmp_path, now=at(3)) == []

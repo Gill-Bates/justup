@@ -416,6 +416,7 @@
 }
 
 .dashboard-monitor-body--compact {
+	container: dashboard-body / inline-size;
 	gap: var(--ui-stat-gap);
 	padding-block: 0.5rem;
 }
@@ -461,6 +462,13 @@
 	overflow-wrap: break-word;
 }
 
+
+/* Too narrow for three columns of whole words: one metric per row, number still above its label. */
+@container dashboard-body (width < 13rem) {
+	.dashboard-monitor-metrics {
+		grid-template-columns: minmax(0, 1fr);
+	}
+}
 
 .dashboard-monitor-metrics dt {
 	order: 2;

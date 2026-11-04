@@ -1079,7 +1079,14 @@ class MonitorScheduler:
                 "auto_close_alert": bool(r["auto_close_alert"]),
                 "_jitter_offset": _stable_jitter_offset(tid),
             }
+            previous = self._targets.get(tid)
             self._targets[tid] = cfg
+            if (
+                previous is not None
+                and tid in self._rt
+                and self._udp_scan_target(previous) != self._udp_scan_target(cfg)
+            ):
+                self._drop_udp_scan(self._rt[tid])
             if tid not in self._rt:
                 offset = cfg["_jitter_offset"]
                 if self._initial_load_done:
@@ -1134,6 +1141,22 @@ class MonitorScheduler:
         for tid in list(self._targets.keys()):
             if tid not in seen:
                 self.forget_target(tid)
+
+    @staticmethod
+    def _udp_scan_target(cfg: dict[str, Any]) -> tuple[str, bool]:
+        """What a UDP scan result belongs to: the scanned host and whether UDP scanning is on."""
+        return str(cfg.get("host") or cfg.get("tcp_host") or ""), bool(cfg.get("enable_udp_scan"))
+
+    @staticmethod
+    def _drop_udp_scan(rt: TargetRuntime) -> None:
+        """Cancel a running UDP scan and forget results of the old host/configuration."""
+        if rt.udp_task is not None and not rt.udp_task.done():
+            rt.udp_task.cancel()
+        rt.udp_task = None
+        rt.udp_result = {}
+        rt.udp_result_at = None
+        rt.udp_last_started = None
+        rt.udp_closed_streak.clear()
 
     @staticmethod
     def _target_matches_snapshot(conn, target_id: int, cfg: dict[str, Any]) -> bool:
@@ -1841,6 +1864,8 @@ class MonitorScheduler:
             return  # target deleted or re-created meanwhile: a late result must not be adopted
         if list(self._targets[target_id].get("udp_ports") or []) != ports:
             return  # port configuration changed while scanning
+        if self._udp_scan_target(self._targets[target_id]) != (host, True):
+            return  # host changed or UDP scanning was switched off while scanning
         outcome = self._confirm_udp_closed(rt, outcome)
         rt.udp_result = outcome
         rt.udp_result_at = utcnow()
@@ -1887,6 +1912,8 @@ class MonitorScheduler:
         judged: dict[str, str] = {}
         generation = maintenance.current_generation() if generation is None else generation
         with maintenance.work_section(generation), self._db_conn() as conn:
+            if not self._target_matches_snapshot(conn, target_id, cfg):
+                return {}  # target edited or deleted while the scan ran: the result belongs to the old state
             stored = {(r["protocol"], r["port"]): r for r in sqlite_db.list_network_ports(conn, target_id)}
             for key, found in observed.items():
                 assessment = checks.assess_service_identity(stored.get(key), found.service)

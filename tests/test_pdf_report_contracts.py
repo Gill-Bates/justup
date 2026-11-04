@@ -447,6 +447,33 @@ def test_pdf_tls_scan_deadline_leaves_time_before_the_job_timeout(monkeypatch):
     assert calls == [("https://host.example", {"timeout": 15, "deadline": 60.0})]
 
 
+@pytest.mark.parametrize(
+    ("fields", "expected"),
+    [
+        ({"http_url": "https://host.example", "cert_port": 8443}, "https://host.example:8443"),
+        ({"cert_host": "2001:db8::1", "cert_port": 8443}, "https://[2001:db8::1]:8443"),
+        ({"cert_host": "2001:db8::1"}, "https://[2001:db8::1]"),
+        ({"cert_host": "c.example", "http_url": "https://h.example:9443/x"}, "https://c.example:9443"),
+        ({"cert_host": "c.example", "http_url": "https://h.example", "http_port": 8443}, "https://c.example:8443"),
+        ({"cert_host": "c.example", "http_url": "http://h.example"}, "https://c.example"),
+        ({"http_url": "https://[2001:db8::1]:8443/"}, "https://[2001:db8::1]:8443"),
+        ({"http_url": "http://host.example", "http_port": 8080}, None),
+        ({"http_url": "https://host.example", "cert_port": 99999}, None),
+    ],
+)
+def test_get_ssl_data_uses_the_shared_certificate_target_resolution(monkeypatch, fields, expected):
+    calls = []
+
+    def scan(target, **kwargs):
+        calls.append(target)
+        return _tls_result()
+
+    monkeypatch.setattr(pdf_report, "scan_tls", scan)
+    result = _builder(fields)._get_ssl_data()
+    assert calls == ([expected] if expected else [])
+    assert (result is None) == (expected is None)
+
+
 # ─── Layout contracts: chapters, page breaks, repeated headers, A4/Letter ──────────────────────
 
 

@@ -88,6 +88,7 @@ from ..utils.constants import (
     SettingKeys,
 )
 from ..utils.deps import get_conn, get_tsdb_dir
+from ..utils.endpoint_view import build_endpoint_views
 from ..utils.formatters import format_compact_count, format_percent, row_to_alert_dict
 from ..utils.public_url import get_public_hostname
 from ..utils.rate_limit import rate_limit
@@ -481,6 +482,8 @@ def _target_detail_view(conn, row, target_id: int) -> dict:
     else:
         target.update(get_status_defaults())
         target["overall_status"] = "unknown" if bool(row["is_enabled"]) else "disabled"
+    target["network_ports"] = sqlite_db.list_network_ports(conn, target_id)
+    target["endpoints"] = build_endpoint_views(target, target["network_ports"])
     return target
 
 
@@ -1268,6 +1271,7 @@ def fragment_targets_table(
         rows, total = sqlite_db.list_targets_paginated(conn, page=page, page_size=page_size)
 
     status_cache = {s["target_id"]: s for s in sqlite_db.get_all_target_statuses(conn)}
+    stored_ports = sqlite_db.all_network_ports(conn)
 
     targets = []
     for r in rows:
@@ -1282,6 +1286,7 @@ def fragment_targets_table(
             # No cache = show defaults (scheduler hasn't run yet)
             t.update(get_status_defaults())
 
+        t["endpoints"] = build_endpoint_views(t, stored_ports.get(target_id, []))
         targets.append(t)
 
     # Sorting is already done in SQL (list_targets_paginated).
@@ -1579,9 +1584,28 @@ async def fragment_downtime_history(
         series=downtime_series(row),
         check_interval_seconds=row["interval_seconds"] or 60,
     )
+    unmeasured = await run_in_threadpool(
+        tsdb_db.query_unmeasured_periods,
+        request.app.state.tsdb_dir,
+        target_id=target_id,
+        since=query_since,
+        until=query_until,
+        limit=limit,
+        series=downtime_series(row),
+        check_interval_seconds=row["interval_seconds"] or 60,
+    )
+    # Three separate kinds: measured downtime, measurement gap, UNKNOWN result (the last two are no downtime).
+    entries = [
+        {"kind": "down", "start": p.start, "end": p.end, "duration_seconds": p.duration_seconds, "services": p.failed_services}
+        for p in periods
+    ] + [
+        {"kind": u.kind, "start": u.start, "end": u.end, "duration_seconds": u.duration_seconds, "services": u.services}
+        for u in unmeasured
+    ]
+    entries.sort(key=lambda entry: entry["start"], reverse=True)
 
     # Only claim "all up" when the range actually holds measurements.
-    has_data = bool(periods) or await run_in_threadpool(
+    has_data = bool(entries) or await run_in_threadpool(
         _has_availability_data,
         request.app.state.tsdb_dir,
         target_id,
@@ -1594,7 +1618,7 @@ async def fragment_downtime_history(
         request,
         "fragments/downtime_history.html",
         {
-            "periods": periods,
+            "periods": entries,
             "has_data": has_data,
             "use_utc": use_utc_dashboard(conn),
             "range_label": range_label,

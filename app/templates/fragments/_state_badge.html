@@ -1,0 +1,12 @@
+{# One badge for a check or endpoint state. UP, DOWN and UNKNOWN differ by text and icon shape, not only by colour (DESIGN.md, "Endpoint state"). #}
+{% macro state_badge(label, status, title='') -%}
+{%- set known = status if status in ('up', 'down') else 'unknown' -%}
+{%- set look = {'up': ('Up', 'check_circle', 'success'), 'down': ('Down', 'cancel', 'danger'), 'unknown': ('Unknown', 'help', 'neutral')}[known] -%}
+<span class="badge ju-status-badge--{{ look[2] }} ju-state-badge ju-state-badge--{{ known }}"{% if title %} title="{{ title }}"{% endif %}><span class="material-icons" aria-hidden="true">{{ look[1] }}</span>{{ label }}<span class="visually-hidden">: {{ look[0] }}</span></span>
+{%- endmacro %}
+{# The state itself as a badge: icon and visible word, no repeated hidden text. #}
+{% macro state_pill(status) -%}
+{%- set known = status if status in ('up', 'down') else 'unknown' -%}
+{%- set look = {'up': ('Up', 'check_circle', 'success'), 'down': ('Down', 'cancel', 'danger'), 'unknown': ('Unknown', 'help', 'neutral')}[known] -%}
+<span class="badge ju-status-badge--{{ look[2] }} ju-state-badge ju-state-badge--{{ known }}"><span class="material-icons" aria-hidden="true">{{ look[1] }}</span>{{ look[0] }}</span>
+{%- endmacro %}

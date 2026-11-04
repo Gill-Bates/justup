@@ -701,6 +701,43 @@ details[open]>summary .target-details-chevron {
 	background: var(--td-bad);
 }
 
+/* Unmeasured time is no downtime: a dashed ring (gap) and a diamond (UNKNOWN) differ from the solid red dot by shape. */
+.downtime-item--gap .downtime-marker {
+	border-color: var(--bs-secondary-color);
+	border-style: dashed;
+	background: transparent;
+}
+.downtime-item--unknown .downtime-marker {
+	border-color: var(--bs-secondary-color);
+	border-radius: 0.1rem;
+	background: transparent;
+	transform: rotate(45deg) scale(0.85);
+}
+.downtime-kind {
+	display: flex;
+	align-items: center;
+	gap: 0.25rem;
+	margin-bottom: 0.15rem;
+	font-size: 0.8125rem;
+}
+.downtime-kind .material-icons {
+	font-size: 1rem;
+}
+.downtime-kind--down {
+	color: var(--td-bad);
+}
+.downtime-kind--gap,
+.downtime-kind--unknown {
+	color: var(--bs-secondary-color);
+}
+.downtime-note {
+	margin-top: 0.15rem;
+	color: var(--bs-secondary-color);
+	font-size: 0.8125rem;
+}
+.downtime-summary-note {
+	font-size: 0.8125rem;
+}
 .downtime-times {
 	display: flex;
 	align-items: center;

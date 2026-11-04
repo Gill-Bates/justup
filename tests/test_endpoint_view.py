@@ -42,6 +42,7 @@ def target(**overrides) -> dict:
         "uptime_level": "none",
         "uptime_level_30d": "none",
         "uptime_percent_display": "–",
+        "uptime_percent": None,
         "overall_status": "unknown",
         "last_check": None,
         "group": None,
@@ -200,8 +201,10 @@ def test_dashboard_table_shows_endpoint_status_with_text_not_only_colour() -> No
         total=1,
         show_all=False,
     )
-    down = re.search(r"TCP:25.*?</span>\s*</span>", html, re.S).group(0)
-    unknown = re.search(r"UDP:161.*?</span>\s*</span>", html, re.S).group(0)
+    def badge(label: str) -> str:
+        return re.search(rf'<span class="badge[^>]*>(?:(?!<span class="badge).)*?{label}.*?</span></span>', html, re.S).group(0)
+
+    down, unknown = badge("TCP:25"), badge("UDP:161")
     assert "Down" in down and "Unknown" in unknown
     assert "cancel" in down and "help" in unknown
 

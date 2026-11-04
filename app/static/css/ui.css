@@ -1528,6 +1528,21 @@ textarea.smtp-editor-frame {
 	color: var(--bs-white);
 }
 
+/* Check/endpoint state badge (DESIGN.md, "Endpoint state"): the icon shape and a dashed edge mark UNKNOWN besides its text. */
+.ju-state-badge {
+	gap: 0.2rem;
+}
+.ju-state-badge--unknown {
+	border: 1px dashed currentColor;
+}
+@media (forced-colors: active) {
+	.ju-state-badge {
+		border: 1px solid CanvasText;
+	}
+	.ju-state-badge--unknown {
+		border-style: dashed;
+	}
+}
 /* Compact badges in tables */
 .table .badge {
 	font-size: 0.7rem;

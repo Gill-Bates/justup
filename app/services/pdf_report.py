@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, tzinfo
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import urlparse
 from xml.sax.saxutils import escape as _xml_escape
 
 import matplotlib as mpl
@@ -3085,7 +3085,8 @@ class PDFReportBuilder:
         """Fetch and cache the normalized TLS scan for the target.
 
         Returns cached result on subsequent calls.
-        Respects custom cert_host/cert_port or port in http_url.
+        Uses resolve_cert_target (cert_host/cert_port > http_url > http_port), like the live certificate
+        check. Without cert_host, only https targets are scanned; None means nothing was scanned.
         """
         if self._ssl_fetched:
             return self._ssl_cache
@@ -3094,39 +3095,27 @@ class PDFReportBuilder:
 
         target = self.report_data.target
 
-        # Priority 1: Explicit cert_host and cert_port
         cert_host = target.get("cert_host")
-        cert_port = target.get("cert_port")
-        http_port = target.get("http_port")
-
-        if cert_host:
-            port = cert_port or http_port or 443
-            ssl_target = f"https://{cert_host}:{port}"
-            _log.debug("TLS scan using explicit cert_host: %s", ssl_target)
-        else:
-            # Priority 2: Extract from http_url (may contain custom port)
-            http_url = target.get("http_url") or target.get("url") or ""
-
-            if not http_url:
-                host = target.get("host", "")
-                if host:
-                    http_url = f"https://{host}"
-
-            if not http_url.startswith("https://"):
+        http_url = target.get("http_url") or target.get("url") or ""
+        if not http_url and target.get("host"):
+            http_url = f"https://{target['host']}"
+        if not http_url.startswith("https://"):
+            if not cert_host:
                 _log.debug("Skipping SSL scan for non-HTTPS target: %s", redact_url(http_url))
                 return None
+            http_url = ""  # an explicit cert_host is scanned even when the site itself is plain HTTP
 
-            # Respect request-port override if URL has no explicit port.
-            ssl_target = http_url
-            try:
-                parsed = urlparse(http_url)
-                if http_port and parsed.hostname and parsed.port is None:
-                    host = parsed.hostname
-                    if ":" in host and not host.startswith("["):
-                        host = f"[{host}]"
-                    ssl_target = urlunparse(parsed._replace(netloc=f"{host}:{int(http_port)}"))
-            except ValueError:
-                ssl_target = http_url
+        try:
+            host, port = resolve_cert_target({**target, "http_url": http_url or None})
+        except ValueError as exc:
+            _log.warning("Skipping SSL scan: %s", exc)
+            return None
+        if not host:
+            return None
+        if ":" in host and not host.startswith("["):
+            host = f"[{host}]"
+        ssl_target = f"https://{host}" if port == 443 else f"https://{host}:{port}"
+        _log.debug("TLS scan target resolved: %s", redact_url(ssl_target))
 
         _log.debug("Running TLS scan for %s", redact_url(ssl_target))
         try:

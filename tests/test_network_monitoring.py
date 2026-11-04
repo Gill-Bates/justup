@@ -639,3 +639,65 @@ def test_port_status_constants_match_the_contract():
         "changed",
     )
     assert SimpleNamespace  # keep the import used for readability of ad-hoc fakes
+
+
+@pytest.mark.parametrize("change", ["host", "disable_udp"])
+def test_running_udp_scan_is_dropped_when_the_target_host_or_udp_scan_changes(db_path, tmp_path, monkeypatch, change):
+    tid = _target(db_path, enable_udp_scan=True, udp_ports="53")
+    sched = _sched(db_path, tmp_path)
+    sched._refresh_targets(utcnow())
+
+    async def scenario():
+        gate = asyncio.Event()
+
+        async def slow():
+            await gate.wait()
+            return _scan_result({53: "open"})
+
+        _fake_scan(monkeypatch, slow)
+        await sched._run_target(tid, utcnow())
+        rt = sched._rt[tid]
+        task = rt.udp_task
+        conn = sqlite_db.connect(db_path)
+        column, value = ("host", "other.example") if change == "host" else ("enable_udp_scan", 0)
+        conn.execute(f"UPDATE targets SET {column} = ? WHERE id = ?", (value, tid))  # noqa: S608
+        conn.commit()
+        sqlite_db.close_connection(conn)
+        sched._refresh_targets(utcnow())
+        gate.set()
+        await asyncio.gather(task, return_exceptions=True)
+        assert sched._rt[tid] is rt and rt.udp_result == {} and rt.udp_result_at is None
+        assert _ports(db_path, tid)[("udp", 53)]["status"] != "up"
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("change", ["edited", "deleted"])
+def test_redetection_result_is_discarded_when_the_target_changed_meanwhile(db_path, tmp_path, monkeypatch, change):
+    tid = _target(db_path, enable_tcp_connect=True, tcp_ports="25")
+    conn = sqlite_db.connect(db_path)
+    sqlite_db.sync_network_ports(
+        conn, tid, tcp_ports=[25], udp_ports=[], scan_result=_scan_result({25: "open"}, _svc(), tcp=True)
+    )
+    conn.commit()
+    sqlite_db.close_connection(conn)
+    sched = _sched(db_path, tmp_path)
+    sched._refresh_targets(utcnow())
+    before = _ports(db_path, tid)[("tcp", 25)]["service_identity"]
+
+    def change_target():
+        conn = sqlite_db.connect(db_path)
+        if change == "edited":
+            conn.execute(
+                "UPDATE targets SET host = 'other.example', updated_at = '2099-01-01T00:00:00' WHERE id = ?", (tid,)
+            )
+        else:
+            conn.execute("DELETE FROM targets WHERE id = ?", (tid,))
+        conn.commit()
+        sqlite_db.close_connection(conn)
+        return _scan_result({25: "open"}, _svc(name="http", product="nginx", version="1"), tcp=True)
+
+    _fake_scan(monkeypatch, change_target)
+    assert asyncio.run(sched.redetect_services(tid)) == {}
+    if change == "edited":
+        assert _ports(db_path, tid)[("tcp", 25)]["service_identity"] == before
