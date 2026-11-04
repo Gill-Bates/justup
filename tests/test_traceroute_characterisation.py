@@ -22,8 +22,8 @@ import pytest
 
 from app.api import frontend
 from app.services import pdf_report, traceroute_geo
-from tests.traceroute_helpers import patch_trace
 from tests.test_traceroute_pipeline import HOST, ROUTES, TARGET_IP, _geo, _patch_sources
+from tests.traceroute_helpers import patch_trace
 
 
 def _record_mtr(monkeypatch: pytest.MonkeyPatch, hops: list[dict], resolved: str | None) -> list[tuple[Any, Any]]:
@@ -49,7 +49,10 @@ def _record_mtr(monkeypatch: pytest.MonkeyPatch, hops: list[dict], resolved: str
     ids=["resolved-v4", "resolved-v6", "unresolved-v6-literal", "unresolved-name"],
 )
 def test_both_pipelines_trace_the_resolved_address_or_nothing(
-    monkeypatch: pytest.MonkeyPatch, resolved: str | None, host: str, force_ipv6: bool | None
+    monkeypatch: pytest.MonkeyPatch,
+    resolved: str | None,
+    host: str,
+    force_ipv6: bool | None,  # noqa: ARG001
 ) -> None:
     calls = _record_mtr(monkeypatch, ROUTES["reached"], resolved)
     pdf_report._run_traceroute_with_interpolation(host)

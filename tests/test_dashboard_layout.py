@@ -322,3 +322,15 @@ def test_availability_invalid_state_and_window_bounds():
     assert _avail([(0, 2), (30, 1)], stale_after=1000.0, minutes=1) == (30.0, 30.0)
     assert _avail([(0, 1)], stale_after=1000.0, minutes=1) == (60.0, 60.0)
     assert _avail([], minutes=1) == (0.0, 0.0)
+
+
+def test_availability_last_point_is_capped_by_stale_after_and_window_start():
+    # last sample vouches for stale_after only, not until the window end
+    assert _avail([(0, 1), (500, 0)], stale_after=100.0) == (100.0, 200.0)
+    # a sample before the window start only counts from `since`
+    assert _avail([(-50, 1)], stale_after=100.0, minutes=10) == (50.0, 50.0)
+
+
+def test_availability_non_monotonic_timestamps_never_yield_negative_time():
+    up, known = _avail([(300, 1), (100, 0), (200, 1)], stale_after=1000.0, minutes=10)
+    assert 0.0 <= up <= known <= 600.0

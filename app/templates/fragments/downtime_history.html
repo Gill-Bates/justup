@@ -13,10 +13,6 @@
 <div class="downtime-panel" data-range-label="{{ range_label | default('30d') }}">
 	<div class="downtime-head">
 		{{ stats() }}
-		<details class="downtime-info">
-			<summary aria-label="About downtimes and data gaps"><span class="material-icons" aria-hidden="true">info</span></summary>
-			<p>Downtime is a confirmed outage. A data gap is time without measurements or with an inconclusive result; it counts neither as downtime nor as uptime.</p>
-		</details>
 	</div>
 	<div class="downtime-scroll" role="region" aria-label="Downtime history" tabindex="0">
 		<ol class="downtime-list">

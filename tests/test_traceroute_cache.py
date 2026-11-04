@@ -20,9 +20,9 @@ from app.api import frontend as frontend_api
 from app.db import sqlite as sqlite_db
 from app.models.users import hash_token, new_token
 from app.services import route_interpolator, traceroute_geo, traceroute_service
-from tests.traceroute_helpers import patch_trace
 from app.utils import crypto
 from tests import _support  # noqa: F401 - imported for its sys.path side effect
+from tests.traceroute_helpers import patch_trace
 
 
 def test_traceroute_fragment_reuses_authorized_recent_result(tmp_path: Path, monkeypatch) -> None:
@@ -287,7 +287,11 @@ def test_fragment_counts_collapsed_hops_and_renders_panels(tmp_path: Path, monke
     # Visible text names each step; an aria-label would trip axe's label-content-name-mismatch.
     assert not re.search(r"<button[^>]*tr-step-btn[^>]*aria-label", text)
     assert text.count(">No reply<") >= 4 and text.count("ju-status-badge--warning") >= 1
-    assert "15.7 ms" in text and "%" not in text.split("hop-table", 1)[1].split("</table>")[0] and "Frankfurt am Main, DE" in text
+    assert (
+        "15.7 ms" in text
+        and "%" not in text.split("hop-table", 1)[1].split("</table>")[0]
+        and "Frankfurt am Main, DE" in text
+    )
     assert "Geolocated route for 2 of 7 hops" in text
     for header in ("IP address", "Hostname", "Location", "RTT", "Status"):
         assert f">{header}</th>" in text
@@ -385,7 +389,9 @@ def _measured_at(response) -> int:
 
 def _allow_refresh(app, target_id: int, host: str = "diag.example.com") -> None:
     with frontend_api._traceroute_refresh_lock:
-        frontend_api._traceroute_refresh_finished[(f"{frontend_api._TRACEROUTE_CACHE_VERSION}:{app.state.db_path}", target_id, host)] = time.monotonic() - 60
+        frontend_api._traceroute_refresh_finished[
+            (f"{frontend_api._TRACEROUTE_CACHE_VERSION}:{app.state.db_path}", target_id, host)
+        ] = time.monotonic() - 60
 
 
 def test_response_carries_the_original_measurement_time(tmp_path: Path, monkeypatch) -> None:
@@ -424,7 +430,9 @@ def test_refresh_bypasses_the_server_cache_and_reports_the_new_time(tmp_path: Pa
     assert limited.status_code == 429 and "x-measured-at" not in limited.headers and len(calls) == 2
     _allow_refresh(app, target_id)
     with frontend_api._traceroute_refresh_lock:
-        frontend_api._traceroute_refresh_inflight.add((f"{frontend_api._TRACEROUTE_CACHE_VERSION}:{app.state.db_path}", target_id, "diag.example.com"))
+        frontend_api._traceroute_refresh_inflight.add(
+            (f"{frontend_api._TRACEROUTE_CACHE_VERSION}:{app.state.db_path}", target_id, "diag.example.com")
+        )
     assert client.get(f"{url}?refresh=1", headers=_HX).status_code == 429
     assert len(calls) == 2
     client.close()
@@ -569,15 +577,15 @@ def test_timeline_legend_lists_only_present_states() -> None:
 
 def test_fragment_renders_single_timeline(tmp_path: Path, monkeypatch) -> None:
     hops = [
-        _ok_hop(1, "10.0.0.1", 1.0),
+        _ok_hop(1, "2001:db8::1", 1.0),
         _timeout_hop(2),
         _timeout_hop(3),
-        _ok_hop(4, "10.0.0.4", 3.0),
-        _ok_hop(5, "10.0.0.5", 4.0),
-        _ok_hop(6, "10.0.0.6", 5.0),
+        _ok_hop(4, "2001:db8::4", 3.0),
+        _ok_hop(5, "2001:db8::5", 4.0),
+        _ok_hop(6, "2001:db8::6", 5.0),
         _ok_hop(7, "2001:db8::99", 6.0),
     ]
-    geo = [{"ip": "10.0.0.5", "lat": 51.5, "lon": 7.4, "city": "Dortmund", "country": "DE", "hop": 5}]
+    geo = [{"ip": "2001:db8::5", "lat": 51.5, "lon": 7.4, "city": "Dortmund", "country": "DE", "hop": 5}]
     client, url, _calls, _app, _tid = _diagnostics_client(
         tmp_path, monkeypatch, hops, target_ip="2001:db8::99", geo_points=geo
     )
@@ -589,7 +597,7 @@ def test_fragment_renders_single_timeline(tmp_path: Path, monkeypatch) -> None:
     assert "Start / Destination" not in text and ">Start<" not in text
     assert not re.search(r"<button[^>]*tr-step-btn[^>]*aria-label", text)
     assert 'data-hop-first="1"' in text and 'data-country="DE"' in text
-    assert "10.0.0.1" in text and "10.0.0.5" in text
+    assert "2001:db8::1" in text and "2001:db8::5" in text
     assert 'aria-controls="tr-group-2-3"' not in text  # 2 hops are below the group threshold
     assert 'class="tr-route-legend"' in text and "No map location" in text
     assert "Hop 1–7" in text and "7 hops" in text

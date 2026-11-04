@@ -139,6 +139,7 @@ def test_fragment_mixed_has_three_shapes_and_one_figure_row():
     assert "Unknown" in found["unknown"] and "Result inconclusive" in found["unknown"]
     assert re.search(r"<strong>1</strong> Downtime<", html) and re.search(r"<strong>2</strong> Data gaps<", html)
     assert "uptime" not in "".join(found.values()).lower()
+    assert "<details" not in html and "downtime-info" not in html and "confirmed outage" not in html
     assert 'class="downtime-scroll"' in html and html.count('class="downtime-scroll"') == 1
 
 

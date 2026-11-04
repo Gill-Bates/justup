@@ -211,7 +211,7 @@ test('corrupt, incompatible, oversized and future entries are discarded', () => 
   const clock = { t: T0 };
   const scope = { user: 'u1', target: 't1', build: 'b1' };
   const key = 'justup.traceroute.v1.e.u1.t1';
-  const good = { schemaVersion: 2, build: 'b1', user: 'u1', target: 't1', measuredAt: T0, html: '<p>x</p>' };
+  const good = { schemaVersion: 3, build: 'b1', user: 'u1', target: 't1', measuredAt: T0, html: '<p>x</p>' };
   const cases = {
     garbage: '{not json',
     schema: JSON.stringify({ ...good, schemaVersion: 1 }),

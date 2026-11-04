@@ -11,12 +11,14 @@ the hop table without measuring or geolocating anything on the network.
 """
 
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from app.services import mtr_run
+from app.services import nmap_client, traceroute_service
 from app.services import traceroute_geo as tg
+from app.services.route_model import Route, RouteHop
 
 _ROUTE = [
     ("10.0.0.1", None),
@@ -31,35 +33,33 @@ _ROUTE = [
 _SITES = {ip: site for ip, site in _ROUTE if site}
 
 
-def _run_mtr(_host, **_kwargs):
+async def _request_traceroute(host, **_kwargs):
+    """Offline stand-in for the Nmap worker: the fixed route above as a Route, no network."""
     hops = []
     for number, (ip, _site) in enumerate(_ROUTE, 1):
         if ip == "*":
+            hops.append(RouteHop(hop_number=number, status="no_reply"))
+        else:
             hops.append(
-                {
-                    "hop": number,
-                    "ip": ip,
-                    "hostname": None,
-                    "hostname_display": None,
-                    "latency_ms": None,
-                    "loss_pct": 100.0,
-                    "status": "timeout",
-                }
+                RouteHop(
+                    hop_number=number,
+                    ip=ip,
+                    hostname=f"core{number}.carrier-example.net",
+                    rtt_ms=3.0 * number,
+                    status="ok",
+                )
             )
-            continue
-        name = f"core{number}.carrier-example.net"
-        hops.append(
-            {
-                "hop": number,
-                "ip": ip,
-                "hostname": name,
-                "hostname_display": name,
-                "latency_ms": {"avg": 3.0 * number, "min": 2.0 * number, "max": 4.0 * number},
-                "loss_pct": 0.0,
-                "status": "ok",
-            }
-        )
-    return hops
+    now = datetime.now(UTC)
+    return Route(
+        destination_ip=host,
+        address_family="ipv4",
+        started_at=now,
+        completed_at=now,
+        duration_ms=0,
+        destination_reached=True,
+        complete=True,
+        hops=hops,
+    )
 
 
 def _geolocate(ip, _hostname=None):
@@ -80,8 +80,9 @@ def _geolocate(ip, _hostname=None):
     }
 
 
-mtr_run.run_mtr = _run_mtr
-mtr_run.resolve_target_ip = lambda _host: _ROUTE[-1][0]
+nmap_client.request_traceroute = _request_traceroute
+traceroute_service.resolve_target_ip = lambda _host: _ROUTE[-1][0]
+traceroute_service._add_reverse_dns = lambda _hops: None  # noqa: SLF001
 tg.geolocate_with_hostname_hint = _geolocate
 
 if __name__ == "__main__":

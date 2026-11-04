@@ -38,25 +38,9 @@ from ..utils.time import parse_utc, utcnow
 from ..utils.uptime_metric import select_uptime_metric
 from .auth import get_current_user
 
-# Server-side allowlist of widget ids; kept in sync with the registry in
-# app/static/js/dashboard-widgets.js by tests/test_dashboard_layout.py.
-DASHBOARD_WIDGETS = frozenset(
-    {
-        "status-online",
-        "status-offline",
-        "status-disabled",
-        "status-total",
-        "quality",
-        "downtime",
-        "alerts-open",
-        "delivery-queue",
-        "uptime-day",
-        "cert-expiry",
-        "slowest-monitors",
-        "quality-trend",
-        "stale-checks",
-    }
-)
+# Server-side allowlist of widget ids, derived from the minimum-size table; kept in sync with the
+# registry in app/static/js/dashboard-widgets.js by tests/test_dashboard_layout.py.
+DASHBOARD_WIDGETS = frozenset(DASHBOARD_WIDGET_MIN_SIZES)
 
 
 class DashboardWidgetLayout(BaseModel):

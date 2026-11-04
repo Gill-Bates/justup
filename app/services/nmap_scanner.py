@@ -199,7 +199,7 @@ def _port_argument(tcp_ports: list[int], udp_ports: list[int]) -> str:
 
 def _resolve_slots() -> asyncio.Semaphore:
     """Return the resolution limiter of the running loop (created lazily: a semaphore binds to one loop)."""
-    global _resolve_gate  # noqa: PLW0603
+    global _resolve_gate
     loop = asyncio.get_running_loop()
     if _resolve_gate is None or _resolve_gate[0] is not loop:
         _resolve_gate = (loop, asyncio.Semaphore(MAX_CONCURRENT_RESOLUTIONS))

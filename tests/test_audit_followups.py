@@ -13,7 +13,6 @@ import asyncio
 import errno
 import ipaddress
 import json
-import subprocess
 from pathlib import Path
 from unittest import mock
 

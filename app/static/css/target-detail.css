@@ -700,42 +700,6 @@ details[open]>summary .target-details-chevron {
 	font-weight: 600;
 }
 
-.downtime-info {
-	margin-left: auto;
-	color: var(--bs-secondary-color);
-}
-
-.downtime-info[open] {
-	flex: 1 0 100%;
-}
-
-.downtime-info summary {
-	display: flex;
-	justify-content: flex-end;
-	padding: 0.125rem;
-	border-radius: var(--bs-border-radius-sm);
-	cursor: pointer;
-	list-style: none;
-}
-
-.downtime-info summary::-webkit-details-marker {
-	display: none;
-}
-
-.downtime-info summary:focus-visible {
-	outline: var(--ju-focus-outline-width) solid var(--ju-focus-ring);
-	outline-offset: var(--ju-focus-outline-offset);
-}
-
-.downtime-info .material-icons {
-	font-size: 1.125rem;
-}
-
-.downtime-info p {
-	margin: 0.25rem 0;
-	font-size: 0.8125rem;
-}
-
 /* Only the list scrolls; the figures above stay in view. The cap matches the neighbouring availability plot. */
 .downtime-scroll {
 	max-height: calc(clamp(240px, 30vh, 340px) - 2.25rem);

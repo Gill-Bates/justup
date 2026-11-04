@@ -108,6 +108,10 @@ SLA targets (availability %, HTTP response time, ping latency) are set per targe
 They affect charts and reports only and never raise alerts. Without an
 availability target, charts assume 99.9 %. See [Reports](reports.md).
 
+## Downtimes and data gaps
+
+The downtime card of a target lists three kinds of period. A **downtime** is a confirmed outage: the enabled checks measured failures. A **data gap** is time without measurements (a gap longer than three check intervals, shown as `No measurements`) or with an inconclusive result (shown as `Unknown`). A data gap counts neither as downtime nor as uptime, so it never lowers or raises the availability figures. The card shows both counts separately; a running downtime is marked `Ongoing`. Times are shown compactly (seconds hidden); the exact timestamps and duration appear on hover.
+
 ## Dashboard
 
 The dashboard shows online, offline, disabled, and total targets, the connection

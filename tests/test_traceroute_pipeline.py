@@ -19,9 +19,9 @@ import pytest
 from app.api import frontend
 from app.services import geo_resolver as gr
 from app.services import pdf_report, traceroute_geo, traceroute_service
-from tests.traceroute_helpers import patch_trace
 from app.services.route_timeline import mapped_hop_numbers
 from tests import _support  # noqa: F401 - imported for its sys.path side effect
+from tests.traceroute_helpers import patch_trace
 
 TARGET_IP = "198.51.100.9"
 HOST = "dest.example"

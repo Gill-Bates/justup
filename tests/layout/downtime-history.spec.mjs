@@ -125,7 +125,9 @@ test("downtime card: compact event and mixed kinds @downtime-history", async ({ 
 		const { height, lineHeight } = await item.evaluate((el) => ({ height: el.getBoundingClientRect().height, lineHeight: parseFloat(getComputedStyle(el).lineHeight) }));
 		assert.ok(height <= lineHeight * 3 + 16, `simple event is ${height}px high`);
 		assert.match(await item.innerText(), /Downtime[\s\S]*\d+ \w{3} · \d\d:\d\d[–]\d\d:\d\d[\s\S]*TCP:25/);
-		assert.match(await page.locator(".downtime-info p").evaluate((p) => p.textContent), /neither as downtime nor as uptime/);
+		// The interface names states but does not explain terms; that belongs to the documentation.
+		assert.equal(await page.locator("#downtime-history-card details, #downtime-history-card .downtime-info").count(), 0);
+		assert.doesNotMatch(await page.locator("#downtime-history-card").innerText(), /confirmed outage|neither as downtime/);
 	} finally {
 		await context.close();
 	}
