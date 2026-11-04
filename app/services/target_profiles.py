@@ -29,6 +29,7 @@ def build_profile(
     name: str | None = None,
     group: str | None = None,
     tcp_ports: str | None = None,
+    udp_ports: str | None = None,
     overrides: dict | None = None,
 ) -> tuple[TargetCreate, bool]:
     if profile not in PROFILE_LABELS:
@@ -67,9 +68,12 @@ def build_profile(
             raise ValueError("Host is required")
         values["host"] = host
         if profile == "tcp":
-            if not tcp_ports or not tcp_ports.strip():
-                raise ValueError("TCP ports must be selected explicitly")
-            values.update(enable_tcp_connect=True, tcp_ports=tcp_ports)
+            if not (tcp_ports and tcp_ports.strip()) and not (udp_ports and udp_ports.strip()):
+                raise ValueError("TCP or UDP ports must be selected explicitly")
+            if tcp_ports and tcp_ports.strip():
+                values.update(enable_tcp_connect=True, tcp_ports=tcp_ports)
+            if udp_ports and udp_ports.strip():
+                values.update(enable_udp_scan=True, udp_ports=udp_ports)
         else:
             values["enable_ping"] = True
     if overrides:
@@ -89,4 +93,9 @@ def build_profile(
         if not values.get("tcp_host"):
             values["tcp_host"] = values["host"]
         values["tcp_ports"] = selected_ports
+    if values.get("enable_udp_scan"):
+        selected_udp_ports = values.get("udp_ports") or udp_ports
+        if not selected_udp_ports or not str(selected_udp_ports).strip():
+            raise ValueError("UDP ports must be selected explicitly")
+        values["udp_ports"] = selected_udp_ports
     return TargetCreate.model_validate(values), suggested_https

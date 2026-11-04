@@ -15,6 +15,7 @@
 !docker/libsignal-pins.txt
 !docker/requirements.lock
 !docker/vendor/wheels/
+!tools/nmap-release.py
 !pyproject.toml
 
 # ─── ALLOW: Documentation for About page ───

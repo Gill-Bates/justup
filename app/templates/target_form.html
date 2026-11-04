@@ -665,6 +665,34 @@
 					</div>
 				</div>
 
+				<div class="card mb-3 check-card" data-check="udp">
+					<div class="card-header d-flex align-items-center justify-content-between">
+						<div>
+							<span class="material-icons text-warning me-2" aria-hidden="true">settings_ethernet</span>
+							<strong>UDP ports</strong>
+							<div class="text-body-secondary small">Open, closed, and uncertain UDP states are kept distinct.</div>
+						</div>
+						<div class="form-check form-switch">
+							<input class="form-check-input" type="checkbox" role="switch" aria-label="Enable UDP port checks"
+								id="enable_udp_scan" name="enable_udp_scan" {{ 'checked' if target.enable_udp_scan else '' }}>
+						</div>
+					</div>
+					<div class="check-body" id="udp-check-body">
+						<label for="udp_ports" class="form-label">UDP ports *</label>
+						<input type="text" id="udp_ports" name="udp_ports" class="form-control" inputmode="numeric"
+							maxlength="200" placeholder="e.g. 53,161" value="{{ target.udp_ports or '' }}">
+						<div class="form-text">Enter port numbers separated by commas, or add ports from a scan.</div>
+					</div>
+				</div>
+
+				{% set scan_prefix = 'edit' %}
+				{% set scan_host_id = 'host-input' %}
+				{% set scan_tcp_id = 'tcp_ports' %}
+				{% set scan_udp_id = 'udp_ports' %}
+				{% set scan_tcp_toggle_id = 'enable_tcp_connect' %}
+				{% set scan_udp_toggle_id = 'enable_udp_scan' %}
+				{% include 'fragments/network_scan_picker.html' %}
+
 					</div>
 					<div class="tab-pane fade" id="target-alerts-pane" role="tabpanel"
 						aria-labelledby="target-alerts-tab" tabindex="0">
@@ -789,6 +817,7 @@
 
 		// Initialize from hidden input value
 		function initFromValue() {
+			ports = [];
 			const value = hiddenInput.value.trim();
 			if (value) {
 				value.split(',').forEach(p => {
@@ -896,6 +925,7 @@
 		});
 
 		initFromValue();
+		hiddenInput.addEventListener('change', initFromValue);
 	})();
 
 	// ═══════════════════════════════════════════════════════════════════════════════
@@ -1096,9 +1126,21 @@
 	// ═══════════════════════════════════════════════════════════════════════════════
 	// FORM SUBMISSION
 	// ═══════════════════════════════════════════════════════════════════════════════
+	document.getElementById('udp_ports').addEventListener('input', event => event.target.setCustomValidity(''));
 	document.getElementById('target-form').addEventListener('submit', async (e) => {
 		e.preventDefault();
 		const form = e.target;
+		const udpValue = form.udp_ports.value.trim();
+		const validUdpPorts = udpValue && udpValue.split(',').every(part => {
+			const text = part.trim();
+			return /^[0-9]+$/.test(text) && Number(text) >= 1 && Number(text) <= 65535;
+		});
+		if ((form.enable_udp_scan.checked || udpValue) && !validUdpPorts) {
+			form.udp_ports.setCustomValidity('Enter UDP ports from 1 to 65535, separated by commas.');
+			form.udp_ports.reportValidity();
+			return;
+		}
+		form.udp_ports.setCustomValidity('');
 		const submitBtn = form.querySelector('button[type="submit"]');
 		const originalSubmitHtml = submitBtn.innerHTML;
 
@@ -1140,6 +1182,7 @@
 			http_port: form.http_port?.value ? parseInt(form.http_port.value) : null,
 			http_success_codes: _normText(form.http_success_codes?.value) || '200-399',
 			enable_tcp_connect: form.enable_tcp_connect.checked,
+			enable_udp_scan: form.enable_udp_scan.checked,
 			enable_cert_expiration: form.enable_http_check.checked && form.enable_cert_expiration.checked,
 			// Ignore cert errors only when HTTP is enabled
 			ignore_cert_errors: form.enable_http_check.checked && (form.ignore_cert_errors?.checked ?? false),
@@ -1147,6 +1190,7 @@
 			http_url: computedHttpUrl,
 			tcp_host: _normText(form.tcp_host.value),
 			tcp_ports: _normText(form.tcp_ports.value),
+			udp_ports: _normText(form.udp_ports.value),
 			cert_host: _normText(form.cert_host.value),
 			cert_port: form.cert_port.value ? parseInt(form.cert_port.value) : null,
 			sla_enabled: form.sla_enabled.checked,
@@ -1155,6 +1199,7 @@
 			sla_response_time_ms: form.sla_enabled.checked && form.sla_response_time_ms.value ? parseFloat(form.sla_response_time_ms.value) : null,
 			sla_ping_latency_ms: form.sla_enabled.checked && form.sla_ping_latency_ms.value ? parseFloat(form.sla_ping_latency_ms.value) : null
 		};
+		if (form.network_scan_id.value) data.network_scan_id = form.network_scan_id.value;
 
 		// Handle password: new password has ALWAYS priority over clear flag
 		if (basicAuthEnabled && form.http_password.value) {
@@ -1318,4 +1363,5 @@
 
 	loadAlertUsersCheckboxes();
 </script>
+<script src="/static/js/network-scan-picker.js" defer></script>
 {% endblock %}

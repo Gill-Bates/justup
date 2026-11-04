@@ -48,6 +48,7 @@
 	<div id="target-config" class="d-none" data-target-id="{{ target.id }}"
 		data-use-utc="{{ 'true' if use_utc else 'false' }}" data-pdf-page-size="{{ pdf_page_size or 'a4' }}"
 		data-tcp-ports="{{ target.tcp_ports or '80' }}"
+		data-udp-ports="{{ target.udp_ports or '' }}"
 		data-sla-enabled="{{ 'true' if target.sla_enabled else 'false' }}"
 		data-sla-availability="{{ target.sla_availability_pct if target.sla_availability_pct is not none else 99.9 }}"
 		data-sla-response-time="{{ target.sla_response_time_ms if target.sla_response_time_ms is not none else 500 }}"
@@ -55,6 +56,7 @@
 		data-enable-http="{{ 'true' if target.enable_http_check else 'false' }}"
 		data-enable-ping="{{ 'true' if target.enable_ping else 'false' }}"
 		data-enable-tcp="{{ 'true' if target.enable_tcp_connect else 'false' }}"
+		data-enable-udp="{{ 'true' if target.enable_udp_scan else 'false' }}"
 		data-enable-cert="{{ 'true' if target.enable_cert_expiration else 'false' }}">
 	</div>
 </div>

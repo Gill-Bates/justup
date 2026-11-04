@@ -40,8 +40,8 @@
 						</thead>
 						<tbody>
 							{% for t in group_targets %}
-							{# data-search lists the fields the targets search matches: name, host, URL, TCP ports, group #}
-							<tr data-search="{{ [t.name, t.host, t.http_url, (t.tcp_ports if t.enable_tcp_connect), group_name] | select | join(' ') }}">
+			{# data-search lists the fields the targets search matches: name, host, URL, ports, group #}
+			<tr data-search="{{ [t.name, t.host, t.http_url, (t.tcp_ports if t.enable_tcp_connect), (t.udp_ports if t.enable_udp_scan), group_name] | select | join(' ') }}">
 								<td data-label="Status" class="text-center ju-cell-icon">
 									<span hx-get="/ui/fragments/target-status/{{ t.id }}" hx-trigger="load, justup-target-{{ t.id }} from:body throttle:1s"
 										hx-swap="innerHTML">
@@ -79,6 +79,9 @@
 									<span class="badge {% if ps == 'up' %}ju-status-badge--success{% elif ps == 'down' %}ju-status-badge--danger{% else %}ju-status-badge--neutral{% endif %}" title="TCP Port {{ port | trim }}">TCP:{{ port | trim }}</span>
 									{% endfor %}
 									{% endif %}
+									{% endif %}
+									{% if t.enable_udp_scan %}
+									<span class="badge {% if t.udp_status == 'up' %}ju-status-badge--success{% elif t.udp_status == 'down' %}ju-status-badge--danger{% else %}ju-status-badge--neutral{% endif %}" title="UDP ports {{ t.udp_ports }}">UDP:{{ t.udp_ports }}<span class="visually-hidden">: {{ t.udp_status or 'unknown' }}</span></span>
 									{% endif %}
 									</div>
 								</td>

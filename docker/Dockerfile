@@ -63,6 +63,65 @@ COPY app/ app/
 COPY pyproject.toml ./
 # Remove __pycache__ directories
 RUN find app/ -type d -name "__pycache__" -prune -exec rm -rf {} + || true
+
+# The release workflow resolves Nmap once and supplies the same stable version
+# to both architectures; a local build resolves it from the official page.
+FROM ${PYTHON_BASE} AS nmap-builder
+ARG TARGETARCH
+ARG NMAP_VERSION=""
+ARG NMAP_RPM="-"
+COPY tools/nmap-release.py /usr/local/bin/nmap-release.py
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      ca-certificates gnupg rpm2cpio cpio bzip2 \
+ && rm -rf /var/lib/apt/lists/*
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+RUN <<'EOF'
+set -euo pipefail
+version="$NMAP_VERSION"
+rpm="$NMAP_RPM"
+if [[ -z "$version" ]]; then
+  release="$(python3 /usr/local/bin/nmap-release.py latest)"
+  read -r version rpm <<< "$release"
+fi
+[[ -n "$version" && -n "$TARGETARCH" ]] || { echo "Missing Nmap version or target architecture" >&2; exit 1; }
+python3 /usr/local/bin/nmap-release.py fetch "$version" "$rpm" /tmp/nmap
+mkdir -p /out/usr/bin /out/usr/share/nmap /out/usr/share/doc/nmap
+tar -xOf "/tmp/nmap/nmap-${version}.tar.bz2" "nmap-${version}/LICENSE" > /out/usr/share/doc/nmap/LICENSE
+method=""
+if [[ "$TARGETARCH" == amd64 && "$rpm" != "-" ]]; then
+  mkdir -p /tmp/nmap/rpm
+  (cd /tmp/nmap/rpm && rpm2cpio "/tmp/nmap/${rpm}" | cpio -id --quiet)
+  if ldd /tmp/nmap/rpm/usr/bin/nmap > /tmp/nmap/rpm-libs.txt \
+      && ! grep -q 'not found' /tmp/nmap/rpm-libs.txt \
+      && NMAPDIR=/tmp/nmap/rpm/usr/share/nmap /tmp/nmap/rpm/usr/bin/nmap --version >/dev/null; then
+    install -m 755 /tmp/nmap/rpm/usr/bin/nmap /out/usr/bin/nmap
+    cp -a /tmp/nmap/rpm/usr/share/nmap/. /out/usr/share/nmap/
+    method="official-rpm"
+  fi
+fi
+if [[ -z "$method" ]]; then
+  apt-get update
+  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends build-essential libssl-dev pkg-config zlib1g-dev
+  rm -rf /var/lib/apt/lists/*
+  tar -xjf "/tmp/nmap/nmap-${version}.tar.bz2" -C /tmp/nmap
+  cd "/tmp/nmap/nmap-${version}"
+  ./configure --prefix=/usr --with-libpcap=included --with-libpcre=included \
+    --with-libz=included --with-libssh2=included --with-liblinear=included \
+    --without-liblua --without-ncat --without-nping --without-ndiff --without-zenmap
+  make -j"$(nproc)" nmap
+  make DESTDIR=/out install-nmap
+  method="verified-source"
+fi
+find /out/usr/share/nmap -maxdepth 1 -type f \
+  ! -name nmap-services ! -name nmap-service-probes ! -name nmap-protocols ! -name nmap-rpc -delete
+rm -rf /out/usr/share/nmap/scripts /out/usr/share/nmap/nselib
+rm -rf /out/usr/share/man
+cat /tmp/nmap/provenance.txt > /out/usr/share/doc/nmap/PROVENANCE.txt
+printf 'architecture=%s\nbuild_method=%s\n' "$TARGETARCH" "$method" >> /out/usr/share/doc/nmap/PROVENANCE.txt
+ldd /out/usr/bin/nmap > /out/usr/share/doc/nmap/DEPENDENCIES.txt
+! grep -q 'not found' /out/usr/share/doc/nmap/DEPENDENCIES.txt
+NMAPDIR=/out/usr/share/nmap /out/usr/bin/nmap --version
+EOF
 # ──────────────────────────────────────────────────────────────
 # Stage 2b: signal-cli release (download verified against the published SHA-256)
 # ──────────────────────────────────────────────────────────────
@@ -389,6 +448,15 @@ RUN ln -s /opt/signal-cli/bin/signal-cli /usr/local/bin/signal-cli \
       ls /opt/signal-cli/lib | grep '^libsignal-client-'; } > /opt/COMPONENTS.txt \
  && rm -rf /tmp/hsperfdata_*
 
+COPY --from=nmap-builder /out/usr/bin/nmap /usr/bin/nmap
+COPY --from=nmap-builder /out/usr/share/nmap /usr/share/nmap
+COPY --from=nmap-builder /out/usr/share/doc/nmap /usr/share/doc/nmap
+RUN test -s /usr/share/nmap/nmap-services \
+ && test -s /usr/share/nmap/nmap-service-probes \
+ && nmap --version \
+ && ldd /usr/bin/nmap > /usr/share/doc/nmap/DEPENDENCIES.txt \
+ && ! grep -q 'not found' /usr/share/doc/nmap/DEPENDENCIES.txt
+
 # Non-root user with dedicated home directory (security: avoid HOME=/tmp)
 RUN groupadd -r justup && useradd -r -g justup justup \
  && mkdir -p /home/justup/.matplotlib \
@@ -476,6 +544,7 @@ ENV HOME=/home/justup \
     JUSTUP_DATA_DIR=/app/data \
     SIGNAL_CLI_PATH=/usr/local/bin/signal-cli \
     SIGNAL_DATA_DIR=/app/data/signal \
+    NMAPDIR=/usr/share/nmap \
     JAVA_XMS=64m \
     JAVA_XMX=256m
 

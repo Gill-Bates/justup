@@ -197,7 +197,12 @@ def create_target(conn: sqlite3.Connection, values: dict[str, Any], *, manage_tr
                 now,
             ),
         )
-        return int(cur.lastrowid)
+        target_id = int(cur.lastrowid)
+        conn.execute(
+            "UPDATE targets SET enable_udp_scan = ?, udp_ports = ? WHERE id = ?",
+            (1 if values.get("enable_udp_scan", False) else 0, str(values.get("udp_ports") or ""), target_id),
+        )
+        return target_id
 
 
 def update_target(
@@ -221,6 +226,7 @@ def update_target(
             "enable_http_check",
             "enable_cert_expiration",
             "enable_tcp_connect",
+            "enable_udp_scan",
             "host",
             "ping_host",
             "http_url",
@@ -235,6 +241,7 @@ def update_target(
             "ignore_cert_errors",
             "tcp_host",
             "tcp_ports",
+            "udp_ports",
             "max_retries",
             "auto_close_alert",
             "ping_timeout_minutes",
@@ -258,6 +265,7 @@ def update_target(
                 "enable_http_check",
                 "enable_cert_expiration",
                 "enable_tcp_connect",
+                "enable_udp_scan",
                 "ignore_cert_errors",
                 "sla_enabled",
                 "http_prefer_head",

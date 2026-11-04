@@ -41,6 +41,7 @@ from . import (
     login_attempts,
     migrations,
     monitor_quality,
+    network_ports,
     recipients,
     report_jobs,
     scheduler_runs,
@@ -200,6 +201,7 @@ from .report_jobs import (
     prune_expired_report_jobs,
     update_report_job,
 )
+from .network_ports import all_network_ports, list_network_ports, sync_network_ports, update_network_port_status
 from .scheduler_runs import (
     cleanup_stale_scheduler_runs,
     register_scheduler_run,
@@ -290,6 +292,7 @@ _SUBMODULES = (
     alerts,
     monitor_quality,
     report_jobs,
+    network_ports,
     scheduler_runs,
     bootstrap,
 )

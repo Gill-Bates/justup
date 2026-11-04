@@ -34,9 +34,11 @@ from .schema import (
     IncompatibleSchemaError,
     _create_baseline_schema,
     _ensure_unique_recipient_phone,
+    ensure_target_network_ports_table,
     get_schema_version,
 )
 from .schema_notifications import ensure_alert_dispatch_outbox_table, ensure_notification_queue_table
+from ...utils.tcp_ports import parse_port_list
 
 # Keep the pre-split logger name: log filters and caplog assertions address app.db.sqlite.
 _log = logging.getLogger("app.db.sqlite")
@@ -243,6 +245,24 @@ def _migrate_6_pop_candidates(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migrate_7_network_ports(conn: sqlite3.Connection) -> None:
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(targets)")}
+    if "enable_udp_scan" not in columns:
+        conn.execute("ALTER TABLE targets ADD COLUMN enable_udp_scan INTEGER NOT NULL DEFAULT 0 CHECK (enable_udp_scan IN (0, 1))")
+    if "udp_ports" not in columns:
+        conn.execute("ALTER TABLE targets ADD COLUMN udp_ports TEXT NOT NULL DEFAULT ''")
+    ensure_target_network_ports_table(conn)
+    for row in conn.execute("SELECT id, tcp_ports FROM targets WHERE enable_tcp_connect = 1"):
+        try:
+            ports = parse_port_list(row["tcp_ports"] or "80")
+        except ValueError:
+            continue
+        conn.executemany(
+            "INSERT OR IGNORE INTO target_network_ports(target_id, protocol, port, source) VALUES(?, 'tcp', ?, 'manual')",
+            ((row["id"], port) for port in ports),
+        )
+
+
 # Ordered by version, contiguous from 2.
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(
@@ -254,6 +274,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(4, "dashboard widget automatic and manual height contract", _migrate_4_dashboard_widget_height_mode),
     Migration(5, "recipients.enable_for_all_targets flag", _migrate_5_recipient_enable_for_all_targets),
     Migration(6, "bounded PoP candidate evidence and explicit review metadata", _migrate_6_pop_candidates),
+    Migration(7, "UDP configuration and protocol-specific port metadata", _migrate_7_network_ports),
 )
 
 

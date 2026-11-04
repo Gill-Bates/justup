@@ -26,6 +26,31 @@ _log = logging.getLogger("app.db.sqlite")
 _OVERALL_STATUS_SQL = ", ".join(f"'{status.value}'" for status in CheckStatus)
 
 
+def ensure_target_network_ports_table(conn: sqlite3.Connection) -> None:
+    """Create the protocol/port identity table used by network monitoring."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS target_network_ports (
+            target_id INTEGER NOT NULL REFERENCES targets(id) ON DELETE CASCADE,
+            protocol TEXT NOT NULL CHECK (protocol IN ('tcp', 'udp')),
+            port INTEGER NOT NULL CHECK (port BETWEEN 1 AND 65535),
+            source TEXT NOT NULL CHECK (source IN ('manual', 'discovered')),
+            service_name TEXT,
+            service_product TEXT,
+            service_version TEXT,
+            service_method TEXT CHECK (service_method IN ('probed', 'table')),
+            confidence INTEGER CHECK (confidence BETWEEN 0 AND 10),
+            discovered_at timestamp,
+            status TEXT CHECK (status IN ('up', 'down', 'unknown')),
+            checked_at timestamp,
+            last_up_at timestamp,
+            detail TEXT,
+            PRIMARY KEY (target_id, protocol, port)
+        )
+        """
+    )
+
+
 def _create_baseline_schema(conn: sqlite3.Connection) -> None:
     """Create every table and index of the v1.0.0 baseline schema (idempotent, no transaction handling)."""
     conn.execute(
@@ -86,6 +111,7 @@ def _create_baseline_schema(conn: sqlite3.Connection) -> None:
             enable_http_check INTEGER NOT NULL CHECK (enable_http_check IN (0, 1)),
             enable_cert_expiration INTEGER NOT NULL CHECK (enable_cert_expiration IN (0, 1)),
             enable_tcp_connect INTEGER NOT NULL DEFAULT 0 CHECK (enable_tcp_connect IN (0, 1)),
+            enable_udp_scan INTEGER NOT NULL DEFAULT 0 CHECK (enable_udp_scan IN (0, 1)),
             host TEXT NOT NULL DEFAULT '',
             ping_host TEXT,
             http_url TEXT,
@@ -100,6 +126,7 @@ def _create_baseline_schema(conn: sqlite3.Connection) -> None:
                 ignore_cert_errors INTEGER NOT NULL DEFAULT 0 CHECK (ignore_cert_errors IN (0, 1)),
                 tcp_host TEXT,
                 tcp_ports TEXT DEFAULT '80',
+                udp_ports TEXT NOT NULL DEFAULT '',
                 max_retries INTEGER NOT NULL DEFAULT 5 CHECK (max_retries >= 0),
                 ping_timeout_minutes INTEGER NOT NULL DEFAULT 5 CHECK (ping_timeout_minutes > 0),
                 auto_close_alert INTEGER NOT NULL DEFAULT 1 CHECK (auto_close_alert IN (0, 1)),
@@ -114,6 +141,8 @@ def _create_baseline_schema(conn: sqlite3.Connection) -> None:
         """
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_targets_group_id ON targets(group_id)")
+
+    ensure_target_network_ports_table(conn)
 
     conn.execute(
         """
@@ -511,7 +540,7 @@ def _ensure_unique_recipient_phone(conn: sqlite3.Connection) -> None:
 # MIGRATIONS that upgrades a database from ``version - 1``. _create_baseline_schema() must then
 # create the new current schema for fresh databases, so migrations only transform older ones.
 # Migrations run inside init_schema's transaction (an error rolls schema and user_version back).
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 # IncompatibleSchemaError.kind values

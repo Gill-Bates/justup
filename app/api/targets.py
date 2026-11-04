@@ -35,6 +35,7 @@ from ..models.targets import (
     target_row_to_dict,
 )
 from ..services import event_bus
+from ..services.nmap_jobs import completed_job
 from ..services.target_identity import classify_conflicts, normalize_host
 from ..services.target_profiles import PROFILE_LABELS, build_profile
 from ..utils import maintenance
@@ -133,6 +134,23 @@ def _validate_tcp_ports(ports: str | None) -> str:
     return ",".join(str(p) for p in parsed) if parsed else DEFAULT_TCP_PORTS
 
 
+def _validate_udp_ports(ports: str | None) -> str:
+    try:
+        parsed = parse_port_list(ports)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid udp_ports: {exc}") from exc
+    return ",".join(str(port) for port in parsed)
+
+
+def _scan_result_for_target(scan_id: str | None, owner_id: int, host: str):
+    if scan_id is None:
+        return None
+    job = completed_job(scan_id, owner_id)
+    if job is None or _norm_host(job.host) != _norm_host(host):
+        raise HTTPException(status_code=422, detail="Network scan is unavailable or belongs to another host")
+    return job.result
+
+
 def _encrypt_password(password: str | object | None) -> str | None:
     """Extract plain password from SecretStr and encrypt for storage."""
     if password is None:
@@ -184,7 +202,7 @@ def _validate_target_consistency(data: dict) -> None:
         errors.append("host is required")
 
     if data.get("is_enabled") and not any(
-        data.get(field) for field in ("enable_ping", "enable_http_check", "enable_tcp_connect")
+        data.get(field) for field in ("enable_ping", "enable_http_check", "enable_tcp_connect", "enable_udp_scan")
     ):
         errors.append("An enabled target requires at least one monitoring check")
 
@@ -197,6 +215,9 @@ def _validate_target_consistency(data: dict) -> None:
 
     if data.get("enable_tcp_connect") and not data.get("tcp_host"):
         errors.append("tcp_host is required when enable_tcp_connect is true")
+
+    if data.get("enable_udp_scan") and not data.get("udp_ports"):
+        errors.append("udp_ports is required when enable_udp_scan is true")
 
     if data.get("enable_ping") and not data.get("host") and not data.get("ping_host"):
         errors.append("Host or ping_host is required when enable_ping is true")
@@ -223,9 +244,13 @@ def _validate_target_consistency(data: dict) -> None:
         raise HTTPException(status_code=422, detail="; ".join(errors))
 
 
-def _row_to_target_public(row) -> TargetPublic:
+def _row_to_target_public(row, conn=None, ports=None) -> TargetPublic:
     """Convert DB row to the public response model (no secrets exposed)."""
-    return TargetPublic(**target_row_to_dict(row))
+    data = target_row_to_dict(row)
+    if ports is None and conn is not None:
+        ports = sqlite_db.list_network_ports(conn, row["id"])
+    data["network_ports"] = ports or []
+    return TargetPublic(**data)
 
 
 def _prepare_create_values(payload: TargetCreate) -> dict:
@@ -250,6 +275,7 @@ def _prepare_create_values(payload: TargetCreate) -> dict:
         "http_success_codes": values.get("http_success_codes") or DEFAULT_HTTP_SUCCESS_CODES,
         "enable_cert_expiration": enable_cert_expiration,
         "enable_tcp_connect": values.get("enable_tcp_connect", False),
+        "enable_udp_scan": values.get("enable_udp_scan", False),
         "ping_host": _norm_host(values.get("ping_host")),
         "http_url": http_url,
         "http_username": values.get("http_username"),
@@ -259,6 +285,7 @@ def _prepare_create_values(payload: TargetCreate) -> dict:
         "ignore_cert_errors": values.get("ignore_cert_errors", False),
         "tcp_host": _norm_host(values.get("tcp_host")),
         "tcp_ports": _validate_tcp_ports(values.get("tcp_ports")),
+        "udp_ports": _validate_udp_ports(values.get("udp_ports")),
         "host": _norm_host(values["host"]),
         "max_retries": values.get("max_retries", 5),
         "auto_close_alert": values.get("auto_close_alert", True),
@@ -287,6 +314,7 @@ def preview(payload: TargetWizardPreview, conn=Depends(get_conn), _user=Depends(
             name=payload.name,
             group=payload.group,
             tcp_ports=payload.tcp_ports,
+            udp_ports=payload.udp_ports,
             overrides=payload.overrides,
         )
     except ValueError as exc:
@@ -303,6 +331,7 @@ def preview(payload: TargetWizardPreview, conn=Depends(get_conn), _user=Depends(
         cert_host=values["cert_host"],
         http_url=values["http_url"],
         tcp_ports=values["tcp_ports"],
+        udp_ports=values["udp_ports"],
         enable_cert_expiration=values["enable_cert_expiration"],
     )
     return {"values": public_values, "conflicts": conflicts, "suggested_https": suggested_https}
@@ -311,7 +340,8 @@ def preview(payload: TargetWizardPreview, conn=Depends(get_conn), _user=Depends(
 @router.get("", response_model=list[TargetPublic])
 def list_all(conn=Depends(get_conn), _user=Depends(get_current_user)):
     """List all configured targets."""
-    return [_row_to_target_public(r) for r in sqlite_db.list_targets(conn)]
+    ports = sqlite_db.all_network_ports(conn)
+    return [_row_to_target_public(r, ports=ports.get(r["id"], [])) for r in sqlite_db.list_targets(conn)]
 
 
 @router.get("/{target_id}", response_model=TargetPublic)
@@ -320,13 +350,14 @@ def get_one(target_id: int, conn=Depends(get_conn), _user=Depends(get_current_us
     row = sqlite_db.get_target(conn, target_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Target not found")
-    return _row_to_target_public(row)
+    return _row_to_target_public(row, conn)
 
 
 @router.post("", response_model=TargetPublic, status_code=status.HTTP_201_CREATED)
 def create(payload: TargetCreate, request: Request, conn=Depends(get_conn), _user=Depends(require_admin)):
     """Create a new target."""
     values_db = _prepare_create_values(payload)
+    scan_result = _scan_result_for_target(payload.network_scan_id, int(_user["id"]), values_db["host"])
     recipient_ids = payload.alert_recipient_ids
     with sqlite_db.immediate_transaction(conn):
         for rid in set(recipient_ids):
@@ -334,6 +365,13 @@ def create(payload: TargetCreate, request: Request, conn=Depends(get_conn), _use
                 raise HTTPException(status_code=422, detail=f"Recipient {rid} not found")
         _check_host_collision(conn, values_db)
         new_id = sqlite_db.create_target(conn, values_db, manage_transaction=False)
+        sqlite_db.sync_network_ports(
+            conn,
+            new_id,
+            tcp_ports=parse_port_list(values_db["tcp_ports"]) if values_db["enable_tcp_connect"] else [],
+            udp_ports=parse_port_list(values_db["udp_ports"]) if values_db["enable_udp_scan"] else [],
+            scan_result=scan_result,
+        )
         if recipient_ids:
             sqlite_db.set_target_recipients(conn, new_id, list(dict.fromkeys(recipient_ids)), manage_transaction=False)
         # After the explicit list (which replaces assignments): recipients flagged "all targets" always join.
@@ -361,18 +399,18 @@ def create(payload: TargetCreate, request: Request, conn=Depends(get_conn), _use
         scheduler.request_refresh()
 
     row = sqlite_db.get_target(conn, new_id)
-    return _row_to_target_public(row)
+    return _row_to_target_public(row, conn)
 
 
 @router.patch("/{target_id}", response_model=TargetPublic)
 def patch(target_id: int, payload: TargetUpdate, conn=Depends(get_conn), _user=Depends(require_admin)):
     with sqlite_db.immediate_transaction(conn):
-        result = _patch_locked(target_id, payload, conn)
+        result = _patch_locked(target_id, payload, conn, owner_id=int(_user["id"]))
     event_bus.publish("target.changed", {"target_id": target_id})
     return result
 
 
-def _patch_locked(target_id: int, payload: TargetUpdate, conn):
+def _patch_locked(target_id: int, payload: TargetUpdate, conn, owner_id: int | None = None):
     """
     Update a target by id (partial update).
 
@@ -411,6 +449,7 @@ def _patch_locked(target_id: int, payload: TargetUpdate, conn):
         "http_port",
         "http_success_codes",
         "enable_tcp_connect",
+        "enable_udp_scan",
         "cert_port",
         "ignore_cert_errors",
         "max_retries",
@@ -425,6 +464,8 @@ def _patch_locked(target_id: int, payload: TargetUpdate, conn):
 
     if "tcp_ports" in patch_payload:
         patch_db["tcp_ports"] = _validate_tcp_ports(patch_payload["tcp_ports"])
+    if "udp_ports" in patch_payload:
+        patch_db["udp_ports"] = _validate_udp_ports(patch_payload["udp_ports"])
 
     if "host" in patch_payload:
         patch_db["host"] = _norm_host(patch_payload["host"])
@@ -464,6 +505,7 @@ def _patch_locked(target_id: int, payload: TargetUpdate, conn):
             bool(existing["enable_http_check"]),
         ),
         "enable_tcp_connect": patch_db.get("enable_tcp_connect", existing["enable_tcp_connect"]),
+        "enable_udp_scan": patch_db.get("enable_udp_scan", existing["enable_udp_scan"]),
         "ping_host": _merge("ping_host"),
         "http_url": _merge("http_url"),
         "http_username": _merge("http_username"),
@@ -471,6 +513,7 @@ def _patch_locked(target_id: int, payload: TargetUpdate, conn):
         "cert_host": _merge("cert_host"),
         "tcp_host": _merge("tcp_host"),
         "tcp_ports": _merge("tcp_ports"),
+        "udp_ports": _merge("udp_ports"),
         "http_port": _merge("http_port"),
     }
 
@@ -504,8 +547,20 @@ def _patch_locked(target_id: int, payload: TargetUpdate, conn):
 
     if patch_db:
         sqlite_db.update_target(conn, target_id=target_id, patch=patch_db, manage_transaction=False)
+    scan_result = (
+        _scan_result_for_target(payload.network_scan_id, owner_id, effective["host"])
+        if payload.network_scan_id and owner_id is not None
+        else None
+    )
+    sqlite_db.sync_network_ports(
+        conn,
+        target_id,
+        tcp_ports=parse_port_list(effective["tcp_ports"]) if effective["enable_tcp_connect"] else [],
+        udp_ports=parse_port_list(effective["udp_ports"]) if effective["enable_udp_scan"] else [],
+        scan_result=scan_result,
+    )
     row = sqlite_db.get_target(conn, target_id)
-    return _row_to_target_public(row)
+    return _row_to_target_public(row, conn)
 
 
 @router.delete("/{target_id}", status_code=status.HTTP_204_NO_CONTENT)

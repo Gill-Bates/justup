@@ -17,6 +17,26 @@ const TLS_FIELDS = ["#wizard-ignore-cert"];
 const TCP_FIELDS = ["#wizard-extra-ports"];
 const TOGGLES = { http: "#wizard-http", ping: "#wizard-ping", tcp: "#wizard-tcp", cert: "#wizard-cert" };
 const VIEWPORTS = [{ name: "390x844", width: 390, height: 844 }, { name: "320x640", width: 320, height: 640 }, { name: "1280x720", width: 1280, height: 720 }];
+const SCAN_ID = "123e4567-e89b-12d3-a456-426614174000";
+
+async function stubPortScan(page) {
+	await page.route("**/network-scans**", async route => {
+		const method = route.request().method();
+		if (method === "DELETE") return route.fulfill({ status: 204 });
+		const job = {
+			id: SCAN_ID, host: "mail.example.org", protocols: ["tcp", "udp"],
+			status: method === "POST" ? "queued" : "completed",
+			result: method === "POST" ? null : {
+				hosts: [{ address: "mail.example.org", status: "up", ports: [
+					{ protocol: "tcp", port: 443, state: "open", service: { name: "https", method: "probed" } },
+					{ protocol: "udp", port: 53, state: "open", service: { name: "domain", method: "probed" } },
+					{ protocol: "udp", port: 161, state: "open|filtered", service: { name: "snmp", method: "table" } },
+				] }], complete: true,
+			}
+		};
+		return route.fulfill({ status: method === "POST" ? 202 : 200, contentType: "application/json", body: JSON.stringify(job) });
+	});
+}
 
 async function openChecksStep(page, app, { profile, address, ports }) {
 	await page.goto(`${app.base}/ui/targets/new`);
@@ -94,6 +114,48 @@ test("the review shows only values of active checks @wizard", async ({ app, page
 	const summary = await page.locator("#wizard-summary").innerText();
 	assert.doesNotMatch(summary, /HTTP method|Ignore certificate errors|Full URL/i);
 	assert.match(summary, /TCP ports/i);
+});
+
+test("discovered TCP and UDP ports can be selected without saving the wizard @wizard", async ({ app, page }) => {
+	await stubPortScan(page);
+	await page.goto(`${app.base}/ui/targets/new`);
+	await page.locator('input[name="profile"][value="custom"]').check({ force: true });
+	await page.getByRole("button", { name: "Continue" }).click();
+	await page.locator("#wizard-address").fill("mail.example.org");
+	await page.locator("#wizard-ports").fill("22");
+	await page.locator('[data-scan-protocol="udp"]').check();
+	await page.getByRole("button", { name: "Scan ports" }).click();
+	await page.locator("[data-scan-results]").waitFor({ state: "visible" });
+	await page.getByRole("button", { name: "Select all confirmed open ports" }).click();
+	assert.equal(await page.locator('[data-scan-rows] input:checked').count(), 2, "uncertain UDP is not selected as open");
+	await page.getByRole("checkbox", { name: "Select UDP port 161 (open|filtered)" }).check();
+	await page.getByRole("button", { name: "Add selected ports" }).click();
+	assert.equal(await page.locator("#wizard-ports").inputValue(), "22,443");
+	assert.equal(await page.locator("#wizard-udp-ports").inputValue(), "53,161");
+	assert.equal(await page.locator("#wizard-tcp").isChecked(), true);
+	assert.equal(await page.locator("#wizard-udp").isChecked(), true);
+	assert.equal(await page.locator('[name="network_scan_id"]').inputValue(), SCAN_ID);
+});
+
+test("discovered ports preserve manual entries in target edit @wizard", async ({ app, page }) => {
+	await stubPortScan(page);
+	await page.goto(`${app.base}/ui/targets/1/edit`);
+	await page.locator("#target-network-tab").click();
+	await page.locator("#host-input").fill("mail.example.org");
+	await page.locator("#enable_tcp_connect").check();
+	await page.locator("#tcp_ports_input").fill("22");
+	await page.locator("#tcp_ports_input").press("Enter");
+	await page.locator("#enable_udp_scan").check();
+	await page.locator("#udp_ports").fill("161");
+	await page.locator('[data-scan-protocol="udp"]').check();
+	await page.getByRole("button", { name: "Scan ports" }).click();
+	await page.locator("[data-scan-results]").waitFor({ state: "visible" });
+	await page.getByRole("button", { name: "Select all confirmed open ports" }).click();
+	await page.getByRole("button", { name: "Add selected ports" }).click();
+	assert.match(await page.locator("#tcp_ports").inputValue(), /(?:^|,)22(?:,|$)/);
+	assert.match(await page.locator("#tcp_ports").inputValue(), /(?:^|,)443(?:,|$)/);
+	assert.equal(await page.locator("#udp_ports").inputValue(), "53,161");
+	assert.equal(await page.locator('[name="network_scan_id"]').inputValue(), SCAN_ID);
 });
 
 for (const viewport of VIEWPORTS) {

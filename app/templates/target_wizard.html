@@ -63,6 +63,20 @@
             <div id="wizard-ports-help" class="form-text">Choose ports explicitly; no port is assumed.</div>
             <div id="wizard-ports-error" class="invalid-feedback" role="alert"></div>
           </div>
+          <div class="col-12 col-lg-5 wizard-kind" data-kinds="tcp custom" hidden>
+            <label for="wizard-udp-ports" class="form-label">UDP ports</label>
+            <input id="wizard-udp-ports" name="udp_ports" class="form-control" type="text" inputmode="numeric" maxlength="200" placeholder="e.g. 53,161" aria-describedby="wizard-udp-ports-help">
+            <div id="wizard-udp-ports-help" class="form-text">Enter ports manually or add them from a scan.</div>
+          </div>
+          <div class="col-12 wizard-kind" data-kinds="tcp custom" hidden>
+            {% set scan_prefix = 'wizard' %}
+            {% set scan_host_id = 'wizard-address' %}
+            {% set scan_tcp_id = 'wizard-ports' %}
+            {% set scan_udp_id = 'wizard-udp-ports' %}
+            {% set scan_tcp_toggle_id = 'wizard-tcp' %}
+            {% set scan_udp_toggle_id = 'wizard-udp' %}
+            {% include 'fragments/network_scan_picker.html' %}
+          </div>
           <div class="col-12 col-lg-7"><label for="wizard-name" class="form-label">Name</label>
             <input id="wizard-name" name="name" class="form-control" type="text" maxlength="200" autocomplete="off" placeholder="Suggested from address">
           </div>
@@ -80,10 +94,12 @@
           <div class="wizard-check-option"><div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="wizard-http" name="enable_http_check" aria-controls="wizard-group-http-url wizard-group-http-method wizard-group-http-codes wizard-group-ignore-cert"><label class="form-check-label" for="wizard-http">HTTP check</label></div></div>
           <div class="wizard-check-option"><div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="wizard-ping" name="enable_ping"><label class="form-check-label" for="wizard-ping">ICMP ping</label></div></div>
           <div class="wizard-check-option"><div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="wizard-tcp" name="enable_tcp_connect" aria-controls="wizard-group-tcp"><label class="form-check-label" for="wizard-tcp">TCP connection</label></div></div>
+          <div class="wizard-check-option"><div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="wizard-udp" name="enable_udp_scan" aria-controls="wizard-group-udp"><label class="form-check-label" for="wizard-udp">UDP ports</label></div></div>
           <div class="wizard-check-option"><div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="wizard-cert" name="enable_cert_expiration" aria-controls="wizard-group-ignore-cert"><label class="form-check-label" for="wizard-cert">Monitor certificate expiry</label></div></div>
         </div>
         <p id="wizard-checks-status" class="visually-hidden" role="status"></p>
         <div class="wizard-check-detail" id="wizard-group-tcp" data-check-group="tcp" hidden><label for="wizard-extra-ports" class="form-label">TCP ports *</label><input id="wizard-extra-ports" class="form-control" type="text" maxlength="200" placeholder="e.g. 22,443" aria-describedby="wizard-extra-ports-help"><div id="wizard-extra-ports-help" class="form-text">Choose every TCP port explicitly. Each port is tested with its own connection on the host from the previous step.</div></div>
+        <div class="wizard-check-detail" id="wizard-group-udp" data-check-group="udp" hidden><label for="wizard-extra-udp-ports" class="form-label">UDP ports *</label><input id="wizard-extra-udp-ports" class="form-control" type="text" inputmode="numeric" maxlength="200" placeholder="e.g. 53,161" aria-describedby="wizard-extra-udp-ports-help"><div id="wizard-extra-udp-ports-help" class="form-text">An uncertain UDP result stays unknown until a later scan confirms it.</div></div>
         <details class="wizard-advanced" id="wizard-advanced"><summary><span class="material-icons" aria-hidden="true">tune</span>Advanced settings</summary>
           <div class="row g-3 mt-1">
             <div class="col-12 col-md-6" id="wizard-group-http-url" data-check-group="http" hidden><label for="wizard-http-url" class="form-label">Full HTTP URL</label><input id="wizard-http-url" name="http_url" class="form-control" type="url" maxlength="2048"></div>
@@ -120,4 +136,4 @@
 </div>
 {% endblock %}
 
-{% block scripts %}<script src="/static/js/utils/optional-groups.js" defer></script><script src="/static/js/utils/check-groups.js" defer></script><script src="/static/js/target-wizard.js" defer></script>{% endblock %}
+{% block scripts %}<script src="/static/js/utils/optional-groups.js" defer></script><script src="/static/js/utils/check-groups.js" defer></script><script src="/static/js/network-scan-picker.js" defer></script><script src="/static/js/target-wizard.js" defer></script>{% endblock %}

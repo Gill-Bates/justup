@@ -32,9 +32,17 @@ def touch(root: Path, relative: str, content: bytes = b"x") -> None:
 
 
 def make_image_root(root: Path) -> Path:
-    """A minimal clean runtime tree: Python, native libs, signal-cli, a libsignal jar."""
+    """A minimal clean runtime tree with the required scanner and native tools."""
     touch(root, "opt/signal-cli/bin/signal-cli")
     touch(root, "opt/java/bin/java")
+    for path in (
+        "usr/bin/nmap",
+        "usr/share/nmap/nmap-services",
+        "usr/share/nmap/nmap-service-probes",
+        "usr/share/doc/nmap/LICENSE",
+        "usr/share/doc/nmap/PROVENANCE.txt",
+    ):
+        touch(root, path)
     touch(root, "usr/local/bin/python3")
     touch(root, "usr/lib/x86_64-linux-gnu/libz.so.1")
     touch(root, "usr/local/lib/python3.13/site-packages/numpy/_core/lib/libnpymath.a")
@@ -108,7 +116,10 @@ def test_tool_names_outside_bin_directories_are_not_flagged(tmp_path):
     assert problems(root) == []
 
 
-@pytest.mark.parametrize("missing", ["opt/signal-cli/bin/signal-cli", "opt/java/bin/java"])
+@pytest.mark.parametrize(
+    "missing",
+    ["opt/signal-cli/bin/signal-cli", "opt/java/bin/java", "usr/bin/nmap", "usr/share/nmap/nmap-service-probes"],
+)
 def test_missing_required_file_fails(tmp_path, missing):
     root = make_image_root(tmp_path)
     (root / missing).unlink()

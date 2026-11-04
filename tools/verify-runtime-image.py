@@ -67,7 +67,15 @@ CPYTHON_CONFIG = re.compile(r"^/usr/local/lib/python3[0-9.]*/config-[^/]+/")
 EMPTY_DIRS = ("/tmp", "/var/tmp", "/usr/src")  # noqa: S108 # paths inside the audited image
 SKIPPED_ROOT_DIRS = frozenset({"proc", "sys", "dev"})
 LIBSIGNAL_JAR_DIR = "/opt/signal-cli/lib"
-REQUIRED_FILES = ("/opt/signal-cli/bin/signal-cli", "/opt/java/bin/java")
+REQUIRED_FILES = (
+    "/opt/signal-cli/bin/signal-cli",
+    "/opt/java/bin/java",
+    "/usr/bin/nmap",
+    "/usr/share/nmap/nmap-services",
+    "/usr/share/nmap/nmap-service-probes",
+    "/usr/share/doc/nmap/LICENSE",
+    "/usr/share/doc/nmap/PROVENANCE.txt",
+)
 ARCHS = frozenset({"amd64", "arm64"})
 MAX_LISTED = 50
 

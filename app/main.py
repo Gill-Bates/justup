@@ -26,6 +26,7 @@ from .api import frontend as frontend_ui
 from .api import groups as groups_api
 from .api import health as health_api
 from .api import metrics as metrics_api
+from .api import network_scans as network_scans_api
 from .api import notifications as notifications_api
 from .api import pop as pop_api
 from .api import quality as quality_api
@@ -41,6 +42,7 @@ from .middleware.maintenance import MaintenanceWriteMiddleware, maintenance_unav
 from .middleware.security_headers import SecurityHeadersMiddleware
 from .monitor.scheduler import MonitorScheduler
 from .services import event_bus, pdf_worker
+from .services.nmap_jobs import shutdown_jobs
 from .services.notifications.signal_backend import (
     get_signal_backend,
     reset_signal_backend,
@@ -413,6 +415,7 @@ async def _lifespan(app: FastAPI):
 
         # 2. Stop background tasks (stop events are already set)
         await _bounded_stop(supervisor.stop(), label="service_supervisor")
+        await _bounded_stop(shutdown_jobs(), label="nmap_discovery_jobs")
         await _bounded_stop(alert_sink.aclose(), label="service_alert_sink")
         # to_thread jobs cannot be cancelled; shutdown() joins the PDF thread pool, so keep it off the loop
         await _bounded_stop(asyncio.to_thread(pdf_worker.shutdown_pdf_worker), label="pdf_worker_pool")
@@ -529,6 +532,7 @@ def create_app() -> FastAPI:
     app.include_router(alerts_api.router)
     app.include_router(notifications_api.router)
     app.include_router(metrics_api.router)
+    app.include_router(network_scans_api.router)
     app.include_router(settings_api.router)
     app.include_router(signal_api.router)
     app.include_router(recipients_api.router)

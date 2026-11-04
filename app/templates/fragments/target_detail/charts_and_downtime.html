@@ -1,5 +1,5 @@
 {# Hero panel: combined response time + HTTP status + downtime chart (primary performance view) #}
-{% if target.enable_http_check or target.enable_ping or target.enable_tcp_connect %}
+{% if target.enable_http_check or target.enable_ping or target.enable_tcp_connect or target.enable_udp_scan %}
 <div class="card target-panel target-combined-card" id="combined-card">
 	<div class="card-header target-panel-header">
 		<div class="target-panel-heading">
@@ -54,7 +54,7 @@
 		<div class="combined-empty combined-empty--panel" role="status">
 			<i class="material-icons" aria-hidden="true">toggle_off</i>
 			<span>No checks are enabled for this target, so no response times or status codes are recorded.
-				<a href="/ui/targets/{{ target.id }}/edit">Enable HTTP, Ping or TCP checks in Edit</a>.</span>
+				<a href="/ui/targets/{{ target.id }}/edit">Enable HTTP, Ping, TCP or UDP checks in Edit</a>.</span>
 		</div>
 	</div>
 </div>

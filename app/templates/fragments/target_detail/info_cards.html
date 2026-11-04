@@ -73,7 +73,14 @@
 					{% endfor %}
 					{% endif %}
 					{% endif %}
-					{% if not (target.enable_http_check or target.enable_ping or target.enable_cert_expiration or target.enable_tcp_connect) %}
+					{% if target.enable_udp_scan %}
+					{% for endpoint in target.network_ports|default([]) if endpoint.protocol == 'udp' %}
+					<span class="badge {% if endpoint.status == 'up' %}ju-status-badge--success{% elif endpoint.status == 'down' %}ju-status-badge--danger{% else %}ju-status-badge--neutral{% endif %}">
+						UDP:{{ endpoint.port }}<span class="visually-hidden">: {{ endpoint.status or 'unknown' }}</span>
+					</span>
+					{% endfor %}
+					{% endif %}
+					{% if not (target.enable_http_check or target.enable_ping or target.enable_cert_expiration or target.enable_tcp_connect or target.enable_udp_scan) %}
 					<span class="target-kpi-hint">No checks enabled</span>
 					{% endif %}
 				</div>
@@ -126,5 +133,34 @@
 	</div>
 
 </section>
+
+{% if target.enable_tcp_connect or target.enable_udp_scan or target.enable_ping %}
+<section class="card target-panel" aria-labelledby="target-network-endpoints-title">
+	<div class="card-header" id="target-network-endpoints-title">Network endpoints</div>
+	<div class="card-body">
+		{% if target.network_ports|default([]) or target.enable_ping %}
+		<div class="table-responsive" role="region" tabindex="0" aria-label="Network endpoint status">
+			<table class="table table-sm align-middle mb-0">
+				<thead><tr><th scope="col">Endpoint</th><th scope="col">Status</th><th scope="col">Service</th><th scope="col">Last check</th><th scope="col">Last up</th></tr></thead>
+				<tbody>
+				{% if target.enable_ping %}
+				<tr><th scope="row">ICMP</th><td>{{ (target.ping_status or 'unknown')|upper }}</td><td>—</td><td>—</td><td>—</td></tr>
+				{% endif %}
+				{% for endpoint in target.network_ports|default([]) %}
+				<tr>
+					<th scope="row">{{ endpoint.protocol|upper }} {{ endpoint.port }}</th>
+					<td><span class="badge {% if endpoint.status == 'up' %}ju-status-badge--success{% elif endpoint.status == 'down' %}ju-status-badge--danger{% else %}ju-status-badge--neutral{% endif %}">{{ (endpoint.status or 'unknown')|upper }}</span></td>
+					<td>{% if endpoint.service_name %}{{ endpoint.service_name }}{% if endpoint.method == 'table' %} (table hint){% endif %}{% else %}—{% endif %}</td>
+					<td>{% if endpoint.checked_at %}<time datetime="{{ endpoint.checked_at }}">{{ endpoint.checked_at }}</time>{% else %}Never{% endif %}</td>
+					<td>{% if endpoint.last_up_at %}<time datetime="{{ endpoint.last_up_at }}">{{ endpoint.last_up_at }}</time>{% else %}Never{% endif %}</td>
+				</tr>
+				{% endfor %}
+				</tbody>
+			</table>
+		</div>
+		{% else %}<p class="small text-body-secondary mb-0">No port measurements yet.</p>{% endif %}
+	</div>
+</section>
+{% endif %}
 
 {# SLA Thresholds are displayed as yellow lines in the charts #}

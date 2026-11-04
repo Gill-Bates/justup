@@ -51,6 +51,10 @@ def check_identities(data: dict) -> set[tuple[str, str]]:
         for port in str(data.get("tcp_ports") or "").split(","):
             if port.strip():
                 result.add(("tcp", f"{tcp_host}:{int(port)}"))
+    if data.get("enable_udp_scan"):
+        for port in str(data.get("udp_ports") or "").split(","):
+            if port.strip():
+                result.add(("udp", f"{host or ''}:{int(port)}"))
     return result
 
 

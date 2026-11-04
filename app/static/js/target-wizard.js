@@ -19,12 +19,15 @@
   const fields = {
     address: document.getElementById('wizard-address'),
     ports: document.getElementById('wizard-ports'),
+    udpPorts: document.getElementById('wizard-udp-ports'),
     extraPorts: document.getElementById('wizard-extra-ports'),
+    extraUdpPorts: document.getElementById('wizard-extra-udp-ports'),
     name: document.getElementById('wizard-name'),
     group: document.getElementById('wizard-group'),
     http: document.getElementById('wizard-http'),
     ping: document.getElementById('wizard-ping'),
     tcp: document.getElementById('wizard-tcp'),
+    udp: document.getElementById('wizard-udp'),
     cert: document.getElementById('wizard-cert'),
     url: document.getElementById('wizard-http-url'),
     method: document.getElementById('wizard-method'),
@@ -39,6 +42,7 @@
     enable_http_check: fields.http,
     enable_ping: fields.ping,
     enable_tcp_connect: fields.tcp,
+    enable_udp_scan: fields.udp,
     enable_cert_expiration: fields.cert,
     http_url: fields.url,
     http_prefer_head: fields.method,
@@ -56,7 +60,7 @@
     http_success_codes: 'http',
     ignore_cert_errors: 'tls'
   };
-  const groupLabels = { http: 'HTTP settings', tls: 'TLS certificate option', tcp: 'TCP port field' };
+  const groupLabels = { http: 'HTTP settings', tls: 'TLS certificate option', tcp: 'TCP port field', udp: 'UDP port field' };
   const dirty = new Set();
   let shownGroups = {};
   let step = 0;
@@ -137,7 +141,7 @@
   }
 
   function activeChecks() {
-    return { http: fields.http.checked, ping: fields.ping.checked, tcp: fields.tcp.checked, cert: fields.cert.checked };
+    return { http: fields.http.checked, ping: fields.ping.checked, tcp: fields.tcp.checked, udp: fields.udp.checked, cert: fields.cert.checked };
   }
 
   // Shows the field groups of the active checks; a user toggle is announced through the status region.
@@ -184,6 +188,7 @@
       name: fields.name.value.trim() || null,
       group: fields.group.value || null,
       tcp_ports: fields.ports.value.trim() || null,
+      udp_ports: fields.udpPorts.value.trim() || null,
       overrides
     };
   }
@@ -223,7 +228,22 @@
       showError('Choose at least one TCP port.', fields.ports);
       return false;
     }
+    if (fields.ports.value.trim() && !validPorts(fields.ports.value)) {
+      showError('Enter TCP port numbers from 1 to 65535, separated by commas.', fields.ports);
+      return false;
+    }
+    if (fields.udpPorts.value.trim() && !validPorts(fields.udpPorts.value)) {
+      showError('Enter UDP port numbers from 1 to 65535, separated by commas.', fields.udpPorts);
+      return false;
+    }
     return true;
+  }
+
+  function validPorts(value) {
+    return value.split(',').every(part => {
+      const text = part.trim();
+      return /^[0-9]+$/.test(text) && Number(text) >= 1 && Number(text) <= 65535;
+    });
   }
 
   function validateChecks() {
@@ -233,12 +253,24 @@
         return false;
       }
     }
-    if (!fields.http.checked && !fields.ping.checked && !fields.tcp.checked) {
+    if (!fields.http.checked && !fields.ping.checked && !fields.tcp.checked && !fields.udp.checked) {
       showError('Enable at least one monitoring check.');
       return false;
     }
     if (fields.tcp.checked && !fields.ports.value.trim()) {
       showError('Choose at least one TCP port.', fields.extraPorts);
+      return false;
+    }
+    if (fields.tcp.checked && !validPorts(fields.ports.value)) {
+      showError('Enter TCP port numbers from 1 to 65535, separated by commas.', fields.extraPorts);
+      return false;
+    }
+    if (fields.udp.checked && !fields.udpPorts.value.trim()) {
+      showError('Choose at least one UDP port.', fields.extraUdpPorts);
+      return false;
+    }
+    if (fields.udp.checked && !validPorts(fields.udpPorts.value)) {
+      showError('Enter UDP port numbers from 1 to 65535, separated by commas.', fields.extraUdpPorts);
       return false;
     }
     return true;
@@ -268,7 +300,8 @@
     // Rows of an inactive check are left out instead of showing a placeholder.
     if (values.enable_http_check) addSummaryRow(list, 'Full URL', values.http_url);
     if (values.enable_tcp_connect) addSummaryRow(list, 'TCP ports', values.tcp_ports);
-    const checks = [values.enable_http_check && 'HTTP', values.enable_ping && 'ICMP ping', values.enable_tcp_connect && 'TCP', values.enable_cert_expiration && 'Certificate expiry'].filter(Boolean);
+    if (values.enable_udp_scan) addSummaryRow(list, 'UDP ports', values.udp_ports);
+    const checks = [values.enable_http_check && 'HTTP', values.enable_ping && 'ICMP ping', values.enable_tcp_connect && 'TCP', values.enable_udp_scan && 'UDP', values.enable_cert_expiration && 'Certificate expiry'].filter(Boolean);
     addSummaryRow(list, 'Checks', checks.join(', ') || 'None');
     addSummaryRow(list, 'Interval / retries / retention', `${values.interval_seconds} s / ${values.max_retries} / ${values.retention_days} days`);
     if (values.enable_http_check) addSummaryRow(list, 'HTTP method / success codes', `${values.http_prefer_head ? 'HEAD' : 'GET'} / ${values.http_success_codes}`);
@@ -379,11 +412,13 @@
   for (const [key, field] of Object.entries(overrideFields)) {
     field.addEventListener(field.type === 'checkbox' || field.tagName === 'SELECT' ? 'change' : 'input', () => dirty.add(key));
   }
-  for (const toggle of [fields.http, fields.ping, fields.tcp, fields.cert]) {
+  for (const toggle of [fields.http, fields.ping, fields.tcp, fields.udp, fields.cert]) {
     toggle.addEventListener('change', () => updateCheckGroups({ announce: true }));
   }
   fields.ports.addEventListener('input', () => { fields.extraPorts.value = fields.ports.value; });
   fields.extraPorts.addEventListener('input', () => { fields.ports.value = fields.extraPorts.value; });
+  fields.udpPorts.addEventListener('input', () => { fields.extraUdpPorts.value = fields.udpPorts.value; });
+  fields.extraUdpPorts.addEventListener('input', () => { fields.udpPorts.value = fields.extraUdpPorts.value; });
   fields.name.addEventListener('input', () => { fields.name.dataset.userEdited = 'true'; });
   fields.address.addEventListener('input', suggestName);
   form.querySelectorAll('input[name="profile"]').forEach(input => input.addEventListener('change', updateKindFields));
@@ -403,7 +438,8 @@
       const recipientIds = [...document.querySelectorAll('#wizard-recipients input:checked')].map(input => Number(input.value));
       const response = await window.apiFetch('/targets', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...reviewedValues, alert_recipient_ids: recipientIds })
+        body: JSON.stringify({ ...reviewedValues, alert_recipient_ids: recipientIds,
+          ...(form.elements.network_scan_id.value ? { network_scan_id: form.elements.network_scan_id.value } : {}) })
       });
       if (!response.ok) {
         let detail;

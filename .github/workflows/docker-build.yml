@@ -47,6 +47,8 @@ jobs:
       archs: ${{ steps.matrix.outputs.archs }}
       python_base: ${{ steps.rolling.outputs.python_base }}
       signal_cli_version: ${{ steps.rolling.outputs.signal_cli_version }}
+      nmap_version: ${{ steps.rolling.outputs.nmap_version }}
+      nmap_rpm: ${{ steps.rolling.outputs.nmap_rpm }}
 
     steps:
       - name: Checkout repository
@@ -150,14 +152,24 @@ jobs:
             exit 1
           fi
 
+          nmap_release="$(python3 tools/nmap-release.py latest)"
+          read -r nmap_version nmap_rpm <<< "$nmap_release"
+          if [[ ! "$nmap_version" =~ ^[0-9]+(\.[0-9]+)+$ || -z "$nmap_rpm" ]]; then
+            echo "ERROR: could not resolve the official stable Nmap release" >&2
+            exit 1
+          fi
+
           {
             echo "python_base=${python_base}"
             echo "signal_cli_version=${signal_cli_version}"
+            echo "nmap_version=${nmap_version}"
+            echo "nmap_rpm=${nmap_rpm}"
           } >> "$GITHUB_OUTPUT"
 
           echo "Resolved once for every architecture:"
           echo "  python base      : ${python_base}"
           echo "  signal-cli       : ${signal_cli_version}"
+          echo "  nmap             : ${nmap_version} (${nmap_rpm})"
 
       # The only place architectures are declared: build, create-manifest,
       # release-newest.py and the release notes all derive from it. Native
@@ -266,6 +278,8 @@ jobs:
             --cache-to type=gha,mode=max,scope=${{ matrix.cache_scope }} \
             --build-arg "PYTHON_BASE=${{ needs.meta.outputs.python_base }}" \
             --build-arg "SIGNAL_CLI_VERSION=${{ needs.meta.outputs.signal_cli_version }}" \
+            --build-arg "NMAP_VERSION=${{ needs.meta.outputs.nmap_version }}" \
+            --build-arg "NMAP_RPM=${{ needs.meta.outputs.nmap_rpm }}" \
             --build-arg "APP_VERSION=${{ needs.meta.outputs.tag }}" \
             --build-arg "BUILD_DATE=${{ needs.meta.outputs.build_date }}" \
             --build-arg "VCS_REF=${{ github.sha }}" \
@@ -317,6 +331,64 @@ jobs:
           docker ps -a -f name="${{ matrix.container_name }}"
           exit 1
 
+      - name: Verify Nmap TCP and UDP in the runtime image (${{ matrix.arch }})
+        env:
+          EXPECTED_NMAP_VERSION: ${{ needs.meta.outputs.nmap_version }}
+          TEST_IMAGE: ${{ matrix.test_image }}
+          PLATFORM: ${{ matrix.platform }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          actual="$(docker run --rm --platform "$PLATFORM" --entrypoint /usr/bin/nmap "$TEST_IMAGE" --version \
+            | sed -n 's/^Nmap version \([^ ]*\).*/\1/p')"
+          if [[ "$actual" != "$EXPECTED_NMAP_VERSION" ]]; then
+            echo "ERROR: Nmap version ${actual} differs from resolved ${EXPECTED_NMAP_VERSION}" >&2
+            exit 1
+          fi
+          echo "NMAP_ACTUAL_VERSION=${actual}" >> "$GITHUB_ENV"
+
+          docker run --rm --platform "$PLATFORM" --user 1000:1000 \
+            --entrypoint /usr/bin/nmap "$TEST_IMAGE" \
+            -sT -Pn -n -p 9 --max-retries 0 --host-timeout 10s -oX - 127.0.0.1 \
+            > "${RUNNER_TEMP}/nmap-tcp-${ARCH}.xml"
+
+          # The worker's steady-state UID is non-root with only ambient NET_RAW.
+          docker run --rm --platform "$PLATFORM" --cap-drop ALL \
+            --cap-add NET_RAW --cap-add SETUID --cap-add SETGID \
+            --security-opt no-new-privileges:true --entrypoint /usr/bin/setpriv "$TEST_IMAGE" \
+            --inh-caps +net_raw --ambient-caps +net_raw \
+            --reuid 1000 --regid 1000 --clear-groups \
+            /usr/bin/nmap --privileged -sU -Pn -n -p 9 \
+            --max-retries 0 --host-timeout 10s -oX - 127.0.0.1 \
+            > "${RUNNER_TEMP}/nmap-udp-${ARCH}.xml"
+
+          python3 - "$ARCH" "$RUNNER_TEMP" <<'PY'
+          import sys
+          from pathlib import Path
+          from xml.etree import ElementTree
+
+          arch, directory = sys.argv[1], Path(sys.argv[2])
+          for protocol in ("tcp", "udp"):
+              root = ElementTree.parse(directory / f"nmap-{protocol}-{arch}.xml").getroot()
+              assert root.tag == "nmaprun"
+              assert root.find("scaninfo").get("protocol") == protocol
+              assert root.find(".//port").get("portid") == "9"
+          PY
+
+          docker run --rm --platform "$PLATFORM" --entrypoint cat "$TEST_IMAGE" \
+            /usr/share/doc/nmap/PROVENANCE.txt > "nmap-provenance-${ARCH}.txt"
+          grep -qx "nmap_version=${actual}" "nmap-provenance-${ARCH}.txt"
+          grep -q '^source_sha256=[0-9a-f]\{64\}$' "nmap-provenance-${ARCH}.txt"
+          grep -qx "architecture=${ARCH}" "nmap-provenance-${ARCH}.txt"
+
+      - name: Upload Nmap provenance (${{ matrix.arch }})
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: nmap-provenance-${{ matrix.arch }}
+          path: nmap-provenance-${{ matrix.arch }}.txt
+          retention-days: 14
+          if-no-files-found: error
+
       # Packaging, ELF header and a dlopen of the library (--load); JNI_OnLoad inside the JVM
       # and a real Signal send stay a manual gate.
       - name: Verify libsignal native library (${{ matrix.arch }})
@@ -361,6 +433,7 @@ jobs:
           signal_cli_version="$(docker run --rm --platform "${{ matrix.platform }}" \
             --entrypoint signal-cli "${{ matrix.test_image }}" --version)"
           printf 'signal_cli=%s\n' "$signal_cli_version" >> "toolchain/${{ matrix.image_suffix }}.txt"
+          printf 'nmap=%s\n' "$NMAP_ACTUAL_VERSION" >> "toolchain/${{ matrix.image_suffix }}.txt"
 
           # COMPONENTS.txt mixes formats, so each value is extracted on its own.
           # Only arch-independent values belong here; library names and hashes differ by design.
@@ -760,6 +833,7 @@ jobs:
       IMAGE_NAME: ${{ format('{0}/justup', secrets.DOCKERHUB_USERNAME) }}
       MOVES_LATEST: ${{ needs.meta.outputs.moves_latest }}
       ARCHS: ${{ needs.meta.outputs.archs }}
+      NMAP_VERSION: ${{ needs.meta.outputs.nmap_version }}
     permissions:
       contents: write
       actions: read
@@ -785,6 +859,13 @@ jobs:
           path: toolchain/
           merge-multiple: true
 
+      - name: Download Nmap provenance
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          pattern: nmap-provenance-*
+          path: nmap-provenance/
+          merge-multiple: true
+
       # The release body links to the reports: each must exist and be a valid report
       # of a recognized image (tools/trivy-report.py) before a public release is created.
       - name: Validate Trivy findings
@@ -805,6 +886,7 @@ jobs:
             const path = require('node:path');
             const version = process.env.VERSION;
             const imageName = process.env.IMAGE_NAME;
+            const nmapVersion = process.env.NMAP_VERSION;
             const isPrerelease = version.includes('-');
             // Mirrors create-manifest: do not document a 'latest' this run left alone.
             const movedLatest = !isPrerelease && process.env.MOVES_LATEST === 'true';
@@ -867,6 +949,7 @@ jobs:
             // The release title already carries the version, so the body starts with the image.
             const body = [
               '**Docker Image:** `docker pull ' + imageName + ':' + version + '`',
+              '**Nmap:** ' + nmapVersion + ' (verified upstream release)',
               '',
               '### Available Tags',
               ...tags,
@@ -924,6 +1007,7 @@ jobs:
             const assets = archs.flatMap(arch => [
               [`trivy-${arch}.json`, path.join('trivy-reports', `trivy-findings-${arch}`, `trivy-${arch}.json`), 'application/json'],
               [`toolchain-${arch}.txt`, path.join('toolchain', `${arch}.txt`), 'text/plain'],
+              [`nmap-provenance-${arch}.txt`, path.join('nmap-provenance', `nmap-provenance-${arch}.txt`), 'text/plain'],
             ]);
             for (const [assetName, file, contentType] of assets) {
               const data = fs.readFileSync(file);

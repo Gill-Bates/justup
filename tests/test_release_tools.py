@@ -88,6 +88,7 @@ FIELDS = {
     "java_version": "25",
     "libsignal_client": "0.1",
     "signal_cli": "0.14",
+    "nmap": "7.993",
     "fastapi": "1",
 }
 
@@ -102,7 +103,7 @@ def test_parity_flags_difference_and_single_architecture():
     assert any("at least two" in p for p in parity.problems({"amd64": FIELDS}, []))
 
 
-@pytest.mark.parametrize("field", ["java_version", "libsignal_client", "signal_cli", "python"])
+@pytest.mark.parametrize("field", ["java_version", "libsignal_client", "signal_cli", "nmap", "python"])
 def test_parity_requires_fields_even_when_missing_everywhere(field):
     gap = {k: v for k, v in FIELDS.items() if k != field}
     found = parity.problems({"amd64": gap, "arm64": dict(gap)}, list(parity.REQUIRED_FIELDS))
