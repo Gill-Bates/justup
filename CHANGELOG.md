@@ -5,8 +5,11 @@
 
 ## [Unreleased]
 
+- `Fix` The Delivery Queue Log shows one card per entry on narrow screens (with the channel name next to its icon) instead of a sideways-scrolling table.
+- `Fix` The dashboard alert counts (resolved and acknowledged in 24 h) no longer read every resolved alert: a schema upgrade (version 9) adds two range indexes; with 100,000 alerts a poll drops from about 300 ms to under 1 ms. The upgrade takes about 0.1 s once.
 - `New` The target wizard tile "TCP service" is now "TCP/UDP service"; its TCP and UDP port fields stand side by side (stacked on narrow screens) and the address uses the full width.
 - `New` Port discovery: the wizard and target editor scan a host with Nmap (TCP and/or UDP, Quick or Extended) and add the chosen ports. Targets can monitor UDP ports; uncertain UDP results stay unknown.
+- `Fix` Port discovery no longer fails with "Nmap scan worker is unavailable" when justUp! runs outside Docker (`python run.py`): the app now starts its own unprivileged Nmap worker (Nmap must be installed). If the worker is down, Scan ports is disabled with the reason shown on the form and re-enabled once it is back.
 - `Fix` The alert email header shows only the logo; the "Monitoring alert" label with bell and divider is gone. Templates you saved yourself are not changed.
 - `Fix` The Targets list no longer flickers on live updates: only changed cells are rewritten, so rows, status icons, focus, open groups and the search stay as they are.
 - `Fix` The route map is easier to read: the route is drawn between the markers with an outline, estimated sections are dashed, the basemap is calmer, only a few place names remain and the legend names every kind of node and link.

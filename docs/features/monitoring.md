@@ -60,6 +60,18 @@ both and a **Quick** or **Extended** scope, then select the ports to adopt.
 - Only administrators can scan. The host must pass the same validation as a check
   target; at most 128 ports are scanned and two scans run at once (`429` when busy).
 - A scan times out after 90 s (Quick) or 180 s (Extended) and can be cancelled.
+- **Nmap worker.** Scans run in a separate worker process, never in the web process. In
+  the Docker image the entrypoint starts it under its own user with `CAP_NET_RAW` only
+  (needed for UDP) and restarts it if it stops. Started directly (`python run.py`) there is
+  no entrypoint: justUp! starts an unprivileged worker itself with a scrubbed environment.
+  This needs the `nmap` package on the host (`apt install nmap`). TCP scans then work; UDP
+  scans need raw-socket rights and report `permission_denied` without them. Setting
+  `JUSTUP_NMAP_SOCKET` tells justUp! that an external supervisor owns the worker.
+- **Unavailable worker.** If Nmap is missing or the worker is down or restarting, the form
+  shows the reason, **Scan ports** is disabled and the ports can still be entered by hand.
+  The state is re-checked when the page regains focus, every 30 s while it is down and on
+  **Check again**. `GET /network-scans/status` reports it; starting a scan answers `503`
+  with `code` `unavailable`.
 
 ## Host rules
 

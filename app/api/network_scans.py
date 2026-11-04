@@ -9,7 +9,9 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
+from pydantic import BaseModel
 
+from app.services.nmap_client import availability
 from app.services.nmap_jobs import NmapScanJob, NmapScanRequest, cancel_job, create_job, get_job
 from app.services.nmap_scanner import NmapScannerError
 from app.utils.rate_limit import rate_limit, rate_limit_user
@@ -19,6 +21,20 @@ from .auth import require_admin
 router = APIRouter(prefix="/network-scans", tags=["network-scans"])
 
 
+class NmapAvailability(BaseModel):
+    """Whether port discovery can start now; ``message`` explains what to do when it cannot."""
+
+    available: bool
+    state: str
+    message: str = ""
+    detail: str = ""
+
+
+@router.get("/status", response_model=NmapAvailability, dependencies=[Depends(rate_limit("60/minute"))])
+async def worker_availability(_admin=Depends(require_admin)) -> dict:
+    return await availability()
+
+
 @router.post(
     "",
     response_model=NmapScanJob,
@@ -26,6 +42,12 @@ router = APIRouter(prefix="/network-scans", tags=["network-scans"])
     dependencies=[Depends(rate_limit("10/minute")), Depends(rate_limit_user("3/minute", require_admin))],
 )
 async def start_scan(payload: NmapScanRequest, admin=Depends(require_admin)) -> NmapScanJob:
+    current = await availability()
+    if not current["available"]:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "unavailable", "message": current["message"]},
+        )
     try:
         return await create_job(payload, int(admin["id"]))
     except NmapScannerError as exc:

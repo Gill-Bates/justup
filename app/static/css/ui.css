@@ -1454,10 +1454,28 @@ textarea.smtp-editor-frame {
 
 /* ----- Spooler Notification Log ----- */
 
-/* A dense log: no card layout, the table contract scrolls it locally and wraps long values. */
+/* A dense log: a table in a wide container, one card per entry in a narrow one (table contract, .rtable). */
 .spooler-log td[data-label="Error"] {
 	font-size: 0.875rem;
 	line-height: 1.3;
+}
+
+/* The channel is an icon in the table; the card row shows its name next to the icon. */
+@container ju-table (width <40rem) {
+	.spooler-log td[data-label="Channel"] {
+		justify-content: space-between;
+	}
+
+	.spooler-log td[data-label="Channel"] .visually-hidden {
+		position: static !important;
+		width: auto !important;
+		height: auto !important;
+		margin: 0 0 0 0.35rem !important;
+		overflow: visible !important;
+		clip: auto !important;
+		clip-path: none !important;
+		white-space: nowrap;
+	}
 }
 
 @media (width >=768px) {

@@ -48,6 +48,7 @@ from ..utils.availability_rules import (
     is_gap,
     measured_outages,
     merge_outages,
+    series_interval_seconds,
 )
 from ..utils.time import ensure_utc, parse_utc, utcnow
 from ..utils.uptime_metric import combine_availability
@@ -1886,20 +1887,19 @@ def query_downtime_periods(
     ref_now = now or utcnow()
     found: list[tuple[str, Outage]] = []
     for metric, label in series:
+        interval = series_interval_seconds(metric, check_interval_seconds)
         points = _series_points(
             tsdb_dir,
             target_id=target_id,
             metric=metric,
             since=since_u,
             until=until_u,
-            interval_seconds=check_interval_seconds,
+            interval_seconds=interval,
         )
         # An ongoing outage is only ongoing at the live edge of the query, never inside a closed range.
-        closed_range = until_u is not None and until_u < ref_now - timedelta(seconds=check_interval_seconds)
+        closed_range = until_u is not None and until_u < ref_now - timedelta(seconds=interval)
         live = None if closed_range else ref_now
-        found.extend(
-            (label, outage) for outage in measured_outages(points, interval_seconds=check_interval_seconds, now=live)
-        )
+        found.extend((label, outage) for outage in measured_outages(points, interval_seconds=interval, now=live))
     periods: list[DowntimePeriod] = []
     for merged in merge_outages(found):
         if merged.end is None:
@@ -1922,6 +1922,7 @@ def _availability_transitions(
     check_interval_seconds: int = 60,
 ) -> list[dict[str, Any]]:
     """Keep every observed state transition and mark gaps without filling them."""
+    check_interval_seconds = int(series_interval_seconds(metric, check_interval_seconds))
     now = utcnow()
     raw_cutoff = now - timedelta(days=ROLLUP_CONFIG["raw"][1])
     rollup_cutoff = now - timedelta(days=ROLLUP_CONFIG["5m_median"][1])

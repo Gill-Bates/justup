@@ -13,6 +13,7 @@ neither downtime nor uptime, and it must never be turned into either of them.
 
 from __future__ import annotations
 
+import itertools
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -44,6 +45,26 @@ def udp_interval_seconds(target_interval_seconds: int) -> int:
     return max(int(target_interval_seconds), UDP_MIN_INTERVAL_SECONDS)
 
 
+def series_interval_seconds(metric: str, target_interval_seconds: float) -> float:
+    """Expected spacing of one series: UDP series follow the (slower) UDP scan interval."""
+    if metric.startswith("udp_"):
+        return float(udp_interval_seconds(int(target_interval_seconds)))
+    return float(target_interval_seconds)
+
+
+def effective_interval_seconds(stamps: Iterable[datetime], interval_seconds: float) -> float:
+    """Spacing of a series that may be resampled or rolled up (median distance, never below the interval).
+
+    A thinned series has a larger regular spacing than the check interval; applying the gap rule with the
+    check interval would turn every neighbouring pair into a gap.
+    """
+    ordered = sorted(stamps)
+    deltas = sorted((b - a).total_seconds() for a, b in itertools.pairwise(ordered) if b > a)
+    if len(deltas) < 3:
+        return float(interval_seconds)
+    return max(float(interval_seconds), deltas[len(deltas) // 2])
+
+
 @dataclass(frozen=True)
 class Outage:
     """Measured downtime of one series; ``end`` is None while the outage is ongoing."""
@@ -59,6 +80,7 @@ def measured_outages(
     points: Iterable[tuple[datetime, int | None]],
     *,
     interval_seconds: float,
+    gap_interval_seconds: float | None = None,
     now: datetime | None = None,
 ) -> list[Outage]:
     """Derive outages from one time-ordered series of ``(ts, 1 | 0 | None)`` points.
@@ -68,6 +90,7 @@ def measured_outages(
     single point), so unmeasured time is never counted. The outage is ongoing only while its last point is fresh.
     """
     interval = timedelta(seconds=interval_seconds)
+    gap_interval = gap_interval_seconds or interval_seconds  # a thinned series has a larger regular spacing
     outages: list[Outage] = []
     start: datetime | None = None
     last: datetime | None = None
@@ -83,7 +106,7 @@ def measured_outages(
         start = None
 
     for ts, value in points:
-        if start is not None and last is not None and is_gap((ts - last).total_seconds(), interval_seconds):
+        if start is not None and last is not None and is_gap((ts - last).total_seconds(), gap_interval):
             close_unmeasured(ts)
         if value == 0:
             if start is None:
@@ -96,7 +119,7 @@ def measured_outages(
             close_unmeasured(ts)
         last = ts
     if start is not None and last is not None:
-        if now is None or not is_gap((now - last).total_seconds(), interval_seconds):
+        if now is None or not is_gap((now - last).total_seconds(), gap_interval):
             outages.append(Outage(start, None))
         else:
             outages.append(Outage(start, measured_end(start, last)))

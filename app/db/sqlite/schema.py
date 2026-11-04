@@ -305,6 +305,8 @@ def _create_baseline_schema(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_alerts_target_started ON alerts(target_id, started_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_alerts_status_started ON alerts(status, started_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_alerts_started_at ON alerts(started_at)")
+    conn.execute(ALERT_SUMMARY_INDEXES[0])
+    conn.execute(ALERT_SUMMARY_INDEXES[1])
 
     # Monitor quality time series (Quality Gate feature)
     conn.execute(
@@ -546,7 +548,14 @@ def _ensure_unique_recipient_phone(conn: sqlite3.Connection) -> None:
 # MIGRATIONS that upgrades a database from ``version - 1``. _create_baseline_schema() must then
 # create the new current schema for fresh databases, so migrations only transform older ones.
 # Migrations run inside init_schema's transaction (an error rolls schema and user_version back).
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
+
+# Dashboard summary (resolved / acknowledged in the last 24 h): range scans on their own timestamps instead of
+# reading every resolved alert. Shared by the baseline and migration 9, so both build the same layout.
+ALERT_SUMMARY_INDEXES = (
+    "CREATE INDEX IF NOT EXISTS idx_alerts_status_ended ON alerts(status, ended_at)",
+    "CREATE INDEX IF NOT EXISTS idx_alerts_acknowledged_at ON alerts(acknowledged_at) WHERE is_acknowledged = 1",
+)
 
 
 # IncompatibleSchemaError.kind values

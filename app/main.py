@@ -43,6 +43,7 @@ from .middleware.security_headers import SecurityHeadersMiddleware
 from .monitor.scheduler import MonitorScheduler
 from .services import event_bus, pdf_worker
 from .services.nmap_jobs import shutdown_jobs
+from .services.nmap_local import start_local_worker, stop_local_worker
 from .services.notifications.signal_backend import (
     get_signal_backend,
     reset_signal_backend,
@@ -386,6 +387,11 @@ async def _lifespan(app: FastAPI):
         )
     )
 
+    try:
+        await start_local_worker()
+    except Exception as e:  # noqa: BLE001 - lifespan boundary: a missing scanner never blocks monitoring
+        _log.warning("Nmap worker could not be started: %s", e)
+
     _log.info("Application started")
 
     try:
@@ -416,6 +422,7 @@ async def _lifespan(app: FastAPI):
         # 2. Stop background tasks (stop events are already set)
         await _bounded_stop(supervisor.stop(), label="service_supervisor")
         await _bounded_stop(shutdown_jobs(), label="nmap_discovery_jobs")
+        await _bounded_stop(stop_local_worker(), label="nmap_local_worker")
         await _bounded_stop(alert_sink.aclose(), label="service_alert_sink")
         # to_thread jobs cannot be cancelled; shutdown() joins the PDF thread pool, so keep it off the loop
         await _bounded_stop(asyncio.to_thread(pdf_worker.shutdown_pdf_worker), label="pdf_worker_pool")

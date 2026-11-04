@@ -20,6 +20,12 @@
       <button class="btn btn-outline-primary" type="button" data-scan-action="start">Scan ports</button>
       <button class="btn btn-outline-secondary" type="button" data-scan-action="cancel" hidden>Cancel scan</button>
     </div>
+    <div role="status" aria-live="polite">
+      <p class="small text-danger mt-2 mb-0" data-scan-unavailable hidden>
+        <span id="{{ scan_prefix }}-scan-unavailable" data-scan-unavailable-text></span>
+        <button class="btn btn-link btn-sm p-0 align-baseline" type="button" data-scan-action="recheck">Check again</button>
+      </p>
+    </div>
     <p class="small mt-2 mb-0" id="{{ scan_prefix }}-scan-status" data-scan-status role="status" aria-live="polite"></p>
     <div data-scan-results hidden>
       <div class="table-responsive mt-3" role="region" tabindex="0" aria-label="Discovered ports">

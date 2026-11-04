@@ -34,9 +34,41 @@ def worker_status() -> dict[str, object]:
 def _unavailable_message() -> str:
     status = worker_status()
     state, detail = status.get("state"), status.get("detail")
-    if state in {"restarting", "failed", "starting"}:
+    if isinstance(status.get("message"), str) and status["message"]:
+        return status["message"]
+    if state in {"restarting", "starting"}:
         return f"Nmap scan worker is {state}" + (f": {detail}" if isinstance(detail, str) and detail else "")
+    if state == "failed":
+        return "Nmap scan worker failed" + (f": {detail}" if isinstance(detail, str) and detail else "")
     return "Nmap scan worker is unavailable"
+
+
+async def probe_socket(timeout: float = 2.0) -> bool:
+    """Return whether the worker accepts a connection; closing at once makes it drop the empty request."""
+    try:
+        async with asyncio.timeout(timeout):
+            _, writer = await asyncio.open_unix_connection(SOCKET_PATH)
+    except (OSError, TimeoutError):
+        return False
+    writer.close()
+    with suppress(OSError):
+        await writer.wait_closed()
+    return True
+
+
+async def availability() -> dict[str, object]:
+    """Report whether scans can start now and, if not, why; never starts a scan."""
+    if await probe_socket():
+        return {"available": True, "state": "ready", "message": "", "detail": ""}
+    status = worker_status()
+    state = status.get("state")
+    detail = status.get("detail")
+    return {
+        "available": False,
+        "state": state if state in {"starting", "restarting", "failed"} else "unavailable",
+        "message": _unavailable_message(),
+        "detail": detail if isinstance(detail, str) else "",
+    }
 
 
 async def request_scan(

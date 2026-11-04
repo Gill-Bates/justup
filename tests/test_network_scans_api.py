@@ -77,7 +77,12 @@ def stub(monkeypatch):
             raise state.error
         return _result()
 
+    async def worker_ready():
+        return state.availability
+
+    state.availability = {"available": True, "state": "ready", "message": "", "detail": ""}
     monkeypatch.setattr(nmap_jobs, "request_scan", fake_request_scan)
+    monkeypatch.setattr(network_scans, "availability", worker_ready)
     return state
 
 
@@ -384,6 +389,49 @@ class TestLimitsAndExpiry:
     def test_web_app_survives_when_the_worker_is_missing(self, client, monkeypatch):
         monkeypatch.undo()
         monkeypatch.setattr("app.services.nmap_client.SOCKET_PATH", "/nonexistent/nmap.sock")
-        job = _wait(client, _start(client).json()["id"], {"failed"})
-        assert job["error"]["code"] == "unavailable"
+        response = _start(client)
+        assert response.status_code == 503
+        assert response.json()["detail"]["code"] == "unavailable"
         assert client.get("/api/network-scans/nope", headers=ADMIN).status_code == 404
+
+
+class TestAvailability:
+    def test_status_reports_a_ready_worker(self, client, stub):
+        body = client.get("/api/network-scans/status", headers=ADMIN).json()
+        assert body["available"] is True and body["state"] == "ready"
+
+    def test_status_names_the_reason_when_the_worker_is_down(self, client, stub):
+        stub.availability = {
+            "available": False,
+            "state": "failed",
+            "message": "Nmap is not installed on this host. Install the nmap package and restart justUp!",
+            "detail": "nmap binary not found",
+        }
+        body = client.get("/api/network-scans/status", headers=ADMIN).json()
+        assert body["available"] is False and body["state"] == "failed"
+        assert "Install the nmap package" in body["message"]
+
+    def test_status_requires_an_admin(self, client):
+        assert client.get("/api/network-scans/status").status_code == 401
+        assert client.get("/api/network-scans/status", headers=PLAIN_USER).status_code == 403
+
+    def test_status_is_not_mistaken_for_a_scan_id(self, client, stub):
+        assert client.get("/api/network-scans/status", headers=ADMIN).json().get("id") is None
+
+    def test_start_is_refused_with_a_machine_readable_code_while_the_worker_is_down(self, client, stub):
+        stub.availability = {
+            "available": False,
+            "state": "restarting",
+            "message": "Nmap scan worker is restarting",
+            "detail": "",
+        }
+        response = _start(client)
+        assert response.status_code == 503
+        assert response.json()["detail"] == {"code": "unavailable", "message": "Nmap scan worker is restarting"}
+        assert stub.calls == []
+
+    def test_start_works_again_once_the_worker_is_back(self, client, stub):
+        stub.availability = {"available": False, "state": "restarting", "message": "x", "detail": ""}
+        assert _start(client).status_code == 503
+        stub.availability = {"available": True, "state": "ready", "message": "", "detail": ""}
+        assert _start(client).status_code == 202

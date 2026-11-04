@@ -110,7 +110,7 @@ def test_new_file_is_initialised_as_baseline(db_path: Path):
     _init(db_path)
     conn = sqlite_db.connect(db_path)
     try:
-        assert sqlite_db.SCHEMA_VERSION == 8  # baseline plus schema migrations through network port state
+        assert sqlite_db.SCHEMA_VERSION == 9  # baseline plus schema migrations through the alert summary indexes
         assert sqlite_db.get_schema_version(conn) == sqlite_db.SCHEMA_VERSION
         tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         assert tables >= EXPECTED_TABLES
@@ -648,6 +648,7 @@ def test_upgrade_preserves_data_ids_and_integrity_across_restarts(db_path: Path,
         "Schema migration 5 -> 6 (bounded PoP candidate evidence and explicit review metadata): ok",
         "Schema migration 6 -> 7 (UDP configuration and protocol-specific port metadata): ok",
         "Schema migration 7 -> 8 (raw port state, service identity and latency per network port): ok",
+        "Schema migration 8 -> 9 (alert summary range indexes and planner statistics): ok",
     ]
 
     conn = sqlite_db.connect(db_path)
@@ -1022,3 +1023,120 @@ def test_v6_pop_migration_preserves_historical_learned_rows_and_marks_old_review
         assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
     finally:
         sqlite_db.close_connection(conn)
+
+
+# ─── v9: indexes for the dashboard alert summary ──────────────────────────────
+
+_SUMMARY_INDEXES = {"idx_alerts_status_ended", "idx_alerts_acknowledged_at"}
+_SUMMARY_QUERIES = {
+    "resolved": (
+        "SELECT COUNT(*) FROM alerts WHERE status = 'resolved' AND ended_at >= ? AND ended_at <= ?",
+        "idx_alerts_status_ended",
+    ),
+    "acknowledged": (
+        (
+            "SELECT COUNT(*) FROM alerts WHERE status = 'resolved' AND is_acknowledged = 1 "
+            "AND acknowledged_at >= ? AND acknowledged_at <= ?"
+        ),
+        "idx_alerts_acknowledged_at",
+    ),
+}
+
+
+def _alert_indexes(conn: sqlite3.Connection) -> set[str]:
+    return {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='alerts'")}
+
+
+def _plan(conn: sqlite3.Connection, name: str) -> str:
+    sql, _ = _SUMMARY_QUERIES[name]
+    params = ("2026-11-03T00:00:00", "2026-11-04T00:00:00")
+    return " | ".join(r[3] for r in conn.execute("EXPLAIN QUERY PLAN " + sql, params))
+
+
+def _fill_alerts(conn: sqlite3.Connection, count: int = 3000) -> None:
+    """Many resolved alerts, a few acknowledged and open ones: the shape that makes a scan expensive."""
+    target = _target(conn, "alerts")
+    rows = []
+    for i in range(count):
+        start = f"2026-{1 + i % 9:02d}-{1 + i % 27:02d}T{i % 24:02d}:00:00"
+        resolved = i % 50 != 0
+        ack = resolved and i % 4 == 0
+        rows.append(
+            (
+                f"a{i}",
+                target,
+                "alerts",
+                "HTTP",
+                "resolved" if resolved else "open",
+                0 if resolved else 1,
+                start,
+                start if resolved else None,
+                int(ack),
+                start if ack else None,
+                start,
+                start,
+            )
+        )
+    conn.executemany(
+        "INSERT INTO alerts (id, target_id, target_name, failed_service, status, active_incident, started_at, "
+        "ended_at, is_acknowledged, acknowledged_at, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        rows,
+    )
+    conn.commit()
+
+
+def _downgrade_to_v8(conn: sqlite3.Connection) -> None:
+    for name in _SUMMARY_INDEXES:
+        conn.execute(f"DROP INDEX IF EXISTS {name}")
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE name='sqlite_stat1'").fetchone():
+        conn.execute("DELETE FROM sqlite_stat1")
+    conn.commit()
+    conn.execute("PRAGMA user_version = 8")
+    conn.commit()
+
+
+def test_fresh_database_has_the_alert_summary_indexes(db_path: Path):
+    _init(db_path)
+    conn = sqlite_db.connect(db_path)
+    try:
+        assert _alert_indexes(conn) >= _SUMMARY_INDEXES
+        sql = conn.execute("SELECT sql FROM sqlite_master WHERE name='idx_alerts_acknowledged_at'").fetchone()[0]
+        assert "WHERE is_acknowledged = 1" in sql
+    finally:
+        sqlite_db.close_connection(conn)
+
+
+def test_v9_migration_adds_the_indexes_and_the_summary_plan_uses_them(db_path: Path):
+    _init(db_path)
+    conn = sqlite_db.connect(db_path)
+    try:
+        _fill_alerts(conn)
+        _downgrade_to_v8(conn)
+        assert not _SUMMARY_INDEXES & _alert_indexes(conn)
+        sqlite_db.init_schema(conn)
+        assert sqlite_db.get_schema_version(conn) == sqlite_db.SCHEMA_VERSION
+        assert _alert_indexes(conn) >= _SUMMARY_INDEXES
+        # The planner only picks the acknowledged_at index with statistics: the migration collects them once.
+        assert conn.execute("SELECT 1 FROM sqlite_stat1 WHERE tbl='alerts' LIMIT 1").fetchone()
+        for name, (_, index) in _SUMMARY_QUERIES.items():
+            assert index in _plan(conn, name), f"{name}: {_plan(conn, name)}"
+        assert conn.execute("SELECT COUNT(*) FROM alerts").fetchone()[0] == 3000
+        assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    finally:
+        sqlite_db.close_connection(conn)
+
+
+def test_v9_migration_is_idempotent_across_connections(db_path: Path):
+    _init(db_path)
+    conn = sqlite_db.connect(db_path)
+    try:
+        _downgrade_to_v8(conn)
+        sqlite_db.init_schema(conn)
+        sqlite_db.init_schema(conn)
+        assert sqlite_db.get_schema_version(conn) == sqlite_db.SCHEMA_VERSION
+    finally:
+        sqlite_db.close_connection(conn)
+    before = {r[0]: r[1] for r in sqlite3.connect(db_path).execute("SELECT name, sql FROM sqlite_master")}
+    _init(db_path)
+    after = {r[0]: r[1] for r in sqlite3.connect(db_path).execute("SELECT name, sql FROM sqlite_master")}
+    assert before == after

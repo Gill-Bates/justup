@@ -6,17 +6,22 @@
 
 """Outside Docker no entrypoint starts the Nmap worker: the app supervises its own unprivileged one."""
 
-# ruff: noqa: SLF001  # white-box checks of the private worker process and socket directory
+# ruff: noqa: SLF001, ASYNC240  # white-box checks of the private worker process and socket directory
 from __future__ import annotations
 
 import asyncio
 import os
 import signal
 import stat
+from pathlib import Path
 
 import pytest
 
 from app.services import nmap_client, nmap_local, nmap_scanner
+
+REAL_EXTERNAL_CHECK = (
+    nmap_local.external_worker_configured
+)  # the autouse fixture in conftest.py patches the module attribute
 
 
 @pytest.fixture
@@ -43,9 +48,9 @@ async def _until(predicate, timeout=15.0):
 
 def test_container_supervisor_is_left_alone_when_the_socket_is_configured(monkeypatch):
     monkeypatch.setenv("JUSTUP_NMAP_SOCKET", "/run/justup/nmap.sock")
-    assert nmap_local.external_worker_configured() is True
+    assert REAL_EXTERNAL_CHECK() is True
     monkeypatch.delenv("JUSTUP_NMAP_SOCKET")
-    assert nmap_local.external_worker_configured() is False
+    assert REAL_EXTERNAL_CHECK() is False
 
 
 @pytest.mark.asyncio
@@ -66,20 +71,20 @@ async def test_missing_nmap_binary_is_reported_with_the_prerequisite(monkeypatch
 async def test_worker_is_started_ready_supervised_and_cleaned_up(local):
     await local.start()
     try:
-        await _until(lambda: _available())
+        await _until(_ready)
         socket_dir = local._directory
         assert stat.S_IMODE(socket_dir.stat().st_mode) == 0o700
-        assert nmap_client.SOCKET_PATH == str(socket_dir / "nmap.sock")
+        assert str(socket_dir / "nmap.sock") == nmap_client.SOCKET_PATH
         status = nmap_client.worker_status()
         assert status["state"] == "ready" and status["restarts"] == 0
         # The child gets a scrubbed environment: no application secrets.
-        environ = (open(f"/proc/{local._process.pid}/environ", "rb").read()).split(b"\0")
+        environ = Path(f"/proc/{local._process.pid}/environ").read_bytes().split(b"\0")
         assert not any(item.startswith(b"SECRET_KEY=") for item in environ)
         # A crashed worker is restarted with backoff and becomes reachable again.
         first_pid = local._process.pid
         os.kill(first_pid, signal.SIGKILL)
         await _until(lambda: _restarted(local, first_pid))
-        await _until(lambda: _available())
+        await _until(_ready)
         assert nmap_client.worker_status()["restarts"] >= 1
     finally:
         socket_dir = local._directory
@@ -87,8 +92,8 @@ async def test_worker_is_started_ready_supervised_and_cleaned_up(local):
     assert not socket_dir.exists()
 
 
-async def _available() -> bool:
-    return (await nmap_client.availability())["available"] is True
+async def _ready() -> bool:
+    return nmap_client.worker_status()["state"] == "ready" and (await nmap_client.availability())["available"] is True
 
 
 async def _restarted(worker, first_pid) -> bool:

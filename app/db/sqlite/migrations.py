@@ -26,6 +26,7 @@ from .layout import (
     _layout_problems,
 )
 from .schema import (
+    ALERT_SUMMARY_INDEXES,
     SCHEMA_CORRUPT,
     SCHEMA_FUTURE,
     SCHEMA_MIGRATION_FAILED,
@@ -297,6 +298,15 @@ def _migrate_8_network_port_state(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migrate_9_alert_summary_indexes(conn: sqlite3.Connection) -> None:
+    for ddl in ALERT_SUMMARY_INDEXES:
+        conn.execute(ddl)
+    # Without statistics the planner reads every resolved alert instead of the new range indexes;
+    # one pass over this table (bounded sample) makes them effective from the first dashboard poll.
+    conn.execute("PRAGMA analysis_limit = 1000")
+    conn.execute("ANALYZE alerts")
+
+
 # Ordered by version, contiguous from 2.
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(
@@ -310,6 +320,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(6, "bounded PoP candidate evidence and explicit review metadata", _migrate_6_pop_candidates),
     Migration(7, "UDP configuration and protocol-specific port metadata", _migrate_7_network_ports),
     Migration(8, "raw port state, service identity and latency per network port", _migrate_8_network_port_state),
+    Migration(9, "alert summary range indexes and planner statistics", _migrate_9_alert_summary_indexes),
 )
 
 

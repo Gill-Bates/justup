@@ -84,7 +84,7 @@ from app.services.traceroute_geo import (
     location_view,
     mtr_hops_to_geo_points,
 )
-from app.utils.availability_rules import MIN_DOWNTIME_SECONDS, measured_outages
+from app.utils.availability_rules import MIN_DOWNTIME_SECONDS, effective_interval_seconds, measured_outages
 from app.utils.ssrf import redact_url
 from app.utils.status_palette import STATUS_PALETTE
 from app.utils.tls_model import Check, ScanStatus, TlsScanResult, Verdict
@@ -1523,13 +1523,15 @@ def _extract_downtime_events(
         value = p.get("value")
         points.append((ts, value if value in (0, 1) else None))
 
+    # The report series is resampled or rolled up: its regular spacing, not the check interval, is the unit.
+    gap_interval = effective_interval_seconds((ts for ts, _v in points), interval_seconds)
     events = [
         DowntimeEvent(
             start=o.start,
             end=o.end,
             duration_minutes=None if o.end is None else int((o.seconds() or 0) / 60),
         )
-        for o in measured_outages(points, interval_seconds=interval_seconds, now=now)
+        for o in measured_outages(points, interval_seconds=interval_seconds, gap_interval_seconds=gap_interval, now=now)
         if o.end is None or (o.seconds() or 0) >= MIN_DOWNTIME_SECONDS
     ]
     if skipped_count > 0:

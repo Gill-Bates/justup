@@ -58,7 +58,10 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) ->
     disconnect_task: asyncio.Task | None = None
     try:
         raw = await asyncio.wait_for(reader.readline(), timeout=5)
-        if not raw or len(raw) > MAX_REQUEST_BYTES:
+        if raw == b"":  # availability probe: the peer connected and left without a request
+            writer.close()
+            return
+        if len(raw) > MAX_REQUEST_BYTES:
             raise ValueError("Invalid request size")
         request = WorkerRequest.model_validate_json(raw)
         if request.protocols is not None:

@@ -311,6 +311,11 @@ class TargetRuntime:
     udp_result_at: datetime | None = None
     udp_skipped_cycles: int = 0
     udp_seeded: bool = False
+    # Consecutive "closed" scans per port: a single closed result never becomes DOWN (confirmation).
+    udp_closed_streak: dict[int, int] = field(default_factory=dict)
+    # True from the moment a scan ended until the next check cycle consumed it; only then points are written.
+    udp_unconsumed: bool = False
+    udp_new_result: bool = False
     # Endpoints (e.g. "tcp:25", "udp:53") that are down in the current cycle, for traceable alerts
     down_endpoints: dict[str, list[str]] = field(default_factory=dict)
     current_alert_id: str | None = None
@@ -358,6 +363,7 @@ FAIL_WINDOW_SECONDS = 300  # Sliding window: FAILs must occur within this time t
 
 
 # Simultaneous UDP scans across all targets; a slow scan never delays the check cycle of its target.
+UDP_CONFIRM_SCANS = 2
 UDP_MAX_PARALLEL_SCANS = 2
 # Hard cap added on top of the scan timeout, so a hung worker connection cannot keep a target's scan slot.
 UDP_HARD_TIMEOUT_MARGIN_SECONDS = 15.0
@@ -1516,8 +1522,11 @@ class MonitorScheduler:
 
                     # Ternary UDP state: only confirmed ports get a 0/1 point; UNKNOWN is its own flag
                     # series, so it can never be read as down (and the gap stays explainable).
-                    confirmed = [c for c in udp_checks if c.status in (PortStatus.UP, PortStatus.DOWN)]
-                    for c in udp_checks:
+                    # Points exist only for a scan that just ended: a cached result is never re-emitted as a
+                    # new measurement (no artificial downtime from one scan).
+                    new_udp = udp_checks if rt.udp_new_result else []
+                    confirmed = [c for c in new_udp if c.status in (PortStatus.UP, PortStatus.DOWN)]
+                    for c in new_udp:
                         if c.status == PortStatus.UNKNOWN:
                             put(f"udp_unknown_{c.port}", 1)
                         else:
@@ -1755,6 +1764,8 @@ class MonitorScheduler:
                 target_id,
                 rt.udp_skipped_cycles,
             )
+        rt.udp_new_result = rt.udp_unconsumed
+        rt.udp_unconsumed = False
         max_age = udp_interval * UDP_RESULT_MAX_AGE_FACTOR
         fresh = rt.udp_result_at is not None and (now - rt.udp_result_at).total_seconds() <= max_age
         outcome = []
@@ -1779,9 +1790,34 @@ class MonitorScheduler:
             rt.udp_result[row["port"]] = checks.PortCheck(
                 "udp", row["port"], row["status"], row["raw_state"], row["detail"]
             )
+            if row["status"] == PortStatus.DOWN:
+                rt.udp_closed_streak[row["port"]] = UDP_CONFIRM_SCANS  # a stored DOWN was already confirmed
             newest = checked_at if newest is None else min(newest, checked_at)
         rt.udp_result_at = newest
         rt.udp_last_started = newest
+
+    @staticmethod
+    def _confirm_udp_closed(rt: TargetRuntime, outcome: dict[int, checks.PortCheck]) -> dict[int, checks.PortCheck]:
+        """Report DOWN only after UDP_CONFIRM_SCANS consecutive ``closed`` scans of a port.
+
+        The first closed result keeps the previous UP (or is UNKNOWN); any other result resets the streak.
+        The Nmap state itself stays unchanged in ``raw_state``.
+        """
+        confirmed: dict[int, checks.PortCheck] = {}
+        for port, c in outcome.items():
+            if c.status != PortStatus.DOWN:
+                rt.udp_closed_streak[port] = 0
+                confirmed[port] = c
+                continue
+            streak = rt.udp_closed_streak.get(port, 0) + 1
+            rt.udp_closed_streak[port] = streak
+            if streak >= UDP_CONFIRM_SCANS:
+                confirmed[port] = c
+                continue
+            previous = rt.udp_result.get(port)
+            keep = PortStatus.UP if previous is not None and previous.status == PortStatus.UP else PortStatus.UNKNOWN
+            confirmed[port] = checks.PortCheck("udp", port, keep, c.raw_state, "closed, awaiting confirmation scan")
+        return confirmed
 
     async def _run_udp_scan(
         self, target_id: int, host: str, ports: list[int], udp_interval: int, rt: TargetRuntime, generation: int | None
@@ -1805,8 +1841,10 @@ class MonitorScheduler:
             return  # target deleted or re-created meanwhile: a late result must not be adopted
         if list(self._targets[target_id].get("udp_ports") or []) != ports:
             return  # port configuration changed while scanning
+        outcome = self._confirm_udp_closed(rt, outcome)
         rt.udp_result = outcome
         rt.udp_result_at = utcnow()
+        rt.udp_unconsumed = True
         try:
             with maintenance.work_section(generation), self._db_conn() as conn:
                 for c in outcome.values():

@@ -172,7 +172,7 @@ The cross-channel status palette is fixed: success `#198754` / white foreground 
 
 `tests/layout/audit.js` measures every badge group on every audited page, viewport and widget size (selector convention `.ju-badges, [data-ju-badges]`; new groups are covered automatically): `badge-group-not-centered` (rows are not vertically centred in the space the group offers, tolerance 2 px), `badge-text-not-centered` (label not centred in the badge box), `badge-overlap` and `badge-clipped-by-group` / `badge-text-clipped`. The audit self-test injects each defect and a centred group must report nothing. The quality widget is measured in `tests/layout/run.mjs` at its default height, with three rows, manually enlarged and narrow.
 
-Delivery queue status labels are defined once in `settings.spooler.js` (`_statusBadge`) and mirrored by the static filter and summary labels in `settings/spooler.html`: `pending` Waiting for handoff, `processing` Handing over, `sent` Sent, `failed` Handoff failed. Stored values never change; `Sent` has no tooltip; its meaning (accepted by the SMTP server or signal-cli, delivery to the recipient not verifiable) is documented in `docs/features/notifications.md`. Channel and type columns show only an icon with an accessible name (`title` plus `visually-hidden` text, icon `aria-hidden`), use `ju-cell-icon`, and distinguish values by icon shape, not by color.
+Delivery queue status labels are defined once in `settings.spooler.js` (`_statusBadge`) and mirrored by the static filter and summary labels in `settings/spooler.html`: `pending` Waiting for handoff, `processing` Handing over, `sent` Sent, `failed` Handoff failed. Stored values never change; `Sent` has no tooltip; its meaning (accepted by the SMTP server or signal-cli, delivery to the recipient not verifiable) is documented in `docs/features/notifications.md`. Channel and type columns show only an icon with an accessible name (`title` plus `visually-hidden` text, icon `aria-hidden`), use `ju-cell-icon`, and distinguish values by icon shape, not by color. The Delivery Queue Log is an `.rtable`: in a narrow container each entry is a card with label/value rows (labels from `data-label`), and the channel row shows icon plus visible name. Check: `tests/layout/spooler-log.spec.mjs`.
 
 ## Notification list
 
@@ -297,6 +297,10 @@ Keep the established 992 px sidebar breakpoint and 576 px compact-header breakpo
 ## Interaction states
 
 The active navigation item has text and a visual marker. Buttons show hover and keyboard focus in both themes. Loading, empty, error, offline, and disabled states retain their existing labels and messages. Theme changes update the wordmark and shared surfaces immediately; system mode tracks the operating-system preference.
+
+### Action disabled by a missing backend capability
+
+When an action needs a backend capability that is not available (for example the Nmap worker behind **Scan ports**), the control is disabled with the native `disabled` attribute and the reason is visible next to it as text, not only in a toast. The reason says what is missing and what to do instead, sits in a polite live region, and is linked with `aria-describedby` to the control. The state is read when the form loads, not after a failed click, and is re-checked on focus, on a slow timer and on an explicit **Check again** link. Related inputs and manual alternatives stay usable. Saving never depends on the disabled action.
 
 ### Filter-as-you-type search
 

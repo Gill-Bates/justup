@@ -34,7 +34,11 @@
   async function responseJson(response) {
     let data;
     try { data = await response.json(); } catch (_) { data = null; }
-    if (!response.ok) throw new Error(errorMessage(data?.detail, response.status));
+    if (!response.ok) {
+      const error = new Error(errorMessage(data?.detail, response.status));
+      error.code = data?.detail?.code;
+      throw error;
+    }
     return data;
   }
 
@@ -54,13 +58,20 @@
     const status = root.querySelector('[data-scan-status]');
     const results = root.querySelector('[data-scan-results]');
     const rows = root.querySelector('[data-scan-rows]');
-    if (![host, tcp, udp, tcpToggle, udpToggle, scanId, start, cancel, selectOpen, apply, status, results, rows].every(Boolean)) return;
+    const notice = root.querySelector('[data-scan-unavailable]');
+    const noticeText = root.querySelector('[data-scan-unavailable-text]');
+    const recheck = root.querySelector('[data-scan-action="recheck"]');
+    if (![host, tcp, udp, tcpToggle, udpToggle, scanId, start, cancel, selectOpen, apply, status, results, rows, notice, noticeText, recheck].every(Boolean)) return;
 
     let job = null;
     let checkedHost = '';
     let generation = 0;
     let timer = null;
     let controller = null;
+    let unavailable = false;
+    let checking = null;
+    let lastCheck = 0;
+    let recheckTimer = null;
 
     function message(value, error = false) {
       status.textContent = value;
@@ -77,8 +88,56 @@
     }
 
     function ready() {
-      start.disabled = false;
+      start.disabled = unavailable;
       cancel.hidden = true;
+    }
+
+    // Scanning needs the Nmap worker. While it is down the button stays disabled and the visible reason is its description.
+    function markUnavailable(reason) {
+      unavailable = true;
+      noticeText.textContent = `${String(reason || 'Nmap scan worker is unavailable').replace(/[.\s]+$/, '')}. Port scanning is disabled; you can still enter ports manually.`;
+      notice.hidden = false;
+      start.setAttribute('aria-describedby', noticeText.id);
+      if (cancel.hidden) start.disabled = true;
+      scheduleRecheck();
+    }
+
+    function markAvailable() {
+      const wasUnavailable = unavailable;
+      unavailable = false;
+      notice.hidden = true;
+      noticeText.textContent = '';
+      start.removeAttribute('aria-describedby');
+      if (cancel.hidden) start.disabled = false;
+      if (wasUnavailable && !job) message('Nmap scan worker is available again.');
+    }
+
+    // The supervisor restarts the worker with backoff, so a down worker is re-checked slowly and on focus.
+    function scheduleRecheck() {
+      if (recheckTimer !== null) clearTimeout(recheckTimer);
+      recheckTimer = unavailable ? window.setTimeout(() => refreshAvailability(), 30000) : null;
+    }
+
+    function refreshAvailability(force = false) {
+      if (checking) return checking;
+      if (!force && document.visibilityState === 'hidden') return Promise.resolve();
+      if (!force && Date.now() - lastCheck < 5000) return Promise.resolve();
+      checking = (async () => {
+        try {
+          const response = await window.apiFetch('/network-scans/status', { cache: 'no-store' });
+          if (!response.ok) return;
+          const data = await response.json();
+          if (typeof data?.available !== 'boolean') return;
+          if (data.available) markAvailable(); else markUnavailable(data.message);
+        } catch (_) {
+          // Unknown stays unchanged; starting a scan reports the real reason.
+        } finally {
+          checking = null;
+          lastCheck = Date.now();
+          scheduleRecheck();
+        }
+      })();
+      return checking;
     }
 
     function render(data) {
@@ -139,22 +198,25 @@
           ready();
         } else if (terminal.has(data.status)) {
           results.hidden = true;
+          if (data.error?.code === 'unavailable') markUnavailable(data.error.message);
           ready();
-          message(data.error?.message || `Scan ${data.status}. Enter ports manually or try again.`, data.status === 'failed');
+          message(data.error?.code === 'unavailable' ? '' : data.error?.message || `Scan ${data.status}. Enter ports manually or try again.`, data.status === 'failed' && data.error?.code !== 'unavailable');
         } else {
           message(data.status === 'queued' ? 'Scan queued…' : 'Scanning ports…');
           timer = window.setTimeout(() => poll(id, sequence), 2000);
         }
       } catch (error) {
         if (sequence !== generation || error.name === 'AbortError') return;
+        if (error.code === 'unavailable') markUnavailable(error.message);
         ready();
-        message(error.message || 'Scan failed. Enter ports manually or try again.', true);
+        message(error.code === 'unavailable' ? '' : error.message || 'Scan failed. Enter ports manually or try again.', error.code !== 'unavailable');
       } finally {
         controller = null;
       }
     }
 
     start.addEventListener('click', async () => {
+      if (unavailable) return;
       const target = scanHost(host);
       const protocols = ['tcp', 'udp'].filter(protocol => root.querySelector(`[data-scan-protocol="${protocol}"]`)?.checked);
       if (!target || !protocols.length) {
@@ -185,8 +247,9 @@
         await poll(data.id, sequence);
       } catch (error) {
         if (sequence !== generation || error.name === 'AbortError') return;
+        if (error.code === 'unavailable') markUnavailable(error.message);
         ready();
-        message(error.message || 'Unable to start the scan. Enter ports manually or try again.', true);
+        message(error.code === 'unavailable' ? '' : error.message || 'Unable to start the scan. Enter ports manually or try again.', error.code !== 'unavailable');
       } finally {
         controller = null;
       }
@@ -210,7 +273,7 @@
     });
 
     host.addEventListener('input', () => {
-      if (!job && !scanId.value && !start.disabled) return;
+      if (!job && !scanId.value && cancel.hidden) return;
       if (scanHost(host) === checkedHost) return;
       const id = job?.id;
       const wasRunning = job && !terminal.has(job.status);
@@ -249,7 +312,14 @@
       } catch (error) { message(error.message, true); }
     });
 
-    window.addEventListener('pagehide', stopPolling, { once: true });
+    recheck.addEventListener('click', () => refreshAvailability(true));
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') refreshAvailability(); });
+    window.addEventListener('focus', () => refreshAvailability());
+    window.addEventListener('pagehide', () => {
+      stopPolling();
+      if (recheckTimer !== null) clearTimeout(recheckTimer);
+    }, { once: true });
+    refreshAvailability(true);
   }
 
   document.querySelectorAll('[data-network-scan-picker]').forEach(init);

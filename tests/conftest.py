@@ -25,3 +25,9 @@ def _reset_rate_limits():
     reset_all()
     yield
     reset_all()
+
+
+@pytest.fixture(autouse=True)
+def _no_local_nmap_worker(monkeypatch):
+    """App lifespans in tests must never spawn a worker process; tests of the supervisor opt back in."""
+    monkeypatch.setattr("app.services.nmap_local.external_worker_configured", lambda: True)

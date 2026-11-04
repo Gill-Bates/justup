@@ -147,6 +147,18 @@ def _run_cycles(sched: MonitorScheduler, tid: int, count: int = 2) -> None:
     asyncio.run(scenario())
 
 
+def _run_confirmed_scans(sched: MonitorScheduler, tid: int, scans: int = 2) -> None:
+    """Run ``scans`` full UDP scans (each due again) and one more cycle that consumes the last result."""
+
+    async def scenario():
+        for _ in range(scans):
+            sched._rt[tid].udp_last_started = None
+            await _cycle(sched, tid)
+        await sched._run_target(tid, utcnow())
+
+    asyncio.run(scenario())
+
+
 def _tcp_connect(results: dict[int, tuple[bool, float | None, str | None]]):
     async def tcp_connect(host, port, *a, **k):
         ok, latency, detail = results[port]
@@ -301,8 +313,8 @@ def test_udp_states_are_mapped_stored_unchanged_and_kept_apart_per_port(db_path,
     sched = _sched(db_path, tmp_path)
     sched._refresh_targets(utcnow())
     calls = _fake_scan(monkeypatch, _scan_result({53: "open", 123: "closed", 161: "filtered", 500: "open|filtered"}))
-    _run_cycles(sched, tid, 2)
-    assert len(calls) == 1 and calls[0]["detect_services"] is False  # lightweight scan, once per UDP interval
+    _run_confirmed_scans(sched, tid)
+    assert len(calls) == 2 and calls[0]["detect_services"] is False  # lightweight scan, once per UDP interval
     assert calls[0]["udp_ports"] == [53, 123, 161, 500] and calls[0].get("tcp_ports") is None
     ports = _ports(db_path, tid)
     assert {p: (ports[("udp", p)]["status"], ports[("udp", p)]["raw_state"]) for p in (53, 123, 161, 500)} == {
@@ -311,7 +323,9 @@ def test_udp_states_are_mapped_stored_unchanged_and_kept_apart_per_port(db_path,
         161: ("unknown", "filtered"),
         500: ("unknown", "open|filtered"),
     }
-    assert _values(tmp_path, tid, "udp_up_53") == [1] and _values(tmp_path, tid, "udp_up_123") == [0]
+    # one point per finished scan (never a cached result again); the first closed scan is only a pending UNKNOWN
+    assert _values(tmp_path, tid, "udp_up_53") == [1, 1] and _values(tmp_path, tid, "udp_up_123") == [0]
+    assert _values(tmp_path, tid, "udp_unknown_123") == [1]
     assert _values(tmp_path, tid, "udp_up_161") == [] and _values(tmp_path, tid, "udp_up_500") == []
     assert _values(tmp_path, tid, "udp_unknown_161")[-1] == 1 and _values(tmp_path, tid, "udp_unknown_500")[-1] == 1
     assert _values(tmp_path, tid, "udp_up")[-1] == 0  # aggregate of the confirmed ports: 123 is down
@@ -424,7 +438,7 @@ def test_stale_result_turns_unknown_and_is_never_down(db_path, tmp_path, monkeyp
     sched = _sched(db_path, tmp_path)
     sched._refresh_targets(utcnow())
     _fake_scan(monkeypatch, _scan_result({53: "closed"}))
-    _run_cycles(sched, tid, 2)
+    _run_confirmed_scans(sched, tid)
     assert _status(db_path, tid) == TargetStatus.DOWN
     rt = sched._rt[tid]
     rt.udp_result_at = utcnow() - timedelta(seconds=1000)  # older than two UDP intervals
@@ -522,12 +536,52 @@ def test_confirmed_udp_closed_alerts_only_after_the_timeout_and_names_the_endpoi
     sched = _sched(db_path, tmp_path)
     sched._refresh_targets(utcnow())
     _fake_scan(monkeypatch, _scan_result({53: "open", 123: "closed"}))
-    _run_cycles(sched, tid, 2)
+    _run_confirmed_scans(sched, tid)
     rt = sched._rt[tid]
     assert rt.down_since_by_service["udp"] is not None and _alert_ids(db_path) == []  # still being confirmed
     rt.down_since_by_service["udp"] = utcnow() - timedelta(minutes=10)
     asyncio.run(sched._run_target(tid, utcnow()))
     assert _alert_ids(db_path) == ["udp:123"]  # per-endpoint cause, UDP:53 is up and not named
+
+
+def test_single_closed_scan_is_pending_not_down_and_never_alerts(db_path, tmp_path, monkeypatch):
+    tid = _target(db_path, enable_udp_scan=True, udp_ports="53")
+    sched = _sched(db_path, tmp_path)
+    sched._refresh_targets(utcnow())
+    _fake_scan(monkeypatch, _scan_result({53: "closed"}))
+    _run_cycles(sched, tid, 4)  # one scan, its result is seen by several cycles
+    rt = sched._rt[tid]
+    assert _values(tmp_path, tid, "udp_up_53") == [] and _values(tmp_path, tid, "udp_up") == []
+    assert _values(tmp_path, tid, "udp_unknown_53") == [1]  # exactly one point for one scan
+    assert _status(db_path, tid) == TargetStatus.UNKNOWN
+    assert rt.down_since_by_service["udp"] is None and _alert_ids(db_path) == []
+    port = _ports(db_path, tid)[("udp", 53)]
+    assert port["status"] == "unknown" and port["raw_state"] == "closed"
+
+
+def test_two_consecutive_closed_scans_confirm_down_with_one_point_each_scan(db_path, tmp_path, monkeypatch):
+    tid = _target(db_path, enable_udp_scan=True, udp_ports="53")
+    sched = _sched(db_path, tmp_path)
+    sched._refresh_targets(utcnow())
+    _fake_scan(monkeypatch, _scan_result({53: "closed"}))
+    _run_confirmed_scans(sched, tid)
+    assert _values(tmp_path, tid, "udp_up_53") == [0] and _status(db_path, tid) == TargetStatus.DOWN
+    asyncio.run(sched._run_target(tid, utcnow()))  # the cached result is not re-emitted as a measurement
+    assert _values(tmp_path, tid, "udp_up_53") == [0]
+
+
+def test_closed_then_open_filtered_resets_the_confirmation(db_path, tmp_path, monkeypatch):
+    tid = _target(db_path, enable_udp_scan=True, udp_ports="53")
+    sched = _sched(db_path, tmp_path)
+    sched._refresh_targets(utcnow())
+    _fake_scan(monkeypatch, _scan_result({53: "closed"}))
+    _run_confirmed_scans(sched, tid, 1)
+    _fake_scan(monkeypatch, _scan_result({53: "open|filtered"}))
+    _run_confirmed_scans(sched, tid, 1)
+    _fake_scan(monkeypatch, _scan_result({53: "closed"}))
+    _run_confirmed_scans(sched, tid, 1)
+    assert _values(tmp_path, tid, "udp_up_53") == []  # closed, unclear, closed: never two in a row
+    assert _status(db_path, tid) == TargetStatus.UNKNOWN and _alert_ids(db_path) == []
 
 
 def test_unknown_never_alerts_and_restarts_the_confirmation(db_path, tmp_path, monkeypatch):
@@ -549,7 +603,7 @@ def test_recovery_resolves_the_udp_alert_and_unknown_does_not(db_path, tmp_path,
     sched = _sched(db_path, tmp_path)
     sched._refresh_targets(utcnow())
     _fake_scan(monkeypatch, _scan_result({53: "closed"}))
-    _run_cycles(sched, tid, 2)
+    _run_confirmed_scans(sched, tid)
     rt = sched._rt[tid]
     rt.down_since_by_service["udp"] = utcnow() - timedelta(minutes=10)
     asyncio.run(sched._run_target(tid, utcnow()))

@@ -283,3 +283,50 @@ def test_dashboard_widget_groups_the_ports_of_one_service_but_not_other_services
     groups = metrics._service_groups(row)
     assert list(groups) == ["http_up", "tcp_up", "udp_up"]
     assert [label for _m, label in groups["tcp_up"]] == ["TCP:25", "TCP:587"]
+
+
+def _resampled(start_min: float, hours: float, step_s: int, down: tuple[float, float]) -> list[dict]:
+    """A report series thinned to ``step_s`` spacing, DOWN between the two minute offsets."""
+    out = []
+    t = at(start_min)
+    end = at(start_min + hours * 60)
+    while t <= end:
+        minute = (t - T0).total_seconds() / 60
+        out.append({"ts": t.isoformat(), "value": 0 if down[0] <= minute < down[1] else 1})
+        t += timedelta(seconds=step_s)
+    return out
+
+
+def test_resampled_pdf_series_gives_one_outage_of_the_true_duration():
+    # Every spacing above 3 x the 60 s check interval must not turn the neighbouring points into gaps.
+    for step in (270, 300, 3600):
+        hours = 40 if step == 3600 else 12
+        data = _resampled(0, hours, step, (60, 240) if step != 3600 else (600, 840))
+        events = pdf_report._extract_downtime_events(data, 60, now=at(hours * 60 + 1))
+        assert len(events) == 1, (step, events)
+        expected = 180 if step != 3600 else 240
+        assert abs(events[0].duration_minutes - expected) <= step / 60, (step, events)
+        assert abs(pdf_report._downtime_minutes(data, 60) - expected) <= step / 60
+
+
+def test_resampled_pdf_series_still_excludes_a_real_gap():
+    data = [
+        p
+        for p in _resampled(0, 12, 300, (60, 400))
+        if not 120 < (datetime.fromisoformat(p["ts"]) - T0).total_seconds() / 60 < 400
+    ]
+    events = pdf_report._extract_downtime_events(data, 60, now=at(13 * 60))
+    assert sum(e.duration_minutes or 0 for e in events) < 120  # the 280 unmeasured minutes are not downtime
+
+
+def test_udp_series_with_scan_spaced_points_is_one_continuous_outage(tmp_path):
+    # UDP scans run at most every 300 s; their points are not a gap against a 60 s target interval.
+    put(tmp_path, "udp_up_53", [(0, 1), (5, 0), (10, 0), (15, 0), (20, 1)])
+    [period] = periods(tmp_path, [("udp_up_53", "UDP:53")])
+    assert (period.start, period.duration_seconds) == (at(5), 15 * 60)
+
+
+def test_udp_gap_beyond_three_udp_intervals_is_not_downtime(tmp_path):
+    put(tmp_path, "udp_up_53", [(0, 1), (5, 0), (60, 1)])
+    found = periods(tmp_path, [("udp_up_53", "UDP:53")])
+    assert sum(p.duration_seconds or 0 for p in found) < 15 * 60

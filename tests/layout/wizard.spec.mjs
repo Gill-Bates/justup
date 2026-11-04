@@ -123,8 +123,14 @@ test("a port check on a website profile reveals the port fields from Edit ports 
 });
 
 test("the submitted payload keeps tcp_ports and udp_ports from the address step @wizard", async ({ app, page }) => {
-	await openChecksStep(page, app, { profile: "custom", address: "payload.example.org", ports: "22,443" });
+	await page.goto(`${app.base}/ui/targets/new`);
+	await page.locator('input[name="profile"][value="custom"]').check({ force: true });
+	await page.getByRole("button", { name: "Continue" }).click();
+	await page.locator("#wizard-address").fill("payload.example.org");
+	await page.locator("#wizard-ports").fill("22,443");
 	await page.locator("#wizard-udp-ports").fill("53");
+	await page.getByRole("button", { name: "Continue" }).click();
+	await page.locator("#step-checks-title").waitFor({ state: "visible" });
 	await page.getByRole("button", { name: "Continue" }).click();
 	await page.locator("#step-recipients-title").waitFor({ state: "visible" });
 	await page.getByRole("button", { name: "Continue" }).click();
@@ -236,3 +242,127 @@ for (const viewport of VIEWPORTS) {
 		});
 	}
 }
+// Port discovery needs the Nmap worker: while it is down the scan cannot start and the reason is on screen.
+const WORKER_DOWN = { available: false, state: "unavailable", message: "Nmap scan worker is unavailable", detail: "" };
+const WORKER_UP = { available: true, state: "ready", message: "", detail: "" };
+async function stubWorkerStatus(page, worker) {
+	// Registered after stubPortScan so it wins for /network-scans/status.
+	await page.route("**/network-scans/status", route => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(worker.current) }));
+}
+function countScanStarts(page) {
+	const starts = { count: 0 };
+	page.on("request", request => { if (request.method() === "POST" && request.url().endsWith("/network-scans")) starts.count += 1; });
+	return starts;
+}
+async function openScanStep(page, app, address = "mail.example.org") {
+	await page.goto(`${app.base}/ui/targets/new`);
+	await page.locator('input[name="profile"][value="custom"]').check({ force: true });
+	await page.getByRole("button", { name: "Continue" }).click();
+	await page.locator("#wizard-address").fill(address);
+	await page.locator("#wizard-ports").fill("22");
+}
+test("wizard: scan button is disabled with a visible, announced reason while the worker is down, manual ports still save @wizard", async ({ app, page }) => {
+	const worker = { current: WORKER_DOWN };
+	await stubPortScan(page);
+	await stubWorkerStatus(page, worker);
+	const starts = countScanStarts(page);
+	await openScanStep(page, app);
+	const scan = page.getByRole("button", { name: "Scan ports" });
+	await page.locator('[data-scan-action="start"]:disabled').waitFor();
+	const notice = page.locator("[data-scan-unavailable]");
+	assert.equal(await notice.isVisible(), true, "the reason is visible without clicking");
+	assert.match(await notice.innerText(), /Nmap scan worker is unavailable.*enter ports manually/is);
+	const describedBy = await scan.getAttribute("aria-describedby");
+	assert.ok(describedBy, "the disabled button names its reason");
+	assert.match(await page.locator(`#${describedBy}`).innerText(), /Nmap scan worker is unavailable/);
+	assert.equal(await notice.evaluate(element => element.closest('[role="status"]') !== null), true, "the reason sits in a live region");
+	await scan.click({ force: true });
+	assert.equal(starts.count, 0, "a disabled button starts no scan");
+	// Protocols and scope stay usable and manual entry is unaffected.
+	await page.locator('[data-scan-protocol="udp"]').check();
+	await page.locator("[data-scan-profile]").selectOption("extended");
+	await page.locator("#wizard-udp-ports").fill("161");
+	await page.getByRole("button", { name: "Continue" }).click();
+	await page.locator("#step-recipients-title").waitFor({ state: "visible" });
+	await page.getByRole("button", { name: "Continue" }).click();
+	let body = null;
+	await page.route("**/targets", async route => {
+		if (route.request().method() !== "POST") return route.fallback();
+		body = route.request().postDataJSON();
+		return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ detail: "stop" }) });
+	});
+	await page.getByRole("button", { name: "Start monitoring" }).click();
+	await page.locator("#wizard-error:not(.d-none)").waitFor();
+	assert.equal(body.tcp_ports, "22");
+	assert.equal(body.udp_ports, "161");
+});
+test("wizard: scan button is enabled and no reason is shown while the worker is available @wizard", async ({ app, page }) => {
+	await stubPortScan(page);
+	await stubWorkerStatus(page, { current: WORKER_UP });
+	await openScanStep(page, app);
+	await page.getByRole("button", { name: "Scan ports" }).waitFor();
+	await page.waitForResponse("**/network-scans/status");
+	assert.equal(await page.getByRole("button", { name: "Scan ports" }).isEnabled(), true);
+	assert.equal(await page.locator("[data-scan-unavailable]").isHidden(), true);
+	assert.equal(await page.getByRole("button", { name: "Scan ports" }).getAttribute("aria-describedby"), null);
+});
+test("wizard: the button follows the worker back and forth via Check again and focus @wizard", async ({ app, page }) => {
+	const worker = { current: WORKER_DOWN };
+	await stubPortScan(page);
+	await stubWorkerStatus(page, worker);
+	await openScanStep(page, app);
+	const scan = page.getByRole("button", { name: "Scan ports" });
+	await page.locator('[data-scan-action="start"]:disabled').waitFor();
+	worker.current = WORKER_UP;
+	await page.getByRole("button", { name: "Check again" }).click();
+	await page.locator('[data-scan-action="start"]:enabled').waitFor();
+	assert.equal(await page.locator("[data-scan-unavailable]").isHidden(), true);
+	assert.equal(await scan.getAttribute("aria-describedby"), null);
+	assert.match(await page.locator("[data-scan-status]").innerText(), /available again/i);
+	// Down again; regaining focus re-checks once the 5 s throttle has passed.
+	worker.current = WORKER_DOWN;
+	await page.waitForTimeout(5200);
+	await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+	await page.locator('[data-scan-action="start"]:disabled').waitFor();
+	assert.equal(await page.locator("[data-scan-unavailable]").isVisible(), true);
+});
+test("wizard: a refused scan start disables the button with the server reason @wizard", async ({ app, page }) => {
+	await stubPortScan(page);
+	await stubWorkerStatus(page, { current: WORKER_UP });
+	await page.route("**/network-scans", async route => {
+		if (route.request().method() !== "POST") return route.fallback();
+		return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: { code: "unavailable", message: "Nmap scan worker is restarting" } }) });
+	});
+	await openScanStep(page, app);
+	await page.waitForResponse("**/network-scans/status");
+	await page.getByRole("button", { name: "Scan ports" }).click();
+	await page.locator('[data-scan-action="start"]:disabled').waitFor();
+	assert.match(await page.locator("[data-scan-unavailable]").innerText(), /Nmap scan worker is restarting/);
+});
+test("target edit: scan button is disabled while the worker is down, manual ports still save @wizard", async ({ app, page }) => {
+	await stubPortScan(page);
+	await stubWorkerStatus(page, { current: WORKER_DOWN });
+	const starts = countScanStarts(page);
+	await page.goto(`${app.base}/ui/targets/1/edit`);
+	await page.locator("#target-network-tab").click();
+	await page.locator('[data-scan-action="start"]:disabled').waitFor();
+	assert.equal(await page.locator("[data-scan-unavailable]").isVisible(), true);
+	const describedBy = await page.getByRole("button", { name: "Scan ports" }).getAttribute("aria-describedby");
+	assert.match(await page.locator(`#${describedBy}`).innerText(), /Nmap scan worker is unavailable/);
+	await page.locator("#enable_tcp_connect").check();
+	await page.locator("#tcp_ports_input").fill("22");
+	await page.locator("#tcp_ports_input").press("Enter");
+	await page.locator("#enable_udp_scan").check();
+	await page.locator("#udp_ports").fill("161");
+	let body = null;
+	await page.route("**/targets/1", async route => {
+		if (route.request().method() === "GET") return route.fallback();
+		body = route.request().postDataJSON();
+		return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ detail: "stop" }) });
+	});
+	await page.locator('#target-form button[type="submit"]').click();
+	await page.waitForRequest(request => request.url().endsWith("/targets/1") && request.method() !== "GET");
+	assert.match(body.tcp_ports, /(?:^|,)22(?:,|$)/);
+	assert.equal(body.udp_ports, "161");
+	assert.equal(starts.count, 0);
+});

@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import os
+import shutil
 import signal
 from contextlib import suppress
 from datetime import datetime
@@ -35,7 +36,17 @@ EXTENDED_UDP_PORTS = (*QUICK_UDP_PORTS, 69, 137, 138, 389, 4500, 5353)
 MAX_PORTS = 128
 MAX_OUTPUT_BYTES = 1_000_000
 MAX_CONCURRENT_SCANS = 2
-NMAP_BINARY = "/usr/bin/nmap"
+DEFAULT_NMAP_BINARY = "/usr/bin/nmap"
+
+
+def locate_binary() -> str | None:
+    """Return the Nmap executable: the image path first, else `nmap` from PATH (hosts running outside Docker)."""
+    if os.access(DEFAULT_NMAP_BINARY, os.X_OK):
+        return DEFAULT_NMAP_BINARY
+    return shutil.which("nmap")
+
+
+NMAP_BINARY = locate_binary() or DEFAULT_NMAP_BINARY
 
 _scan_slots = asyncio.Semaphore(MAX_CONCURRENT_SCANS)
 _target_locks: dict[str, asyncio.Lock] = {}
