@@ -3,6 +3,7 @@
 # tests/test_port_picker_markup.py
 # Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 #
+
 """Port picker markup contract: accessible controls, live regions, script order, no HTML sinks for scanner text."""
 
 from __future__ import annotations

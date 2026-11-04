@@ -1,0 +1,86 @@
+#!/usr/bin/env python3
+#
+# tests/test_welcome_notification_name.py
+# Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
+#
+
+"""The welcome message names the target as stored when the task runs, not as it was when it was queued."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from unittest.mock import MagicMock
+
+import pytest
+
+from app.api import targets as targets_api
+from app.db import sqlite as sqlite_db
+from app.utils.constants import SettingKeys
+from app.utils.time import utcnow
+from tests import _support  # noqa: F401 - imported for its sys.path side effect
+
+
+@pytest.fixture
+def spooler(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+    fake = MagicMock()
+    fake.is_channel_idle.return_value = True
+    monkeypatch.setattr("app.services.notifications.spooler.get_spooler", lambda _factory: fake)
+    return fake
+
+
+def _prepare(tmp_path: Path, *, stored_name: str) -> tuple[Path, int, int]:
+    db_path = tmp_path / "justup.db"
+    conn = sqlite_db.connect(db_path)
+    try:
+        sqlite_db.init_schema(conn)
+        now = utcnow()
+        target_id = sqlite_db.create_target(
+            conn,
+            {
+                "name": stored_name,
+                "host": "renamed.example.org",
+                "interval_seconds": 60,
+                "retention_days": 30,
+                "enable_ping": 1,
+                "created_at": now,
+                "updated_at": now,
+            },
+        )
+        recipient_id = sqlite_db.create_recipient(conn, name="Rita", email="rita@example.org")
+        sqlite_db.set_target_recipients(conn, target_id, [recipient_id])
+        sqlite_db.set_setting(conn, SettingKeys.SMTP_ENABLED, True)
+        conn.commit()
+    finally:
+        sqlite_db.close_connection(conn)
+    return db_path, target_id, recipient_id
+
+
+def _run(db_path: Path, target_id: int, recipient_id: int, queued_name: str) -> None:
+    targets_api._notification_tasks.setdefault(target_id, {})["task"] = {  # noqa: SLF001 - task registry under test
+        "status": "running",
+        "success": 0,
+        "queued": 0,
+        "failed": 0,
+        "updated_at": 0.0,
+    }
+    targets_api._notify_recipients_background_in_section(  # noqa: SLF001 - the background task under test
+        db_path, target_id, "task", queued_name, {recipient_id}
+    )
+
+
+def test_welcome_email_uses_the_name_stored_when_the_task_runs(tmp_path: Path, spooler: MagicMock) -> None:
+    db_path, target_id, recipient_id = _prepare(tmp_path, stored_name="New Name")
+    _run(db_path, target_id, recipient_id, queued_name="Old Name")  # renamed between queueing and execution
+    spooler.enqueue.assert_called_once()
+    payload = spooler.enqueue.call_args.kwargs["payload"]
+    assert payload["target_name"] == "New Name"
+    for body in (payload["text_body"], payload["html_body"]):
+        assert "New Name" in body
+        assert "Old Name" not in body
+
+
+def test_welcome_email_keeps_the_name_when_it_did_not_change(tmp_path: Path, spooler: MagicMock) -> None:
+    db_path, target_id, recipient_id = _prepare(tmp_path, stored_name="Same")
+    _run(db_path, target_id, recipient_id, queued_name="Same")
+    payload = spooler.enqueue.call_args.kwargs["payload"]
+    assert "'Same'" in payload["text_body"]

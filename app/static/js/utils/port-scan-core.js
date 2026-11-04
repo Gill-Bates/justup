@@ -2,6 +2,7 @@
 // app/static/js/utils/port-scan-core.js
 // Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 //
+
 // Pure rules of the port picker (no DOM): port parsing, protocol-typed input, merging, the meaning of
 // Nmap states, and the user-facing outcome of a scan job. Loaded as a classic script and by tests/js.
 (function (root) {

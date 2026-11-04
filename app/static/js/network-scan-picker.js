@@ -2,6 +2,7 @@
 // app/static/js/network-scan-picker.js
 // Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 //
+
 // Port picker of the target wizard and the target form: manual, protocol-typed entry and Nmap discovery.
 // The rules live in utils/port-scan-core.js; this file owns the DOM and the requests.
 (() => {

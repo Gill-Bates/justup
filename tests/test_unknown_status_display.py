@@ -3,6 +3,7 @@
 # tests/test_unknown_status_display.py
 # Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 #
+
 """UNKNOWN is not DOWN on the dashboard and the detail page, and it hides no measured check."""
 
 from __future__ import annotations

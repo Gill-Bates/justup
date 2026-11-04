@@ -35,21 +35,23 @@ ALLOWED_METRICS = {
     "ping_up",
     "tcp_ms",
     "tcp_up",
+    "udp_up",
     "cert_days_left",
 }
 
-# Pattern for port-specific TCP metrics (tcp_ms_80, tcp_up_443, etc.)
-TCP_PORT_METRIC_PATTERN = re.compile(r"^tcp_(ms|up)_(\d{1,5})$")
+# Port-specific series the monitor writes: TCP latency and availability, UDP availability only (there is no
+# UDP latency series). TCP and UDP of one port are separate series. ``udp_unknown_<port>`` is an internal
+# flag that rollups read; no client queries it, so it is not served.
+PORT_METRIC_PATTERN = re.compile(r"^(?:tcp_(?:ms|up)|udp_up)_(\d{1,5})$")
 
 
 def _is_allowed_metric(metric: str) -> bool:
-    """Check if metric name is allowed (static or port-specific TCP)."""
+    """Check if metric name is allowed (static or port-specific TCP/UDP)."""
     if metric in ALLOWED_METRICS:
         return True
-    # Allow tcp_ms_<port> and tcp_up_<port> patterns
-    match = TCP_PORT_METRIC_PATTERN.match(metric)
+    match = PORT_METRIC_PATTERN.match(metric)
     if match:
-        port = int(match.group(2))
+        port = int(match.group(1))
         return 1 <= port <= 65535
     return False
 

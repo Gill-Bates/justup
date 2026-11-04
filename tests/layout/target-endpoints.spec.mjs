@@ -2,6 +2,7 @@
 // tests/layout/target-endpoints.spec.mjs
 // Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 //
+
 // Target detail, "Network endpoints" card: it lists every configured endpoint (never the empty text while
 // a check is configured) and the cards of the Dashboard tab stack with one gutter between them. The
 // generic layout audit looks for overflow, clipping and overlap, so an oversized empty band between two

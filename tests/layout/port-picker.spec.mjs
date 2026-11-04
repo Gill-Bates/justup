@@ -2,6 +2,7 @@
 // tests/layout/port-picker.spec.mjs
 // Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 //
+
 // Port picker of the target wizard and the target form: manual and protocol-typed entry, scan, results,
 // selection, adoption, error states, stale answers and safe rendering. The scan API is stubbed; the
 // worker itself is covered by the backend tests. Every scenario ends without saving unless it says so.

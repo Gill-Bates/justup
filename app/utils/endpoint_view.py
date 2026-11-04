@@ -3,6 +3,7 @@
 # app/utils/endpoint_view.py
 # Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 #
+
 """View model of a target's network endpoints (ICMP, TCP and UDP ports) for the dashboard and detail page.
 
 One list drives both pages so they cannot contradict each other or the API: it merges the configured

@@ -3,6 +3,7 @@
 # tests/test_endpoint_view.py
 # Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 #
+
 """Endpoint view model and its markup: ICMP apart, TCP/UDP unambiguous, UNKNOWN never rendered like DOWN."""
 
 from __future__ import annotations

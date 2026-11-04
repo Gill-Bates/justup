@@ -1104,6 +1104,8 @@ def _alerts_panel_context(
             services.append("PING")
         if t["enable_tcp_connect"]:
             services.append("TCP")
+        if t["enable_udp_scan"]:
+            services.append("UDP")
         target_services[t["id"]] = services
 
     for alert in alerts:

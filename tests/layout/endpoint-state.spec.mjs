@@ -2,6 +2,7 @@
 // tests/layout/endpoint-state.spec.mjs
 // Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 //
+
 // Endpoint state on the target detail page and the targets table: ICMP apart, TCP and UDP told apart by
 // protocol, UNKNOWN never presented like DOWN (text, icon and shape, not colour alone), and the downtime
 // history keeping measured downtime, measurement gaps and UNKNOWN results as three presentations.

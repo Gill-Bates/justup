@@ -944,9 +944,6 @@ def _notify_recipients_background_in_section(
     if task_status is None:
         return
 
-    message = f"📣 You were just added to the alerting group for '{target_name}'."
-    email_message = f"📣 You were just added to the alerting group for '{target_name}'."
-
     from ..utils.constants import SettingKeys
 
     conn = sqlite_db.connect(db_path)
@@ -957,7 +954,10 @@ def _notify_recipients_background_in_section(
             task_status["updated_at"] = time.monotonic()
             task_status["completed_at"] = time.monotonic()
             return
+        # A rename since queueing must not put the old name into the message.
         target_name = str(target["name"])
+        message = f"📣 You were just added to the alerting group for '{target_name}'."
+        email_message = message
         system_url = target_url(get_public_base_url(conn), None)
         github_url = "https://github.com/Gill-Bates/justup"
 
