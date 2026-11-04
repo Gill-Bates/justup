@@ -59,8 +59,12 @@ const tabOrder = async (page) => {
 	}
 	return seen;
 };
-const geometry = (page) => page.evaluate(() => {
+const geometry = (page) => page.evaluate(async () => {
 	const de = document.documentElement, modal = document.getElementById("editRecipientModal");
+	// Bootstrap emits `shown` from a timer that can fire before a slow engine finished the slide-in;
+	// measure the resting geometry only (same rule as the modal audit in harness.mjs).
+	for (let i = 0; i < 100 && modal.getAnimations({ subtree: true }).some((a) => a.playState === "running"); i++) await new Promise((r) => setTimeout(r, 30));
+	await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
 	const content = modal.querySelector(".modal-content").getBoundingClientRect();
 	const footer = modal.querySelector(".modal-footer").getBoundingClientRect();
 	const body = modal.querySelector(".modal-body");
