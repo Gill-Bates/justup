@@ -425,6 +425,20 @@ jobs:
           docker exec -u justup "$CONTAINER" test -S /run/justup/nmap.sock
           docker exec -i "$CONTAINER" python - capabilities < tools/verify-nmap-worker.py
           docker exec -i -u justup "$CONTAINER" python - scan < tools/verify-nmap-worker.py
+          docker exec -i "$CONTAINER" python - status < tools/verify-nmap-worker.py
+          # A killed worker is restarted by the supervisor and scans work again.
+          worker_pid="$(docker top "$CONTAINER" -eo pid,args | awk '/app\.services\.nmap_worker/ && !/awk/ {print $1; exit}')"
+          [[ -n "$worker_pid" ]]
+          sudo kill -9 "$worker_pid"
+          for _ in $(seq 1 60); do
+            if docker exec -u justup "$CONTAINER" test -S /run/justup/nmap.sock 2>/dev/null \
+                && docker exec -i "$CONTAINER" python - status < tools/verify-nmap-worker.py >/dev/null 2>&1; then
+              break
+            fi
+            sleep 1
+          done
+          docker exec -i "$CONTAINER" python - status < tools/verify-nmap-worker.py
+          docker exec -i -u justup "$CONTAINER" python - scan < tools/verify-nmap-worker.py
 
       - name: Upload Nmap provenance (${{ matrix.arch }})
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7

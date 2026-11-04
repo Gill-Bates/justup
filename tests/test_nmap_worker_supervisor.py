@@ -54,7 +54,7 @@ launch_worker() {{
 handshake() {{ return {0 if handshake_ok else 1}; }}
 supervise
 """
-    result = subprocess.run(  # noqa: S603 # fixed local script under test
+    result = subprocess.run(
         ["bash", "-c", script],
         env={**env, "FAKE_WORKER": FAKE_WORKER},
         capture_output=True,
@@ -105,3 +105,21 @@ def test_status_detail_is_sanitised_and_file_is_world_readable(tmp_path):
     _, status, _ = run_supervisor(tmp_path, bind=False, lifetime=0, max_failures=1)
     assert set(status) == {"state", "detail", "restarts", "since"}
     assert (tmp_path / "status.json").stat().st_mode & 0o044 == 0o044
+
+
+def test_client_reports_the_published_worker_state_as_the_unavailable_reason(tmp_path, monkeypatch):
+    import asyncio
+
+    from app.services import nmap_client
+    from app.services.nmap_scanner import NmapScannerError
+
+    status = tmp_path / "status.json"
+    status.write_text('{"state":"failed","detail":"worker not ready within 20s","restarts":2,"since":"x"}')
+    monkeypatch.setattr(nmap_client, "WORKER_STATUS_PATH", status)
+    monkeypatch.setattr(nmap_client, "SOCKET_PATH", str(tmp_path / "missing.sock"))
+    with pytest.raises(NmapScannerError) as raised:
+        asyncio.run(nmap_client.request_scan("192.0.2.1", tcp_ports=[80]))
+    assert raised.value.error.code == "unavailable"
+    assert "failed: worker not ready within 20s" in raised.value.error.message
+    status.write_text("not json")
+    assert nmap_client.worker_status()["state"] == "unknown"

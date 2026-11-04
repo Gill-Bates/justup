@@ -6,7 +6,8 @@
 """Check the Nmap worker's privilege separation and scans inside a running justUp container.
 
 ``capabilities``: the worker runs as UID 10001 with CAP_NET_RAW as its only capability, the web
-process holds none, both run with no_new_privs. ``scan``: as the web user, a TCP and a UDP scan
+process holds none, both run with no_new_privs. ``status``: the supervisor published state ``ready``.
+``scan``: as the web user, a TCP and a UDP scan
 of the container's own address go through the worker socket and come back as parsed results.
 docker-build.yml pipes this script into the container (``python - <mode> < tools/verify-nmap-worker.py``).
 """
@@ -14,6 +15,7 @@ docker-build.yml pipes this script into the container (``python - <mode> < tools
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import socket
 import sys
@@ -68,6 +70,12 @@ def check_capabilities() -> None:
     print(f"worker uid={WORKER_UID} caps=only CAP_NET_RAW; web uid={web_uid} caps=none")
 
 
+def check_status(expected: str) -> None:
+    status = json.loads(Path("/run/justup-nmap.status").read_text(encoding="utf-8"))
+    require(status.get("state") == expected, status)
+    print(f"worker status: {status}")
+
+
 async def check_scan() -> None:
     from app.services.nmap_client import request_scan
 
@@ -84,11 +92,16 @@ async def check_scan() -> None:
 
 
 def main(argv: list[str]) -> int:
-    if argv not in (["capabilities"], ["scan"]):
-        print("Usage: verify-nmap-worker.py capabilities|scan", file=sys.stderr)
+    if argv not in (["capabilities"], ["scan"], ["status"]):
+        print("Usage: verify-nmap-worker.py capabilities|scan|status", file=sys.stderr)
         return 2
     try:
-        check_capabilities() if argv == ["capabilities"] else asyncio.run(check_scan())
+        if argv == ["capabilities"]:
+            check_capabilities()
+        elif argv == ["status"]:
+            check_status("ready")
+        else:
+            asyncio.run(check_scan())
     except CheckError as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 1

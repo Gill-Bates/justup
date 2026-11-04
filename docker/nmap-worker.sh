@@ -67,11 +67,26 @@ sys.exit(0 if asyncio.run(asyncio.wait_for(probe(), 5)) else 1)
 ' 2> /dev/null
 }
 
+# kill -0 cannot be used: with cap_drop ALL the root supervisor lacks CAP_KILL and gets EPERM for
+# a process of another UID. /proc tells whether the child still runs (a zombie counts as gone).
+worker_alive() {
+    local state
+    state=$(sed -n 's/^[0-9]* (.*) //p' "/proc/$1/stat" 2> /dev/null)
+    [ -n "$state" ] && [ "${state%% *}" != Z ]
+}
+
+# Same limitation for signals: send them with the worker's own UID (needs only SETUID/SETGID).
+signal_worker() {
+    kill -s "$1" "$2" 2> /dev/null && return 0
+    setpriv --reuid="$WORKER_UID_NAME" --regid="$WORKER_UID_NAME" --clear-groups --no-new-privs \
+        kill -s "$1" "$2" 2> /dev/null
+}
+
 # 0 = ready, 1 = not ready within the timeout, 2 = worker exited during startup
 wait_ready() {
     local deadline=$((SECONDS + READY_TIMEOUT))
     while (( SECONDS < deadline )); do
-        kill -0 "$worker_pid" 2> /dev/null || return 2
+        worker_alive "$worker_pid" || return 2
         if [ -S "$JUSTUP_NMAP_SOCKET" ] && handshake; then
             return 0
         fi
@@ -81,8 +96,8 @@ wait_ready() {
 }
 
 stop_worker() {
-    if [ -n "$worker_pid" ] && kill -0 "$worker_pid" 2> /dev/null; then
-        kill "$worker_pid" 2> /dev/null
+    if [ -n "$worker_pid" ] && worker_alive "$worker_pid"; then
+        signal_worker TERM "$worker_pid"
         wait "$worker_pid" 2> /dev/null
     fi
     worker_pid=""

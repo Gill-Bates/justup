@@ -12,11 +12,31 @@ import asyncio
 import json
 import os
 from contextlib import suppress
+from pathlib import Path
 
 from app.services.nmap_scanner import NmapScannerError, NmapScanResult
 
 SOCKET_PATH = os.environ.get("JUSTUP_NMAP_SOCKET", "/run/justup/nmap.sock")
 MAX_RESPONSE_BYTES = 1_100_000
+# Published by docker/nmap-worker.sh: {"state": starting|ready|restarting|failed, "detail", "restarts", "since"}
+WORKER_STATUS_PATH = Path(os.environ.get("JUSTUP_NMAP_STATUS", "/run/justup-nmap.status"))
+
+
+def worker_status() -> dict[str, object]:
+    """Return the supervisor's worker state; ``{"state": "unknown"}`` when nobody publishes one."""
+    try:
+        status = json.loads(WORKER_STATUS_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"state": "unknown", "detail": "", "restarts": 0}
+    return status if isinstance(status, dict) and isinstance(status.get("state"), str) else {"state": "unknown"}
+
+
+def _unavailable_message() -> str:
+    status = worker_status()
+    state, detail = status.get("state"), status.get("detail")
+    if state in {"restarting", "failed", "starting"}:
+        return f"Nmap scan worker is {state}" + (f": {detail}" if isinstance(detail, str) and detail else "")
+    return "Nmap scan worker is unavailable"
 
 
 async def request_scan(
@@ -42,7 +62,7 @@ async def request_scan(
     try:
         reader, writer = await asyncio.open_unix_connection(SOCKET_PATH, limit=MAX_RESPONSE_BYTES)
     except (FileNotFoundError, ConnectionRefusedError, PermissionError, OSError) as exc:
-        raise NmapScannerError("unavailable", "Nmap scan worker is unavailable") from exc
+        raise NmapScannerError("unavailable", _unavailable_message()) from exc
     try:
         writer.write(json.dumps(payload, separators=(",", ":")).encode() + b"\n")
         await writer.drain()
