@@ -153,7 +153,7 @@ test("status labels say accepted/handoff and never claim delivery", () => {
   vm.runInContext(src, h.ctx);
   const { statusBadge } = h.ctx._spoolerInternals;
   assert.match(statusBadge("sent", 0), />\s*Sent<\/span>$/);
-  assert.match(statusBadge("sent", 0), /not verifiable/);
+  assert.doesNotMatch(statusBadge("sent", 0), /title=/);
   assert.match(statusBadge("pending", 0), /Waiting for handoff/);
   assert.match(statusBadge("pending", 2), /Retrying handoff/);
   assert.match(statusBadge("failed", 3), /Handoff failed/);

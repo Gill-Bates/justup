@@ -12,7 +12,7 @@ const source = readFileSync(new URL("../../app/static/js/utils/list-filter.js", 
 const sandbox = {};
 sandbox.window = sandbox;
 vm.runInNewContext(source, sandbox);
-const { normalize, normalizeQuery, matches, statusMessage, countLabel, createExpansionMemory, MAX_QUERY_LENGTH } = sandbox.JuListFilter;
+const { normalize, normalizeQuery, matches, filterRows, statusMessage, countLabel, createExpansionMemory, MAX_QUERY_LENGTH } = sandbox.JuListFilter;
 // Values built inside the vm context are not reference-equal to ours; compare plain copies.
 const plain = (value) => JSON.parse(JSON.stringify(value));
 
@@ -65,6 +65,19 @@ test("result messages", () => {
   assert.equal(statusMessage(1), "1 target found");
   assert.equal(statusMessage(3), "3 targets found");
   assert.equal(countLabel(2, 5), "2 / 5");
+  assert.equal(statusMessage(0, "recipient"), "No recipients found");
+  assert.equal(statusMessage(1, "recipient"), "1 recipient found");
+  assert.equal(statusMessage(2, "recipient"), "2 recipients found");
+});
+
+test("filterRows hides rows without a hit and returns the hit count (shared by Targets and Recipients)", () => {
+  const rows = ["Martin martin@example.org", "Tobias", "MARTINA"].map((search) => ({ dataset: { search }, hidden: false }));
+  assert.equal(filterRows(rows, normalizeQuery(" martin ")), 2);
+  assert.deepEqual(rows.map((row) => row.hidden), [false, true, false]);
+  assert.equal(filterRows(rows, normalizeQuery("zzz")), 0);
+  assert.ok(rows.every((row) => row.hidden));
+  assert.equal(filterRows(rows, ""), 3);
+  assert.ok(rows.every((row) => !row.hidden));
 });
 
 test("expansion memory returns the state from before the search, first value wins", () => {

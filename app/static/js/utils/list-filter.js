@@ -25,9 +25,20 @@
 	function matches(haystack, needle) {
 		return needle === '' || normalize(haystack).includes(needle);
 	}
-	function statusMessage(count) {
-		if (count === 0) return 'No targets found';
-		return count === 1 ? '1 target found' : count + ' targets found';
+	// Shows or hides each row by its data-search text and returns the number of hits.
+	function filterRows(rows, needle) {
+		let hits = 0;
+		Array.from(rows).forEach(function (row) {
+			const hit = matches(row.dataset.search, needle);
+			row.hidden = !hit;
+			if (hit) hits += 1;
+		});
+		return hits;
+	}
+	function statusMessage(count, noun) {
+		const word = noun || 'target';
+		if (count === 0) return 'No ' + word + 's found';
+		return count === 1 ? '1 ' + word + ' found' : count + ' ' + word + 's found';
 	}
 	function countLabel(count, total) {
 		return count + ' / ' + total;
@@ -58,6 +69,7 @@
 		normalize: normalize,
 		normalizeQuery: normalizeQuery,
 		matches: matches,
+		filterRows: filterRows,
 		statusMessage: statusMessage,
 		countLabel: countLabel,
 		createExpansionMemory: createExpansionMemory

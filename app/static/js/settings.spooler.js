@@ -273,12 +273,12 @@
 			+ '<span class="visually-hidden">' + channel[1] + '</span></span>';
 	}
 
-	// Labels state what is known; the tooltip keeps the caveat that "sent" only means the server accepted the message.
+	// "sent" only means the server accepted the message; the caveat is documented, not shown as tooltip.
 	function _statusBadge(status, retries) {
 		const map = {
 			pending: ['ju-status-badge--warning', 'schedule', 'Waiting for handoff', 'Waiting for SMTP handoff'],
 			processing: ['ju-status-badge--info', 'sync', 'Handing over', 'Being handed to the server'],
-			sent: ['ju-status-badge--success', 'check', 'Sent', 'Accepted by the server; final delivery is not verifiable'],
+			sent: ['ju-status-badge--success', 'check', 'Sent', ''],
 			failed: ['ju-status-badge--danger', 'error_outline', 'Handoff failed', 'Handoff to the server failed'],
 		};
 		const entry = map[status];
@@ -286,7 +286,8 @@
 		const retrying = status === 'pending' && retries > 0;
 		const label = retrying ? 'Retrying handoff' : entry[2];
 		const title = retrying ? 'SMTP handoff is being retried' : entry[3];
-		return '<span class="badge ' + entry[0] + '" title="' + title + '">'
+		const titleAttr = title ? ' title="' + title + '"' : '';
+		return '<span class="badge ' + entry[0] + '"' + titleAttr + '>'
 			+ '<span class="material-icons me-1" style="font-size:12px;vertical-align:middle;" aria-hidden="true">' + entry[1] + '</span>'
 			+ label + '</span>';
 	}

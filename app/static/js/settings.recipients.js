@@ -133,6 +133,57 @@ function applyCachedSignalStatus(recipients) {
 	}
 }
 
+/* ----- Recipients search (DESIGN.md, "Filter-as-you-type search") -----
+   Filtering runs in the browser only; names, addresses and numbers never reach URL, storage or logs. */
+const recipientSearchEl = (id) => document.getElementById('recipients-search' + id);
+
+function setRecipientSearchState(noMatch, hits, total) {
+	const input = recipientSearchEl('');
+	const clear = recipientSearchEl('-clear');
+	const searching = Boolean(input && window.JuListFilter.normalizeQuery(input.value) !== '');
+	if (clear && input) clear.hidden = input.value === '';
+	const empty = recipientSearchEl('-empty');
+	if (empty) empty.hidden = !noMatch;
+	const term = recipientSearchEl('-term');
+	if (term) term.textContent = noMatch ? '"' + input.value.trim() + '"' : '';
+	const status = recipientSearchEl('-status');
+	if (status) status.textContent = searching && total > 0 ? window.JuListFilter.statusMessage(hits, 'recipient') : '';
+	const table = document.querySelector('#recipients-list table');
+	if (table) table.hidden = noMatch;
+}
+
+// Applies the current query to the rendered rows; also re-run after every list reload.
+function applyRecipientSearch() {
+	const input = recipientSearchEl('');
+	if (!input || !window.JuListFilter) return;
+	const needle = window.JuListFilter.normalizeQuery(input.value);
+	const rows = document.querySelectorAll('#recipients-list tbody tr[data-search]');
+	const hits = window.JuListFilter.filterRows(rows, needle);
+	setRecipientSearchState(needle !== '' && rows.length > 0 && hits === 0, hits, rows.length);
+}
+
+function clearRecipientSearch(focus) {
+	const input = recipientSearchEl('');
+	if (!input) return;
+	input.value = '';
+	applyRecipientSearch();
+	if (focus) input.focus();
+}
+
+// Delegated: the field lives in a fragment that HTMX loads after this script.
+document.addEventListener('input', (event) => {
+	if (event.target.id === 'recipients-search') applyRecipientSearch();
+});
+document.addEventListener('keydown', (event) => {
+	if (event.target.id === 'recipients-search' && event.key === 'Escape' && event.target.value !== '') {
+		event.preventDefault();
+		clearRecipientSearch(true);
+	}
+});
+document.addEventListener('click', (event) => {
+	if (event.target.closest('#recipients-search-clear, #recipients-search-reset')) clearRecipientSearch(true);
+});
+
 // Load Recipients List
 let recipientsGeneration = 0;
 
@@ -156,6 +207,7 @@ async function loadRecipients() {
 		if (generation !== recipientsGeneration) return;
 		
 		if (recipients.length === 0) {
+			setRecipientSearchState(false, 0, 0);
 			container.innerHTML = `
 				<div class="text-center text-body-secondary py-4">
 					<span class="material-icons mb-2" style="font-size: 48px;">notifications_off</span>
@@ -221,7 +273,7 @@ async function loadRecipients() {
 				: '<span class="text-body-secondary">—</span>';
 			
 				html += `
-					<tr data-recipient-id="${r.id}">
+					<tr data-recipient-id="${r.id}" data-search="${escapeHtml([r.name, r.email, r.phone].filter(Boolean).join(' '))}">
 						<td data-label="Name" class="ju-cell-text">
 							<span class="d-flex align-items-center gap-2">
 								<span class="material-icons" style="font-size: 20px;">person</span>
@@ -265,6 +317,7 @@ async function loadRecipients() {
 		
 		html += '</tbody></table>';
 			container.innerHTML = html;
+		applyRecipientSearch();
 		
 		// Event delegation - remove old listener and re-bind (handles HTMX swaps)
 		container.removeEventListener('click', handleRecipientListClick);
@@ -410,6 +463,8 @@ async function addRecipient() {
 				if (bsModal) bsModal.hide();
 			}
 			form.reset();
+			// A new entry must not stay hidden behind an active filter.
+			clearRecipientSearch(false);
 			loadRecipients();
 			
 			// Show warning toast if phone not registered with Signal

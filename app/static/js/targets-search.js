@@ -72,12 +72,7 @@
 		} else {
 			container.querySelectorAll('.accordion-item').forEach(function (item) {
 				const rows = Array.from(item.querySelectorAll('tr[data-search]'));
-				let groupHits = 0;
-				rows.forEach(function (row) {
-					const hit = filter.matches(row.dataset.search, needle);
-					row.hidden = !hit;
-					if (hit) groupHits += 1;
-				});
+				const groupHits = filter.filterRows(rows, needle);
 				rowTotal += rows.length;
 				hits += groupHits;
 				item.hidden = groupHits === 0;

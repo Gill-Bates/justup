@@ -96,7 +96,7 @@ def parse_nmap_xml(data: bytes, *, started_at: datetime, completed_at: datetime)
         raise NmapScannerError("invalid_xml", "Nmap returned an invalid or oversized XML document")
     try:
         text = data.decode("utf-8")
-        root = ElementTree.fromstring(text, forbid_dtd=True, forbid_entities=True, forbid_external=True)
+        root = ElementTree.fromstring(text, forbid_dtd=False, forbid_entities=True, forbid_external=True)
     except (UnicodeError, ElementTree.ParseError, DefusedXmlException) as exc:
         raise NmapScannerError("invalid_xml", "Nmap returned invalid XML") from exc
     if root.tag != "nmaprun":

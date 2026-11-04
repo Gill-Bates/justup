@@ -5,7 +5,7 @@
 
 ## [Unreleased]
 
-- `Fix` Settings > Delivery Queue shows the stored status `sent` as "Sent" (it read "Accepted by server"); the tooltip still notes that final delivery is not verifiable.
+- `Fix` Settings > Delivery Queue shows the stored status `sent` as "Sent" (it read "Accepted by server"); the status carries no tooltip, the meaning is documented.
 - `Fix` The Delivery Queue Log shows the channel as an icon only; the name stays available as tooltip and for screen readers.
 
 ## [1.0.2] - 2026-11-03

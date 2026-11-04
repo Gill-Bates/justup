@@ -1008,7 +1008,7 @@ _HTTP_LINK_RE = re.compile(r"""(?is)<a\b[^>]*?\bhref\s*=\s*"(https?://[^"\s]+)"[
 
 def _link_with_url(match: re.Match) -> str:
     url, label = match.group(1), match.group(2)
-    return f"{label} ({url})"
+    return f"{label.strip()} ({url})"
 
 
 def html_to_text(html_body: str) -> str:

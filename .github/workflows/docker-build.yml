@@ -419,12 +419,12 @@ jobs:
             --security-opt no-new-privileges:true \
             -e SECRET_KEY="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" "$TEST_IMAGE"
           for _ in $(seq 1 45); do
-            docker exec "$CONTAINER" test -S /run/justup/nmap.sock 2>/dev/null && break
+            docker exec -u justup "$CONTAINER" test -S /run/justup/nmap.sock 2>/dev/null && break
             sleep 1
           done
-          docker exec "$CONTAINER" test -S /run/justup/nmap.sock
+          docker exec -u justup "$CONTAINER" test -S /run/justup/nmap.sock
           docker exec -i "$CONTAINER" python - capabilities < tools/verify-nmap-worker.py
-          docker exec -i -u 1000:1000 "$CONTAINER" python - scan < tools/verify-nmap-worker.py
+          docker exec -i -u justup "$CONTAINER" python - scan < tools/verify-nmap-worker.py
 
       - name: Upload Nmap provenance (${{ matrix.arch }})
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7

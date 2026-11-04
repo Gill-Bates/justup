@@ -58,7 +58,7 @@ saved values, work for disabled recipients, and are not retried on failure.
 | --- | --- | --- |
 | `pending` | Waiting for handoff | Queued; waiting for its turn or a scheduled retry |
 | `pending` with retries | Retrying handoff | The last SMTP handoff failed; another attempt is scheduled |
-| `sent` | Sent | The configured SMTP server accepted the message (`RCPT TO` and `DATA`). Final delivery is not verifiable |
+| `sent` | Sent | Accepted by the configured SMTP server (`RCPT TO` and `DATA`) or by signal-cli. Delivery to the recipient is not verifiable |
 | `failed` | Handoff failed | Rejected, retry budget used up, or not handed over within 24 h |
 
 `sent` is the stored status of a message that the SMTP server accepted. It never means that the
