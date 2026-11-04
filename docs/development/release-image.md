@@ -25,3 +25,11 @@ The Trivy scan of the built images and the digest recorded per architecture show
 ## Updates
 
 Renovate (`.github/renovate.json`) has a Docker rule with `pinDigests` and proposes digest and version updates for images referenced in the Dockerfile, such as `RUST_IMAGE`. The Python base digest of a release comes from the workflow, not from a pin in the repository, so there is no second pin to keep in sync.
+
+## Published version tags are immutable
+
+The release workflow does not overwrite an existing version tag on Docker Hub. If `<version>` is already published, a re-run only confirms it: the platform digests built in the run must equal the ones in the published index, otherwise the run stops. Updated dependencies (Nmap, signal-cli, base image) ship as a new justUp version. `latest` and the tag cleanup are decided again against the registry immediately before they happen.
+
+## Official release versus manual build
+
+Only the tag-driven workflow `docker-build.yml` produces a release: it publishes to Docker Hub after the CI gate, Trivy, the runtime-image purity check, multi-architecture toolchain parity and the manifest verification. A manual `docker buildx build --push` to another registry (for example a private one) skips all of these and is a convenience build, not a release proof.

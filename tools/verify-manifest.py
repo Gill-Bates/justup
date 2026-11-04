@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import sys
+from collections import Counter
 from pathlib import Path
 
 
@@ -29,7 +30,7 @@ class ManifestError(Exception):
 
 
 def platform_digests(index: dict) -> dict[str, str]:
-    """Return ``os/architecture -> child digest``; duplicates and non-indexes raise."""
+    """Return ``os/architecture -> child digest``; duplicates, variants of one architecture and non-indexes raise."""
     manifests = index.get("manifests")
     if manifests is None:
         raise ManifestError("not a manifest index")
@@ -47,6 +48,11 @@ def platform_digests(index: dict) -> dict[str, str]:
     duplicates = sorted({"/".join(part for part in i if part) for i in identities if identities.count(i) > 1})
     if duplicates:
         raise ManifestError(f"index lists duplicate platforms: {', '.join(duplicates)}")
+    # Variants are not part of the platform contract: one child per os/architecture.
+    counts = Counter(f"{i[0]}/{i[1]}" for i in identities)
+    multiple = sorted(key for key, count in counts.items() if count > 1)
+    if multiple:
+        raise ManifestError(f"index has more than one entry for: {', '.join(multiple)}")
     return digests
 
 

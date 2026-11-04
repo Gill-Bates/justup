@@ -752,9 +752,37 @@ jobs:
           echo "INDEX_DIGEST=${index_digest}" >> "$GITHUB_ENV"
 
       # Only the verified index digest is published; nothing is rebuilt or re-resolved.
+      # A published version tag is immutable: if it exists, this run may only confirm it
+      # (its platform digests equal the ones built here); a rebuild with newly resolved
+      # components must ship as a new version, never overwrite the tag.
       - name: Publish version tag
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
           set -euo pipefail
+          state="$(python3 tools/dockerhub.py exists "$VERSION")"
+          if [[ "$state" == "present" ]]; then
+            docker buildx imagetools inspect --raw "${IMAGE_NAME}:${VERSION}" > manifest-existing.json
+            if ! python3 tools/verify-manifest.py verify manifest-existing.json digests; then
+              echo "ERROR: ${IMAGE_NAME}:${VERSION} is already published with different content." >&2
+              echo "A version tag is immutable. Release the changed components as a new justUp version." >&2
+              exit 1
+            fi
+            existing_digest="$(docker buildx imagetools inspect "${IMAGE_NAME}:${VERSION}" \
+              --format '{{.Manifest.Digest}}')"
+            case "$existing_digest" in
+              sha256:*) ;;
+              *) echo "ERROR: could not resolve the digest of ${IMAGE_NAME}:${VERSION}" >&2; exit 1 ;;
+            esac
+            echo "INDEX_DIGEST=${existing_digest}" >> "$GITHUB_ENV"
+            echo "Confirmed: ${IMAGE_NAME}:${VERSION} already carries these images (${existing_digest}); not republished"
+            exit 0
+          fi
+          if [[ "$state" != "absent" ]]; then
+            echo "ERROR: unexpected tag state '${state}'" >&2
+            exit 1
+          fi
           docker buildx imagetools create --tag "${IMAGE_NAME}:${VERSION}" "${IMAGE_NAME}@${INDEX_DIGEST}"
           docker buildx imagetools inspect --raw "${IMAGE_NAME}:${VERSION}" > manifest-version.json
           python3 tools/verify-manifest.py verify manifest-version.json digests
@@ -763,6 +791,9 @@ jobs:
       # 'latest' moves only after the candidate passed verification, and only for the
       # newest stable release (moves_latest). It points at the same verified digest.
       - name: Promote latest
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
           set -euo pipefail
 
@@ -773,6 +804,17 @@ jobs:
           if [[ "$MOVES_LATEST" != "true" ]]; then
             echo "Skipping 'latest': a newer stable version is already published"
             exit 0
+          fi
+
+          # The meta decision may be hours old: re-read the registry right before moving 'latest'.
+          work="$(mktemp -d)"
+          trap 'rm -rf "$work"' EXIT
+          python3 tools/dockerhub.py list > "$work/tags.txt"
+          # shellcheck disable=SC2086 # EXPECTED_ARCHS is a space-separated list
+          python3 tools/release-newest.py "$work/tags.txt" "$VERSION" $EXPECTED_ARCHS > "$work/decision.txt"
+          if ! grep -qxF 'moves_latest=true' "$work/decision.txt"; then
+            echo "ERROR: a newer stable release was published since the start of this run; 'latest' stays put." >&2
+            exit 1
           fi
 
           docker buildx imagetools create --tag "${IMAGE_NAME}:latest" "${IMAGE_NAME}@${INDEX_DIGEST}"
@@ -855,6 +897,7 @@ jobs:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
           VERSION: ${{ needs.meta.outputs.version }}
+          ARCHS: ${{ needs.meta.outputs.archs }}
         run: |
           set -euo pipefail
           work="$(mktemp -d)"
@@ -864,6 +907,14 @@ jobs:
 
           # The complete listing is read first; a failed page exits before anything is deleted.
           python3 tools/dockerhub.py list > "$work/before.txt"
+
+          # The meta decision may be hours old: re-check against this fresh listing before deleting.
+          # shellcheck disable=SC2086 # ARCHS is a space-separated list
+          python3 tools/release-newest.py "$work/before.txt" "$VERSION" $ARCHS > "$work/decision.txt"
+          if ! grep -qxF 'is_newest=true' "$work/decision.txt"; then
+            echo "ERROR: a newer release was published since the start of this run; nothing is deleted." >&2
+            exit 1
+          fi
 
           # Release policy: keep the current version and 'latest', delete the rest.
           # grep exits 1 when nothing is left to delete, which is fine.

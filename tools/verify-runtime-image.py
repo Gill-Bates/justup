@@ -16,7 +16,9 @@ directories, build source trees (Cargo.toml/Cargo.lock), object files (.o, .rlib
 .a archives), test caches, build credentials, and leftovers in /tmp, /var/tmp and /usr/src.
 Exceptions that are part of the shipped runtime, not of the build: static .a archives inside
 site-packages (numpy ships libnpymath.a) and objects in the CPython config-* directory of the
-base interpreter. Compiled shared libraries (.so) are never forbidden; the required
+base interpreter. pip, setuptools and wheel must be gone from the final file system (``fs``); the
+base image still carries them in its own layer, which the layer scan accepts by design (see
+package_tooling). Compiled shared libraries (.so) are never forbidden; the required
 libsignal JNI library is asserted instead.
 
   fs <amd64|arm64> [root]   inspect the file system of a running container; docker-build.yml pipes
@@ -128,12 +130,35 @@ def tree_violations(root: Path) -> list[str]:
             reason = violation(path, is_dir)
             if reason:
                 found.append(f"{path}: {reason}")
+    found.extend(package_tooling(root))
     for directory in EMPTY_DIRS:
         target = root / directory.lstrip("/")
         if target.is_dir():
             leftovers = sorted(item.name for item in target.iterdir())
             if leftovers:
                 found.append(f"{directory}: leftovers {', '.join(leftovers[:5])}")
+    return found
+
+
+def package_tooling(root: Path) -> list[str]:
+    """Python package tooling must not be visible in the final file system.
+
+    The base image ships pip, setuptools and wheel in its own layer; the Dockerfile removes them
+    in a later layer. That hides them from the running image but leaves their bytes in the base
+    layer, so this is a file-system check only and the layer scan deliberately does not flag them.
+    """
+    found: list[str] = []
+    for site in sorted(root.glob("usr/local/lib/python3*/site-packages")):
+        found.extend(
+            f"/{entry.relative_to(root).as_posix()}: Python package tooling is still visible"
+            for entry in sorted(site.iterdir())
+            if re.match(r"^(?:pip|setuptools|wheel|pkg_resources)(?:-[0-9][^/]*\.(?:dist|egg)-info)?$", entry.name)
+        )
+    found.extend(
+        f"/usr/local/bin/{entry.name}: Python package tooling is still visible"
+        for entry in sorted((root / "usr/local/bin").glob("*"))
+        if re.match(r"^(?:pip[0-9.]*|wheel)$", entry.name)
+    )
     return found
 
 

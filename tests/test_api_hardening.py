@@ -367,7 +367,9 @@ class TestTargetRowMapping:
         finally:
             sqlite_db.close_connection(conn)
         mapped = target_row_to_dict(row)
-        assert set(mapped) == set(TargetPublic.model_fields)
+        # network_ports lives in its own table; the API layer merges it (a silent [] default here
+        # would hide a caller that forgot to).
+        assert set(mapped) == set(TargetPublic.model_fields) - {"network_ports"}
         assert mapped["has_http_password"] is True
         assert "http_password" not in mapped
         assert "s3cret" not in str(TargetPublic(**mapped).model_dump())

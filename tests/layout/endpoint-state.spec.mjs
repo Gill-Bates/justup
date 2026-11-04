@@ -144,3 +144,16 @@ test("targets table: endpoint badges carry the state as text and icon @endpoint-
 		await context.close();
 	}
 });
+test("availability chart: a UDP port is a dashed line, a TCP port of the same number is not @endpoint-state", async ({ browser, app, adminState }) => {
+	const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, storageState: adminState });
+	const page = await context.newPage();
+	try {
+		await page.goto(`${app.base}/ui/targets/${targetId}`, { waitUntil: "load" });
+		await page.waitForFunction(() => window.Chart && window.Chart.getChart("chart-uptime")?.data.datasets.length > 0, null, { timeout: 20000 });
+		const lines = await page.evaluate(() => Object.fromEntries(window.Chart.getChart("chart-uptime").data.datasets.map((set) => [set.label, set.borderDash || []])));
+		assert.deepEqual(lines["UDP:53"], [6, 4]);
+		assert.deepEqual(lines["TCP:587"], []);
+	} finally {
+		await context.close();
+	}
+});

@@ -56,3 +56,19 @@ def test_temporary_tag_cleanup_does_not_depend_on_artifacts():
 
 def test_no_trivy_result_is_defaulted_to_zero():
     assert not re.search(r"\|\|\s*echo 0", RELEASE + SECURITY)
+
+
+def test_published_version_tag_is_checked_before_it_is_written():
+    publish = RELEASE.index("      - name: Publish version tag")
+    assert (
+        publish
+        < RELEASE.index('dockerhub.py exists "$VERSION"')
+        < RELEASE.index('imagetools create --tag "${IMAGE_NAME}:${VERSION}"')
+    )
+
+
+def test_registry_is_rechecked_right_before_latest_moves_and_before_tags_are_deleted():
+    promote = RELEASE.split("      - name: Promote latest", 1)[1].split("  cleanup-arch-tags:", 1)[0]
+    assert promote.index("release-newest.py") < promote.index('imagetools create --tag "${IMAGE_NAME}:latest"')
+    cleanup = RELEASE.split("  cleanup-dockerhub-tags:", 1)[1].split("  create-release:", 1)[0]
+    assert cleanup.index("release-newest.py") < cleanup.index("dockerhub.py delete")

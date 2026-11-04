@@ -177,6 +177,30 @@ def build_image_archive(path: Path, layers: list[dict[str, bytes | None]]) -> No
         image.addfile(info, io.BytesIO(manifest))
 
 
+@pytest.mark.parametrize(
+    "relative",
+    [
+        "usr/local/lib/python3.13/site-packages/pip/__init__.py",
+        "usr/local/lib/python3.13/site-packages/setuptools/__init__.py",
+        "usr/local/lib/python3.13/site-packages/wheel/__init__.py",
+        "usr/local/lib/python3.13/site-packages/pkg_resources/__init__.py",
+        "usr/local/lib/python3.13/site-packages/pip-25.0.dist-info/METADATA",
+        "usr/local/bin/pip3.13",
+        "usr/local/bin/wheel",
+    ],
+)
+def test_visible_python_package_tooling_fails_the_file_system_check(tmp_path, relative):
+    root = make_image_root(tmp_path)
+    touch(root, relative)
+    assert any("package tooling" in line for line in problems(root))
+
+
+def test_package_tooling_in_a_base_layer_is_not_a_layer_violation(tmp_path):
+    archive = tmp_path / "image.tar"
+    build_image_archive(archive, [{"usr/local/lib/python3.13/site-packages/pip/__init__.py": b"x"}, {}])
+    assert tool.layer_violations(archive) == []
+
+
 def test_layer_scan_finds_artifact_that_a_later_layer_deleted(tmp_path):
     archive = tmp_path / "image.tar"
     build_image_archive(

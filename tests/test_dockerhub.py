@@ -147,3 +147,28 @@ def test_cli_delete_verify_and_usage(monkeypatch):
     assert dockerhub.main(["dockerhub.py", "delete", "--verify", "1.0.0", "0.9.0"]) == 0
     assert dockerhub.main(["dockerhub.py", "delete"]) == 1
     assert dockerhub.main(["dockerhub.py", "list", "--bogus"]) == 1
+
+
+def test_tag_exists_is_fail_closed(monkeypatch):
+    _script(monkeypatch, [(200, b"{}")])
+    assert dockerhub.tag_exists("ns", "repo", "t", "1.0.0") is True
+    _script(monkeypatch, [(404, b"")])
+    assert dockerhub.tag_exists("ns", "repo", "t", "1.0.0") is False
+    for status in (401, 403):
+        _script(monkeypatch, [(status, b"")])
+        with pytest.raises(dockerhub.HubError):
+            dockerhub.tag_exists("ns", "repo", "t", "1.0.0")
+
+
+def test_cli_exists_prints_state_and_rejects_bad_usage(monkeypatch, capsys):
+    monkeypatch.setenv("DOCKERHUB_USERNAME", "ns")
+    monkeypatch.setenv("DOCKERHUB_TOKEN", "pw")
+    _script(monkeypatch, [(200, b'{"token": "t"}'), (200, b"{}")])
+    assert dockerhub.main(["dockerhub.py", "exists", "1.0.0"]) == 0
+    _script(monkeypatch, [(200, b'{"token": "t"}'), (404, b"")])
+    assert dockerhub.main(["dockerhub.py", "exists", "1.0.0"]) == 0
+    assert capsys.readouterr().out.split() == ["present", "absent"]
+    _script(monkeypatch, [(200, b'{"token": "t"}'), (500, b"")] + [(500, b"")] * dockerhub.GET_ATTEMPTS)
+    assert dockerhub.main(["dockerhub.py", "exists", "1.0.0"]) == 1
+    assert dockerhub.main(["dockerhub.py", "exists"]) == 1
+    assert dockerhub.main(["dockerhub.py", "exists", "a", "b"]) == 1

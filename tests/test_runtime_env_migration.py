@@ -46,6 +46,14 @@ ALLOWED_ENV_NAMES = {
     "SIGNAL_DATA_DIR",
     "TESTING",
     "PYTEST_CURRENT_TEST",
+    # Local Nmap worker: socket, status file and parent pid are set by the entrypoint or the parent
+    # process, never by the UI; PATH, LANG and NMAPDIR are forwarded into its scrubbed environment.
+    "JUSTUP_NMAP_SOCKET",
+    "JUSTUP_NMAP_STATUS",
+    "JUSTUP_NMAP_PARENT_PID",
+    "NMAPDIR",
+    "PATH",
+    "LANG",
 }
 
 

@@ -207,9 +207,10 @@ function buildAvailabilitySeriesChart(canvasId, data) {
     CERT: "#6f42c1", // Purple
   };
 
-  // Golden-angle hue per TCP port; null for non-TCP services
+  // Golden-angle hue per TCP/UDP port; null for other services. TCP and UDP of one port share the
+  // hue and differ by the line style (UDP is dashed), so the protocol is not told by colour alone.
   function getTcpPortColor(serviceName) {
-    if (!serviceName.startsWith("TCP:")) return null;
+    if (!/^(TCP|UDP):/.test(serviceName)) return null;
     var port = parseInt(serviceName.split(":")[1], 10);
     if (isNaN(port)) return null;
     return tcpPortColorFor(tcpPortHueFor(port), theme.mode);
@@ -229,7 +230,7 @@ function buildAvailabilitySeriesChart(canvasId, data) {
       serviceColors[serviceName] || getTcpPortColor(serviceName) || "#6c757d";
     // Store TCP port hue for theme-aware color updates
     var tcpPortHue = null;
-    if (serviceName.startsWith("TCP:")) {
+    if (/^(TCP|UDP):/.test(serviceName)) {
       var port = parseInt(serviceName.split(":")[1], 10);
       if (!isNaN(port)) {
         tcpPortHue = tcpPortHueFor(port);
@@ -256,10 +257,11 @@ function buildAvailabilitySeriesChart(canvasId, data) {
         },
       },
     };
-    // Store hue metadata for theme updates (if TCP port)
+    // Store hue metadata for theme updates (if TCP/UDP port)
     if (tcpPortHue !== null) {
       dataset._tcpPortHue = tcpPortHue;
     }
+    if (serviceName.startsWith("UDP:")) dataset.borderDash = [6, 4];
     datasets.push(dataset);
   }
 

@@ -69,6 +69,16 @@ def test_manifest_mismatch_fails(bad, message):
         manifest_tool.verify(bad, PUSHED)
 
 
+def test_manifest_rejects_two_entries_for_one_architecture_even_with_different_variants():
+    other = "sha256:" + "e" * 64
+    # The last entry matches the pushed digest, so a collapsing os/architecture map would pass.
+    bad = index((other, platform("arm64", "v7")), (ARM64, platform("arm64", "v8")), (AMD64, platform("amd64")))
+    with pytest.raises(manifest_tool.ManifestError, match=r"more than one entry for: linux/arm64"):
+        manifest_tool.verify(bad, PUSHED)
+    with pytest.raises(manifest_tool.ManifestError, match="more than one entry"):
+        manifest_tool.platform_digests(bad)
+
+
 def test_manifest_cli_verify_and_children(tmp_path, capsys):
     (tmp_path / "digests").mkdir()
     (tmp_path / "digests" / "amd64").write_text(AMD64)
