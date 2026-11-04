@@ -18,6 +18,7 @@ These cover the durable contracts of the redesigned template:
 
 from __future__ import annotations
 
+import logging
 import re
 from datetime import UTC, datetime, timedelta
 
@@ -35,6 +36,7 @@ from app.services.notifications.email_template import (
     render_template,
     template_to_preview,
 )
+from app.utils.status_palette import STATUS_PALETTE
 from tests import _support  # noqa: F401 - imported for its sys.path side effect
 
 _FIXED_NOW = datetime(2026, 11, 1, 19, 18, tzinfo=UTC)
@@ -89,6 +91,32 @@ def test_status_maps_to_text_and_redundant_label(status, text, label):
     assert ctx["status"]["label"] == label
     # Status colour is a valid 6-digit hex (CSS-injection guard in render_template).
     assert re.fullmatch(r"#[0-9a-fA-F]{6}", ctx["status"]["color"])
+
+
+@pytest.mark.parametrize(
+    ("status", "variant"),
+    [
+        ("OPEN", "danger"),
+        ("DOWN", "danger"),
+        ("UP", "success"),
+        ("RESOLVED", "success"),
+        ("WARN", "warning"),
+        ("WARNING", "warning"),
+        ("UNKNOWN", "neutral"),
+        ("unexpected", "neutral"),
+    ],
+)
+def test_email_status_fill_uses_shared_palette_with_legible_foreground(status, variant):
+    ctx = _ctx(status=status)
+    palette = STATUS_PALETTE[variant]
+    assert ctx["status"]["accent_color"] == palette.background
+    assert ctx["status"]["foreground_color"] == palette.foreground
+    assert ctx["status"]["text_color"] == palette.text
+    assert ctx["status"]["color"] == palette.text
+    rendered = render_template(DEFAULT_HTML_TEMPLATE, ctx)
+    assert rendered.count(f"background-color:{palette.background}") >= 3
+    assert f"color:{palette.foreground};background-color:{palette.background}" in rendered
+    assert f"color:{palette.text};" in rendered
 
 
 def test_status_is_conveyed_by_text_not_only_colour():
@@ -163,6 +191,81 @@ def test_status_color_cannot_inject_css():
     # A non-hex status colour falls back to grey instead of being written verbatim.
     rendered = render_template("x{{status.color}}y", {"status": {"color": "red;}body{display:none"}})
     assert rendered == "x#6b7280y"
+
+
+@pytest.mark.parametrize(
+    ("placeholder", "fallback"),
+    [("accent_color", "#6c757d"), ("foreground_color", "#ffffff"), ("text_color", "#5b6b7b")],
+)
+def test_status_badge_colors_cannot_inject_css(placeholder, fallback):
+    rendered = render_template(f"x{{{{status.{placeholder}}}}}y", {"status": {placeholder: "red;}body{display:none"}})
+    assert rendered == f"x{fallback}y"
+
+
+# ─── Target Details are metadata: neutral in every mail state ────────────────
+
+_NEUTRAL = STATUS_PALETTE["neutral"]
+_CARD_BG = "#f7f9fb"  # background of the Target Details card in the default template
+
+
+def _luminance(hex_color: str) -> float:
+    channels = [int(hex_color[i : i + 2], 16) / 255 for i in (1, 3, 5)]
+    lin = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4 for c in channels]
+    return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
+
+
+def _contrast(a: str, b: str) -> float:
+    hi, lo = sorted((_luminance(a), _luminance(b)), reverse=True)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def _target_details_html(status: str, check_type: str = "HTTP") -> str:
+    ctx = _ctx(status=status)
+    ctx["target"]["check_badges"] = build_alert_context(
+        {"status": status}, {"name": "t", "host": "h", "check_type": check_type}
+    )["target"]["check_badges"]
+    html = render_template(DEFAULT_HTML_TEMPLATE, ctx)
+    start = html.index("<!-- TARGET DETAILS -->")
+    return html[start : html.index("<!-- SLA -->", start)]
+
+
+_MAIL_STATES = ["OPEN", "DOWN", "RESOLVED", "UP", "WARNING", "UNKNOWN"]
+
+
+@pytest.mark.parametrize("status", _MAIL_STATES)
+@pytest.mark.parametrize("check_type", ["HTTP", "HTTPS", "PING", "TCP", "DNS", "CERT", "HTTP + PING"])
+def test_check_badge_is_neutral_in_every_mail_state(status, check_type):
+    section = _target_details_html(status, check_type)
+    assert f"background-color:{_NEUTRAL.background};color:{_NEUTRAL.foreground};" in section
+    # No status colour (and no per-type colour) anywhere in the card.
+    for variant in ("success", "warning", "danger", "info"):
+        assert STATUS_PALETTE[variant].background not in section
+    for legacy in ("#dbeafe", "#fef9c3", "#16815c"):
+        assert legacy not in section
+
+
+def test_target_details_are_identical_across_states():
+    sections = {_target_details_html(s) for s in _MAIL_STATES}
+    assert len(sections) == 1
+
+
+@pytest.mark.parametrize("status", ["OPEN", "RESOLVED", "WARNING"])
+def test_status_banner_keeps_its_state_colour(status):
+    html = render_template(DEFAULT_HTML_TEMPLATE, _ctx(status=status))
+    banner = html[: html.index("<!-- TARGET DETAILS -->")]
+    variant = {"OPEN": "danger", "RESOLVED": "success", "WARNING": "warning"}[status]
+    assert STATUS_PALETTE[variant].background in banner
+    assert STATUS_PALETTE[variant].text in banner
+
+
+def test_neutral_badge_contrast_meets_wcag_limits():
+    assert _contrast(_NEUTRAL.foreground, _NEUTRAL.background) >= 4.5  # badge text
+    assert _contrast(_NEUTRAL.background, _CARD_BG) >= 3.0  # badge edge against the card
+    assert _contrast(_NEUTRAL.text, _CARD_BG) >= 4.5  # card icon/labels
+
+
+def test_plain_text_part_does_not_depend_on_badge_colour():
+    assert render_template("{{target.check_badges}}", _ctx(), mode="plain_text") == "HTTP"
 
 
 # ─── Inline logo / MIME structure ────────────────────────────────────────────
@@ -373,3 +476,17 @@ def test_end_to_end_send_captures_a_multipart_related_message_with_the_inline_lo
     assert image.get_payload(decode=True)[:8] == b"\x89PNG\r\n\x1a\n"
     # No dependency on an external image host survived into the wire bytes.
     assert b"raw.githubusercontent.com" not in server.message_bytes
+
+
+def test_debug_log_of_placeholder_rendering_never_contains_the_values(caplog):
+    secret_url = "https://internal.example/status?token=s3cr3t-token-value"  # noqa: S105 - fake value
+    ctx = _ctx()
+    ctx["system"] = {**ctx.get("system", {}), "url": secret_url}
+    ctx["target"] = {**ctx.get("target", {}), "host": "db01.internal.example", "name": "Payroll-DB"}
+    with caplog.at_level(logging.DEBUG, logger="app.services.notifications.email_template"):
+        rendered = render_template("{{system.url}} {{target.host}} {{target.name}}", ctx, mode="plain_text")
+    assert secret_url in rendered  # the value is rendered ...
+    logged = "\n".join(r.getMessage() for r in caplog.records)
+    assert "system.url" in logged  # ... the name and length are logged, never the value
+    for value in ("s3cr3t-token-value", "internal.example", "db01", "Payroll-DB"):
+        assert value not in logged

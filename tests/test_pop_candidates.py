@@ -1,0 +1,264 @@
+#!/usr/bin/env python3
+#
+# tests/test_pop_candidates.py
+# Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
+#
+
+"""Unknown PoP observation and explicit-review safety contracts."""
+
+from __future__ import annotations
+
+import hashlib
+import sqlite3
+
+import pytest
+
+from app.db import pop_candidates, pop_lookup
+from app.db import sqlite as sqlite_db
+from app.services import pop_codes, traceroute_geo
+from tests import _support  # noqa: F401 - imported for its sys.path side effect
+
+
+@pytest.fixture
+def conn() -> sqlite3.Connection:
+    db = sqlite3.connect(":memory:")
+    sqlite_db.init_schema(db)
+    db.row_factory = sqlite3.Row
+    return db
+
+
+def _key(value: str) -> str:
+    return hashlib.sha256(value.encode()).hexdigest()
+
+
+def _observe(conn: sqlite3.Connection, ip: str, measurement: str, *, country: str = "DE", lat: float = 50.1) -> bool:
+    return pop_candidates.observe(
+        conn,
+        code="xyz",
+        hostname="core.xyz.example.net",
+        public_ip=ip,
+        provider="generic",
+        measurement_key=_key(measurement),
+        proposal={"city": "Frankfurt", "country": country, "lat": lat, "lon": 8.6},
+    )
+
+
+def test_unconfirmed_candidate_is_inert_and_repeated_measurement_is_deduplicated(conn) -> None:
+    assert _observe(conn, "8.8.8.8", "route-a")
+    assert not _observe(conn, "8.8.8.8", "route-a")
+    assert _observe(conn, "8.8.8.9", "route-b")
+    assert pop_candidates.observe(
+        conn,
+        code="xyz",
+        hostname="core.xyz.example.net",
+        public_ip="8.8.8.10",
+        provider="other",
+        measurement_key=_key("route-b2"),
+        proposal={"city": "Frankfurt", "country": "DE", "lat": 50.1, "lon": 8.6},
+    )
+    row = conn.execute("SELECT seen_count, independent_count, quality_score FROM pop_alias_candidates").fetchone()
+    assert tuple(row) == (3, 1, 40)
+    assert pop_lookup.lkp_t(conn, ["xyz"]) is None
+    with pytest.raises(ValueError, match="two independent"):
+        pop_candidates.review(
+            conn,
+            "xyz",
+            action="approve",
+            actor="reviewer",
+            evidence="manual check",
+            city="Frankfurt",
+            country="DE",
+            lat=50.1,
+            lon=8.6,
+        )
+    assert _observe(conn, "1.1.1.1", "route-c")
+    row = conn.execute("SELECT seen_count, independent_count, quality_score FROM pop_alias_candidates").fetchone()
+    assert tuple(row) == (4, 2, 70)
+
+
+def test_approval_revocation_and_review_audit(conn) -> None:
+    _observe(conn, "8.8.8.8", "route-a")
+    _observe(conn, "1.1.1.1", "route-b")
+    pop_candidates.review(
+        conn,
+        "xyz",
+        action="approve",
+        actor="alice",
+        evidence="ticket 123 and route evidence",
+        city="Frankfurt",
+        country="DE",
+        lat=50.1,
+        lon=8.6,
+    )
+    result = pop_lookup.lkp_t(conn, ["xyz"])
+    assert result is not None and result["source"] == "learned"
+    assert result["confidence"] == "medium"
+    assert tuple(conn.execute("SELECT confidence, priority FROM pop_locations WHERE alias_code='xyz'").fetchone()) == (
+        70,
+        10,
+    )
+    pop_candidates.review(conn, "xyz", action="revoke", actor="bob", evidence="contradicting route")
+    assert pop_lookup.lkp_t(conn, ["xyz"]) is None
+    assert [
+        (r[0], r[1], r[2])
+        for r in conn.execute("SELECT action, actor, evidence FROM pop_candidate_reviews ORDER BY id")
+    ] == [
+        ("approve", "alice", "ticket 123 and route evidence"),
+        ("revoke", "bob", "contradicting route"),
+    ]
+
+
+def test_explicit_curated_canonical_mapping_requires_matching_anchor(conn) -> None:
+    for ip, measurement in (("8.8.8.8", "a"), ("1.1.1.1", "b")):
+        pop_candidates.observe(
+            conn,
+            code="xyz",
+            hostname="xyz.example.net",
+            public_ip=ip,
+            provider="generic",
+            measurement_key=_key(measurement),
+            proposal={"city": "Frankfurt", "country": "DE", "lat": 50.1, "lon": 8.6, "canonical_guess": "fra"},
+        )
+    with pytest.raises(ValueError, match="curated anchor"):
+        pop_candidates.review(
+            conn,
+            "xyz",
+            action="approve",
+            actor="alice",
+            evidence="route review",
+            canonical="fra",
+            city="Frankfurt",
+            country="DE",
+            lat=50.1,
+            lon=8.6,
+        )
+    conn.execute(
+        "INSERT INTO pop_locations (canonical_code, alias_code, city, country, lat, lon, source, confidence, "
+        "priority, created_at, updated_at) VALUES ('fra','fra','Frankfurt','DE',50.1,8.6,'seed',100,0,'x','x')"
+    )
+    conn.commit()
+    pop_candidates.review(
+        conn,
+        "xyz",
+        action="approve",
+        actor="alice",
+        evidence="route review",
+        canonical="fra",
+        city="Frankfurt",
+        country="DE",
+        lat=50.1,
+        lon=8.6,
+    )
+    assert pop_lookup.lkp_t(conn, ["xyz"])["canonical_code"] == "fra"
+    assert conn.execute("SELECT confidence FROM pop_locations WHERE alias_code='fra'").fetchone()[0] == 100
+
+
+def test_conflicts_and_curated_alias_block_approval(conn) -> None:
+    _observe(conn, "8.8.8.8", "route-a")
+    _observe(conn, "1.1.1.1", "route-b", country="FR", lat=48.8)
+    assert tuple(conn.execute("SELECT status, conflict_count FROM pop_alias_candidates").fetchone()) == ("conflict", 1)
+    with pytest.raises(ValueError, match="non-conflicting"):
+        pop_candidates.review(
+            conn,
+            "xyz",
+            action="approve",
+            actor="alice",
+            evidence="review",
+            city="Frankfurt",
+            country="DE",
+            lat=50.1,
+            lon=8.6,
+        )
+    pop_candidates.review(conn, "xyz", action="reject", actor="alice", evidence="country conflict")
+    assert conn.execute("SELECT status FROM pop_alias_candidates").fetchone()[0] == "rejected"
+
+    for ip, route in (("8.8.4.4", "c"), ("1.0.0.1", "d")):
+        pop_candidates.observe(
+            conn,
+            code="cur",
+            hostname="cur.example.net",
+            public_ip=ip,
+            provider="generic",
+            measurement_key=_key(route),
+            proposal={"city": "Paris", "country": "FR", "lat": 48.85, "lon": 2.35},
+        )
+    conn.execute(
+        "INSERT INTO pop_locations (canonical_code, alias_code, city, country, lat, lon, source, confidence, priority, "
+        "created_at, updated_at) VALUES ('cur','cur','Paris','FR',48.85,2.35,'seed',100,0,'x','x')"
+    )
+    conn.commit()
+    with pytest.raises(ValueError, match="already owns"):
+        pop_candidates.review(
+            conn,
+            "cur",
+            action="approve",
+            actor="alice",
+            evidence="review",
+            city="Paris",
+            country="FR",
+            lat=48.85,
+            lon=2.35,
+        )
+    assert tuple(conn.execute("SELECT source, confidence FROM pop_locations WHERE alias_code='cur'").fetchone()) == (
+        "seed",
+        100,
+    )
+
+
+def test_distance_conflict_and_input_limits(conn, monkeypatch) -> None:
+    assert not _observe(conn, "10.0.0.1", "private")
+    assert not pop_candidates.observe(
+        conn,
+        code="xyz",
+        hostname="x" * 254,
+        public_ip="8.8.8.8",
+        provider="generic",
+        measurement_key=_key("bad-host"),
+    )
+    _observe(conn, "8.8.8.8", "a")
+    _observe(conn, "1.1.1.1", "b", lat=55.0)
+    assert conn.execute("SELECT status FROM pop_alias_candidates").fetchone()[0] == "conflict"
+    monkeypatch.setattr(pop_candidates, "MAX_CANDIDATES", 1)
+    assert not pop_candidates.observe(
+        conn,
+        code="new",
+        hostname="new.example.net",
+        public_ip="8.8.4.4",
+        provider="generic",
+        measurement_key=_key("new"),
+    )
+
+
+def test_route_capture_is_inert_and_candidate_failures_do_not_break_monitoring(tmp_path, monkeypatch) -> None:
+    path = tmp_path / "justup.db"
+    db = sqlite_db.connect(path)
+    sqlite_db.init_schema(db)
+    sqlite_db.close_connection(db)
+    monkeypatch.setattr(pop_codes, "_pop_get_conn", lambda: sqlite_db.connect(path))
+    monkeypatch.setattr(traceroute_geo, "geolocate_with_hostname_hint", lambda *_args: None)
+    monkeypatch.setattr(
+        traceroute_geo,
+        "geolocate_ip",
+        lambda _ip: {
+            "city": "Frankfurt",
+            "country": "DE",
+            "lat": 50.1,
+            "lon": 8.6,
+        },
+    )
+    hop = [{"hop": 1, "ip": "8.8.8.8", "hostname": "core.xyz.example.net", "status": "ok"}]
+    assert traceroute_geo.mtr_hops_to_geo_points(hop) == []
+    assert traceroute_geo.mtr_hops_to_geo_points(hop) == []
+    db = sqlite_db.connect(path)
+    assert db.execute("SELECT seen_count FROM pop_alias_candidates WHERE alias_code='xyz'").fetchone()[0] == 1
+    assert tuple(
+        db.execute(
+            "SELECT canonical_guess, proposal_source FROM pop_alias_candidates WHERE alias_code='xyz'"
+        ).fetchone()
+    ) == ("fra", "geolite2-city+curated-code")
+    assert pop_lookup.lkp_t(db, ["xyz"]) is None
+    sqlite_db.close_connection(db)
+    monkeypatch.setattr(
+        traceroute_geo, "observe_unknown_pop", lambda *_args: (_ for _ in ()).throw(sqlite3.Error("disk"))
+    )
+    assert traceroute_geo.mtr_hops_to_geo_points(hop) == []

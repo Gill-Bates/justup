@@ -281,13 +281,20 @@ def test_availability_series_uses_exact_selected_range(conn, monkeypatch):
     assert captured[0]["until"] == datetime(2026, 1, 9, 8, 11, tzinfo=UTC)
 
 
-def test_downtime_history_fragment_rejects_inverted_range(conn, monkeypatch):
+@pytest.mark.parametrize(
+    ("since", "until"),
+    [
+        pytest.param("2026-02-01T00:00:00Z", "2026-01-01T00:00:00Z", id="aware"),
+        pytest.param("2026-02-01T00:00:00", "2026-01-01T00:00:00+00:00", id="naive-and-aware"),
+    ],
+)
+def test_downtime_history_fragment_rejects_inverted_range(conn, monkeypatch, since, until):
     tid = _target(conn, "T")
     monkeypatch.setattr(frontend, "resolve_user_or_htmx_redirect", lambda *_a, **_k: {"id": 1})
     client = _client(conn, frontend.router, user=_mk_user(conn, "u", admin=False))
     resp = client.get(
         f"/ui/fragments/downtime-history/{tid}",
-        params={"since": "2026-02-01T00:00:00Z", "until": "2026-01-01T00:00:00Z"},
+        params={"since": since, "until": until},
     )
     assert resp.status_code == 400
 
@@ -787,17 +794,6 @@ def test_dashboard_routes_treat_naive_datetimes_as_utc(conn, path):
     assert mixed_ok.status_code == 200, mixed_ok.text
 
 
-def test_downtime_history_fragment_treats_naive_datetimes_as_utc(conn, monkeypatch):
-    tid = _target(conn, "T")
-    monkeypatch.setattr(frontend, "resolve_user_or_htmx_redirect", lambda *_a, **_k: {"id": 1})
-    client = _client(conn, frontend.router, user=_mk_user(conn, "u", admin=False))
-    resp = client.get(
-        f"/ui/fragments/downtime-history/{tid}",
-        params={"since": "2026-02-01T00:00:00", "until": "2026-01-01T00:00:00+00:00"},
-    )
-    assert resp.status_code == 400
-
-
 @pytest.fixture
 def signal_env(conn, monkeypatch):
     from app.utils.constants import SettingKeys
@@ -1170,6 +1166,21 @@ def test_target_detail_view_passes_stored_overall_status_through(conn, stored):
     assert frontend._target_detail_view(conn, row, tid)["overall_status"] == stored
 
 
+@pytest.mark.parametrize(
+    ("status", "label"),
+    [("up", "Online"), ("down", "Offline"), ("disabled", "Disabled"), ("unknown", "Unknown")],
+)
+def test_target_detail_header_renders_current_status_immediately(status, label):
+    rendered = frontend.templates.get_template("fragments/target_detail/header.html").render(
+        target={"id": 1, "name": "example.com", "group": None, "overall_status": status},
+        user=None,
+        has_recipients=False,
+    )
+
+    assert f"target-status-pill--{status}" in rendered
+    assert f"<span>{label}</span>" in rendered
+
+
 def test_target_status_row_created_by_default_is_unknown_not_empty(conn):
     # The column is NOT NULL DEFAULT 'unknown' and every writer uses a TargetStatus constant.
     tid = _target(conn, "detail-default")
@@ -1257,6 +1268,15 @@ def test_alert_list_rejects_inverted_range(conn, params):
     assert client.get("/alerts", params=params).status_code == 400
     ok = client.get("/alerts", params={"from_date": "2026-01-01T00:00:00", "to_date": "2026-02-01T00:00:00Z"})
     assert ok.status_code == 200
+
+
+def test_alert_summary_route_returns_numeric_counters_and_is_not_an_alert_id(conn):
+    from app.api import alerts
+
+    client = _client(conn, alerts.router, user=_mk_user(conn, "u", admin=False))
+    resp = client.get("/alerts/summary")
+    assert resp.status_code == 200
+    assert resp.json() == {"open": 0, "acknowledged_24h": 0, "started_24h": 0, "resolved_24h": 0}
 
 
 @pytest.mark.parametrize(("code", "status"), [("12345a", 422), ("12 456", 422), ("12345", 422), ("123456", 204)])

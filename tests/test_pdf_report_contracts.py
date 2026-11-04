@@ -12,13 +12,18 @@ from __future__ import annotations
 import dataclasses
 import io
 import itertools
+import re
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
+import matplotlib.colors as mcolors
 import matplotlib.dates as mdates
 import pytest
+from matplotlib.backends.backend_agg import FigureCanvasAgg
+from matplotlib.collections import LineCollection
 from reportlab.platypus import SimpleDocTemplate
 
-from app.services import pdf_report
+from app.services import pdf_logo, pdf_report
 from app.services.pdf_report import PDFReportBuilder, ReportData, _esc
 from app.utils.tls_model import Check, ProtocolResult, ScanStatus, TlsScanResult, Verdict
 
@@ -120,6 +125,59 @@ def test_esc_preserves_unicode_text():
     assert _esc("Grüße 世界 🙂") == "Grüße 世界 🙂"
 
 
+@pytest.mark.parametrize(
+    "font_name",
+    ["IBMPlexSans", "IBMPlexSans-Bold", "IBMPlexSans-Italic", "IBMPlexSans-BoldItalic"],
+)
+def test_shaped_width_uses_harfbuzz_kerning(font_name):
+    pdf_report._register_fonts()
+    assert pdf_report.pdfmetrics.getFont(font_name).shapable
+    for text in ("AV", "To", "Wa", "VA", "Ty", "Availability & Performance"):
+        unshaped = pdf_report.pdfmetrics.stringWidth(text, font_name, 20)
+        shaped = pdf_report._text_width(text, font_name, 20)
+        assert shaped > 0
+        assert shaped <= unshaped
+
+
+def test_canvas_text_helper_passes_shaped_glyphs_and_uses_shaped_alignment():
+    pdf_report._register_fonts()
+
+    class Canvas:
+        _fontname = "IBMPlexSans"
+        _fontsize = 20
+
+        def drawString(self, x, y, text):  # noqa: N802 - mirrors ReportLab canvas API
+            self.drawn = (x, y, text)
+
+    canvas = Canvas()
+    width = pdf_report._text_width("AV", canvas._fontname, canvas._fontsize)
+    pdf_report._draw_text(canvas, 100, 20, "AV", align="center")
+    x, y, shaped = canvas.drawn
+    assert x == pytest.approx(100 - width / 2)
+    assert y == 20
+    assert isinstance(shaped, pdf_report.ShapedStr)
+
+
+def test_empty_canvas_text_has_zero_width_and_is_not_drawn():
+    pdf_report._register_fonts()
+
+    class Canvas:
+        _fontname = "IBMPlexSans"
+        _fontsize = 20
+
+        def drawString(self, *_args):  # noqa: N802 - mirrors ReportLab canvas API
+            pytest.fail("empty text must not be sent to the canvas")
+
+    assert pdf_report._text_width("", "IBMPlexSans", 20) == 0
+    pdf_report._draw_text(Canvas(), 0, 0, "")
+
+
+def test_paragraph_style_requires_shaping():
+    pdf_report._register_fonts()
+    style = pdf_report._paragraph_style("Contract", font_name="IBMPlexSans")
+    assert style.shaping == 1
+
+
 def test_generate_pdf_report_returns_reportlab_pdf_without_converter(monkeypatch):
     expected_pdf = b"%PDF-1.4 ReportLab output"
 
@@ -201,6 +259,13 @@ def _tls_result(**overrides) -> TlsScanResult:
         "certificate": cert,
         "certificate_check": ok,
         "protocols": protocols,
+        "mozilla_tls_profile": ok,
+        "fallback_scsv": ok,
+        "extended_master_secret": ok,
+        "tls_1_3_early_data": False,
+        "session_resumption": "Session IDs: 5/5; TLS tickets: 4/5",
+        "elliptic_curves": "secp256r1",
+        "http_headers": "max-age=31536000; includeSubDomains",
         "heartbleed": ok,
         "ccs_injection": ok,
         "robot": ok,
@@ -261,6 +326,14 @@ def test_ssl_section_secure_scan_shows_all_values(monkeypatch):
         "www.host.example",
         "Certificate",
         "TLS &amp; Security",
+        "Mozilla TLS Profile (Intermediate)",
+        "TLS_FALLBACK_SCSV",
+        "Extended Master Secret",
+        "TLS 1.3 Early Data",
+        "Session IDs: 5/5; TLS tickets: 4/5",
+        "secp256r1",
+        "max-age=31536000",
+        "Cipher Suite Example",
         "SUITE_A",
     ):
         assert expected in text
@@ -321,6 +394,23 @@ def test_ssl_section_survives_hostile_text(monkeypatch):
     assert pdf.startswith(b"%PDF")
 
 
+def test_ssl_section_lists_every_certificate_deployment(monkeypatch):
+    base = _tls_result()
+    alternate = dataclasses.replace(base.certificate, subject="CN=alternate.example", san=("alternate.example",))
+    result = dataclasses.replace(base, certificate_deployments=(base.certificate, alternate))
+    text, pdf = _ssl_section(monkeypatch, result)
+    assert pdf.startswith(b"%PDF")
+    assert "Deployment 1" in text and "Deployment 2" in text
+    assert "CN=alternate.example" in text
+
+
+def test_completed_scan_with_unknown_checks_is_not_marked_complete(monkeypatch):
+    result = _tls_result(mozilla_tls_profile=Check.unknown("certificate deployment unavailable"))
+    text, _ = _ssl_section(monkeypatch, result)
+    assert "Completed with inconclusive checks" in text
+    assert "INCONCLUSIVE" in text and "No result: certificate deployment unavailable" in text
+
+
 def test_stack_section_survives_hostile_text(monkeypatch):
     stack = {
         "webserver": "nginx <1.0> & co",
@@ -343,6 +433,18 @@ def test_get_ssl_data_turns_scanner_crash_into_failed_result(monkeypatch):
     monkeypatch.setattr(pdf_report, "scan_tls", boom)
     result = _builder({"http_url": "https://host.example"})._get_ssl_data()
     assert result.status is ScanStatus.FAILED and "secret-detail" not in (result.error or "")
+
+
+def test_pdf_tls_scan_deadline_leaves_time_before_the_job_timeout(monkeypatch):
+    calls = []
+
+    def scan(target, **kwargs):
+        calls.append((target, kwargs))
+        return _tls_result()
+
+    monkeypatch.setattr(pdf_report, "scan_tls", scan)
+    _builder({"http_url": "https://host.example"})._get_ssl_data()
+    assert calls == [("https://host.example", {"timeout": 15, "deadline": 60.0})]
 
 
 # ─── Layout contracts: chapters, page breaks, repeated headers, A4/Letter ──────────────────────
@@ -803,7 +905,8 @@ def test_downtime_is_labelled_as_an_estimate_everywhere(monkeypatch):
     b = _full_builder(monkeypatch, hops=[_hop(1)], ssl=None, fail=(10, 11, 40))
     text = _all_text(b)
     assert "ESTIMATED DOWNTIME" in text and "≈ " in text
-    assert "Est. duration" in text and "Estimated downtime:" in text and "estimated downtime is about" in text
+    assert "Est. duration" in text and "Estimated downtime:" in text
+    assert "estimated downtime is about" not in text
     assert "| DOWNTIME" not in f"| {text}" and "| Duration" not in f"| {text}"
     assert b.kpis.downtime_minutes == 3 * 5  # failed checks x 300 s interval
 
@@ -882,8 +985,7 @@ def test_full_coverage_keeps_availability_wording(monkeypatch):
     assert "Availability" in text.split(" | ") and "Check success rate" not in text
     assert "of recorded checks" not in text and "RECORDED CHECKS" not in text
     assert "Compliant" in text and "Not enough data" not in text and "+0.17 pp" in text
-    assert "119 of 120 availability checks succeeded" in text
-    assert "recorded checks succeeded" not in text
+    assert "checks succeeded" not in text  # the cover summary sentence under the KPI cards is gone
 
 
 def test_perfect_success_rate_on_thin_coverage_never_claims_availability(monkeypatch):
@@ -960,6 +1062,29 @@ def test_http_status_chart_is_described_as_samples_not_exact_counts(monkeypatch)
     b = _full_builder(monkeypatch, hops=[], ssl=None)
     text = _all_text(b)
     assert "stored samples" in text and "not exact per-check counts" in text
+
+
+def test_pdf_http_status_colors_match_dashboard_light_palette():
+    source = (Path(__file__).resolve().parents[1] / "app/static/js/charts/combined-chart.js").read_text(
+        encoding="utf-8"
+    )
+    light = re.search(r"light:\s*\{(.*?)\}\s*,\s*dark:", source, re.DOTALL)
+    assert light is not None
+    palette = {
+        quoted or plain: color
+        for quoted, plain, color in re.findall(r'(?:"([^"]+)"|([a-z]+)):\s*"(#[0-9a-fA-F]{6})"', light.group(1))
+    }
+    for status_class, key in {0: "err", 1: "info", 2: "2xx", 3: "3xx", 4: "4xx", 5: "5xx"}.items():
+        assert pdf_report._STATUS_CLASS_COLORS[status_class] == palette[key]
+    assert pdf_report._STATUS_CLASS_COLORS[3] == pdf_report._STATUS_CLASS_COLORS[2]
+
+    builder = _builder({"name": "status-color"})
+    builder.report_data.status_code_data = [{"value": 301}]
+    assert builder._add_status_codes(width=6.7)
+    bar = next(
+        el for group in builder.elements for el in getattr(group, "_content", []) if isinstance(el, pdf_report.ShareBar)
+    )
+    assert bar.shares[0][0].hexval().replace("0x", "#") == palette["3xx"]
 
 
 def _route_builder(monkeypatch, hops, *, host="dest.example", size="a4"):
@@ -1043,6 +1168,25 @@ def test_route_entries_group_consecutive_hops_and_keep_silent_hops_single():
     assert "first observed hop" in first["detail"][0]
     assert silent["title"] == "NO REPLY" and "BLOCKED" not in str(model).upper()
     assert dest["detail"][-1].startswith("Ratingen, DE · approximate GeoIP location")
+
+
+def test_route_entries_keep_known_country_for_consecutive_country_only_hops():
+    hops = [
+        _mhop(1),
+        _mhop(2, "198.51.100.2", country="DE"),
+        _mhop(3, "198.51.100.3", country="DE"),
+        _mhop(4, "198.51.100.4", city="Ratingen"),
+    ]
+
+    entries = pdf_report._build_route_entries(hops, "198.51.100.4")["entries"]
+
+    assert [(entry["span"], entry["title"]) for entry in entries] == [
+        ("1", "First observed hop"),
+        ("2–3", "DE (country only)"),
+        ("4", "Destination"),
+    ]
+    assert entries[1]["flag"] == "DE"
+    assert entries[1]["detail"] == ["2 hops measured"]
 
 
 def test_route_groups_never_span_a_gap_in_the_hop_numbers():
@@ -1155,8 +1299,9 @@ def test_tls_leads_with_versions_and_findings_and_names_the_scan_time(monkeypatc
     b._add_ssl_summary()
     text = _texts(b)
     assert "TLS Scan Time" in text and "2026-10-30 12:05" in text and "not part of the reporting period" in text
-    assert text.index("Supported Versions") < text.index("Heartbleed") < text.index("Preferred Cipher")
-    assert text.index("Preferred Cipher") < text.index("Cipher Suites by Protocol (technical detail)")
+    assert text.index("Supported Versions") < text.index("Heartbleed") < text.index("Cipher Suite Example")
+    assert text.index("Cipher Suite Example") < text.index("Cipher Suites by Protocol (technical detail)")
+    assert "Preferred Cipher" not in text
 
 
 def test_report_declares_title_and_language(monkeypatch):
@@ -1365,6 +1510,7 @@ def test_hop_table_dashes_location_and_latency_of_silent_hops_only(monkeypatch):
     cells = {int(_cells_of([r[0]])[0]): [" ".join(_cells_of([c])) for c in r] for r in rows[1:-1]}
     assert "Location unknown" in cells[1][2]  # replied, but private address: no location
     assert cells[8][2].strip() == "—" and cells[8][3].strip() == "—" and "20.3" not in " ".join(cells[8])
+    assert "NO REPLY" in cells[8][-1].upper() and "stimated" not in " ".join(cells[8])  # same wording as the web table
 
 
 # ─── Rendering review: orphan notes, wording and country-only locations ─────────────────────────
@@ -1394,7 +1540,7 @@ def test_report_text_is_english_only(monkeypatch, kw):
 
 def test_single_failed_check_uses_singular_wording(monkeypatch):
     text = _all_text(_full_builder(monkeypatch, hops=[_hop(1)], ssl=None, fail=(10,)))
-    assert "1 failed check ×" in text and "1 failed check forms 1 downtime event" in text
+    assert "1 failed check ×" in text and "forms 1 downtime event" not in text
     assert "1 failed checks" not in text
 
 
@@ -1405,3 +1551,271 @@ def test_country_without_city_is_not_shown_as_a_place(monkeypatch):
     rows = next(el for el in b.elements if hasattr(el, "_cellvalues"))._cellvalues
     location = " ".join(_cells_of([rows[2][2]]))
     assert "DE (country only)" in location and "()" not in location and "(DE)" not in location
+
+
+# ---------------------------------------------------------------------------
+# Latency charts: linear readable axes, peaks within intervals, consistent captions
+# ---------------------------------------------------------------------------
+
+_CH_START = datetime(2026, 5, 4, tzinfo=UTC)
+_CH_END = _CH_START + timedelta(days=7)
+
+
+def _display(n=168, base=80.0, *, peaks=None, rollup_until=0, bad=()):
+    """Hourly display buckets: median near `base`, maximum 1.1-1.4x, selected maxima overridden."""
+    out = []
+    for i in range(n):
+        t = _CH_START + timedelta(hours=i)
+        med = base + (i % 7) - 3
+        point = {
+            "ts": t.isoformat(),
+            "value": med,
+            "max": (peaks or {}).get(i, med * (1.1 + (i % 4) * 0.1)),
+            "bucket_end": (t + timedelta(hours=1)).isoformat(),
+            "rollup": i < rollup_until,
+        }
+        if i < rollup_until:
+            point["max"] = None
+        if i in bad:
+            point["value"], point["max"] = None, "n/a"
+        out.append(point)
+    return out
+
+
+def _capture_axes(monkeypatch, make):
+    figs = []
+    monkeypatch.setattr(pdf_report, "_fig_png", lambda fig: figs.append(fig) or b"png")
+    make()
+    return figs
+
+
+def _tick_labels(ax) -> list[str]:
+    fmt = ax.yaxis.get_major_formatter()
+    return [fmt(t, i) for i, t in enumerate(ax.get_yticks())]
+
+
+def test_response_time_legend_is_below_plot(monkeypatch):
+    (fig,) = _capture_axes(
+        monkeypatch,
+        lambda: pdf_report._create_response_time_chart(_display(), _CH_START, _CH_END, sla_threshold_ms=500),
+    )
+    ax = fig.axes[0]
+    canvas = FigureCanvasAgg(fig)
+    canvas.draw()
+    legend = ax.get_legend().get_window_extent(canvas.get_renderer())
+    assert legend.y1 < ax.get_window_extent().y0
+    assert legend.y0 >= 0
+
+
+@pytest.mark.parametrize(
+    ("top", "expected"),
+    [
+        (6, [0, 2, 4, 6]),
+        (140, [0, 50, 100, 150]),
+        (1250, [0, 250, 500, 750, 1000, 1250]),
+        (0.8, [0, 0.2, 0.4, 0.6, 0.8]),
+    ],
+)
+def test_nice_ticks_are_round_ascending_numbers(top, expected):
+    ticks = pdf_report._nice_ticks(top, 4 if top == 140 else 5)
+    assert ticks[0] == 0 and ticks[-1] >= top and ticks == sorted(set(ticks))
+    assert ticks == pytest.approx(expected) or len(ticks) <= 8
+
+
+@pytest.mark.parametrize(
+    ("base", "peaks", "sla", "label"),
+    [
+        (80, None, None, "normal"),
+        (4, None, None, "under 10 ms"),
+        (100, {10: 150}, None, "50-150 ms"),
+        (80, {40: 2400}, None, "isolated extreme peak"),
+        (80, {40: 2400, 41: 450, 42: 460, 43: 470, 44: 480}, 400, "adjacent peaks and SLA"),
+        (80, {40: 900}, 400, "SLA configured"),
+        (5, None, 500, "SLA far above data"),
+    ],
+)
+def test_latency_axis_is_linear_short_and_plain_numbers(monkeypatch, base, peaks, sla, label):
+    data = _display(base=base, peaks=peaks)
+    (fig,) = _capture_axes(
+        monkeypatch,
+        lambda: pdf_report._create_response_time_chart(data, _CH_START, _CH_END, sla_threshold_ms=sla),
+    )
+    ax = fig.axes[0]
+    assert ax.get_yscale() == "linear", label
+    assert ax.get_ylabel() == "Response time (ms)", label
+    assert ax.yaxis.label.get_rotation() == 0, label
+    assert ax.get_position().x0 <= 0.06, label  # keep only tick-label space outside the plot
+    labels = _tick_labels(ax)
+    assert all(re.fullmatch(r"\d{1,3}(,\d{3})*(\.\d+)?", t) for t in labels), (label, labels)
+    assert len(labels) <= 8 and ax.get_ylim()[0] == 0
+    # An extreme spike must not flatten the normal values: the axis stays near the typical range.
+    if peaks and max(peaks.values()) >= 2000:
+        assert ax.get_ylim()[1] < max(3 * (base + 10) * 1.5, (sla or 0) * 1.5)
+        assert any("2,400 ms" in t.get_text() for t in ax.texts)
+    legend = [t.get_text() for t in ax.get_legend().get_texts()]
+    assert not any("Raw peak" in t for t in legend)
+    if peaks and max(peaks.values()) >= 400:
+        assert any("Peak within interval" in t for t in legend)
+
+
+def test_peak_bars_span_only_their_interval_and_distant_sla_stays_off_the_scale(monkeypatch):
+    minutes = [
+        {
+            "ts": (_CH_START + timedelta(minutes=i)).isoformat(),
+            "value": 80.0,
+            "max": 900.0 if i == 700 else 90.0,
+            "bucket_end": (_CH_START + timedelta(minutes=i + 1)).isoformat(),
+        }
+        for i in range(1440)
+    ]
+    (fig,) = _capture_axes(
+        monkeypatch,
+        lambda: pdf_report._create_response_time_chart(
+            minutes, _CH_START, _CH_START + timedelta(days=1), sla_threshold_ms=5000
+        ),
+    )
+    ax = fig.axes[0]
+    peak_rgb = mcolors.to_rgb(pdf_report.PEAK_COLOR)
+    peak_bars = [
+        c
+        for c in ax.collections
+        if isinstance(c, LineCollection) and tuple(c.get_colors()[0][:3]) == pytest.approx(peak_rgb)
+    ]
+    horizontal = [seg for c in peak_bars for seg in c.get_segments() if seg[0][1] == seg[1][1]]
+    assert horizontal and all(
+        mdates.num2date(seg[1][0]) - mdates.num2date(seg[0][0]) <= timedelta(minutes=1, seconds=1) for seg in horizontal
+    )
+    assert ax.get_ylim()[1] < 5000 / 2
+    assert any("SLA 5,000 ms (above scale)" in t.get_text() for t in ax.texts)
+
+
+def test_normal_variation_draws_no_peak_markers():
+    view = pdf_report._build_view(_display(), UTC)
+    assert view.peaks == [] and view.highest_max is not None
+
+
+def test_peaks_are_prominent_intervals_not_points_in_time():
+    view = pdf_report._build_view(_display(peaks={40: 2400, 41: 450, 100: 520}), UTC)
+    assert round(view.peaks[0].value) == 2400
+    top = view.peaks[0]
+    # The peak keeps its whole bucket instead of claiming the bucket start as its time.
+    assert top.end - top.start == timedelta(hours=1)
+
+
+def test_rollups_invalid_and_missing_points_never_become_peaks():
+    data = _display(rollup_until=100, bad=(120, 121), peaks={150: 900})
+    data.append({"ts": (_CH_START + timedelta(hours=200)).isoformat(), "value": 80})  # no max/bucket_end at all
+    view = pdf_report._build_view(data, UTC)
+    assert [round(p.value) for p in view.peaks] == [900]
+    assert view.no_max_intervals >= 100
+    note = PDFReportBuilder._latency_note([{"ts": d["ts"], "value": d["value"]} for d in data], data, UTC)
+    assert "rolled-up history" in note and "exact time unknown" in note
+    only_rollups = _display(n=20, rollup_until=20)
+    assert pdf_report._build_view(only_rollups, UTC).peaks == []
+    assert pdf_report._create_response_time_chart([], _CH_START, _CH_END) is None
+    assert (
+        pdf_report._create_response_time_chart([{"ts": _CH_START.isoformat(), "value": None}], _CH_START, _CH_END)
+        is None
+    )
+
+
+def test_caption_lists_peaks_and_explains_a_higher_interval_maximum():
+    data = _display(peaks={40: 2400})
+    samples = [{"ts": d["ts"], "value": d["value"]} for d in data]
+    note = PDFReportBuilder._latency_note(samples, data, UTC, None)
+    assert "2,400 ms (05-05 16:00–17:00)" in note
+    assert "above the maximum of the plotted sample series" in note
+    assert "above the axis" in note and "marked at the top edge" in note
+    # Without display data the caption is just the summary statistics
+    assert PDFReportBuilder._latency_note(samples).count("·") == 2 and "peak" not in PDFReportBuilder._latency_note(
+        samples
+    )
+    consistent = PDFReportBuilder._latency_note([{**s, "value": 3000} for s in samples[:1]], data, UTC)
+    assert "above the maximum" not in consistent
+
+
+def test_multi_port_uses_independent_scales_when_ranges_differ_widely(monkeypatch):
+    ports = {22: _display(base=5), 443: _display(base=25, peaks={30: 300}), 8443: _display(base=400, peaks={80: 1500})}
+    (fig,) = _capture_axes(monkeypatch, lambda: pdf_report._create_multi_port_tcp_chart(ports, _CH_START, _CH_END))
+    panels = fig.axes
+    assert [ax.get_yscale() for ax in panels] == ["linear"] * 3
+    assert all(ax.get_position().x0 <= 0.06 for ax in panels)
+    assert len({ax.get_ylim()[1] for ax in panels}) == 3
+    assert all(re.fullmatch(r"[\d,]+", t) for ax in panels for t in _tick_labels(ax))
+    assert any("300 ms" in t.get_text() for t in panels[1].texts) and any(
+        "1,500 ms" in t.get_text() for t in panels[2].texts
+    )
+    note = PDFReportBuilder._multi_port_note(ports, UTC)
+    assert "independent Y scales" in note and "port 8443 1,500 ms" in note
+    close = {22: _display(base=20), 443: _display(base=40)}
+    (fig,) = _capture_axes(monkeypatch, lambda: pdf_report._create_multi_port_tcp_chart(close, _CH_START, _CH_END))
+    assert fig.axes[0].get_ylim() == fig.axes[1].get_ylim()
+    assert "shared time axis and Y scale" in PDFReportBuilder._multi_port_note(close, UTC)
+
+
+@pytest.mark.parametrize("size", ["a4", "letter"])
+def test_pdf_with_extreme_peaks_and_short_window_renders_on_both_paper_sizes(monkeypatch, size):
+    b = _full_builder(monkeypatch, size=size, hops=[], ssl=None, ping=True, tcp_ports=2, sla=True)
+    display = {
+        "http_ms": _display(peaks={40: 2400}),
+        "ping_ms": _display(base=4, peaks={60: 38}),
+        "tcp_ms_443": _display(base=25, peaks={30: 300}),
+        "tcp_ms_444": _display(base=400),
+    }
+    b.report_data = dataclasses.replace(b.report_data, display_data=display)
+    b._assemble()
+    text = _all_text(b)
+    assert "Highest peaks within an interval" in text and "Raw peak" not in text
+    assert "Availability Timeline" in text and "Response Time" in text
+    chart_sections = {
+        section[0].getPlainText().split(" ·", 1)[0]: section
+        for element in b.elements
+        if isinstance(element, pdf_report.KeepTogether)
+        and (section := element._content)
+        and section[0].getPlainText().startswith(("Availability Timeline", "Response Time"))
+    }
+    for title in ("Availability Timeline", "Response Time"):
+        assert chart_sections[title][2].getPlainText().strip()
+    rendered = _render(b)
+    assert rendered.startswith(b"%PDF")
+
+
+def _logo_curve_count() -> int:
+    """Curve segments in the shared logo SVG, counted from its raw path data."""
+    svg = pdf_logo.LOGO_SVG_PATH.read_text(encoding="utf-8")
+    return sum(1 for d in re.findall(r' d="([^"]*)"', svg) for seg in pdf_logo._parse_path(d) if seg[0] == "C")
+
+
+def test_pdf_logo_comes_from_the_single_web_logo_asset():
+    repo = Path(pdf_report.__file__).resolve().parents[2]
+    web_logo = repo / "app" / "static" / "img" / "justup_1c.svg"
+    assert web_logo == pdf_logo.LOGO_SVG_PATH
+    assert "/static/img/justup_1c.svg" in (repo / "app" / "templates" / "base.html").read_text(encoding="utf-8")
+    # No second, stale copy of the wordmark and no hand-drawn footer signet.
+    assert not list((repo / "app" / "static").glob("justup_1c.*"))
+    source = Path(pdf_report.__file__).read_text(encoding="utf-8")
+    assert "justup_1c.png" not in source
+    assert "heartbeat" not in source.lower()
+
+
+def test_pdf_embeds_the_shared_logo_vectors_on_cover_and_footer(monkeypatch):
+    monkeypatch.setattr("reportlab.rl_config.pageCompression", 0)
+    b = _builder({"name": "t", "http_url": "https://example.org"})
+    b.elements = []
+    b._build_cover_page()
+    buf = io.BytesIO()
+    SimpleDocTemplate(buf).build(list(b.elements), onFirstPage=b._add_header_footer)
+    pdf = buf.getvalue()
+    curves = _logo_curve_count()
+    assert curves > 50
+    # The cover flowable and the footer callback each draw every curve of the SVG once.
+    assert pdf.count(b" c\n") + pdf.count(b" c ") >= 2 * curves
+
+
+def test_logo_aspect_and_bounds_match_the_svg_viewbox():
+    w, h, paths = pdf_logo.load_logo()
+    xs = [v for segs in paths for _, pts in segs for v in pts[0::2]]
+    ys = [v for segs in paths for _, pts in segs for v in pts[1::2]]
+    assert min(xs) >= -1 and max(xs) <= w + 1
+    assert min(ys) >= -1 and max(ys) <= h + 1
+    assert pdf_logo.logo_aspect() == pytest.approx(h / w)

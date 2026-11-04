@@ -40,11 +40,11 @@
             {% set act = n.action.type if n.action else '' %}
             {% if act == 'link' %}
             {# Real anchor: middle/ctrl-click, "copy link address" and the URL preview stay native. #}
-            <a class="ju-notif-swipe-content is-actionable" href="{{ n.action.url }}" draggable="false" data-action="link"
+            <a class="ju-notif-swipe-content is-actionable" href="{{ n.action.url }}" title="{{ n.action.label }}" draggable="false" data-action="link"
                data-id="{{ n.id }}"{% if not n.is_read %} aria-keyshortcuts="ArrowRight"{% endif %}>
             {% elif act == 'download' %}
             {# Real attachment link (iOS-safe, no script state); the server answers 404/410 once the report is gone. #}
-            <a class="ju-notif-swipe-content is-actionable" href="{{ n.action.url }}" download draggable="false" data-action="download"
+            <a class="ju-notif-swipe-content is-actionable" href="{{ n.action.url }}" download title="{{ n.action.label }}" draggable="false" data-action="download"
                data-id="{{ n.id }}"{% if not n.is_read %} aria-keyshortcuts="ArrowRight"{% endif %}>
             {% elif not n.is_read %}
             <div class="ju-notif-swipe-content is-actionable" role="button" tabindex="0" data-action="read"
@@ -58,13 +58,14 @@
                   <div class="ju-notif-title">
                      {% if not n.is_read %}<span class="ju-unread-dot" aria-hidden="true"></span><span class="visually-hidden">Unread: </span>{% endif %}
                      <span class="ju-notif-title-text" title="{{ n.title }}">{{ n.title }}</span>
-                     <span class="badge text-bg-{{ 'danger' if n.severity == 'error' else ('warning' if n.severity == 'warning' else ('success' if n.severity == 'success' else 'secondary')) }}">{{ n.severity }}</span>
+                     {% set tone = 'danger' if n.severity == 'error' else ('warning' if n.severity == 'warning' else ('success' if n.severity == 'success' else 'neutral')) %}<span class="badge ju-notif-status ju-status-badge--{{ tone }}">{{ n.severity }}</span>
                   </div>
                   <div class="ju-notif-body text-body-secondary">
-                     {% set context = n.body or n.actor or '' %}{% if context %}<span class="ju-notif-context" title="{{ context }}">{{ context }}</span> · {% endif %}<small class="local-time" data-utc="{{ n.created_at }}">{{ n.created_at }}</small>
+                     {% set context = n.body or n.actor or '' %}{% if context %}<span class="ju-notif-context" title="{{ context }}">{{ context }}</span>{% endif %}
+                     {% if n.action and act not in ('link', 'download') %}<span class="ju-notif-unavailable"><span class="material-icons" aria-hidden="true">link_off</span>{{ n.action.label }}</span>{% endif %}
                   </div>
-                  {% if n.action and act not in ('link', 'download') %}<small class="text-body-secondary">{{ n.action.label }}</small>{% endif %}
                </div>
+               <small class="ju-notif-time text-body-secondary local-time" data-utc="{{ n.created_at }}">{{ n.created_at }}</small>
             {% if act in ('link', 'download') %}</a>{% else %}</div>{% endif %}
             <div class="ju-notif-dismiss-action">
                <button type="button" class="ju-notif-dismiss-button" data-notification-id="{{ n.id }}"

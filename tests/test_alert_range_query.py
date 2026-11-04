@@ -22,6 +22,7 @@ def _target(conn, name: str) -> int:
         "enable_cert_expiration, host, created_at, updated_at) VALUES (?, 60, 30, 1, 0, 0, 'h', ?, ?)",
         (name, now, now),
     )
+    conn.commit()  # an open implicit transaction makes the later immediate transactions fail by design
     return int(cur.lastrowid)
 
 
@@ -64,5 +65,60 @@ def test_monitoring_alert_range_returns_overlapping_intervals(tmp_path: Path) ->
         local_rows = sqlite_db.get_alerts_for_target_in_range(conn, target_id, local_start, local_end)
         assert [row["id"] for row in local_rows] == [row["id"] for row in rows]
         assert sqlite_db.get_alerts_for_target_in_range(conn, target_id, end, start) == []
+    finally:
+        sqlite_db.close_connection(conn)
+
+
+def test_dashboard_alert_summary_uses_each_alerts_own_timestamp(tmp_path: Path, monkeypatch) -> None:
+    now = datetime(2026, 3, 10, 12, 0, tzinfo=UTC)
+    conn = sqlite_db.connect(tmp_path / "summary.db")
+    sqlite_db.init_schema(conn)
+    try:
+        assert sqlite_db.summarize_alerts(conn, now=now) == {
+            "open": 0,
+            "acknowledged_24h": 0,
+            "started_24h": 0,
+            "resolved_24h": 0,
+        }
+        target_id = _target(conn, "summary-target")
+        # Open and never acknowledged, started an hour ago.
+        _alert(conn, target_id, "open-new", now - timedelta(hours=1), None)
+        # Started two days ago, resolved an hour ago: counts as resolved, not as started.
+        _alert(conn, target_id, "long-resolved", now - timedelta(days=2), now - timedelta(hours=1))
+        # Resolved two days ago: outside every 24 h figure.
+        _alert(conn, target_id, "old-resolved", now - timedelta(days=3), now - timedelta(days=2))
+        # Acknowledged (closed) 30 minutes ago: resolved and acknowledged, no longer open.
+        _alert(conn, target_id, "acked", now - timedelta(hours=5), None)
+        monkeypatch.setattr("app.db.sqlite.alerts.utcnow", lambda: now - timedelta(minutes=30))
+        assert sqlite_db.acknowledge_alert(conn, "acked", "admin")
+        # Acknowledged long ago: outside the 24 h acknowledged figure.
+        _alert(conn, target_id, "acked-old", now - timedelta(days=4), None)
+        monkeypatch.setattr("app.db.sqlite.alerts.utcnow", lambda: now - timedelta(days=3))
+        assert sqlite_db.acknowledge_alert(conn, "acked-old", "admin")
+
+        assert sqlite_db.summarize_alerts(conn, now=now) == {
+            "open": 1,
+            "acknowledged_24h": 1,
+            "started_24h": 2,  # open-new, acked
+            "resolved_24h": 2,  # long-resolved, acked
+        }
+    finally:
+        sqlite_db.close_connection(conn)
+
+
+def test_dashboard_alert_summary_is_exact_beyond_one_page(tmp_path: Path) -> None:
+    now = datetime(2026, 3, 10, 12, 0, tzinfo=UTC)
+    conn = sqlite_db.connect(tmp_path / "summary-many.db")
+    sqlite_db.init_schema(conn)
+    try:
+        target_id = _target(conn, "many")
+        for index in range(130):
+            _alert(conn, target_id, f"open-{index}", now - timedelta(minutes=index + 1), None)
+        for index in range(7):
+            _alert(conn, target_id, f"done-{index}", now - timedelta(days=2), now - timedelta(minutes=index + 1))
+        summary = sqlite_db.summarize_alerts(conn, now=now)
+        assert summary["open"] == 130
+        assert summary["started_24h"] == 130
+        assert summary["resolved_24h"] == 7
     finally:
         sqlite_db.close_connection(conn)

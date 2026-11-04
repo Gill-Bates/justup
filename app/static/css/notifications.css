@@ -17,8 +17,8 @@
 	height: 1.1rem;
 	padding: 0 0.25rem;
 	border-radius: 0.55rem;
-	background: #c0283a;
-	color: #fff;
+	background: var(--bs-danger);
+	color: var(--bs-white);
 	font-size: 0.65rem;
 	font-weight: 600;
 	line-height: 1.1rem;
@@ -65,7 +65,11 @@
 	top: calc(100% + 0.4rem);
 	right: 0;
 	z-index: 1060;
-	width: min(22rem, calc(100vw - 1rem));
+	display: flex;
+	flex-direction: column;
+	width: min(24rem, calc(100vw - 1rem));
+	max-height: calc(100vh - var(--ju-topbar-h) - 1rem);
+	max-height: calc(100dvh - var(--ju-topbar-h) - 1rem);
 	border: 1px solid var(--ju-panel-line);
 	border-radius: 0.5rem;
 	background: var(--ju-panel-bg);
@@ -92,12 +96,14 @@
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
+	flex: 0 0 auto;
 	gap: 0.5rem;
 	padding: 0.6rem 0.75rem;
 }
 
 .ju-notif-pop-list {
-	max-height: 60vh;
+	flex: 1 1 auto;
+	min-height: 0;
 	margin: 0;
 	padding: 0;
 	overflow-y: auto;
@@ -113,10 +119,11 @@
 
 .ju-notif-pop-btn {
 	display: flex;
-	align-items: flex-start;
-	gap: 0.6rem;
+	align-items: center;
+	gap: 0.5rem;
 	width: 100%;
-	padding: 0.5rem 0.75rem 0.5rem 1rem;
+	min-height: 2.75rem;
+	padding: 0.375rem 0.75rem 0.375rem 0.875rem;
 	border: 0;
 	border-left: 3px solid transparent;
 	background: transparent;
@@ -126,8 +133,7 @@
 
 .ju-notif-pop-icon {
 	flex: 0 0 auto;
-	margin-top: 0.1rem;
-	font-size: 1.15rem;
+	font-size: 1.125rem;
 	color: var(--ju-secondary, var(--bs-secondary-color));
 }
 
@@ -141,26 +147,28 @@
 .ju-notif-pop-title {
 	min-width: 0;
 	max-width: 100%;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
+	line-height: 1.25;
 }
 
+/* Long titles wrap onto a second line instead of being cut at the first. */
 .ju-notif-pop-text {
-	display: inline-block;
+	display: -webkit-box;
 	max-width: 100%;
 	overflow: hidden;
-	text-overflow: ellipsis;
-	vertical-align: bottom;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 2;
+	line-clamp: 2;
+	overflow-wrap: anywhere;
 }
 
-/* Detail line: a shrinkable context (ellipsized) and the time, which never shrinks and never
-   truncates. On a narrow row the time wraps to its own line instead of pushing the context away. */
+/* Detail line: a shrinkable context (ellipsized, full text in its title) with the short time
+   right-aligned on the same line; the time never shrinks and never truncates. */
 .ju-notif-pop-detail {
 	display: flex;
-	flex-wrap: wrap;
+	font-weight: 400;
+	flex-wrap: nowrap;
 	align-items: baseline;
-	gap: 0.15rem 0.5rem;
+	gap: 0.5rem;
 	min-width: 0;
 	max-width: 100%;
 }
@@ -190,7 +198,7 @@
 
 .ju-notif-pop-btn:hover,
 .ju-notif-pop-btn:focus-visible {
-	background: var(--ju-sidebar-hover, rgb(127 127 127 / 12%));
+	background: var(--ju-panel-hover);
 }
 
 .is-unread>.ju-notif-pop-btn {
@@ -199,7 +207,7 @@
 }
 
 .ju-notif-error.is-unread>.ju-notif-pop-btn {
-	border-left-color: #c0283a;
+	border-left-color: var(--ju-danger-text);
 }
 
 
@@ -266,15 +274,15 @@
 }
 
 .ju-notif-item>.ju-notif-swipe-content {
-	display: flex;
+	display: grid;
+	grid-template-columns: auto minmax(0, 1fr) auto;
 	align-items: center;
-	gap: 1rem;
-	padding: 1rem var(--ui-space-header);
+	gap: 0.125rem 0.75rem;
+	padding: 0.625rem var(--ui-space-header);
 }
 
 .ju-notif-icon {
-	flex: 0 0 auto;
-	font-size: 1.5rem;
+	font-size: 1.25rem;
 	color: var(--bs-secondary-color);
 }
 
@@ -283,27 +291,56 @@
 }
 
 .ju-notif-item.ju-notif-error {
-	border-left-color: #c0283a;
+	border-left-color: var(--ju-danger-text);
 }
 
 .ju-notif-item.ju-notif-error>.ju-notif-swipe-content {
-	background-image: linear-gradient(rgb(192 40 58 / 8%), rgb(192 40 58 / 8%));
+	background-image: linear-gradient(color-mix(in srgb, var(--ju-danger-text) 8%, transparent), color-mix(in srgb, var(--ju-danger-text) 8%, transparent));
 }
 
 .ju-notif-main {
 	display: flex;
-	flex: 1 1 0;
 	flex-direction: column;
-	gap: 0.25rem;
 	min-width: 0;
 	overflow-wrap: anywhere;
 }
 
+/* Timestamp sits in the right column of the first line; below the lg breakpoint the text block
+   dissolves into the grid so the time moves beside the description on the second line. */
+.ju-notif-time {
+	align-self: start;
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
 
+@media (width <=991.98px) {
+	.ju-notif-item>.ju-notif-swipe-content>.ju-notif-icon {
+		grid-row: span 2;
+	}
+
+	.ju-notif-main {
+		display: contents;
+	}
+
+	.ju-notif-title {
+		grid-column: 2 / span 2;
+	}
+
+	.ju-notif-time {
+		grid-column: 3;
+		grid-row: 2;
+	}
+}
 
 @media (width <=576px) {
 	.ju-notif-item>.ju-notif-swipe-content {
-		padding: 0.875rem var(--page-gutter);
+		padding: 0.625rem var(--page-gutter);
+	}
+
+	/* With the delete action open on a phone the time column may not fit; date and time then break. */
+	.ju-notif-time {
+		white-space: normal;
+		text-align: end;
 	}
 }
 
@@ -326,26 +363,86 @@
 	background: var(--bs-primary);
 }
 
+/* Page rows: the unread dot is ringed (shape cue) and the title weight differs, so unread never
+   reads like the event-status badge; read rows use a lighter title. */
+.ju-notif-list .ju-unread-dot {
+	box-shadow: 0 0 0 2px var(--ju-panel-bg, var(--bs-body-bg)), 0 0 0 3px var(--bs-primary);
+}
+
+.ju-notif-list .ju-notif-title,
+.ju-notif-list .ju-notif-title-text {
+	font-weight: 500;
+}
+
+.ju-notif-list .is-unread .ju-notif-title,
+.ju-notif-list .is-unread .ju-notif-title-text {
+	font-weight: 700;
+}
+
+/* Notification severity uses the shared filled status badge palette. */
+.ju-notif-status {
+	font-weight: 500;
+}
+
+/* Secondary slot: the description and the resource status line are separate grid rows of one
+   column, so the status never competes with the description for horizontal space. */
 .ju-notif-body {
-	display: flex;
-	align-items: center;
-	gap: 0.3rem;
+	display: grid;
+	grid-template-columns: minmax(0, 1fr);
+	row-gap: 0.125rem;
 	min-width: 0;
+	font-size: 0.875rem;
 }
 
 .ju-notif-context {
+	display: -webkit-box;
+	min-width: 0;
 	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 2;
+	line-clamp: 2;
 }
 
-.ju-notif-body .local-time {
+/* Resource gone (report, target, alert): a muted status line under the description; the original
+   event keeps its severity. Colour comes from the surrounding text-body-secondary role. */
+.ju-notif-unavailable {
+	display: flex;
+	align-items: center;
+	gap: 0.25rem;
+	min-width: 0;
+	font-size: 0.8125rem;
+	font-style: italic;
+}
+
+.ju-notif-unavailable .material-icons {
 	flex: 0 0 auto;
-	white-space: nowrap;
+	font-size: 1rem;
 }
 
+@media (width <=991.98px) {
+	/* Description beside the time on row 2 (one line, full text in its title attribute); the
+	   resource status line takes row 3 across the width, so the time never squeezes it. */
+	.ju-notif-body {
+		display: contents;
+	}
+
+	.ju-notif-body .ju-notif-context {
+		grid-column: 2;
+		grid-row: 2;
+		-webkit-line-clamp: 1;
+		line-clamp: 1;
+	}
+
+	.ju-notif-body .ju-notif-unavailable {
+		grid-column: 2 / span 2;
+		grid-row: 3;
+	}
+}
+
+/* contain: inline-size keeps the title's shrinkable text from widening the spanned time track (WebKit). */
 .ju-notif-title {
 	display: flex;
+	contain: inline-size;
 	flex-wrap: nowrap;
 	gap: 0.4rem;
 	align-items: center;
@@ -371,7 +468,9 @@
 	font-weight: 600;
 }
 
-/* Swipe-to-delete: the action sits behind the content and is revealed by narrowing the content (text ellipsizes) so it never slides out of view. */
+/* Swipe-to-delete: the action sits behind the content and is revealed by narrowing the content (text
+   ellipsizes), so it never slides out of view. The width is numeric in both states (100% and a calc()
+   of it), which is what lets the transition interpolate; `auto` would not animate. */
 .ju-notif-swipe-item {
 	--ju-notif-dismiss-width: 5.5rem;
 
@@ -383,6 +482,7 @@
 .ju-notif-swipe-content {
 	position: relative;
 	z-index: 1;
+	width: 100%;
 	background-color: var(--ju-panel-bg, var(--bs-body-bg));
 	transition: width 0.2s ease;
 }
@@ -405,15 +505,20 @@
 	min-height: 2.75rem;
 	padding: 0;
 	border: 0;
-	background: #c0283a;
-	color: #fff;
+	background: var(--bs-danger);
+	color: var(--bs-white);
 	font-size: 0.75rem;
+}
+
+/* The icon must not inherit the small label size of the button (it would shrink to 12px). */
+.ju-notif-dismiss-button .material-icons {
+	font-size: 1.5rem;
 }
 
 .ju-notif-dismiss-button:hover,
 .ju-notif-dismiss-button:focus-visible {
-	background: #a02030;
-	color: #fff;
+	background: color-mix(in srgb, var(--bs-danger) 80%, black);
+	color: var(--bs-white);
 }
 
 .ju-notif-dismiss-button[aria-disabled="true"],
@@ -432,6 +537,11 @@
 	}
 }
 
+/* Keyboard focus on the delete button reveals it at once; it must not sit under the content mid-slide. */
+.ju-notif-swipe-item:has(.ju-notif-dismiss-button:focus-visible)>.ju-notif-swipe-content {
+	transition: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
 	.ju-notif-swipe-content {
 		transition: none;
@@ -439,6 +549,8 @@
 }
 
 .ju-notif-pop-item {
+	--ju-notif-dismiss-width: 4.5rem;
+
 	position: relative;
 }
 
@@ -451,11 +563,14 @@ a.ju-notif-swipe-content {
 	text-decoration: none;
 }
 
-.ju-notif-swipe-content.is-actionable:hover {
-	background-color: var(--bs-tertiary-bg);
+/* Same neutral surface as the other interactive panel rows (shared token, both themes). */
+.ju-notif-swipe-content.is-actionable:hover,
+.ju-notif-swipe-content.is-actionable:focus-visible {
+	background-color: var(--ju-panel-hover);
 }
 
 .ju-notif-swipe-content.is-actionable:focus-visible {
-	outline: 2px solid var(--bs-primary);
+	outline: 2px solid var(--ju-focus-ring);
 	outline-offset: -2px;
 }
+

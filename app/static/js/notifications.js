@@ -25,12 +25,14 @@
 
 	// Second line context only: what the event says about its object/actor. The time is rendered
 	// separately as its own <time> element so a long context never truncates it away.
+	// A context that only repeats the title is dropped so the preview shows no redundant text.
 	function detailLine(n) {
-		var context = (n && (n.body || n.actor)) || '';
-		return String(context).trim();
+		var context = String((n && (n.body || n.actor)) || '').trim();
+		var title = String((n && n.title) || '').trim().toLowerCase();
+		return title && context.toLowerCase() === title ? '' : context;
 	}
 
-	// Short English relative age with correct singular/plural. Returns '' for a missing or
+	// Compact English relative age (5m ago, 1h ago, 3d ago). Returns '' for a missing or
 	// unparseable timestamp (and for a time in the future) so a bad value is never shown as "Now".
 	function relTime(iso, nowMs) {
 		var then = Date.parse(iso);
@@ -39,11 +41,11 @@
 		if (s < 0) return '';
 		if (s < 60) return 'Now';
 		var m = Math.floor(s / 60);
-		if (m < 60) return m + ' min ago';
+		if (m < 60) return m + 'm ago';
 		var h = Math.floor(s / 3600);
-		if (h < 24) return h + (h === 1 ? ' hour ago' : ' hours ago');
+		if (h < 24) return h + 'h ago';
 		var d = Math.floor(s / 86400);
-		return d + (d === 1 ? ' day ago' : ' days ago');
+		return d + 'd ago';
 	}
 
 	// Full, readable absolute timestamp for the <time> tooltip/title, honouring the page's
@@ -361,6 +363,7 @@
 			var contextSpan = button.querySelector('.ju-notif-pop-context');
 			var context = detailLine(n);
 			contextSpan.textContent = context;
+			contextSpan.title = context;
 			contextSpan.hidden = context === '';
 			applyTime(button.querySelector('.ju-notif-pop-time'), n.created_at, documentRef);
 			desired.push(li);

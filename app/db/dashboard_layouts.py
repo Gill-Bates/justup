@@ -7,8 +7,8 @@
 """Per-user dashboard layout storage (one row per placed widget).
 
 Bounds are enforced by CHECK constraints in the ``dashboard_layouts`` table, a user's rows vanish
-with the user (ON DELETE CASCADE) and a replace is one transaction. The public shape is
-``{"version": 1, "widgets": [...]}``.
+with the user (ON DELETE CASCADE) and a replace is one transaction. The active V2 model records
+whether each widget height is automatic or manually selected.
 """
 
 from __future__ import annotations
@@ -20,7 +20,22 @@ from .sqlite import transaction
 
 # Vertical bound in rows; mirrors MAX_Y in static/js/dashboard-grid.js and the CHECK in init_schema.
 DASHBOARD_MAX_Y = 1000
-LAYOUT_VERSION = 1
+LAYOUT_VERSION = 2
+DASHBOARD_WIDGET_MIN_SIZES = {
+    "status-online": (1, 2),
+    "status-offline": (1, 2),
+    "status-disabled": (1, 2),
+    "status-total": (1, 2),
+    "quality": (2, 3),
+    "downtime": (3, 3),
+    "alerts-open": (3, 3),
+    "delivery-queue": (3, 3),
+    "uptime-day": (3, 2),
+    "cert-expiry": (3, 3),
+    "slowest-monitors": (4, 3),
+    "quality-trend": (4, 3),
+    "stale-checks": (3, 3),
+}
 
 
 def _widget_valid(widget: Any) -> bool:
@@ -34,20 +49,38 @@ def _widget_valid(widget: Any) -> bool:
     if any(isinstance(v, bool) or not isinstance(v, int) for v in values):
         return False
     x, y, w, h = values
-    return 0 <= x <= 11 and 1 <= w <= 12 and x + w <= 12 and y >= 0 and 1 <= h <= 100 and y + h <= DASHBOARD_MAX_Y
+    min_size = DASHBOARD_WIDGET_MIN_SIZES.get(wid)
+    return (
+        min_size is not None
+        and widget.get("height_mode") in {"auto", "manual"}
+        and x >= 0
+        and y >= 0
+        and min_size[0] <= w <= 12
+        and x + w <= 12
+        and min_size[1] <= h <= 100
+        and y + h <= DASHBOARD_MAX_Y
+    )
 
 
 def get_dashboard_layout(conn: sqlite3.Connection, user_id: int) -> dict[str, Any] | None:
     """Return the stored layout for a user, or None when the user has none."""
     rows = conn.execute(
-        "SELECT widget_id, x, y, w, h, visible, layout_version FROM dashboard_layouts "
+        "SELECT widget_id, x, y, w, h, visible, layout_version, height_mode FROM dashboard_layouts "
         "WHERE user_id = ? ORDER BY position",
         (user_id,),
     ).fetchall()
     if not rows:
         return None
     widgets = [
-        {"id": r["widget_id"], "x": r["x"], "y": r["y"], "w": r["w"], "h": r["h"], "visible": bool(r["visible"])}
+        {
+            "id": r["widget_id"],
+            "x": r["x"],
+            "y": r["y"],
+            "w": r["w"],
+            "h": r["h"],
+            "visible": bool(r["visible"]),
+            "height_mode": r["height_mode"],
+        }
         for r in rows
     ]
     return {"version": int(rows[0]["layout_version"]), "widgets": widgets}
@@ -71,8 +104,9 @@ def set_dashboard_layout(conn: sqlite3.Connection, user_id: int, layout: dict[st
     with transaction(conn):
         conn.execute("DELETE FROM dashboard_layouts WHERE user_id = ?", (user_id,))
         conn.executemany(
-            "INSERT INTO dashboard_layouts (user_id, widget_id, position, x, y, w, h, visible, layout_version) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO dashboard_layouts "
+            "(user_id, widget_id, position, x, y, w, h, visible, layout_version, height_mode) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 (
                     user_id,
@@ -84,6 +118,7 @@ def set_dashboard_layout(conn: sqlite3.Connection, user_id: int, layout: dict[st
                     wd["h"],
                     1 if wd.get("visible", True) else 0,
                     LAYOUT_VERSION,
+                    wd["height_mode"],
                 )
                 for pos, wd in enumerate(widgets)
             ],

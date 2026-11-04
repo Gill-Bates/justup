@@ -34,6 +34,7 @@ function el(id) {
 function harness(responses) {
   const nodes = Object.fromEntries(IDS.map(id => [id, el(id)]));
   let ready;
+  let liveRefresh;
   const bodyListeners = {};
   const document = {
     body: {
@@ -53,6 +54,12 @@ function harness(responses) {
   };
   const requests = [];
   const window = {
+    JustUpLive: {
+      client: {
+        subscribe(_events, callback) { liveRefresh = callback; return () => {}; },
+        state: () => "connected",
+      },
+    },
     apiFetch: async url => {
       requests.push(url);
       const next = responses.shift();
@@ -67,7 +74,7 @@ function harness(responses) {
   const load = async () => { ready(); await new Promise(resolve => setImmediate(resolve)); };
   const visible = id => !nodes[id].classList.contains("d-none");
   const dispatchBodyEvent = event => document.body.dispatchEvent(event);
-  return { nodes, load, visible, requests, dispatchBodyEvent };
+  return { nodes, load, visible, requests, dispatchBodyEvent, refreshLive: () => liveRefresh() };
 }
 
 const ok = body => ({ ok: true, json: async () => body });
@@ -93,6 +100,23 @@ test("a failure after a success shows the error state instead of stale rows or t
     assert.equal(h.visible("empty"), false);
     assert.equal(h.visible("count-badge"), false);
   }
+});
+
+test("a live refresh during a pending load triggers one follow-up request", async () => {
+  let resolveInitial;
+  const latest = { ...incident, name: "updated" };
+  const h = harness([
+    new Promise(resolve => { resolveInitial = resolve; }),
+    ok({ targets: [incident, latest] }),
+  ]);
+  await h.load();
+  h.refreshLive();
+  resolveInitial(ok({ targets: [incident] }));
+  await new Promise(resolve => setImmediate(resolve));
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.equal(h.requests.length, 2);
+  assert.equal(h.nodes["count-badge"].textContent, "2 affected");
 });
 
 test("dashboard has no manual refresh button", () => {

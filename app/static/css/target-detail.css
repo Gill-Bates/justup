@@ -7,10 +7,6 @@
 .target-detail-page {
 	--target-detail-gap: 1.5rem;
 	--target-detail-inner-gap: 1rem;
-	--td-pad-top: 2rem;
-	--td-pad-end: 2.5rem;
-	--td-pad-bottom: 2.5rem;
-	--td-pad-start: 2.25rem;
 	--td-radius: var(--bs-border-radius-lg);
 	--td-shadow: var(--ju-shadow);
 	--td-inset-bg: color-mix(in srgb, var(--bs-body-color) 4%, transparent);
@@ -22,8 +18,7 @@
 	gap: var(--target-detail-gap);
 	max-width: none;
 
-	/* Page spacing is owned here: the page scrolls with the shell instead of fitting one screen. */
-	padding: var(--td-pad-top) var(--td-pad-end) var(--td-pad-bottom) var(--td-pad-start);
+	/* Page spacing comes from .ui-page (--page-gutter, --ui-space-header); the page scrolls with the shell. */
 	overflow: visible;
 }
 
@@ -269,8 +264,9 @@
 .target-detail-page .target-detail-tabs .nav-link:focus-visible,
 .target-recipients-summary:focus-visible,
 .target-custom-range>summary:focus-visible,
-.combined-legend-btn:focus-visible {
-	outline: 2px solid var(--bs-primary);
+.combined-legend-btn:focus-visible,
+.combined-peaks .form-check-input:focus-visible {
+	outline: 2px solid var(--ju-focus-ring);
 	outline-offset: 2px;
 }
 
@@ -397,9 +393,7 @@
 }
 
 .target-kpi-badges {
-	display: flex;
-	flex-wrap: wrap;
-	gap: 0.5rem;
+	--ju-badges-gap: var(--ui-space-tile-compact);
 }
 
 .target-kpi-badges .badge {
@@ -409,19 +403,28 @@
 }
 
 /* ---- 3. Control toolbar ---- */
+
+/* A quiet control strip, not a card: the charts below keep the visual weight. */
 .target-toolbar {
+	--td-toolbar-control-h: 2.25rem;
+
 	position: relative;
 	z-index: 3;
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
 	flex-wrap: wrap;
-	gap: 1rem 2rem;
-	padding: 1rem 1.25rem;
-	border: 1px solid var(--ju-panel-line);
-	border-radius: var(--td-radius);
-	background: var(--ju-panel-bg);
-	box-shadow: var(--td-shadow);
+	gap: 0.5rem 1.5rem;
+
+	/* Aligns the strip with the card text below and clears the fixed sidebar toggle. */
+	padding-inline: var(--target-detail-inner-gap);
+}
+
+/* Touch input keeps the full-size control height. */
+@media (pointer: coarse) {
+	.target-toolbar {
+		--td-toolbar-control-h: var(--td-control-h);
+	}
 }
 
 .target-toolbar-group {
@@ -456,13 +459,14 @@
 .target-toolbar .form-select,
 .target-toolbar .form-control,
 .target-toolbar .btn {
-	min-height: var(--td-control-h);
+	min-height: var(--td-toolbar-control-h);
+	padding-block: 0.25rem;
 }
 
 .target-toolbar .form-select {
 	width: auto;
 	min-width: 10rem;
-	font-size: 0.9375rem;
+	font-size: 0.875rem;
 }
 
 .target-toolbar .btn {
@@ -470,7 +474,8 @@
 	align-items: center;
 	justify-content: center;
 	gap: 0.3rem;
-	padding-inline: 0.9rem;
+	padding-inline: 0.75rem;
+	font-size: 0.875rem;
 	white-space: nowrap;
 }
 
@@ -489,20 +494,21 @@
 	display: none;
 }
 
-.target-custom-range[open] {
-	flex: 1 1 100%;
-	order: 10;
-	min-width: 0;
-}
-
+/* Opens as a popover under the strip (anchored to .target-toolbar) so the controls never move. */
 .target-custom-range-fields {
+	position: absolute;
+	inset-inline-start: 0;
+	top: calc(100% + 0.5rem);
 	display: flex;
 	align-items: end;
 	flex-wrap: wrap;
 	gap: 0.75rem;
-	margin-top: 0.75rem;
-	padding-top: 0.75rem;
-	border-top: 1px solid var(--ju-panel-line);
+	width: min(40rem, 100%);
+	padding: 0.75rem;
+	border: 1px solid var(--bs-border-color);
+	border-radius: var(--td-radius);
+	background: var(--bs-body-bg);
+	box-shadow: var(--td-shadow);
 }
 
 .target-custom-range-fields>div {
@@ -531,9 +537,9 @@
 }
 
 .target-recipients-summary {
-	min-height: var(--td-control-h);
-	padding: 0 0.85rem;
-	border: 1px solid var(--bs-border-color);
+	min-height: var(--td-toolbar-control-h);
+	padding: 0 0.6rem;
+	border: 1px solid transparent;
 	border-radius: var(--bs-border-radius);
 }
 
@@ -573,7 +579,7 @@
 	display: inline-flex;
 	align-items: center;
 	gap: 0.5rem;
-	min-height: var(--td-control-h);
+	min-height: var(--td-toolbar-control-h);
 	margin: 0;
 	padding-left: 0;
 	font-size: 0.875rem;
@@ -583,12 +589,8 @@
 .target-autoclose-switch .form-check-input {
 	float: none;
 	margin: 0;
-	cursor: pointer;
 }
 
-.target-autoclose-switch .form-check-label {
-	cursor: pointer;
-}
 
 .target-details-chevron {
 	transition: transform 0.2s ease;
@@ -851,7 +853,7 @@ details[open]>summary .target-details-chevron {
 @media (forced-colors: active) {
 	.target-status-pill,
 	.target-kpi-card,
-	.target-toolbar {
+	.target-recipients-summary {
 		border: 1px solid CanvasText;
 	}
 
@@ -869,10 +871,6 @@ details[open]>summary .target-details-chevron {
 	.target-detail-page {
 		--target-detail-gap: 1rem;
 		--target-detail-inner-gap: 0.75rem;
-		--td-pad-top: 1.25rem;
-		--td-pad-end: 0.75rem;
-		--td-pad-bottom: 1.5rem;
-		--td-pad-start: 0.75rem;
 	}
 }
 
@@ -882,15 +880,6 @@ details[open]>summary .target-details-chevron {
 	}
 }
 
-/* Tablet padding only; the phone tokens above stay in effect at <= 576px. */
-@media (576px < width < 992px) {
-	.target-detail-page {
-		--td-pad-top: 1.5rem;
-		--td-pad-end: 1.25rem;
-		--td-pad-bottom: 2rem;
-		--td-pad-start: 1.25rem;
-	}
-}
 
 /* ---- 4. Hero panel: combined response time / status / downtime chart ---- */
 .target-combined-card>.card-body {
@@ -916,8 +905,28 @@ details[open]>summary .target-details-chevron {
 	font-size: 0.8125rem;
 }
 
-.combined-legend {
+.combined-toolbar {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 0.25rem 1rem;
 	margin-bottom: 0.75rem;
+}
+
+.combined-legend {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+.combined-peaks {
+	flex: none;
+	font-size: 0.8125rem;
+	font-weight: 500;
+}
+
+.combined-peaks[hidden] {
+	display: none;
 }
 
 .combined-status-key {
@@ -981,11 +990,27 @@ details[open]>summary .target-details-chevron {
 	width: 0.75rem;
 	height: 0.75rem;
 	background: var(--swatch-color);
+
+	/* The canvas keeps its series colors in forced-colors mode, so the key must too. */
+	forced-color-adjust: none;
 }
 
 .combined-swatch--line {
 	height: 0.2rem;
 	width: 1rem;
+}
+
+/* Dash patterns mirror COMBINED_DASHES in combined-chart.js (16px = 1rem). */
+.combined-swatch--dash-1 {
+	background: repeating-linear-gradient(90deg, var(--swatch-color) 0 6px, transparent 6px 9px);
+}
+
+.combined-swatch--dash-2 {
+	background: repeating-linear-gradient(90deg, var(--swatch-color) 0 2px, transparent 2px 5px);
+}
+
+.combined-swatch--dash-3 {
+	background: linear-gradient(90deg, var(--swatch-color) 0 8px, transparent 8px 11px, var(--swatch-color) 11px 13px, transparent 13px);
 }
 
 .combined-swatch--circle {
@@ -1145,8 +1170,6 @@ details[open]>summary .target-details-chevron {
 	.target-toolbar-group--alerts {
 		flex: 1 1 100%;
 		margin-inline-start: 0;
-		padding-top: 0.75rem;
-		border-top: 1px solid var(--ju-panel-line);
 	}
 }
 
@@ -1178,6 +1201,16 @@ details[open]>summary .target-details-chevron {
 		flex: 1 1 0;
 		min-width: 0;
 		gap: 0.375rem;
+	}
+
+	/* The select value names the range; the label stays available to assistive technology. */
+	.target-toolbar-label {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		overflow: hidden;
+		clip-path: inset(50%);
+		white-space: nowrap;
 	}
 
 	.target-toolbar .form-select {
@@ -1212,17 +1245,11 @@ details[open]>summary .target-details-chevron {
 	}
 }
 
-/* ---- 6. Desktop fit mode: dashboard tab fills the space between topbar and footer ----
+/* ---- 6. Desktop fill mode: dashboard tab fills the space between topbar and footer ----
    Only for viewports tall and wide enough for readable minimum sizes; every other
    viewport (short screens, zoom, tablets, phones) keeps the normal scrolling layout above.
    Scoped with :has() to the active dashboard tab; Network diagnostics has its own rule in section 7. */
 @media (width >=1200px) and (height >=800px) {
-	/* Viewport-bound shell: the fit height itself is defined in gentelella-layout.css. */
-	.ju-shell:has(.target-detail-page #target-dashboard-pane.active) {
-		--ju-fit-height: 100dvh;
-		--ju-fit-overflow: auto;
-	}
-
 	.ju-content:has(.target-detail-page #target-dashboard-pane.active)>main {
 		display: grid;
 		grid-template-rows: minmax(0, 1fr);
@@ -1279,10 +1306,6 @@ details[open]>summary .target-details-chevron {
 		font-size: 1.25rem;
 	}
 
-	#target-dashboard-pane.active .target-toolbar {
-		padding: 0.5rem 1rem;
-	}
-
 	#target-dashboard-pane.active .target-combined-card,
 	#target-dashboard-pane.active .target-overview-grid {
 		min-height: 0;
@@ -1333,9 +1356,12 @@ details[open]>summary .target-details-chevron {
 		min-height: 0;
 	}
 
+	#target-dashboard-pane.active .combined-toolbar {
+		margin-bottom: 0.5rem;
+	}
+
 	#target-dashboard-pane.active .combined-legend {
 		gap: 0.35rem 0.5rem;
-		margin-bottom: 0.5rem;
 	}
 
 	#target-dashboard-pane.active .combined-legend-btn {
@@ -1420,17 +1446,12 @@ details[open]>summary .target-details-chevron {
 	}
 }
 
-/* ---- 7. Desktop fit mode: Network diagnostics ----
-   Same viewport condition and shell mechanism as the dashboard. Only active once the fragment
+/* ---- 7. Desktop fill mode: Network diagnostics ----
+   Same viewport condition as the dashboard. Only active once the fragment
    holds a route (.traceroute-diagnostics), so the loading placeholder, the empty state and the
    error state keep the normal flow. Route card and KPI row keep their height; the hop table
    scrolls inside its panel and the map takes the rest. */
 @media (width >=1200px) and (height >=800px) {
-	.ju-shell:has(.target-detail-page #target-network-diagnostics-pane.active .traceroute-diagnostics) {
-		--ju-fit-height: 100dvh;
-		--ju-fit-overflow: auto;
-	}
-
 	.ju-content:has(.target-detail-page #target-network-diagnostics-pane.active .traceroute-diagnostics)>main {
 		display: grid;
 		grid-template-rows: minmax(0, 1fr);
@@ -1554,6 +1575,8 @@ details[open]>summary .target-details-chevron {
 }
 
 .target-detail-more-item {
+	/* Containing block for the clipped label; otherwise it lands in the document and makes it scroll. */
+	position: relative;
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;

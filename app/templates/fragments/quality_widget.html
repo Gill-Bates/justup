@@ -1,22 +1,15 @@
 {# Quality Gate Status Widget #}
-<div class="card shadow-sm h-100">
-    <div class="card-header d-flex align-items-center justify-content-between">
+    <div class="card dashboard-widget-card">
+    <div class="card-header dashboard-widget-header d-flex align-items-center justify-content-between">
         <span class="fw-semibold">
-            <span class="material-icons me-1" aria-hidden="true">device_thermostat</span> Monitor Quality
+            <span class="quality-widget-icon" aria-hidden="true"></span> Monitor Quality
         </span>
         <span class="badge" id="quality-state-badge">--</span>
     </div>
-    <div class="card-body d-flex flex-column align-items-center p-2">
-        <div class="display-4 fw-bold" id="quality-score">--</div>
+    <div class="card-body dashboard-widget-body quality-body d-flex flex-column align-items-center">
+        <div class="dashboard-widget-value fw-bold" id="quality-score">--</div>
         <div class="text-body-secondary small" id="quality-label">Loading...</div>
-        <div class="text-body-secondary small" id="quality-updated">No successful measurement yet</div>
-        <button type="button" class="btn btn-sm btn-outline-secondary mt-2 py-0" id="quality-targets-tooltip-trigger"
-            data-bs-toggle="tooltip" data-bs-trigger="hover focus" data-bs-placement="bottom"
-            data-bs-custom-class="quality-targets-tooltip"
-            hidden>
-            <span class="material-icons me-1" aria-hidden="true">dns</span>
-            <span id="quality-target-count">Targets</span>
-        </button>
+        <div id="quality-targets" class="ju-badges ju-badges--fill quality-targets" role="group" aria-label="Quality targets: loading"></div>
     </div>
 </div>
 

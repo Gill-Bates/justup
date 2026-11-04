@@ -1,30 +1,38 @@
+{#
+	Settings dialogs. Every dialog follows the shared contract in DESIGN.md ("Modal dialogs"):
+	root class ju-modal--form | ju-modal--confirm | ju-modal--critical, header (icon + title + close),
+	body, footer (Cancel first, one primary action). Look and spacing live in ui.css; no per-dialog styles.
+#}
+
 {# Purge Confirmation Modal #}
-<div class="modal fade" id="purgeModal" tabindex="-1" aria-labelledby="purgeModalLabel" aria-hidden="true">
+<div class="modal fade ju-modal--critical" id="purgeModal" tabindex="-1" aria-labelledby="purgeModalLabel"
+	aria-describedby="purgeModalDesc" aria-hidden="true">
 	<div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
 		<div class="modal-content">
-			<div class="modal-header bg-danger text-white">
-				<h2 class="h5 modal-title" id="purgeModalLabel"><span class="material-icons me-2"
-						aria-hidden="true">warning</span>Confirm
-					Deletion</h2>
-				<button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"
-					aria-label="Close"></button>
+			<div class="modal-header">
+				<h2 class="modal-title ju-modal-title" id="purgeModalLabel"><span class="material-icons ju-modal-icon"
+						aria-hidden="true">warning</span>Confirm Deletion</h2>
+				<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
 			</div>
 			<div class="modal-body">
-				<p class="text-danger fw-bold">This will permanently delete ALL metric data!</p>
-				<p>Please enter your password to confirm:</p>
-				<form id="purge-form" autocomplete="off">
-					<input type="text" name="username" autocomplete="username" tabindex="-1" aria-hidden="true"
-						style="position:absolute; left:-10000px;">
-					<input type="password" class="form-control" id="purge-password" aria-label="Password" name="password"
-						placeholder="Enter your password" autocomplete="current-password" aria-describedby="purge-error"
-						required>
+				<p class="ju-modal-consequence" id="purgeModalDesc"><span class="material-icons ju-icon-inline"
+						aria-hidden="true">warning</span><span>This will permanently delete ALL metric data!</span></p>
+				<form id="purge-form" class="ju-modal-form" autocomplete="off">
+					<input type="text" name="username" class="visually-hidden" autocomplete="username" tabindex="-1"
+						aria-hidden="true">
+					<div class="ju-field">
+						<label for="purge-password" class="form-label">Please enter your password to confirm:</label>
+						<input type="password" class="form-control" id="purge-password" name="password"
+							placeholder="Enter your password" autocomplete="current-password"
+							aria-describedby="purge-error" required>
+					</div>
 				</form>
-				<div id="purge-error" class="text-danger mt-2 d-none" role="alert"></div>
+				<div id="purge-error" class="ju-modal-error d-none" role="alert"></div>
 			</div>
 			<div class="modal-footer">
 				<button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
 				<button type="submit" form="purge-form" class="btn btn-danger" id="confirm-purge-btn">
-					<span class="material-icons" aria-hidden="true">delete</span> Delete all Metrics
+					<span class="material-icons" aria-hidden="true">delete</span>Delete all Metrics
 				</button>
 			</div>
 		</div>
@@ -32,24 +40,25 @@
 </div>
 
 {# Spooler Clear Log Confirmation Modal #}
-<div class="modal fade" id="spoolerClearLogModal" tabindex="-1" aria-labelledby="spoolerClearLogModalLabel"
-	aria-hidden="true">
+<div class="modal fade ju-modal--critical" id="spoolerClearLogModal" tabindex="-1"
+	aria-labelledby="spoolerClearLogModalLabel" aria-describedby="spoolerClearLogModalDesc" aria-hidden="true">
 	<div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
 		<div class="modal-content">
-			<div class="modal-header bg-warning text-dark">
-				<h2 class="h5 modal-title" id="spoolerClearLogModalLabel">
-					<span class="material-icons me-2" aria-hidden="true">playlist_remove</span>Clear Notification Log
+			<div class="modal-header">
+				<h2 class="modal-title ju-modal-title" id="spoolerClearLogModalLabel"><span
+						class="material-icons ju-modal-icon" aria-hidden="true">playlist_remove</span>Clear Notification Log
 				</h2>
 				<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
 			</div>
-			<div class="modal-body">
-				<p class="fw-bold mb-2">Delete all <code>sent</code> entries from the notification log?</p>
-				<p class="text-body-secondary mb-0">Pending and failed queue items are not affected.</p>
+			<div class="modal-body" id="spoolerClearLogModalDesc">
+				<p class="ju-modal-lead">Delete all <code>sent</code> entries from the notification log?</p>
+				<p class="ju-modal-consequence"><span class="material-icons ju-icon-inline" aria-hidden="true">warning</span><span>Deleted log entries cannot be recovered.</span></p>
+				<p class="ju-modal-note">Pending and failed queue items are not affected.</p>
 			</div>
 			<div class="modal-footer">
 				<button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-				<button type="button" class="btn btn-warning" id="confirm-spooler-clear-log-btn">
-					<span class="material-icons me-1" aria-hidden="true">delete</span> Clear Log
+				<button type="button" class="btn btn-danger" id="confirm-spooler-clear-log-btn">
+					<span class="material-icons" aria-hidden="true">delete</span>Clear Log
 				</button>
 			</div>
 		</div>
@@ -57,32 +66,34 @@
 </div>
 
 {# Purge Alerts Confirmation Modal #}
-<div class="modal fade" id="purgeAlertsModal" tabindex="-1" aria-labelledby="purgeAlertsModalLabel" aria-hidden="true">
+<div class="modal fade ju-modal--critical" id="purgeAlertsModal" tabindex="-1" aria-labelledby="purgeAlertsModalLabel"
+	aria-describedby="purgeAlertsModalDesc" aria-hidden="true">
 	<div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
 		<div class="modal-content">
-			<div class="modal-header bg-danger text-white">
-				<h2 class="h5 modal-title" id="purgeAlertsModalLabel"><span class="material-icons me-2"
-						aria-hidden="true">warning</span>Confirm
-					Deletion</h2>
-				<button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"
-					aria-label="Close"></button>
+			<div class="modal-header">
+				<h2 class="modal-title ju-modal-title" id="purgeAlertsModalLabel"><span
+						class="material-icons ju-modal-icon" aria-hidden="true">warning</span>Confirm Deletion</h2>
+				<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
 			</div>
 			<div class="modal-body">
-				<p class="text-danger fw-bold">This will permanently delete ALL alert history!</p>
-				<p>Please enter your password to confirm:</p>
-				<form id="purge-alerts-form" autocomplete="off">
-					<input type="text" name="username" autocomplete="username" tabindex="-1" aria-hidden="true"
-						style="position:absolute; left:-10000px;">
-					<input type="password" class="form-control" id="purge-alerts-password" aria-label="Password" name="password"
-						placeholder="Enter your password" autocomplete="current-password"
-						aria-describedby="purge-alerts-error" required>
+				<p class="ju-modal-consequence" id="purgeAlertsModalDesc"><span class="material-icons ju-icon-inline"
+						aria-hidden="true">warning</span><span>This will permanently delete ALL alert history!</span></p>
+				<form id="purge-alerts-form" class="ju-modal-form" autocomplete="off">
+					<input type="text" name="username" class="visually-hidden" autocomplete="username" tabindex="-1"
+						aria-hidden="true">
+					<div class="ju-field">
+						<label for="purge-alerts-password" class="form-label">Please enter your password to confirm:</label>
+						<input type="password" class="form-control" id="purge-alerts-password" name="password"
+							placeholder="Enter your password" autocomplete="current-password"
+							aria-describedby="purge-alerts-error" required>
+					</div>
 				</form>
-				<div id="purge-alerts-error" class="text-danger mt-2 d-none" role="alert"></div>
+				<div id="purge-alerts-error" class="ju-modal-error d-none" role="alert"></div>
 			</div>
 			<div class="modal-footer">
 				<button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
 				<button type="submit" form="purge-alerts-form" class="btn btn-danger" id="confirm-purge-alerts-btn">
-					<span class="material-icons" aria-hidden="true">notifications_off</span> Clear all Alerts
+					<span class="material-icons" aria-hidden="true">notifications_off</span>Clear all Alerts
 				</button>
 			</div>
 		</div>
@@ -90,35 +101,39 @@
 </div>
 
 {# Restore Confirmation Modal #}
-<div class="modal fade" id="restoreModal" tabindex="-1" aria-labelledby="restoreModalLabel" aria-hidden="true">
+<div class="modal fade ju-modal--critical" id="restoreModal" tabindex="-1" aria-labelledby="restoreModalLabel"
+	aria-describedby="restoreModalDesc" aria-hidden="true">
 	<div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
 		<div class="modal-content">
-			<div class="modal-header bg-warning text-dark">
-				<h2 class="h5 modal-title" id="restoreModalLabel"><span class="material-icons me-2"
-						aria-hidden="true">warning</span>Confirm
-					Restore</h2>
+			<div class="modal-header">
+				<h2 class="modal-title ju-modal-title" id="restoreModalLabel"><span class="material-icons ju-modal-icon"
+						aria-hidden="true">warning</span>Confirm Restore</h2>
 				<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
 			</div>
 			<div class="modal-body">
-				<p class="fw-bold">Are you sure you want to restore from this backup?</p>
-				<p class="text-body-secondary mb-2">File: <code id="restore-filename"></code></p>
-				<p class="text-warning"><span class="material-icons me-1" aria-hidden="true">warning</span>This will
-					replace all
-					current data. The application will restart automatically.</p>
-				<p class="mt-3">Please enter your password to confirm:</p>
-				<form id="restore-form" autocomplete="off">
-					<input type="text" name="username" autocomplete="username" tabindex="-1" aria-hidden="true"
-						style="position:absolute; left:-10000px;">
-					<input type="password" class="form-control" id="restore-password" aria-label="Password" name="password"
-						placeholder="Enter your password" autocomplete="current-password"
-						aria-describedby="restore-error" required>
+				<p class="ju-modal-lead">Are you sure you want to restore from this backup?</p>
+				<p>File: <code id="restore-filename"></code></p>
+				<p class="ju-modal-consequence" id="restoreModalDesc"><span class="material-icons ju-icon-inline"
+						aria-hidden="true">warning</span><span>This will replace all current data. The application will
+						restart automatically.</span></p>
+				<p class="ju-modal-note">Backups from older justUp! versions are migrated to the current database
+					schema automatically. Backups from newer versions are rejected and nothing is changed.</p>
+				<form id="restore-form" class="ju-modal-form" autocomplete="off">
+					<input type="text" name="username" class="visually-hidden" autocomplete="username" tabindex="-1"
+						aria-hidden="true">
+					<div class="ju-field">
+						<label for="restore-password" class="form-label">Please enter your password to confirm:</label>
+						<input type="password" class="form-control" id="restore-password" name="password"
+							placeholder="Enter your password" autocomplete="current-password"
+							aria-describedby="restore-error" required>
+					</div>
 				</form>
-				<div id="restore-error" class="text-danger mt-2 d-none" role="alert"></div>
+				<div id="restore-error" class="ju-modal-error d-none" role="alert"></div>
 			</div>
 			<div class="modal-footer">
 				<button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-				<button type="submit" form="restore-form" class="btn btn-warning" id="confirm-restore-btn">
-					<span class="material-icons me-1" aria-hidden="true">upload</span> Restore Backup
+				<button type="submit" form="restore-form" class="btn btn-danger" id="confirm-restore-btn">
+					<span class="material-icons" aria-hidden="true">upload</span>Restore Backup
 				</button>
 			</div>
 		</div>
@@ -126,31 +141,34 @@
 </div>
 
 {# Auth Toggle Confirmation Modal #}
-<div class="modal fade" id="authToggleModal" tabindex="-1" aria-labelledby="authToggleModalLabel" aria-hidden="true">
+<div class="modal fade ju-modal--critical" id="authToggleModal" tabindex="-1" aria-labelledby="authToggleModalLabel"
+	aria-describedby="auth-toggle-message" aria-hidden="true">
 	<div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
 		<div class="modal-content">
-			<div class="modal-header bg-warning text-dark">
-				<h2 class="h5 modal-title" id="authToggleModalLabel"><span class="material-icons me-2"
-						aria-hidden="true">security</span>Confirm
-					Change</h2>
+			<div class="modal-header">
+				<h2 class="modal-title ju-modal-title" id="authToggleModalLabel"><span class="material-icons ju-modal-icon"
+						aria-hidden="true">security</span>Confirm Change</h2>
 				<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
 			</div>
 			<div class="modal-body">
-				<p id="auth-toggle-message" class="fw-bold"></p>
-				<p>Please enter your password to confirm:</p>
-				<form id="auth-toggle-form" autocomplete="off">
-					<input type="text" name="username" autocomplete="username" tabindex="-1" aria-hidden="true"
-						style="position:absolute; left:-10000px;">
-					<input type="password" class="form-control" id="auth-toggle-password" aria-label="Password" name="password"
-						placeholder="Enter your password" autocomplete="current-password"
-						aria-describedby="auth-toggle-error" required>
+				<p id="auth-toggle-message" class="ju-modal-lead"></p>
+				<p class="ju-modal-consequence"><span class="material-icons ju-icon-inline" aria-hidden="true">warning</span><span>This changes access to justUp! for everyone. Confirm with your password.</span></p>
+				<form id="auth-toggle-form" class="ju-modal-form" autocomplete="off">
+					<input type="text" name="username" class="visually-hidden" autocomplete="username" tabindex="-1"
+						aria-hidden="true">
+					<div class="ju-field">
+						<label for="auth-toggle-password" class="form-label">Please enter your password to confirm:</label>
+						<input type="password" class="form-control" id="auth-toggle-password" name="password"
+							placeholder="Enter your password" autocomplete="current-password"
+							aria-describedby="auth-toggle-error" required>
+					</div>
 				</form>
-				<div id="auth-toggle-error" class="text-danger mt-2 d-none" role="alert"></div>
+				<div id="auth-toggle-error" class="ju-modal-error d-none" role="alert"></div>
 			</div>
 			<div class="modal-footer">
 				<button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
 				<button type="submit" form="auth-toggle-form" class="btn btn-warning" id="confirm-auth-toggle-btn">
-					<span class="material-icons me-1" aria-hidden="true">check</span> Confirm
+					<span class="material-icons" aria-hidden="true">check</span>Confirm
 				</button>
 			</div>
 		</div>
@@ -158,43 +176,37 @@
 </div>
 
 {# Unlink Signal Device Modal (simple confirmation with password) #}
-<div class="modal fade" id="unlinkDeviceModal" tabindex="-1" aria-labelledby="unlinkDeviceModalLabel"
-	aria-hidden="true">
+<div class="modal fade ju-modal--critical" id="unlinkDeviceModal" tabindex="-1"
+	aria-labelledby="unlinkDeviceModalLabel" aria-describedby="unlinkDeviceModalDesc" aria-hidden="true">
 	<div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
 		<div class="modal-content">
-			<div class="modal-header bg-warning">
-				<h2 class="h5 modal-title" id="unlinkDeviceModalLabel">
-					<span class="material-icons me-2" aria-hidden="true">link_off</span>Unlink Signal Device
-				</h2>
+			<div class="modal-header">
+				<h2 class="modal-title ju-modal-title" id="unlinkDeviceModalLabel"><span
+						class="material-icons ju-modal-icon" aria-hidden="true">link_off</span>Unlink Signal Device</h2>
 				<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
 			</div>
 			<div class="modal-body">
-				<p class="mb-3">
-						This removes the linked device data from justUp!. You will no longer receive Signal
-						alerts until you link a device again.
-				</p>
-				<p class="text-success small mb-3">
-					<span class="material-icons me-1" style="font-size: 16px;" aria-hidden="true">check_circle</span>
-						Your Signal account stays active. To revoke this device, remove it from Linked Devices
-						on your primary Signal phone.
-				</p>
-
-				<hr>
-
-				<p class="mb-2">Enter your password to confirm:</p>
-				<form id="unlink-device-form" autocomplete="off">
-					<input type="text" name="username" autocomplete="username" tabindex="-1" aria-hidden="true"
-						style="position:absolute; left:-10000px;">
-					<input type="password" class="form-control" id="unlink-device-password" aria-label="Password" name="password"
-						placeholder="Password" autocomplete="current-password" aria-describedby="unlink-device-error"
-						required>
+				<p class="ju-modal-lead" id="unlinkDeviceModalDesc">Unlink this Signal device from justUp!?</p>
+				<p class="ju-modal-consequence"><span class="material-icons ju-icon-inline" aria-hidden="true">warning</span><span>Linked device data is removed from justUp!, and Signal alerts stop until you link a device again.</span></p>
+				<p class="ju-modal-note"><span class="material-icons ju-icon-inline"
+						aria-hidden="true">check_circle</span><span>Your Signal account stays active. To revoke this device,
+						remove it from Linked Devices on your primary Signal phone.</span></p>
+				<form id="unlink-device-form" class="ju-modal-form" autocomplete="off">
+					<input type="text" name="username" class="visually-hidden" autocomplete="username" tabindex="-1"
+						aria-hidden="true">
+					<div class="ju-field">
+						<label for="unlink-device-password" class="form-label">Enter your password to confirm:</label>
+						<input type="password" class="form-control" id="unlink-device-password" name="password"
+							placeholder="Password" autocomplete="current-password"
+							aria-describedby="unlink-device-error" required>
+					</div>
 				</form>
-				<div id="unlink-device-error" class="text-danger mt-2 d-none" role="alert"></div>
+				<div id="unlink-device-error" class="ju-modal-error d-none" role="alert"></div>
 			</div>
 			<div class="modal-footer">
 				<button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
 				<button type="submit" form="unlink-device-form" class="btn btn-warning" id="confirm-unlink-device-btn">
-					<span class="material-icons me-1" aria-hidden="true">link_off</span> Unlink Device
+					<span class="material-icons" aria-hidden="true">link_off</span>Unlink Device
 				</button>
 			</div>
 		</div>
@@ -202,43 +214,39 @@
 </div>
 
 {# Unregister Phone Number Modal #}
-<div class="modal fade" id="unregisterPhoneModal" tabindex="-1" aria-labelledby="unregisterPhoneModalLabel"
-	aria-hidden="true">
+<div class="modal fade ju-modal--critical" id="unregisterPhoneModal" tabindex="-1"
+	aria-labelledby="unregisterPhoneModalLabel" aria-describedby="unregisterPhoneModalDesc" aria-hidden="true">
 	<div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
 		<div class="modal-content">
-			<div class="modal-header bg-danger text-white">
-				<h2 class="h5 modal-title" id="unregisterPhoneModalLabel">
-					<span class="material-icons me-2" aria-hidden="true">phone_disabled</span>Unregister from Signal
+			<div class="modal-header">
+				<h2 class="modal-title ju-modal-title" id="unregisterPhoneModalLabel"><span
+						class="material-icons ju-modal-icon" aria-hidden="true">phone_disabled</span>Unregister from Signal
 				</h2>
-				<button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"
-					aria-label="Close"></button>
+				<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
 			</div>
 			<div class="modal-body">
-				<div class="alert alert-danger">
-					<span class="material-icons me-1" aria-hidden="true">warning</span>
-					<strong>This action is irreversible!</strong>
-				</div>
-
-				<p class="mb-3">
+				<p class="ju-modal-consequence"><span class="material-icons ju-icon-inline"
+						aria-hidden="true">warning</span><span>This action is irreversible!</span></p>
+				<p class="ju-modal-lead" id="unregisterPhoneModalDesc">
 					This will permanently delete your Signal account from the Signal servers.
 					You will lose all message history and contacts associated with this number.
 				</p>
-
-				<form id="unregister-phone-form" autocomplete="off">
-					<input type="text" name="username" autocomplete="username" tabindex="-1" aria-hidden="true"
-						style="position:absolute; left:-10000px;">
-					<label for="unregister-phone-password" class="form-label">Enter your password to confirm:</label>
-					<input type="password" class="form-control" id="unregister-phone-password" name="password"
-						autocomplete="current-password" aria-describedby="unregister-phone-error"
-						required>
+				<form id="unregister-phone-form" class="ju-modal-form" autocomplete="off">
+					<input type="text" name="username" class="visually-hidden" autocomplete="username" tabindex="-1"
+						aria-hidden="true">
+					<div class="ju-field">
+						<label for="unregister-phone-password" class="form-label">Enter your password to confirm:</label>
+						<input type="password" class="form-control" id="unregister-phone-password" name="password"
+							autocomplete="current-password" aria-describedby="unregister-phone-error" required>
+					</div>
 				</form>
-				<div id="unregister-phone-error" class="text-danger mt-2 d-none" role="alert"></div>
+				<div id="unregister-phone-error" class="ju-modal-error d-none" role="alert"></div>
 			</div>
 			<div class="modal-footer">
 				<button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
 				<button type="submit" form="unregister-phone-form" class="btn btn-danger"
 					id="confirm-unregister-phone-btn">
-					<span class="material-icons me-1" aria-hidden="true">phone_disabled</span> Unregister
+					<span class="material-icons" aria-hidden="true">phone_disabled</span>Unregister
 				</button>
 			</div>
 		</div>
@@ -246,80 +254,77 @@
 </div>
 
 {# Add Recipient Modal #}
-<div class="modal fade" id="addRecipientModal" tabindex="-1" aria-labelledby="addRecipientModalLabel"
+<div class="modal fade ju-modal--form" id="addRecipientModal" tabindex="-1" aria-labelledby="addRecipientModalLabel"
 	aria-hidden="true">
 	<div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
 		<div class="modal-content">
 			<div class="modal-header">
-				<h2 class="h5 modal-title" id="addRecipientModalLabel">
-					<span class="material-icons me-2" aria-hidden="true">person_add</span>Add Alert Recipient
-				</h2>
+				<h2 class="modal-title ju-modal-title" id="addRecipientModalLabel"><span
+						class="material-icons ju-modal-icon" aria-hidden="true">person_add</span>Add Alert Recipient</h2>
 				<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
 			</div>
 			<div class="modal-body">
-				<form id="add-recipient-form">
-					<div class="mb-3">
-						<label for="recipient-name" class="form-label">Name *</label>
+				<form id="add-recipient-form" class="ju-modal-form">
+					<p class="ju-modal-note">Fields marked * are required.</p>
+					<div class="ju-field">
+						<label for="recipient-name" class="form-label">Name <span class="ju-required"
+								aria-hidden="true">*</span></label>
 						<input type="text" class="form-control" id="recipient-name" required placeholder="John Doe"
 							autocomplete="off">
 					</div>
 
-					<div class="mb-3" role="group" aria-labelledby="recipient-channels-label">
-						<span class="form-label d-inline-block" id="recipient-channels-label">Notification Channels *</span>
-						<div class="form-text mb-2">Select at least one channel</div>
+					<fieldset class="ju-fieldset" aria-describedby="recipient-channels-help">
+						<legend class="ju-legend">Notification Channels <span class="ju-required"
+								aria-hidden="true">*</span></legend>
+						<p class="form-text" id="recipient-channels-help">Select at least one channel</p>
 
 						{# Signal Channel #}
-						<div class="card mb-2">
-							<div class="card-body py-2">
-								<div class="form-check form-switch mb-2">
-									<input type="checkbox" class="form-check-input" id="recipient-signal-enabled">
-									<label class="form-check-label fw-semibold" for="recipient-signal-enabled">
-										<span class="material-icons me-1"
-											style="font-size: 16px; vertical-align: text-bottom;"
-											aria-hidden="true">sms</span>
-										Signal
-									</label>
-								</div>
-								<div id="recipient-phone-container">
-									<input type="tel" class="form-control form-control-sm" id="recipient-phone" aria-label="Signal phone number"
-										placeholder="+49123456789" autocomplete="off">
-									<small class="form-text text-body-secondary">International format with country code, e.g.
-										+49123456789</small>
-								</div>
+						<div class="ju-channel">
+							<div class="ju-switch form-check form-switch">
+								<input type="checkbox" role="switch" class="form-check-input" id="recipient-signal-enabled" aria-controls="recipient-phone-container">
+								<label class="form-check-label" for="recipient-signal-enabled"><span
+										class="material-icons ju-icon-inline" aria-hidden="true">sms</span>Signal</label>
+							</div>
+							<div class="ju-channel-body" id="recipient-phone-container">
+								<label for="recipient-phone" class="visually-hidden">Signal phone number</label>
+								<input type="tel" inputmode="tel" class="form-control" id="recipient-phone"
+									placeholder="+49123456789" autocomplete="off" aria-describedby="recipient-phone-help">
+								<div class="form-text" id="recipient-phone-help">International format with country code, e.g.
+									+49123456789</div>
 							</div>
 						</div>
 
 						{# Email Channel #}
-						<div class="card">
-							<div class="card-body py-2">
-								<div class="form-check form-switch mb-2">
-									<input type="checkbox" class="form-check-input" id="recipient-email-enabled">
-									<label class="form-check-label fw-semibold" for="recipient-email-enabled">
-										<span class="material-icons me-1"
-											style="font-size: 16px; vertical-align: text-bottom;"
-											aria-hidden="true">email</span>
-										Email
-									</label>
-								</div>
-								<div id="recipient-email-container">
-									<input type="email" class="form-control form-control-sm" id="recipient-email" aria-label="Email address"
-										placeholder="user@example.com" autocomplete="off">
-								</div>
+						<div class="ju-channel">
+							<div class="ju-switch form-check form-switch">
+								<input type="checkbox" role="switch" class="form-check-input" id="recipient-email-enabled" aria-controls="recipient-email-container">
+								<label class="form-check-label" for="recipient-email-enabled"><span
+										class="material-icons ju-icon-inline" aria-hidden="true">email</span>Email</label>
+							</div>
+							<div class="ju-channel-body" id="recipient-email-container">
+								<label for="recipient-email" class="visually-hidden">Email address</label>
+								<input type="email" inputmode="email" class="form-control" id="recipient-email"
+									placeholder="user@example.com" autocomplete="off" aria-describedby="recipient-email-help">
+								<div class="form-text" id="recipient-email-help">Alert emails are sent to this address.</div>
 							</div>
 						</div>
-					</div>
+					</fieldset>
 
-					<div class="form-check form-switch">
-						<input type="checkbox" class="form-check-input" id="recipient-enabled" checked>
+					<div class="ju-switch form-check form-switch">
+						<input type="checkbox" role="switch" class="form-check-input" id="recipient-enabled" checked>
 						<label class="form-check-label" for="recipient-enabled">Recipient Enabled</label>
 					</div>
+					<div class="ju-switch form-check form-switch">
+						<input type="checkbox" role="switch" class="form-check-input" id="recipient-all-targets">
+						<label class="form-check-label" for="recipient-all-targets">Enable for all Targets</label>
+					</div>
 				</form>
-				<div id="add-recipient-error" class="text-danger mt-2 d-none" role="alert"></div>
+				<div id="add-recipient-error" class="ju-modal-error d-none" role="alert"></div>
 			</div>
 			<div class="modal-footer">
 				<button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
 				<button type="submit" form="add-recipient-form" class="btn btn-primary" id="add-recipient-btn">
-					<span class="material-icons me-1" aria-hidden="true">check</span>Add Recipient
+					<span class="material-icons" aria-hidden="true">check</span>Add Recipient
 				</button>
 			</div>
 		</div>
@@ -327,104 +332,101 @@
 </div>
 
 {# Edit Recipient Modal #}
-<div class="modal fade" id="editRecipientModal" tabindex="-1" aria-labelledby="editRecipientModalLabel"
+<div class="modal fade ju-modal--form" id="editRecipientModal" tabindex="-1" aria-labelledby="editRecipientModalLabel"
 	aria-hidden="true">
 	<div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
 		<div class="modal-content">
 			<div class="modal-header">
-				<h2 class="h5 modal-title" id="editRecipientModalLabel">
-					<span class="material-icons me-2" aria-hidden="true">edit</span>Edit Recipient
-				</h2>
+				<h2 class="modal-title ju-modal-title" id="editRecipientModalLabel"><span
+						class="material-icons ju-modal-icon" aria-hidden="true">edit</span>Edit Recipient</h2>
 				<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
 			</div>
 			<div class="modal-body">
-				<form id="edit-recipient-form">
+				<form id="edit-recipient-form" class="ju-modal-form">
 					<input type="hidden" id="edit-recipient-id">
-					<div class="mb-3">
-						<label for="edit-recipient-name" class="form-label">Name *</label>
+					<p class="ju-modal-note">Fields marked * are required.</p>
+					<div class="ju-field">
+						<label for="edit-recipient-name" class="form-label">Name <span class="ju-required"
+								aria-hidden="true">*</span></label>
 						<input type="text" class="form-control" id="edit-recipient-name" required autocomplete="off">
 					</div>
 
-					<div class="mb-3" role="group" aria-labelledby="edit-recipient-channels-label">
-						<span class="form-label d-inline-block" id="edit-recipient-channels-label">Notification Channels *</span>
-						<div class="form-text mb-2">Select at least one channel</div>
+					<fieldset class="ju-fieldset" aria-describedby="edit-recipient-channels-help">
+						<legend class="ju-legend">Notification Channels <span class="ju-required"
+								aria-hidden="true">*</span></legend>
+						<p class="form-text" id="edit-recipient-channels-help">Select at least one channel</p>
 
 						{# Signal Channel #}
-						<div class="card mb-2">
-							<div class="card-body py-2">
-								<div class="form-check form-switch mb-2">
-									<input type="checkbox" class="form-check-input" id="edit-recipient-signal-enabled">
-									<label class="form-check-label fw-semibold" for="edit-recipient-signal-enabled">
-										<span class="material-icons me-1"
-											style="font-size: 16px; vertical-align: text-bottom;"
-											aria-hidden="true">sms</span>
-										Signal
-									</label>
-								</div>
-								<div id="edit-recipient-phone-container">
-									<div class="input-group input-group-sm">
-										<input type="tel" class="form-control form-control-sm" id="edit-recipient-phone" aria-label="Signal phone number"
-											autocomplete="off">
-										<button type="button" class="btn btn-outline-secondary" id="edit-recipient-test-signal"
-											data-test-channel="signal" aria-label="Send Signal test message" title="Send Signal test message" disabled>
-											<span class="material-icons" style="font-size: 16px; vertical-align: text-bottom;"
-												aria-hidden="true">send</span>
-										</button>
-									</div>
-									<small class="form-text text-body-secondary">International format with country code, e.g.
-										+49123456789</small>
+						<div class="ju-channel">
+							<div class="ju-switch form-check form-switch">
+								<input type="checkbox" role="switch" class="form-check-input"
+									id="edit-recipient-signal-enabled" aria-controls="edit-recipient-phone-container">
+								<label class="form-check-label" for="edit-recipient-signal-enabled"><span
+										class="material-icons ju-icon-inline" aria-hidden="true">sms</span>Signal</label>
+							</div>
+							<div class="ju-channel-body" id="edit-recipient-phone-container">
+								<label for="edit-recipient-phone" class="visually-hidden">Signal phone number</label>
+								<input type="tel" inputmode="tel" class="form-control" id="edit-recipient-phone"
+									autocomplete="off" aria-describedby="edit-recipient-phone-help">
+								<div class="form-text" id="edit-recipient-phone-help">International format with country code, e.g.
+									+49123456789</div>
+								<div class="ju-channel-action">
+									<button type="button" class="btn btn-sm btn-outline-secondary"
+										id="edit-recipient-test-signal" data-test-channel="signal"
+										aria-label="Send test message to Signal" aria-describedby="edit-recipient-test-hint"
+										disabled>
+										<span class="material-icons" aria-hidden="true">send</span>Send test
+									</button>
 								</div>
 							</div>
 						</div>
 
 						{# Email Channel #}
-						<div class="card">
-							<div class="card-body py-2">
-								<div class="form-check form-switch mb-2">
-									<input type="checkbox" class="form-check-input" id="edit-recipient-email-enabled">
-									<label class="form-check-label fw-semibold" for="edit-recipient-email-enabled">
-										<span class="material-icons me-1"
-											style="font-size: 16px; vertical-align: text-bottom;"
-											aria-hidden="true">email</span>
-										Email
-									</label>
-								</div>
-								<div id="edit-recipient-email-container">
-									<div class="input-group input-group-sm">
-										<input type="email" class="form-control form-control-sm" id="edit-recipient-email" aria-label="Email address"
-											autocomplete="off">
-										<button type="button" class="btn btn-outline-secondary" id="edit-recipient-test-email"
-											data-test-channel="email" aria-label="Send email test message" title="Send email test message" disabled>
-											<span class="material-icons" style="font-size: 16px; vertical-align: text-bottom;"
-												aria-hidden="true">send</span>
-										</button>
-									</div>
+						<div class="ju-channel">
+							<div class="ju-switch form-check form-switch">
+								<input type="checkbox" role="switch" class="form-check-input"
+									id="edit-recipient-email-enabled" aria-controls="edit-recipient-email-container">
+								<label class="form-check-label" for="edit-recipient-email-enabled"><span
+										class="material-icons ju-icon-inline" aria-hidden="true">email</span>Email</label>
+							</div>
+							<div class="ju-channel-body" id="edit-recipient-email-container">
+								<label for="edit-recipient-email" class="visually-hidden">Email address</label>
+								<input type="email" inputmode="email" class="form-control" id="edit-recipient-email"
+									autocomplete="off" aria-describedby="edit-recipient-email-help">
+								<div class="form-text" id="edit-recipient-email-help">Alert emails are sent to this address.</div>
+								<div class="ju-channel-action">
+									<button type="button" class="btn btn-sm btn-outline-secondary"
+										id="edit-recipient-test-email" data-test-channel="email"
+										aria-label="Send test message to email" aria-describedby="edit-recipient-test-hint"
+										disabled>
+										<span class="material-icons" aria-hidden="true">send</span>Send test
+									</button>
 								</div>
 							</div>
 						</div>
-						<div class="d-flex align-items-center gap-2 mt-2">
-							<button type="button" class="btn btn-sm btn-outline-secondary" id="edit-recipient-test-all"
-								data-test-channel="all" disabled>
-								<span class="material-icons me-1" style="font-size: 16px; vertical-align: text-bottom;"
-									aria-hidden="true">send</span>Send test message
-							</button>
-							<small class="form-text text-body-secondary mt-0" id="edit-recipient-test-hint">Tests use the saved
-								channels. Save changes first to test new values.</small>
-						</div>
-						<div id="edit-recipient-test-result" class="small mt-2" role="status" aria-live="polite"></div>
+					</fieldset>
+
+					<div class="ju-field" data-channel-hint>
+						<p class="form-text" id="edit-recipient-test-hint">Tests use the saved channels. Save changes first to
+							test new values.</p>
+						<div id="edit-recipient-test-result" class="ju-test-result" role="status" aria-live="polite"></div>
 					</div>
 
-					<div class="form-check form-switch">
-						<input type="checkbox" class="form-check-input" id="edit-recipient-enabled">
+					<div class="ju-switch form-check form-switch">
+						<input type="checkbox" role="switch" class="form-check-input" id="edit-recipient-enabled">
 						<label class="form-check-label" for="edit-recipient-enabled">Recipient Enabled</label>
 					</div>
+					<div class="ju-switch form-check form-switch">
+						<input type="checkbox" role="switch" class="form-check-input" id="edit-recipient-all-targets">
+						<label class="form-check-label" for="edit-recipient-all-targets">Enable for all Targets</label>
+					</div>
 				</form>
-				<div id="edit-recipient-error" class="text-danger mt-2 d-none" role="alert"></div>
+				<div id="edit-recipient-error" class="ju-modal-error d-none" role="alert"></div>
 			</div>
 			<div class="modal-footer">
 				<button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
 				<button type="submit" form="edit-recipient-form" class="btn btn-primary" id="edit-recipient-btn">
-					<span class="material-icons me-1" aria-hidden="true">check</span>Save Changes
+					<span class="material-icons" aria-hidden="true">check</span>Save Changes
 				</button>
 			</div>
 		</div>
@@ -432,44 +434,48 @@
 </div>
 
 {# Create User Modal #}
-<div class="modal fade" id="createUserModal" tabindex="-1" aria-labelledby="createUserModalLabel" aria-hidden="true">
+<div class="modal fade ju-modal--form" id="createUserModal" tabindex="-1" aria-labelledby="createUserModalLabel"
+	aria-hidden="true">
 	<div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
 		<div class="modal-content">
 			<div class="modal-header">
-				<h2 class="h5 modal-title" id="createUserModalLabel">
-					<span class="material-icons me-2" aria-hidden="true">person_add</span>Create New User
-				</h2>
+				<h2 class="modal-title ju-modal-title" id="createUserModalLabel"><span class="material-icons ju-modal-icon"
+						aria-hidden="true">person_add</span>Create New User</h2>
 				<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
 			</div>
 			<div class="modal-body">
-				<form id="create-user-form">
-					<div class="mb-3">
-						<label for="new-user-username" class="form-label">Username *</label>
+				<form id="create-user-form" class="ju-modal-form">
+					<p class="ju-modal-note">Fields marked * are required.</p>
+					<div class="ju-field">
+						<label for="new-user-username" class="form-label">Username <span class="ju-required"
+								aria-hidden="true">*</span></label>
 						<input type="text" class="form-control" id="new-user-username" required minlength="1"
 							maxlength="64" autocomplete="off">
 					</div>
-					<div class="mb-3">
-						<label for="new-user-password" class="form-label">Password *</label>
+					<div class="ju-field">
+						<label for="new-user-password" class="form-label">Password <span class="ju-required"
+								aria-hidden="true">*</span></label>
 						<input type="password" class="form-control" id="new-user-password" required minlength="8"
-							maxlength="256" autocomplete="new-password">
-						<div class="form-text">At least 8 characters</div>
+							maxlength="256" autocomplete="new-password" aria-describedby="new-user-password-help">
+						<div class="form-text" id="new-user-password-help">At least 8 characters</div>
 					</div>
-					<div class="form-check form-switch">
-						<input type="checkbox" class="form-check-input" id="new-user-is-admin">
+					<div class="ju-switch form-check form-switch">
+						<input type="checkbox" role="switch" class="form-check-input" id="new-user-is-admin">
 						<label class="form-check-label" for="new-user-is-admin">Admin privileges</label>
 					</div>
-					<div class="form-check form-switch mt-2" id="new-user-close-alerts-container">
-						<input type="checkbox" class="form-check-input" id="new-user-can-close-alerts">
+					<div class="ju-switch form-check form-switch" id="new-user-close-alerts-container">
+						<input type="checkbox" role="switch" class="form-check-input" id="new-user-can-close-alerts"
+							aria-describedby="new-user-can-close-alerts-help">
 						<label class="form-check-label" for="new-user-can-close-alerts">Can close alerts</label>
-						<div class="form-text">Allow user to close/acknowledge alerts</div>
+						<div class="form-text" id="new-user-can-close-alerts-help">Allow user to close/acknowledge alerts</div>
 					</div>
 				</form>
-				<div id="create-user-error" class="text-danger mt-2 d-none" role="alert"></div>
+				<div id="create-user-error" class="ju-modal-error d-none" role="alert"></div>
 			</div>
 			<div class="modal-footer">
 				<button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
 				<button type="submit" form="create-user-form" class="btn btn-primary" id="create-user-btn">
-					<span class="material-icons me-1" aria-hidden="true">check</span> Create User
+					<span class="material-icons" aria-hidden="true">check</span>Create User
 				</button>
 			</div>
 		</div>
@@ -477,60 +483,60 @@
 </div>
 
 {# Edit User Modal #}
-<div class="modal fade" id="editUserModal" tabindex="-1" aria-labelledby="editUserModalLabel" aria-hidden="true">
+<div class="modal fade ju-modal--form" id="editUserModal" tabindex="-1" aria-labelledby="editUserModalLabel"
+	aria-hidden="true">
 	<div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
 		<div class="modal-content">
 			<div class="modal-header">
-				<h2 class="h5 modal-title" id="editUserModalLabel">
-					<span class="material-icons me-2" aria-hidden="true">edit</span>Edit User
-				</h2>
+				<h2 class="modal-title ju-modal-title" id="editUserModalLabel"><span class="material-icons ju-modal-icon"
+						aria-hidden="true">edit</span>Edit User</h2>
 				<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
 			</div>
 			<div class="modal-body">
-				<form id="edit-user-form" autocomplete="off">
+				<form id="edit-user-form" class="ju-modal-form" autocomplete="off">
 					<input type="hidden" id="edit-user-id">
-					<div class="mb-3">
-						<label for="edit-user-username" class="form-label">Username *</label>
+					<p class="ju-modal-note">Fields marked * are required.</p>
+					<div class="ju-field">
+						<label for="edit-user-username" class="form-label">Username <span class="ju-required"
+								aria-hidden="true">*</span></label>
 						<input type="text" class="form-control" id="edit-user-username" required minlength="1"
 							maxlength="64" autocomplete="off">
 					</div>
-					<div class="mb-3">
+					<div class="ju-field">
 						<label for="edit-user-role" class="form-label">Role</label>
 						<select class="form-select" id="edit-user-role">
 							<option value="user">User</option>
 							<option value="admin">Admin</option>
 						</select>
 					</div>
-					<div class="form-check form-switch mb-3" id="edit-user-close-alerts-container">
-						<input type="checkbox" class="form-check-input" id="edit-user-can-close-alerts">
+					<div class="ju-switch form-check form-switch" id="edit-user-close-alerts-container">
+						<input type="checkbox" role="switch" class="form-check-input" id="edit-user-can-close-alerts"
+							aria-describedby="edit-user-can-close-alerts-help">
 						<label class="form-check-label" for="edit-user-can-close-alerts">Can close alerts</label>
-						<div class="form-text">Allow user to close/acknowledge alerts</div>
+						<div class="form-text" id="edit-user-can-close-alerts-help">Allow user to close/acknowledge alerts</div>
 					</div>
-					<hr class="my-3">
-					<div class="mb-2">
-						<div class="d-flex align-items-center gap-2">
-							<span class="material-icons text-body-secondary" aria-hidden="true">vpn_key</span>
-							<span class="fw-semibold">Change Password</span>
+					<fieldset class="ju-fieldset" aria-describedby="edit-user-password-help">
+						<legend class="ju-legend"><span class="material-icons ju-icon-inline"
+								aria-hidden="true">vpn_key</span>Change Password</legend>
+						<p class="form-text" id="edit-user-password-help">Leave blank to keep the current password.</p>
+						<div class="ju-field">
+							<label for="edit-user-password" class="form-label">New Password</label>
+							<input type="password" class="form-control" id="edit-user-password" minlength="8"
+								maxlength="256" autocomplete="new-password">
 						</div>
-						<div class="form-text">Leave blank to keep the current password.</div>
-					</div>
-					<div class="mb-3">
-						<label for="edit-user-password" class="form-label">New Password</label>
-						<input type="password" class="form-control" id="edit-user-password" minlength="8"
-							maxlength="256" autocomplete="new-password">
-					</div>
-					<div class="mb-3">
-						<label for="edit-user-password-confirm" class="form-label">Confirm New Password</label>
-						<input type="password" class="form-control" id="edit-user-password-confirm" minlength="8"
-							maxlength="256" autocomplete="new-password">
-					</div>
+						<div class="ju-field">
+							<label for="edit-user-password-confirm" class="form-label">Confirm New Password</label>
+							<input type="password" class="form-control" id="edit-user-password-confirm" minlength="8"
+								maxlength="256" autocomplete="new-password">
+						</div>
+					</fieldset>
 				</form>
-				<div id="edit-user-error" class="text-danger mt-2 d-none" role="alert"></div>
+				<div id="edit-user-error" class="ju-modal-error d-none" role="alert"></div>
 			</div>
 			<div class="modal-footer">
 				<button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
 				<button type="submit" form="edit-user-form" class="btn btn-primary" id="edit-user-btn">
-					<span class="material-icons me-1" aria-hidden="true">check</span>Save Changes
+					<span class="material-icons" aria-hidden="true">check</span>Save Changes
 				</button>
 			</div>
 		</div>
@@ -538,62 +544,69 @@
 </div>
 
 {# Delete User Confirmation Modal #}
-<div class="modal fade" id="deleteUserModal" tabindex="-1" aria-labelledby="deleteUserModalLabel" aria-hidden="true">
+<div class="modal fade ju-modal--critical" id="deleteUserModal" tabindex="-1" aria-labelledby="deleteUserModalLabel"
+	aria-describedby="deleteUserModalDesc" aria-hidden="true">
 	<div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
 		<div class="modal-content">
-			<div class="modal-header bg-danger text-white">
-				<h2 class="h5 modal-title" id="deleteUserModalLabel"><span class="material-icons me-2"
+			<div class="modal-header">
+				<h2 class="modal-title ju-modal-title" id="deleteUserModalLabel"><span class="material-icons ju-modal-icon"
 						aria-hidden="true">warning</span>Delete User</h2>
-				<button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+				<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
 			</div>
 			<div class="modal-body">
-				<p class="mb-0">Delete user <strong id="delete-user-name"></strong>? This cannot be undone.</p>
+				<p class="ju-modal-lead" id="deleteUserModalDesc">Delete user <strong id="delete-user-name"></strong>?</p>
+				<p class="ju-modal-consequence"><span class="material-icons ju-icon-inline" aria-hidden="true">warning</span><span>The user account is permanently removed.</span></p>
 			</div>
 			<div class="modal-footer">
 				<button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-				<button type="button" class="btn btn-danger" id="confirm-delete-user-btn">Delete</button>
+				<button type="button" class="btn btn-danger" id="confirm-delete-user-btn"><span class="material-icons"
+						aria-hidden="true">delete</span>Delete</button>
 			</div>
 		</div>
 	</div>
 </div>
 
 {# Revoke User Sessions Confirmation Modal #}
-<div class="modal fade" id="revokeSessionsModal" tabindex="-1" aria-labelledby="revokeSessionsModalLabel"
-	aria-hidden="true">
+<div class="modal fade ju-modal--critical" id="revokeSessionsModal" tabindex="-1"
+	aria-labelledby="revokeSessionsModalLabel" aria-describedby="revokeSessionsModalDesc" aria-hidden="true">
 	<div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
 		<div class="modal-content">
-			<div class="modal-header bg-warning">
-				<h2 class="h5 modal-title" id="revokeSessionsModalLabel"><span class="material-icons me-2"
-						aria-hidden="true">logout</span>Revoke Sessions</h2>
+			<div class="modal-header">
+				<h2 class="modal-title ju-modal-title" id="revokeSessionsModalLabel"><span
+						class="material-icons ju-modal-icon" aria-hidden="true">logout</span>Revoke Sessions</h2>
 				<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
 			</div>
 			<div class="modal-body">
-				<p class="mb-0">Sign out <strong id="revoke-sessions-user-name"></strong> everywhere? All active sessions end immediately.</p>
+				<p class="ju-modal-lead" id="revokeSessionsModalDesc">Sign out <strong id="revoke-sessions-user-name"></strong> everywhere?</p>
+				<p class="ju-modal-consequence"><span class="material-icons ju-icon-inline" aria-hidden="true">warning</span><span>All active sessions end immediately.</span></p>
 			</div>
 			<div class="modal-footer">
 				<button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-				<button type="button" class="btn btn-warning" id="confirm-revoke-sessions-btn">Revoke sessions</button>
+				<button type="button" class="btn btn-warning" id="confirm-revoke-sessions-btn"><span
+						class="material-icons" aria-hidden="true">logout</span>Revoke sessions</button>
 			</div>
 		</div>
 	</div>
 </div>
 
 {# Delete Recipient Confirmation Modal #}
-<div class="modal fade" id="deleteRecipientModal" tabindex="-1" aria-labelledby="deleteRecipientModalLabel"
-	aria-hidden="true">
+<div class="modal fade ju-modal--critical" id="deleteRecipientModal" tabindex="-1"
+	aria-labelledby="deleteRecipientModalLabel" aria-describedby="deleteRecipientModalDesc" aria-hidden="true">
 	<div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
 		<div class="modal-content">
-			<div class="modal-header bg-danger text-white">
-				<h2 class="h5 modal-title" id="deleteRecipientModalLabel"><span class="material-icons me-2"
-						aria-hidden="true">warning</span>Delete Recipient</h2>
-				<button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+			<div class="modal-header">
+				<h2 class="modal-title ju-modal-title" id="deleteRecipientModalLabel"><span
+						class="material-icons ju-modal-icon" aria-hidden="true">warning</span>Delete Recipient</h2>
+				<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
 			</div>
 			<div class="modal-body">
-				<p class="mb-0">Delete recipient <strong id="delete-recipient-name"></strong>? This cannot be undone.</p>
+				<p class="ju-modal-lead" id="deleteRecipientModalDesc">Delete recipient <strong id="delete-recipient-name"></strong>?</p>
+				<p class="ju-modal-consequence"><span class="material-icons ju-icon-inline" aria-hidden="true">warning</span><span>The recipient is permanently removed and will no longer receive alerts.</span></p>
 			</div>
 			<div class="modal-footer">
 				<button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-				<button type="button" class="btn btn-danger" id="confirm-delete-recipient-btn">Delete</button>
+				<button type="button" class="btn btn-danger" id="confirm-delete-recipient-btn"><span
+						class="material-icons" aria-hidden="true">delete</span>Delete</button>
 			</div>
 		</div>
 	</div>

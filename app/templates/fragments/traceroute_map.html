@@ -13,16 +13,14 @@
 
 {% macro status_badge(h) %}
 {% set status = h.status_display or h.status %}
-{% if h._collapsed or status == 'interpolated' or status == 'n/a' %}
-<span class="badge tr-badge tr-badge--na" title="Values are interpolated, not measured">{{ labels.estimated }}</span>
-{% elif status == 'ok' %}
-<span class="badge tr-badge tr-badge--ok">OK</span>
+{% if status == 'ok' %}
+<span class="badge tr-badge ju-status-badge--success">OK</span>
 {% elif h._synthetic_destination %}
-<span class="badge tr-badge tr-badge--warn" title="The destination did not answer the probes">No reply</span>
+<span class="badge tr-badge ju-status-badge--warning" title="The destination did not answer the probes">{{ labels.no_reply }}</span>
 {% elif status == 'partial' %}
-<span class="badge tr-badge tr-badge--warn" title="Some probes were lost">Partial</span>
+<span class="badge tr-badge ju-status-badge--warning" title="Some probes were lost">Partial</span>
 {% else %}
-<span class="badge tr-badge tr-badge--bad" title="No answer to the probes">Timeout</span>
+<span class="badge tr-badge ju-status-badge--warning" title="No answer to the probes">{{ labels.no_reply }}</span>
 {% endif %}
 {% endmacro %}
 
@@ -38,7 +36,7 @@
         <span class="tr-step-body">
             <span class="tr-step-title">{{ node.title }}</span>
             <span class="tr-step-sub">{{ node.subtitle }}</span>
-            <span class="tr-step-state">{{ node.location_label }} · {{ node.measurement_label }}</span>
+            <span class="tr-step-state">{{ node.state_label }}</span>
         </span>
         <span class="material-icons tr-step-icon" aria-hidden="true">{{ node.icon }}</span>
     </button>
@@ -162,7 +160,7 @@
                     </thead>
                     <tbody>
                         {% for h in hops %}
-                        {% set blocked = h._collapsed or h.status == 'interpolated' %}
+                        {% set blocked = h._collapsed %}
                         {% set first_hop = h._raw_hops[0].hop if (h._raw_hops and h._raw_hops|length) else h.hop %}
                         {% set last_hop = h._raw_hops[-1].hop if (h._raw_hops and h._raw_hops|length) else h.hop %}
                         <tr class="tr-hop-row{% if blocked %} tr-hop-row--blocked{% elif h.status == 'timeout' %} tr-hop-row--timeout{% endif %}"
@@ -171,7 +169,7 @@
                             {% if blocked %}
                             <td colspan="3" class="tr-blocked-cell">
                                 <span class="tr-blocked-title">{{ labels.no_reply }}</span>
-                                {% if h._raw_hops and h._raw_hops|length > 1 %}<span class="tr-host">{{ h._raw_hops|length }} hops · {{ labels.estimated|lower }}</span>{% endif %}
+                                {% if h._raw_hops and h._raw_hops|length > 1 %}<span class="tr-host">{{ h.hostname_display }}</span>{% endif %}
                             </td>
                             {% else %}
                             <td class="tr-ip-cell">
@@ -234,7 +232,8 @@
                     {% if route_start_is_mapped %}<li><span class="tr-legend-dot tr-legend-dot--start" aria-hidden="true"></span>Start</li>{% endif %}
                     <li><span class="tr-legend-dot tr-legend-dot--hop" aria-hidden="true"></span>Hop</li>
                     {% if destination_on_map %}<li><span class="tr-legend-dot tr-legend-dot--destination" aria-hidden="true"></span>Destination</li>{% endif %}
-                    {% if has_interpolation %}<li><span class="tr-legend-dash" aria-hidden="true"></span>Interpolated</li>{% endif %}
+                    {% if map_features and map_features.has_approximate %}<li><span class="tr-legend-dot tr-legend-dot--approximate" aria-hidden="true"></span>Approximate position (~)</li>{% endif %}
+                    {% if map_features and map_features.has_unknown_link %}<li><span class="tr-legend-dash" aria-hidden="true"></span>Unknown path (schematic)</li>{% endif %}
                 </ul>
             </div>
         </section>

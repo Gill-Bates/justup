@@ -345,8 +345,14 @@ def test_only_admins_see_system_alerts(db_path):
     admin = {"id": sqlite_db.create_user(conn, username="root", password_hash="x", is_admin=True), "is_admin": 1}  # noqa: S106
     user = {"id": sqlite_db.create_user(conn, username="bob", password_hash="x", is_admin=False), "is_admin": 0}  # noqa: S106
     sink.write(_alert("crashed"))
+    (row,) = _rows(db_path)
     assert inbox.count_unread(conn, admin) == 1
     assert inbox.count_unread(conn, user) == 0
+    admin_items, admin_total = inbox.list_notifications(conn, admin)
+    user_items, user_total = inbox.list_notifications(conn, user)
+    assert admin_total == 1 and admin_items[0]["id"] == row["id"]
+    assert user_items == [] and user_total == 0
+    assert inbox.get_notification(conn, user, row["id"]) is None
     sqlite_db.close_connection(conn)
 
 
@@ -383,20 +389,26 @@ def test_alert_is_stored_after_the_database_returns(db_path):
 
 def test_pending_alerts_stay_bounded_and_are_dropped_after_the_attempt_limit():
     async def scenario():
+        attempts: list[None] = []
+
         async def no_sleep(_delay: float) -> None:
             await asyncio.sleep(0)
 
         def down():
+            attempts.append(None)
             raise sqlite3.OperationalError("down")
 
         sink = ServiceAlertSink(down, sleep=no_sleep, max_attempts=3)
         for i in range(80):
             sink(_alert("crashed", crashes_total=i))
         assert len(sink._pending) == sink._pending.maxlen
+        expected_attempts = len(sink._pending) * 3
         await _until(lambda: not sink._pending, timeout=5)
         await sink.aclose()
+        return len(attempts), expected_attempts
 
-    asyncio.run(scenario())
+    attempts, expected_attempts = asyncio.run(scenario())
+    assert attempts == expected_attempts
 
 
 def test_stale_incident_of_a_previous_process_is_closed_after_the_first_stable_run(db_path):
@@ -446,6 +458,7 @@ def test_scheduler_heartbeat_continues_while_iterations_fail(tmp_path, monkeypat
         beats: list[int] = []
         failures: list[str] = []
         oks: list[int] = []
+        loop_turns = 0
         outcomes = iter([RuntimeError(SECRET), RuntimeError(SECRET), None, None])
 
         async def iteration(_loop, _generation=None):
@@ -457,29 +470,54 @@ def test_scheduler_heartbeat_continues_while_iterations_fail(tmp_path, monkeypat
         async def idle():
             if len(beats) + len(failures) + len(oks) > 12:
                 sched._stop.set()
+            await asyncio.sleep(0)
+
+        async def watch_loop_turns():
+            nonlocal loop_turns
+            while not sched._stop.is_set():
+                loop_turns += 1
+                await asyncio.sleep(0)
 
         sched.on_heartbeat = lambda: beats.append(1)
         sched.on_iteration_failed = failures.append
         sched.on_iteration_ok = lambda: oks.append(1)
         monkeypatch.setattr(sched, "_run_iteration", iteration)
         monkeypatch.setattr(sched, "_idle_sleep", idle)
-        await asyncio.wait_for(sched._run_loop(), timeout=5)
-        return beats, failures, oks
+        watcher = asyncio.create_task(watch_loop_turns())
+        try:
+            await asyncio.wait_for(sched._run_loop(), timeout=5)
+        finally:
+            sched._stop.set()
+            await asyncio.wait_for(watcher, timeout=1)
+        return beats, failures, oks, loop_turns
 
-    beats, failures, oks = asyncio.run(scenario())
+    beats, failures, oks, loop_turns = asyncio.run(scenario())
     assert failures == ["RuntimeError", "RuntimeError"]  # class name only
     assert oks  # a successful iteration ends the series
     assert len(beats) == len(failures) + len(oks)
+    assert loop_turns > 0  # idle yields so watchdogs and bounded waits can run
 
 
 def test_release_checker_reports_iteration_outcomes():
-    seen: list[str] = []
+    seen: list[tuple[str, str | None]] = []
     rc = ReleaseChecker(
         lambda: None,
-        on_failure=lambda t: seen.append(f"fail:{t}"),
-        on_success=lambda: seen.append("ok"),
+        on_failure=lambda error: seen.append(("failure", error)),
+        on_success=lambda: seen.append(("success", None)),
     )
-    for status in ("error", "updated", "skipped", "busy", "maintenance", "rate_limited"):
-        rc._report(status)
-    rc._report("crashed", "OperationalError")
-    assert seen == ["fail:ReleaseCheckError", "ok", "fail:OperationalError"]
+    outcomes = [
+        ("release", "ReleaseCheckError", [("success", None)]),
+        ("none", "ReleaseCheckError", [("success", None)]),
+        ("not_modified", "ReleaseCheckError", [("success", None)]),
+        ("rate_limited", "ReleaseCheckError", []),
+        ("error", "ReleaseCheckError", [("failure", "ReleaseCheckError")]),
+        ("skipped", "ReleaseCheckError", []),
+        ("busy", "ReleaseCheckError", []),
+        ("maintenance", "ReleaseCheckError", []),
+        ("stopped", "ReleaseCheckError", []),
+        ("crashed", "OperationalError", [("failure", "OperationalError")]),
+    ]
+    for status, exc_type, expected in outcomes:
+        seen.clear()
+        rc._report(status, exc_type)
+        assert seen == expected, f"unexpected supervisor outcome for {status}"

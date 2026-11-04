@@ -84,7 +84,7 @@ def sample_geo_points():
 
 @pytest.fixture(scope="module")
 def model():
-    return prm.build_route_map_model(sample_geo_points(), sample_hops(), has_interpolation=True)
+    return prm.build_route_map_model(sample_geo_points(), sample_hops())
 
 
 # ─── shared decision with the web map ────────────────────────────────────────────
@@ -193,17 +193,32 @@ def test_close_points_share_label_and_overlapping_groups_fan_out():
     assert groups[0].display == pytest.approx(groups[0].center)
 
 
-def test_dashed_segment_rule_matches_web():
-    a, b = {"segment_to_next": "dashed"}, {}
-    assert prm.segment_is_dashed(a, b)
-    assert prm.segment_is_dashed({}, {"_interpolated": True})
-    assert not prm.segment_is_dashed({"segment_to_next": "solid"}, {})
+def test_chain_joins_every_plotted_point_and_reads_the_servers_dash_flag():
+    pts = [
+        _pt(7, FRANKFURT, "Frankfurt", segment_to_next="dashed"),
+        _pt(8, (50.38, 7.33), "Kottenheim", map_role="estimate", segment_to_next="dashed"),
+        _pt(10, FRANKFURT, "Frankfurt"),
+        _pt(11, DUESSELDORF, "Wuppertal", segment_to_next="dashed"),
+        _pt(13, RATINGEN, "Ratingen", _destination=True, _approximate=True),
+    ]
+    assert prm.route_segments(pts) == [(0, 1, True), (1, 2, True), (2, 3, False), (3, 4, True)]
 
 
-def test_accuracy_radius_cap():
-    assert prm.accuracy_radius_km({"accuracy_radius_km": 25}) == 25.0
-    assert prm.accuracy_radius_km({"accuracy_radius_km": 5000}) is None
-    assert prm.accuracy_radius_km({"accuracy_radius_km": None}) is None
+def test_estimate_gets_its_own_marker_with_a_tilde_label():
+    est = _pt(8, (50.38, 7.33), "Kottenheim", map_role="estimate", _approximate=True)
+    groups = _groups([_pt(7, FRANKFURT, "Frankfurt"), est, _pt(10, FRANKFURT, "Frankfurt")])
+    assert [(g.kind, g.label, g.members) for g in groups] == [
+        ("hop", "7", (0,)),
+        ("estimate", "~8", (1,)),
+        ("hop", "10", (2,)),
+    ]
+    assert groups[1].approximate
+
+
+def test_accuracy_radius_is_the_one_the_server_allows_to_draw():
+    assert prm.accuracy_radius_km({"map_radius_km": 25}) == 25.0
+    assert prm.accuracy_radius_km({"accuracy_radius_km": 25}) is None  # no server decision, nothing drawn
+    assert prm.accuracy_radius_km({"map_radius_km": None}) is None
 
 
 # ─── dataset ─────────────────────────────────────────────────────────────────────
@@ -308,8 +323,9 @@ def test_pdf_contains_route_map_section(monkeypatch):
         "Geolocated route for 8 of 13 hops",
         "Hop",
         "Destination",
-        "Interpolated",
-        "Approximate",
+        "Link estimated or unknown",
+        "Link measured",
+        "Approximate (~)",
         pdf_route_attribution(),
         "Frankfurt",
         "Ratingen",
@@ -321,7 +337,7 @@ def test_pdf_contains_route_map_section(monkeypatch):
 def test_pdf_without_plotted_hops_says_so(monkeypatch):
     b = pdf_contracts._full_builder(monkeypatch, hops=sample_hops())
     b.elements = []
-    b._add_route_map(sample_hops(), [], False)
+    b._add_route_map(sample_hops(), [])
     assert prm.NO_MAP_NOTE in pdf_contracts._texts(b)
 
 
@@ -336,3 +352,54 @@ def pdf_route_attribution():
 
 def test_report_module_uses_shared_helpers():
     assert pdf_report.build_route_map_model is prm.build_route_map_model
+
+
+def test_pdf_and_web_read_the_same_segments_from_the_servers_points(monkeypatch):
+    """Backend points of the Frankfurt/Kottenheim/Ratingen route give the same line in the PDF reader."""
+    from app.services import traceroute_geo as tg
+    from tests.test_traceroute_route_model import _owner_route
+
+    _hops_in, _dest, points = _owner_route(monkeypatch)
+    model = prm.build_route_map_model(points, sample_hops())
+    segments = [
+        (model.points[a]["hop"], model.points[b]["hop"], dashed) for a, b, dashed in prm.route_segments(model.points)
+    ]
+    # Same sequence the web map draws (tests/js/traceroute-map-groups.test.mjs pins it for the JS reader).
+    assert segments == [(7, 8, True), (8, 10, True), (10, 11, False), (11, 13, True)]
+    assert model.has_unknown_link and model.has_approximate
+    assert tg.route_map_features(points) == {"has_unknown_link": True, "has_approximate": True}
+    assert _draw(model)
+
+
+def test_pdf_names_only_path_countries_and_a_capped_set_of_places_from_the_shared_rule(monkeypatch):
+    """The labels the PDF draws come from route_map_rules.select_labels (the web map reads the same list)."""
+    from app.services import route_map_rules as rules
+
+    pts = [
+        _pt(3, FRANKFURT, "Frankfurt"),
+        _pt(5, AMSTERDAM, "Amsterdam", country="NL"),
+        _pt(7, (48.86, 2.35), "Paris", country="FR"),
+        _pt(9, (32.08, 34.78), "Tel Aviv", country="IL", map_role="estimate", _approximate=True),
+        _pt(13, RATINGEN, "Ratingen", _destination=True, _is_terminal=True, segment_to_next=None),
+    ]
+    model_ = prm.build_route_map_model(pts, sample_hops())
+    selected = rules.select_labels(model_.points)
+    drawn: list[str] = []
+    for name in ("drawString", "drawCentredString", "drawRightString"):
+        original = getattr(rl_canvas.Canvas, name)
+
+        def spy(self, x, y, text, *a, _orig=original, **k):
+            drawn.append(str(text))
+            return _orig(self, x, y, text, *a, **k)
+
+        monkeypatch.setattr(rl_canvas.Canvas, name, spy)
+    _draw(model_, width=480, height=280)
+    allowed_countries = {c["name"] for c in selected["countries"]}
+    allowed_cities = {c["name"] for c in selected["cities"]}
+    country_names = {c[0] for c in prm.load_basemap().countries}
+    assert {d for d in drawn if d in country_names} <= allowed_countries
+    assert allowed_countries == {"Germany", "Netherlands", "France", "Israel"}
+    assert len(allowed_cities) <= rules.MAX_CITY_LABELS
+    city_names = {c[0] for c in rules._load("labels", rules.LABELS_FILE)["cities"]}
+    assert {d for d in drawn if d in city_names} <= allowed_cities
+    assert {"Oslo", "Moscow", "Casablanca"}.isdisjoint(drawn)

@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import io
+import json
 import sqlite3
 import tarfile
 import threading
@@ -67,23 +68,62 @@ def _tar(path: Path, entries: list[tuple[str, bytes | None]], *, extra=None) -> 
     return path
 
 
-def _db_bytes() -> bytes:
-    """A small but real SQLite database image."""
+def _db_bytes(schema_version: int = sqlite_db.SCHEMA_VERSION) -> bytes:
+    """A real application database image at the requested supported schema version."""
     with TemporaryDirectory() as tmp:
-        db = Path(tmp) / "x.db"
-        conn = __import__("sqlite3").connect(db)
-        conn.execute("CREATE TABLE t(a INTEGER)")
-        conn.execute("INSERT INTO t VALUES (1)")
+        db = Path(tmp) / "justup.db"
+        conn = sqlite_db.connect(db)
+        sqlite_db.init_schema(conn)
+        if schema_version <= 2:
+            conn.execute("DROP TABLE alert_dispatch_outbox")
+            conn.execute("ALTER TABLE alerts DROP COLUMN active_incident")
+        if schema_version == 1:
+            conn.execute("DROP TABLE notification_channel_state")
+            conn.execute("ALTER TABLE notification_queue DROP COLUMN limited_attempts")
+        conn.execute("INSERT INTO settings VALUES (?, ?, ?)", ("migration-marker", "preserved", "2026-01-01T00:00:00Z"))
+        conn.execute(f"PRAGMA user_version = {schema_version}")
         conn.commit()
-        conn.close()
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        sqlite_db.close_connection(conn)
         return db.read_bytes()
 
 
 DB_BYTES = _db_bytes()
 
 
-def _good(path: Path, db: bytes = DB_BYTES) -> Path:
-    return _tar(path, [("data", None), ("data/sqlite", None), ("data/sqlite/x.db", db), ("data/tsdb", None)])
+def _manifest_bytes(db: bytes, *, app_version: str | None = None, build_id: str | None = None) -> bytes:
+    with TemporaryDirectory() as tmp:
+        db_file = Path(tmp) / "justup.db"
+        db_file.write_bytes(db)
+        manifest = backup_mod.create_backup_manifest(db_file)
+    if app_version is not None:
+        manifest["application"]["version"] = app_version
+    if build_id is not None:
+        manifest["application"]["build_id"] = build_id
+    return json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n"
+
+
+def _good(
+    path: Path,
+    db: bytes = DB_BYTES,
+    *,
+    manifest_db: bytes | None = None,
+    app_version: str | None = None,
+    build_id: str | None = None,
+) -> Path:
+    manifest_bytes = _manifest_bytes(
+        db if manifest_db is None else manifest_db, app_version=app_version, build_id=build_id
+    )
+    return _tar(
+        path,
+        [
+            ("data", None),
+            ("data/sqlite", None),
+            ("data/sqlite/justup.db", db),
+            ("data/tsdb", None),
+            ("data/backup-manifest.json", manifest_bytes),
+        ],
+    )
 
 
 class TestFilenameAndHmac:
@@ -100,6 +140,24 @@ class TestFilenameAndHmac:
         digest = backup_mod.compute_backup_hmac(archive)
         archive.write_bytes(archive.read_bytes() + b"x")
         assert not verify_backup_hmac(archive, digest)
+
+    def test_manifest_is_covered_by_archive_hmac(self, tmp_path: Path):
+        archive = _good(tmp_path / "source.tar.bz2")
+        digest = backup_mod.compute_backup_hmac(archive)
+        entries = []
+        with tarfile.open(archive, mode="r:bz2") as tar:
+            for member in tar.getmembers():
+                if member.isdir():
+                    entries.append((member.name, None))
+                    continue
+                handle = tar.extractfile(member)
+                assert handle is not None
+                content = handle.read()
+                if member.name == "data/backup-manifest.json":
+                    content += b" "
+                entries.append((member.name, content))
+        changed = _tar(tmp_path / "changed.tar.bz2", entries)
+        assert not verify_backup_hmac(changed, digest)
 
     def test_other_instance_key_does_not_verify(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         archive = _good(tmp_path / "a.tar.bz2")
@@ -128,7 +186,85 @@ class TestFilenameAndHmac:
 class TestArchiveValidation:
     def test_valid_archive_extracts(self, tmp_path: Path):
         extracted = backup_mod.extract_backup(_good(tmp_path / "a.tar.bz2"), tmp_path / "out")
-        assert (extracted / "sqlite" / "x.db").read_bytes() == DB_BYTES
+        assert (extracted / "sqlite" / "justup.db").read_bytes() == DB_BYTES
+
+    def test_missing_manifest_and_duplicate_paths_are_rejected(self, tmp_path: Path):
+        archive = _tar(
+            tmp_path / "missing.tar.bz2",
+            [("data", None), ("data/sqlite", None), ("data/sqlite/justup.db", DB_BYTES)],
+        )
+        with pytest.raises(BackupError, match="Missing backup manifest"):
+            backup_mod.inspect_backup_archive(archive)
+
+        duplicate = _tar(
+            tmp_path / "duplicate.tar.bz2",
+            [
+                ("data", None),
+                ("data/sqlite", None),
+                ("data/sqlite/justup.db", DB_BYTES),
+                ("data/sqlite/justup.db", DB_BYTES),
+                ("data/backup-manifest.json", _manifest_bytes(DB_BYTES)),
+            ],
+        )
+        with pytest.raises(BackupError, match="Duplicate archive path"):
+            backup_mod.inspect_backup_archive(duplicate)
+
+    def test_missing_application_database_is_rejected(self, tmp_path: Path):
+        archive = _tar(
+            tmp_path / "missing-db.tar.bz2",
+            [
+                ("data", None),
+                ("data/sqlite", None),
+                ("data/sqlite/other.db", DB_BYTES),
+                ("data/backup-manifest.json", _manifest_bytes(DB_BYTES)),
+            ],
+        )
+        with pytest.raises(BackupError, match=r"Missing data/sqlite/justup\.db"):
+            backup_mod.inspect_backup_archive(archive)
+
+    def test_unknown_metadata_and_fingerprint_mismatch_are_rejected(self):
+        unknown = json.loads(_manifest_bytes(DB_BYTES))
+        unknown["extra"] = True
+        with pytest.raises(BackupError, match="Manifest fields"):
+            backup_mod.validate_backup_manifest(json.dumps(unknown).encode())
+        mismatched = json.loads(_manifest_bytes(DB_BYTES))
+        mismatched["database"]["schema_sha256"] = "0" * 64
+        with pytest.raises(BackupError, match="fingerprint"):
+            backup_mod.validate_backup_manifest(json.dumps(mismatched).encode())
+
+    def test_app_version_comparison_is_numeric_and_fails_closed(self, monkeypatch: pytest.MonkeyPatch):
+        import app.utils.version as version_module
+
+        manifest = backup_mod.validate_backup_manifest(_manifest_bytes(DB_BYTES, app_version="1.0.2"))
+        monkeypatch.setattr(version_module, "get_version", lambda: "1.0.10")
+        backup_mod.validate_backup_compatibility(manifest)
+        with pytest.raises(BackupError, match="newer application version"):
+            backup_mod.validate_backup_compatibility(
+                backup_mod.validate_backup_manifest(_manifest_bytes(DB_BYTES, app_version="1.0.11"))
+            )
+        with pytest.raises(BackupError, match="cannot be compared safely"):
+            backup_mod.validate_backup_compatibility(
+                backup_mod.validate_backup_manifest(_manifest_bytes(DB_BYTES, app_version="unknown"))
+            )
+
+    def test_development_builds_require_an_identical_build_id(self, monkeypatch: pytest.MonkeyPatch):
+        import app.utils.version as version_module
+
+        monkeypatch.setattr(version_module, "get_version", lambda: "dev")
+        monkeypatch.setattr(version_module, "get_build_info", lambda: "build-123")
+        manifest = backup_mod.validate_backup_manifest(
+            _manifest_bytes(DB_BYTES, app_version="dev", build_id="build-123")
+        )
+        backup_mod.validate_backup_compatibility(manifest)
+        manifest["application"]["build_id"] = "build-other"
+        with pytest.raises(BackupError, match="identical, verifiable build ID"):
+            backup_mod.validate_backup_compatibility(manifest)
+
+    def test_missing_migration_path_is_rejected(self, monkeypatch: pytest.MonkeyPatch):
+        manifest = backup_mod.validate_backup_manifest(_manifest_bytes(_db_bytes(1)))
+        monkeypatch.setattr(sqlite_db, "_missing_migrations", lambda _version: True)
+        with pytest.raises(BackupError, match="No migration path"):
+            backup_mod.validate_backup_compatibility(manifest)
 
     def test_too_many_members(self, tmp_path: Path):
         archive = _tar(tmp_path / "a.tar.bz2", [("data", None)] + [(f"data/sqlite/{i}", b"") for i in range(5)])
@@ -166,8 +302,222 @@ class TestArchiveValidation:
     def test_garbage_is_reported_as_corrupt(self, tmp_path: Path):
         bad = tmp_path / "bad.tar.bz2"
         bad.write_bytes(b"BZh9notreallybzip")
-        with pytest.raises(BackupError, match="Extraction failed"):
+        with pytest.raises(BackupError, match="Archive validation failed"):
             backup_mod.extract_backup(bad, tmp_path / "out")
+
+
+def _entries(db: bytes = DB_BYTES, manifest_bytes: bytes | None = None) -> list[tuple[str, bytes | None]]:
+    return [
+        ("data", None),
+        ("data/sqlite", None),
+        ("data/sqlite/justup.db", db),
+        ("data/tsdb", None),
+        ("data/backup-manifest.json", manifest_bytes or _manifest_bytes(db)),
+    ]
+
+
+class TestExtractionRevalidatesTheArchive:
+    """Extraction validates the stream it extracts from, also when a manifest was already inspected."""
+
+    @staticmethod
+    def _signed() -> tuple[bytes, dict[str, object]]:
+        """Manifest bytes as embedded in the test archives, plus the parsed form a prior inspection returns."""
+        raw = _manifest_bytes(DB_BYTES)
+        return raw, backup_mod.validate_backup_manifest(raw)
+
+    def test_unexpected_content_is_rejected_although_a_manifest_was_passed(self, tmp_path: Path):
+        raw, manifest = self._signed()
+        archive = _tar(tmp_path / "a.tar.bz2", [*_entries(manifest_bytes=raw), ("data/unknown/x", b"x")])
+        with pytest.raises(BackupError, match="Unexpected content"):
+            backup_mod.extract_backup(archive, tmp_path / "out", manifest=manifest)
+        assert not (tmp_path / "out" / "data" / "unknown").exists()
+
+    @pytest.mark.parametrize("kind", [tarfile.SYMTYPE, tarfile.LNKTYPE])
+    def test_links_inside_the_archive_are_rejected_although_a_manifest_was_passed(self, tmp_path: Path, kind):
+        raw, manifest = self._signed()
+        info = tarfile.TarInfo("data/sqlite/link.db")
+        info.type = kind
+        info.linkname = "data/sqlite/justup.db" if kind == tarfile.LNKTYPE else "justup.db"
+        archive = _tar(tmp_path / "a.tar.bz2", _entries(manifest_bytes=raw), extra=info)
+        with pytest.raises(BackupError, match="Links or special"):
+            backup_mod.extract_backup(archive, tmp_path / "out", manifest=manifest)
+        assert not (tmp_path / "out" / "data" / "sqlite" / "link.db").exists()
+
+    def test_duplicate_paths_are_rejected_although_a_manifest_was_passed(self, tmp_path: Path):
+        raw, manifest = self._signed()
+        archive = _tar(tmp_path / "a.tar.bz2", [*_entries(manifest_bytes=raw), ("data/sqlite/justup.db", b"other")])
+        with pytest.raises(BackupError, match="Duplicate archive path"):
+            backup_mod.extract_backup(archive, tmp_path / "out", manifest=manifest)
+
+    def test_a_file_used_as_directory_is_rejected(self, tmp_path: Path):
+        archive = _tar(tmp_path / "a.tar.bz2", [*_entries(), ("data/tsdb/x", b"1"), ("data/tsdb/x/y", b"2")])
+        with pytest.raises(BackupError, match="also used as a directory"):
+            backup_mod.inspect_backup_archive(archive)
+        late_parent = _tar(tmp_path / "b.tar.bz2", [*_entries(), ("data/tsdb/x/y", b"2"), ("data/tsdb/x", b"1")])
+        with pytest.raises(BackupError, match="also used as a directory"):
+            backup_mod.inspect_backup_archive(late_parent)
+
+    def test_manifest_that_differs_from_the_inspected_one_is_rejected(self, tmp_path: Path):
+        _raw, manifest = self._signed()
+        other_db = _db_bytes(2)
+        archive = _good(tmp_path / "other.tar.bz2", other_db)
+        with pytest.raises(BackupError, match="Manifest changed"):
+            backup_mod.extract_backup(archive, tmp_path / "out", manifest=manifest)
+
+    def test_archive_changed_after_inspection_is_rejected(self, tmp_path: Path):
+        raw, _manifest = self._signed()
+        archive = _tar(tmp_path / "a.tar.bz2", _entries(manifest_bytes=raw))
+        manifest = backup_mod.inspect_backup_archive(archive)
+        _tar(archive, [*_entries(manifest_bytes=raw), ("data/unknown/x", b"x")])  # same path, new content
+        with pytest.raises(BackupError, match="Unexpected content"):
+            backup_mod.extract_backup(archive, tmp_path / "out", manifest=manifest)
+        assert not (tmp_path / "out" / "data" / "unknown").exists()
+
+    def test_archive_replaced_between_inspection_and_extraction_is_not_reopened(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        archive = _good(tmp_path / "a.tar.bz2")
+        opened: list[Path] = []
+        real_open = Path.open
+
+        def spy(self, *args, **kwargs):
+            if self == archive:
+                opened.append(self)
+            return real_open(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "open", spy)
+        backup_mod.extract_backup(archive, tmp_path / "out")  # no manifest: inspection and extraction in one run
+        assert len(opened) == 1
+
+    def test_valid_archive_extracts_with_and_without_a_passed_manifest(self, tmp_path: Path):
+        archive = _good(tmp_path / "a.tar.bz2")
+        manifest = backup_mod.inspect_backup_archive(archive)
+        extracted = backup_mod.extract_backup(archive, tmp_path / "out1", manifest=manifest)
+        assert (extracted / "sqlite" / "justup.db").read_bytes() == DB_BYTES
+        assert (extracted / "backup-manifest.json").is_file() and (extracted / "tsdb").is_dir()
+        assert backup_mod.extract_backup(archive, tmp_path / "out2") == tmp_path / "out2" / "data"
+
+
+class TestBoundedMemberHandling:
+    def test_member_limit_boundary(self, tmp_path: Path):
+        archive = _good(tmp_path / "a.tar.bz2")  # five members
+        backup_mod.inspect_backup_archive(archive, max_members=5)
+        with pytest.raises(BackupError, match="Too many"):
+            backup_mod.inspect_backup_archive(archive, max_members=4)
+        assert backup_mod.extract_backup(archive, tmp_path / "ok", max_members=5).is_dir()
+        with pytest.raises(BackupError, match="Too many"):
+            backup_mod.extract_backup(archive, tmp_path / "no", max_members=4)
+
+    def test_validate_members_boundary_for_generic_iterables(self):
+        def members(count: int):
+            for index in range(count):
+                info = tarfile.TarInfo(f"data/tsdb/{index}")
+                yield info
+
+        with pytest.raises(BackupError, match="Too many"):
+            backup_mod.validate_members(members(4), max_members=3)
+        with pytest.raises(BackupError, match="Missing backup manifest"):  # three members pass the limit check
+            backup_mod.validate_members(members(3), max_members=3)
+
+    def test_inspection_does_not_keep_every_member_in_the_tar_parser(self, tmp_path: Path, monkeypatch):
+        entries = [*_entries(), *((f"data/tsdb/f{i}", b"") for i in range(3000))]
+        archive = _tar(tmp_path / "a.tar.bz2", entries)
+        opened: list[tarfile.TarFile] = []
+        real_open = tarfile.open
+
+        def spy(*args, **kwargs):
+            tar = real_open(*args, **kwargs)
+            opened.append(tar)
+            return tar
+
+        monkeypatch.setattr(backup_mod.tarfile, "open", spy)
+        backup_mod.inspect_backup_archive(archive)
+        assert opened and all(len(tar.members) <= 1 for tar in opened)
+
+    def test_an_oversized_archive_stops_reading_at_the_limit(self, tmp_path: Path, monkeypatch):
+        archive = _tar(tmp_path / "a.tar.bz2", [("data", None)] + [(f"data/tsdb/f{i}", b"") for i in range(5000)])
+        parsed = 0
+        real_next = tarfile.TarFile.next
+
+        def counting_next(self):
+            nonlocal parsed
+            parsed += 1
+            return real_next(self)
+
+        monkeypatch.setattr(tarfile.TarFile, "next", counting_next)
+        with pytest.raises(BackupError, match="Too many"):
+            backup_mod.inspect_backup_archive(archive, max_members=50)
+        assert parsed <= 60  # aborted right after the limit instead of reading all 5001 headers
+
+    def test_many_small_entries_stay_within_a_modest_memory_budget(self, tmp_path: Path):
+        import tracemalloc
+
+        entries = [*_entries(), *((f"data/tsdb/f{i}", b"") for i in range(60_000))]
+        archive = _tar(tmp_path / "a.tar.bz2", entries)
+        tracemalloc.start()
+        try:
+            backup_mod.inspect_backup_archive(archive)
+            _current, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+        assert peak < MEMBER_MEMORY_BUDGET_BYTES
+
+
+MEMBER_MEMORY_BUDGET_BYTES = 12 * 1024 * 1024
+
+
+class TestBackupContractConstants:
+    def test_missing_application_database_in_a_staged_directory(self, tmp_path: Path):
+        (tmp_path / "sqlite").mkdir()
+        (tmp_path / "sqlite" / "other.db").write_bytes(DB_BYTES)
+        with pytest.raises(BackupError, match=r"Missing data/sqlite/justup\.db"):
+            backup_mod.verify_extracted_databases(tmp_path)
+
+    def test_application_database_is_required_at_one_archive_and_staging_path(self, tmp_path: Path):
+        extracted = backup_mod.extract_backup(_good(tmp_path / "a.tar.bz2"), tmp_path / "out")
+        assert (extracted / "sqlite" / "justup.db").is_file()
+        original, migrated = backup_mod.migrate_staged_application_database(extracted)
+        assert original == migrated == sqlite_db.SCHEMA_VERSION
+
+    def test_application_database_must_be_a_regular_archive_member(self, tmp_path: Path):
+        archive = _tar(
+            tmp_path / "a.tar.bz2",
+            [
+                ("data", None),
+                ("data/sqlite", None),
+                ("data/sqlite/justup.db", None),
+                ("data/backup-manifest.json", _manifest_bytes(DB_BYTES)),
+            ],
+        )
+        with pytest.raises(BackupError, match="Invalid application database entry"):
+            backup_mod.inspect_backup_archive(archive)
+
+    def test_created_manifest_has_exactly_the_v1_schema_categories(self, tmp_path: Path):
+        db_file = tmp_path / "justup.db"
+        db_file.write_bytes(DB_BYTES)
+        manifest = backup_mod.create_backup_manifest(db_file)
+        assert list(manifest["database"]["schema"]) == ["tables", "indexes", "views", "triggers"]
+        backup_mod.validate_backup_manifest(_manifest_bytes(DB_BYTES))  # the generated V1 shape is accepted
+
+    def test_v1_fingerprint_is_stable(self):
+        empty = {"tables": [], "indexes": [], "views": [], "triggers": []}
+        manifest = json.loads(_manifest_bytes(DB_BYTES))
+        manifest["database"].update(
+            schema_version=1,
+            schema=empty,
+            schema_sha256="201c4137a74b5c48e9edc4014204c419cd3b29669bd3ff08a57d6314914f9017",
+        )
+        assert backup_mod.validate_backup_manifest(json.dumps(manifest).encode())["database"]["schema"] == empty
+
+    @pytest.mark.parametrize("change", ["extra", "missing"])
+    def test_unexpected_or_missing_schema_categories_are_rejected(self, change):
+        manifest = json.loads(_manifest_bytes(DB_BYTES))
+        if change == "extra":
+            manifest["database"]["schema"]["sequences"] = []
+        else:
+            del manifest["database"]["schema"]["views"]
+        with pytest.raises(BackupError, match="Schema metadata is invalid"):
+            backup_mod.validate_backup_manifest(json.dumps(manifest).encode())
 
 
 class TestApplyRestore:
@@ -344,7 +694,12 @@ class TestRestoreEndpoint:
         raw.close()
         archive = _tar(
             tmp_path / "old.tar.bz2",
-            [("data", None), ("data/sqlite", None), ("data/sqlite/justup.db", old_db.read_bytes())],
+            [
+                ("data", None),
+                ("data/sqlite", None),
+                ("data/sqlite/justup.db", old_db.read_bytes()),
+                ("data/backup-manifest.json", _manifest_bytes(old_db.read_bytes())),
+            ],
         )
         name, payload = _named(archive)
         live = env[2] / "sqlite" / "justup.db"
@@ -355,11 +710,55 @@ class TestRestoreEndpoint:
         assert "not changed" in resp.json()["detail"]
         assert live.read_bytes() == before
 
+    def test_backup_from_newer_application_is_rejected(self, env, tmp_path: Path):
+        name, payload = _named(_good(tmp_path / "newer-app.tar.bz2", app_version="1.0.3"))
+        resp = _post(env, name, payload)
+        assert resp.status_code == 400
+        assert "newer application version" in resp.json()["detail"]
+
+    @pytest.mark.parametrize("schema_version", [1, 2])
+    def test_older_schema_is_migrated_before_restore(self, env, tmp_path: Path, schema_version: int):
+        name, payload = _named(_good(tmp_path / f"schema-{schema_version}.tar.bz2", db=_db_bytes(schema_version)))
+        resp = _post(env, name, payload)
+        assert resp.status_code == 200, resp.text
+        assert "Backup compatible" in resp.json()["message"]
+        assert f"migrated from {schema_version} to {sqlite_db.SCHEMA_VERSION}" in resp.json()["message"]
+        live = env[2] / "sqlite" / "justup.db"
+        conn = sqlite3.connect(f"{live.resolve().as_uri()}?mode=ro&immutable=1", uri=True)
+        try:
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == sqlite_db.SCHEMA_VERSION
+            assert conn.execute("SELECT value FROM settings WHERE key='migration-marker'").fetchone()[0] == "preserved"
+            assert conn.execute("PRAGMA foreign_key_check").fetchone() is None
+            assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        finally:
+            conn.close()
+
+    def test_failed_staging_migration_leaves_live_database_unchanged(
+        self, env, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        live = env[2] / "sqlite" / "justup.db"
+        conn = sqlite_db.connect(live)
+        sqlite_db.set_setting(conn, "live-marker", "unchanged")
+        sqlite_db.close_connection(conn)
+        before = live.read_bytes()
+
+        def fail_migration(_conn):
+            raise RuntimeError("injected staging migration failure")
+
+        backup_db = _db_bytes(2)
+        monkeypatch.setattr(sqlite_db, "init_schema", fail_migration)
+        name, payload = _named(_good(tmp_path / "migration-failure.tar.bz2", db=backup_db))
+        resp = _post(env, name, payload)
+        assert resp.status_code == 400
+        assert "existing data was not changed" in resp.json()["detail"]
+        assert live.read_bytes() == before
+
     def test_valid_signed_archive_restores(self, env, tmp_path: Path):
         name, payload = _named(_good(tmp_path / "a.tar.bz2"))
         resp = _post(env, name, payload)
         assert resp.status_code == 200, resp.text
-        assert (env[2] / "sqlite" / "x.db").read_bytes() == DB_BYTES
+        assert "Backup compatible" in resp.json()["message"]
+        assert (env[2] / "sqlite" / "justup.db").read_bytes() == DB_BYTES
 
 
 class TestHmacKeys:
@@ -492,10 +891,10 @@ class TestSnapshotAndIntegrity:
         marker = data_dir / "sqlite" / "keep.txt"
         marker.write_text("original")
         corrupt = DB_BYTES[: len(DB_BYTES) // 2] + b"\x00" * (len(DB_BYTES) // 2)
-        name, payload = _named(_good(tmp_path / "bad.tar.bz2", db=corrupt))
+        name, payload = _named(_good(tmp_path / "bad.tar.bz2", db=corrupt, manifest_db=DB_BYTES))
         resp = _post(env, name, payload)  # the HMAC of this archive is valid
         assert resp.status_code == 400
-        assert "Database" in resp.json()["detail"]
+        assert "database" in resp.json()["detail"].lower()
         assert marker.read_text() == "original"
 
     def test_garbage_in_database_pages_fails_quick_check(self, tmp_path: Path):
@@ -523,7 +922,22 @@ class TestSnapshotAndIntegrity:
             archive.write_bytes(resp.content)
             with tarfile.open(archive) as tar:
                 names = tar.getnames()
+                manifest_file = tar.extractfile(backup_mod.MANIFEST_PATH)
+                database_file = tar.extractfile("data/sqlite/justup.db")
+                assert manifest_file is not None and database_file is not None
+                manifest = backup_mod.validate_backup_manifest(manifest_file.read())
+                snapshot_bytes = database_file.read()
             assert "data/sqlite/justup.db" in names
+            assert backup_mod.MANIFEST_PATH in names
+            filename = resp.headers["content-disposition"].split("filename=")[1]
+            assert backup_mod.verify_backup_hmac(archive, backup_mod.parse_backup_filename(filename))
+            snapshot_db = Path(out) / "snapshot.db"
+            snapshot_db.write_bytes(snapshot_bytes)
+            actual_snapshot_manifest = backup_mod.create_backup_manifest(snapshot_db)
+            assert manifest["format_version"] == 1
+            assert manifest["application"]["version"] == "1.0.2"
+            assert manifest["database"] == actual_snapshot_manifest["database"]
+            assert manifest["created_at"].endswith("Z")
             assert not any(n.endswith(("-wal", "-shm")) for n in names)
             extracted = backup_mod.extract_backup(archive, Path(out) / "x")  # runs the integrity check
             backup_mod.check_sqlite_integrity(extracted / "sqlite" / "justup.db", full=True)
@@ -911,7 +1325,7 @@ class TestCoordinatedMaintenance:
         assert len(responses) == 1 and responses[0].status_code == 200, (
             responses[0].text if responses else "restore request produced no response"
         )
-        assert (env[2] / "sqlite" / "x.db").read_bytes() == DB_BYTES
+        assert (env[2] / "sqlite" / "justup.db").read_bytes() == DB_BYTES
 
     def test_restore_503_changes_nothing_and_resets_the_state(self, env, tmp_path: Path, monkeypatch):
         import threading
@@ -1080,3 +1494,270 @@ class TestCoordinatedMaintenance:
             release.set()
             t.join(5)
         assert first_result == [200]
+
+
+# ---------------------------------------------------------------------------
+# Hardening of the manifest-based restore: versions, hostile databases, real v1 history
+# ---------------------------------------------------------------------------
+
+FIXTURES = Path(__file__).parent / "fixtures"
+
+_V1_ROWS = """
+INSERT INTO users(id, username, password_hash, is_admin, created_at) VALUES (3, 'alice', 'x', 1, '2026-01-01 00:00:00');
+INSERT INTO groups(id, name, created_at, updated_at) VALUES (5, 'Prod', '2026-01-01 00:00:00', '2026-01-01 00:00:00');
+INSERT INTO targets(id, name, group_id, interval_seconds, retention_days, enable_ping, enable_http_check,
+    enable_cert_expiration, created_at, updated_at)
+VALUES (7, 'web', 5, 60, 365, 1, 0, 0, '2026-01-01 00:00:00', '2026-01-01 00:00:00');
+INSERT INTO target_status(target_id, overall_status, updated_at) VALUES (7, 'down', '2026-01-02 00:00:00');
+INSERT INTO alerts(id, target_id, target_name, failed_service, status, started_at, created_at, updated_at)
+VALUES ('a-1', 7, 'web', 'PING', 'open', '2026-01-02 00:00:00', '2026-01-02 00:00:00', '2026-01-02 00:00:00');
+INSERT INTO recipients(id, name, email, created_at, updated_at)
+VALUES (9, 'ops', 'ops@example.com', '2026-01-01 00:00:00', '2026-01-01 00:00:00');
+INSERT INTO target_recipients(target_id, recipient_id) VALUES (7, 9);
+INSERT INTO notification_queue(notification_type, channel_type, recipient_id, recipient_name, recipient_address,
+    payload, retry_count, next_retry_at, created_at, updated_at, target_id)
+VALUES ('alert', 'email', 9, 'ops', 'ops@example.com', '{}', 3, '2026-01-02 00:00:00', '2026-01-02 00:00:00',
+    '2026-01-02 00:00:00', 7);
+INSERT INTO settings(key, value, updated_at) VALUES ('keep_me', '"yes"', '2026-01-01 00:00:00');
+"""
+
+
+def _v1_db_bytes() -> bytes:
+    """A schema-1 database built from the DDL of the v1.0.0 release (tests/fixtures/schema_v1.sql) plus history."""
+    with TemporaryDirectory() as tmp:
+        db = Path(tmp) / "justup.db"
+        raw = sqlite3.connect(db)
+        try:
+            raw.executescript((FIXTURES / "schema_v1.sql").read_text(encoding="utf-8"))
+            raw.executescript(_V1_ROWS)
+            raw.execute("PRAGMA user_version = 1")
+            raw.commit()
+        finally:
+            raw.close()
+        return db.read_bytes()
+
+
+def _app_db_with(*statements: str) -> bytes:
+    """The current application database with extra statements applied (foreign keys off)."""
+    with TemporaryDirectory() as tmp:
+        db = Path(tmp) / "justup.db"
+        db.write_bytes(DB_BYTES)
+        raw = sqlite3.connect(db)
+        try:
+            raw.execute("PRAGMA foreign_keys = OFF")
+            for statement in statements:
+                raw.execute(statement)
+            raw.commit()
+        finally:
+            raw.close()
+        return db.read_bytes()
+
+
+def _archive(path: Path, db: bytes, *, app_version: str | None = None, extra=()) -> Path:
+    """A signed-style archive whose manifest describes ``db`` exactly (what the export would write)."""
+    entries = [
+        ("data", None),
+        ("data/sqlite", None),
+        ("data/sqlite/justup.db", db),
+        ("data/tsdb", None),
+        ("data/backup-manifest.json", _manifest_bytes(db, app_version=app_version)),
+        *extra,
+    ]
+    return _tar(path, entries)
+
+
+def _assert_rejected(env, archive: Path, fragment: str, status: int = 400) -> None:
+    live = env[2] / "sqlite" / "justup.db"
+    before = live.read_bytes()
+    name, payload = _named(archive)
+    resp = _post(env, name, payload)
+    assert resp.status_code == status, resp.text
+    assert fragment in resp.json()["detail"], resp.json()["detail"]
+    assert live.read_bytes() == before
+    assert not maintenance.is_active()
+    assert not list(env[2].glob(".restore_staging_*"))
+    sqlite_db.close_connection(sqlite_db.connect(live))  # still usable: nothing was quiesced
+
+
+class TestReleaseComparison:
+    """Application releases are ordered numerically; anything that cannot be ordered fails closed."""
+
+    @pytest.fixture
+    def installed(self, monkeypatch: pytest.MonkeyPatch):
+        import app.utils.version as version_module
+
+        def use(version: str) -> None:
+            monkeypatch.setattr(version_module, "get_version", lambda: version)
+
+        return use
+
+    @staticmethod
+    def _check(backup_version: str) -> None:
+        manifest = backup_mod.validate_backup_manifest(_manifest_bytes(DB_BYTES, app_version=backup_version))
+        backup_mod.validate_backup_compatibility(manifest)
+
+    @pytest.mark.parametrize(
+        ("installed_version", "backup_version"),
+        [
+            ("1.0.2", "1.0.2"),
+            ("1.0.2", "1.0.2.0"),  # trailing zero parts do not matter
+            ("1.0.10", "1.0.9"),  # numeric, not lexicographic
+            ("1.0.2.1", "1.0.2"),
+            ("1.1.0", "1.1.0rc1"),  # a pre-release is older than its final release
+            ("1.1.0rc1", "1.1.0rc1"),  # an installed pre-release restores its own backups
+            ("1.1.0", "1.1.0+build7"),
+        ],
+    )
+    def test_accepted(self, installed, installed_version: str, backup_version: str):
+        installed(installed_version)
+        self._check(backup_version)
+
+    @pytest.mark.parametrize(
+        ("installed_version", "backup_version"),
+        [
+            ("1.0.9", "1.0.10"),
+            ("1.0.2", "1.0.2.1"),  # a numeric suffix is newer
+            ("1.1.0rc1", "1.1.0"),
+            ("1.0.2", "1.0.2.post1"),  # post-releases are newer and not orderable here
+            ("1.0.2", "1.0.2-1"),
+            ("1.1.0rc1", "1.1.0rc2"),  # two different pre-releases cannot be ordered
+            ("1.0.2", "v-unknown"),
+        ],
+    )
+    def test_rejected(self, installed, installed_version: str, backup_version: str):
+        installed(installed_version)
+        with pytest.raises(BackupError, match=r"newer application version|cannot be compared safely"):
+            self._check(backup_version)
+
+
+class TestHostileBackupContent:
+    def test_sqlite_side_files_are_not_accepted_in_an_archive(self, tmp_path: Path):
+        for suffix in ("-wal", "-shm", "-journal"):
+            archive = _archive(
+                tmp_path / f"a{suffix}.tar.bz2", DB_BYTES, extra=((f"data/sqlite/justup.db{suffix}", b"x"),)
+            )
+            with pytest.raises(BackupError, match="side files"):
+                backup_mod.inspect_backup_archive(archive)
+
+    def test_triggers_and_views_in_the_application_database_are_rejected(self, env, tmp_path: Path):
+        trigger = _app_db_with("CREATE TRIGGER evil AFTER INSERT ON settings BEGIN DELETE FROM users; END")
+        _assert_rejected(env, _archive(tmp_path / "t.tar.bz2", trigger), "triggers or views")
+        view = _app_db_with("CREATE VIEW sneaky AS SELECT * FROM users")
+        _assert_rejected(env, _archive(tmp_path / "v.tar.bz2", view), "triggers or views")
+
+    def test_foreign_key_violations_are_rejected_before_the_swap(self, env, tmp_path: Path):
+        dangling = _app_db_with(
+            "INSERT INTO alerts(id, target_id, target_name, failed_service, started_at, created_at, updated_at)"
+            " VALUES ('x', 999, 't', 'ping', '2026-01-01 00:00:00', '2026-01-01 00:00:00', '2026-01-01 00:00:00')"
+        )
+        _assert_rejected(env, _archive(tmp_path / "fk.tar.bz2", dangling), "foreign_key_check")
+
+    def test_leftover_wal_after_the_staging_migration_rejects_the_backup(
+        self, env, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        real_close = sqlite_db.close_connection
+
+        def close_and_leave_wal(conn):
+            path = Path(conn.execute("PRAGMA database_list").fetchone()[2])
+            closed = real_close(conn)
+            Path(f"{path}-wal").write_bytes(b"left behind")
+            return closed
+
+        monkeypatch.setattr(sqlite_db, "close_connection", close_and_leave_wal)
+        _assert_rejected(env, _archive(tmp_path / "a.tar.bz2", _db_bytes(2)), "existing data was not changed")
+
+    def test_unexpected_exception_while_opening_the_staged_database_rejects_the_backup(
+        self, env, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        real_connect = sqlite_db.connect
+
+        def broken_connect(path, *args, **kwargs):
+            if ".restore_staging_" in str(path):
+                raise OSError("disk exploded")
+            return real_connect(path, *args, **kwargs)
+
+        monkeypatch.setattr(sqlite_db, "connect", broken_connect)
+        _assert_rejected(env, _archive(tmp_path / "a.tar.bz2", DB_BYTES), "existing data was not changed")
+
+
+class TestRestoreAfterRestore:
+    def test_second_restore_before_the_restart_is_postponed_not_failed(self, env, tmp_path: Path):
+        name, payload = _named(_archive(tmp_path / "a.tar.bz2", DB_BYTES))
+        assert _post(env, name, payload).status_code == 200  # the instance now waits for its restart
+        again = _post(env, name, payload)
+        assert again.status_code == 503, again.text
+        assert again.headers["retry-after"] == "30"
+
+
+class TestRealSchemaOneBackup:
+    """A schema-1 database built from the DDL of the v1.0.0 release, with history."""
+
+    def _restore(self, env, tmp_path: Path):
+        name, payload = _named(
+            _archive(
+                tmp_path / "v1.tar.bz2",
+                _v1_db_bytes(),
+                app_version="1.0.0",
+                extra=(("data/tsdb/7/ping.jsonl", b'{"t": 1, "v": 12.5}\n'),),
+            )
+        )
+        resp = _post(env, name, payload)
+        assert resp.status_code == 200, resp.text
+        sqlite_db.end_quiesce()
+        return resp
+
+    def test_history_survives_the_migration_that_runs_before_the_swap(self, env, tmp_path: Path):
+        resp = self._restore(env, tmp_path)
+        assert f"migrated from 1 to {sqlite_db.SCHEMA_VERSION}" in resp.json()["message"]
+        assert resp.json()["migrated"] is True
+        assert resp.json()["backup_schema_version"] == 1
+        assert (env[2] / "tsdb" / "7" / "ping.jsonl").read_bytes() == b'{"t": 1, "v": 12.5}\n'
+        conn = sqlite3.connect(env[2] / "sqlite" / "justup.db")  # no application start happened yet
+        try:
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == sqlite_db.SCHEMA_VERSION
+            assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+            assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+            assert conn.execute("SELECT id, name, group_id FROM targets").fetchall() == [(7, "web", 5)]
+            assert conn.execute("SELECT id, username FROM users").fetchall() == [(3, "alice")]
+            assert conn.execute("SELECT target_id, recipient_id FROM target_recipients").fetchall() == [(7, 9)]
+            assert conn.execute("SELECT limited_attempts, retry_count FROM notification_queue").fetchall() == [(3, 3)]
+            assert conn.execute("SELECT id, active_incident FROM alerts").fetchall() == [("a-1", 1)]
+            assert conn.execute("SELECT alert_id FROM alert_dispatch_outbox").fetchall() == [("a-1",)]
+        finally:
+            conn.close()
+        assert not list((env[2] / "sqlite").glob("*-shm"))
+
+    def test_start_after_the_restore_needs_no_further_migration(self, env, tmp_path: Path, monkeypatch):
+        self._restore(env, tmp_path)
+        applied: list[int] = []
+        monkeypatch.setattr(
+            sqlite_db,
+            "MIGRATIONS",
+            tuple(
+                sqlite_db.Migration(m.version, m.description, lambda _c, v=m.version: applied.append(v))
+                for m in sqlite_db.MIGRATIONS
+            ),
+        )
+        conn = sqlite_db.connect(env[2] / "sqlite" / "justup.db")
+        try:
+            sqlite_db.init_schema(conn)
+        finally:
+            sqlite_db.close_connection(conn)
+        assert applied == []
+
+    def test_failed_swap_after_a_migration_leaves_the_live_database_untouched(
+        self, env, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        live = env[2] / "sqlite" / "justup.db"
+        before = live.read_bytes()
+
+        def failing_swap(*_a, **_k):
+            raise backup_mod.RestoreFailedError("restore failed", rolled_back=True)
+
+        monkeypatch.setattr(settings_api, "apply_restore", failing_swap)
+        name, payload = _named(_archive(tmp_path / "v1.tar.bz2", _v1_db_bytes(), app_version="1.0.0"))
+        resp = _post(env, name, payload)
+        assert resp.status_code == 500
+        assert "rollback successful" in resp.json()["detail"]
+        assert live.read_bytes() == before
+        assert not maintenance.is_active()

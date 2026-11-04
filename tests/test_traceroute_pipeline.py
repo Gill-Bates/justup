@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import asyncio
+import itertools
 from types import SimpleNamespace
 from typing import Any
 
@@ -18,6 +19,7 @@ import pytest
 from app.api import frontend
 from app.services import geo_resolver as gr
 from app.services import mtr_run, pdf_report, traceroute_geo
+from app.services.route_timeline import mapped_hop_numbers
 from tests import _support  # noqa: F401 - imported for its sys.path side effect
 
 TARGET_IP = "198.51.100.9"
@@ -197,27 +199,120 @@ def test_table_and_map_agree_on_places_pins_and_counts(monkeypatch: pytest.Monke
         )
         for number in range(first, last + 1):
             plotted[number] = point
-    # Every hop on the map shows exactly the city and country of its marker and carries the pin flag.
-    assert set(plotted) == {number for number, row in rows.items() if row["on_map"]} == {7, 10, 11}
+    # Every located table row has a matching city or country-center point.
+    assert set(plotted) == {number for number, row in rows.items() if row["on_map"]} == {3, 5, 7, 8, 10, 11, 13}
     for number, point in plotted.items():
         assert (rows[number]["city"], rows[number]["country"]) == (point["city"], point["country"])
-    # The subtitle count is exactly the number of plotted hops (no range claims hop 8 or 9).
-    assert ctx["mapped_hop_count"] == len(plotted) == 3
+    # The subtitle counts plotted hops, never silent gaps.
+    assert ctx["mapped_hop_count"] == len(plotted) == 7
     # No city without a position of its own: the name from another source ("Kettenhausen") is not shown.
     assert (rows[8]["city"], rows[8]["country"], rows[8]["loc_precision"]) == (None, "DE", "country")
     assert rows[5]["city"] is None and rows[5]["loc_precision"] == "country"
     # Approximate cities stay visible but are flagged; private hops have no location claim.
-    assert (rows[3]["city"], rows[3]["loc_precision"], rows[3]["on_map"]) == ("Mannheim", "approximate", False)
+    assert rows[5]["on_map"] is True
+    assert (plotted[5]["lat"], plotted[5]["lon"]) == traceroute_geo.country_center("DE")
+    assert plotted[5]["map_role"] == "estimate" and plotted[5]["_country_center"] is True
+    monkeypatch.setattr(pdf_report, "resolve_target_ip", lambda _host: DEST)
+    monkeypatch.setattr(pdf_report, "run_mtr", lambda *_args, **_kwargs: [dict(hop) for hop in _OWNER_ROUTE])
+    pdf_hops, pdf_points, _interpolated = pdf_report._run_mtr_with_interpolation(HOST)
+    fields = ("hop", "city", "country", "lat", "lon", "map_role", "_destination", "_country_center")
+    assert [tuple(point.get(key) for key in fields) for point in pdf_points] == [
+        tuple(point.get(key) for key in fields) for point in ctx["geo_points"]
+    ]
+
+    def underlying_places(hops: list[dict]) -> list[tuple[int, str | None, str | None]]:
+        return [
+            (raw["hop"], raw.get("city"), raw.get("country"))
+            for hop in hops
+            for raw in (hop["_raw_hops"] if hop.get("_collapsed") else [hop])
+        ]
+
+    assert underlying_places(pdf_hops) == underlying_places(ctx["hops"])
+    assert (rows[3]["city"], rows[3]["loc_precision"], rows[3]["on_map"]) == ("Mannheim", "approximate", True)
+    assert plotted[3]["_approximate"] is True
     assert rows[1]["city"] is None and rows[1]["loc_precision"] == "none"
 
 
-def test_unmapped_destination_is_not_replaced_by_the_last_mapped_hop(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_country_centers_and_unlocated_hops_match_in_web_and_pdf(monkeypatch: pytest.MonkeyPatch) -> None:
+    route = [
+        _hop(1, "10.20.0.1"),  # private: never plotted
+        _hop(2, "8.8.8.2"),
+        _hop(3, "8.8.8.3"),  # repeated Germany center
+        _hop(4, "8.8.8.4"),  # public but unknown: never plotted
+        _hop(5, "8.8.8.5"),
+        _hop(6, "8.8.8.6"),  # destination at the repeated Israel center
+    ]
+    destination = "8.8.8.6"
+    candidates = {
+        "8.8.8.2": [_gl2(51.16, 10.45, None, None)],
+        "8.8.8.3": [_gl2(51.16, 10.45, None, None)],
+        "8.8.8.5": [gr.build_candidate(gr.SRC_GEOLITE2, 31.0, 35.0, country_code="IL")],
+        destination: [gr.build_candidate(gr.SRC_GEOLITE2, 31.0, 35.0, country_code="IL")],
+    }
+    monkeypatch.setattr(traceroute_geo, "_online_fallback_enabled", lambda: False)
+    monkeypatch.setattr(
+        traceroute_geo,
+        "_collect_candidates",
+        lambda ip, _hostname: (list(candidates.get(ip, [])), [gr.SRC_GEOLITE2], {}),
+    )
+    for module in (mtr_run, pdf_report):
+        monkeypatch.setattr(module, "resolve_target_ip", lambda _host: destination, raising=False)
+        monkeypatch.setattr(module, "run_mtr", lambda *_args, **_kwargs: [dict(h) for h in route], raising=False)
+
+    monkeypatch.setattr(pdf_report, "geolocate_with_hostname_hint", traceroute_geo.geolocate_with_hostname_hint)
+    destination_geo = traceroute_geo.geolocate_with_hostname_hint(destination, HOST)
+    web_points = traceroute_geo.mtr_hops_to_geo_points(
+        route, destination_ip=destination, destination_geo=destination_geo
+    )
+    pdf_hops, pdf_points, _interpolated = pdf_report._run_mtr_with_interpolation(HOST)
+
+    for points in (web_points, pdf_points):
+        by_hop = {}
+        for point in points:
+            first, last = (
+                tuple(int(v) for v in point["_hop_range"].split("-"))
+                if point.get("_hop_range")
+                else (point["hop"], point["hop"])
+            )
+            for number in range(first, last + 1):
+                by_hop[number] = point
+        assert set(by_hop) == {2, 3, 5, 6}
+        assert (by_hop[2]["lat"], by_hop[2]["lon"]) == traceroute_geo.country_center("DE")
+        assert (by_hop[5]["lat"], by_hop[5]["lon"]) == traceroute_geo.country_center("IL")
+        assert by_hop[2]["map_role"] == by_hop[3]["map_role"] == "estimate"
+        assert by_hop[5]["map_role"] == by_hop[6]["map_role"] == "estimate"
+        assert by_hop[6]["_destination"] is True
+
+    assert len(mapped_hop_numbers(web_points)) == 4
+    assert len([point for point in web_points if point.get("_destination")]) == 1
+    assert len([point for point in pdf_points if point.get("_destination")]) == 1
+    assert [hop["hop"] for hop in pdf_hops] == [hop["hop"] for hop in route]
+
+
+def test_approximate_destination_maps_its_own_city_candidate(monkeypatch: pytest.MonkeyPatch) -> None:
     ctx = _owner_route_context(monkeypatch)
-    assert ctx["destination_on_map"] is False
-    assert not any(point.get("_destination") for point in ctx["geo_points"])
+    assert ctx["destination_on_map"] is True
+    assert any(point.get("_destination") for point in ctx["geo_points"])
     dest_row = next(h for h in ctx["hops"] if h.get("ip") == DEST)
-    assert (dest_row["city"], dest_row["on_map"]) == ("Ratingen", False)
+    assert (dest_row["city"], dest_row["loc_precision"], dest_row["on_map"]) == ("Ratingen", "approximate", True)
     assert ctx["kpis"]["city"] == "Ratingen"
+
+
+def test_country_only_destination_uses_the_same_center_in_web_and_pdf(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(_CANDIDATES, DEST, [_gl2(51.3, 6.85, None, 500)])
+    ctx = _owner_route_context(monkeypatch)
+    monkeypatch.setattr(pdf_report, "resolve_target_ip", lambda _host: DEST)
+    monkeypatch.setattr(pdf_report, "run_mtr", lambda *_args, **_kwargs: [dict(hop) for hop in _OWNER_ROUTE])
+    pdf_hops, pdf_points, _interpolated = pdf_report._run_mtr_with_interpolation(HOST)
+    for points in (ctx["geo_points"], pdf_points):
+        destinations = [point for point in points if point.get("_destination")]
+        assert len(destinations) == 1
+        point = destinations[0]
+        assert point["hop"] == 13 and point["city"] is None and point["country"] == "DE"
+        assert (point["lat"], point["lon"]) == traceroute_geo.country_center("DE")
+        assert point["map_role"] == "estimate" and point["_country_center"] is True
+    assert ctx["destination_on_map"] is True
+    assert pdf_hops[-1]["city"] is None and pdf_hops[-1]["country"] == "DE"
 
 
 def test_hops_split_by_an_unmapped_hop_are_never_merged_into_a_range(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -235,7 +330,7 @@ def test_mapped_destination_marker_matches_the_destination_row(monkeypatch: pyte
     assert ctx["destination_on_map"] is True and row["on_map"] is True
     assert (point["city"], point["country"]) == (row["city"], row["country"]) == ("Ratingen", "DE")
     assert (point["lat"], point["lon"]) == (51.3, 6.85)
-    assert ctx["mapped_hop_count"] == 4
+    assert ctx["mapped_hop_count"] == 7
 
 
 def test_destination_ip_has_one_location_decision_even_when_the_last_hop_resolves_differently(
@@ -321,3 +416,32 @@ def test_kpis_follow_an_explicit_verdict_over_hop_flags() -> None:
     assert frontend._destination_kpis(hops, TARGET_IP, None, True)["latency_display"] == "5.0 ms"
     unreached = frontend._destination_kpis(hops, TARGET_IP, None, False)
     assert unreached["destination_reached"] is False and unreached["latency_display"] is None
+
+
+def test_approximate_city_between_reliable_hops_stays_off_the_route_line_in_the_web_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Hop 8 is now an approximate position with a city of its own (Kottenheim), far off the Frankfurt-Wuppertal line.
+    monkeypatch.setitem(_CANDIDATES, "92.79.239.89", [_gl2(50.38, 7.33, "Kottenheim", 100)])
+    ctx = _owner_route_context(monkeypatch)
+    points = ctx["geo_points"]
+    assert [(p["hop"], p["map_role"]) for p in points] == [
+        (3, "estimate"),
+        (5, "estimate"),
+        (7, "route"),
+        (8, "estimate"),
+        (10, "route"),
+        (11, "route"),
+        (13, "route"),
+    ]
+    route = [p for p in points if p["map_role"] == "route"]
+    assert [(a["hop"], b["hop"], a["segment_to_next"]) for a, b in itertools.pairwise(route)] == [
+        (7, 10, "dashed"),
+        (10, 11, "solid"),
+        (11, 13, "dashed"),
+    ]
+    assert ctx["map_features"] == {"has_unknown_link": True, "has_approximate": True}
+    # The hop table keeps the measured hops in order, including the estimate (silent hops are collapsed rows).
+    table = [h["hop"] for h in ctx["hops"] if not h.get("_collapsed")]
+    assert [n for n in table if n >= 7] == [7, 8, 10, 11, 13]
+    assert next(h for h in ctx["hops"] if h["hop"] == 8)["city"] == "Kottenheim"

@@ -16,6 +16,7 @@ from ..db import sqlite as sqlite_db
 from .constants import (
     DEFAULT_ONLINE_GEO_FALLBACK_ENABLED,
     PROVIDER_LOOKUP_CACHE_TTL_DEFAULT,
+    QUALITY_MAX_TARGETS,
     QUALITY_MIN_SCORE_DEFAULT,
     QUALITY_MIN_TARGETS,
     QUALITY_RTT_THRESHOLD_MS_DEFAULT,
@@ -49,11 +50,13 @@ _TARGET_RE = re.compile(QUALITY_TARGET_PATTERN)
 
 def validate_quality_targets(raw: str) -> str:
     """Normalise a comma-separated target list; empty means built-in defaults."""
-    items = [t.strip() for t in raw.split(",") if t.strip()]
+    items = list(dict.fromkeys(t.strip() for t in raw.split(",") if t.strip()))
     if not items:
         return ""
     if len(items) < QUALITY_MIN_TARGETS:
         raise HTTPException(status_code=422, detail=f"quality_targets needs at least {QUALITY_MIN_TARGETS} targets")
+    if len(items) > QUALITY_MAX_TARGETS:
+        raise HTTPException(status_code=422, detail=f"quality_targets allows at most {QUALITY_MAX_TARGETS} targets")
     for item in items:
         if not _TARGET_RE.match(item) or len(item) > QUALITY_TARGET_MAX_LENGTH:
             raise HTTPException(status_code=422, detail="quality_targets contains an invalid entry")

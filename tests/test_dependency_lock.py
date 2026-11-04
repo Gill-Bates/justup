@@ -378,7 +378,6 @@ def test_ci_installs_the_same_runtime_lock_and_vendored_wheel():
         text,
     )
     assert "pyproject-deps.py >> " not in text, "runtime dependencies must come from the lock, not be re-resolved"
-    assert "feature/v1.0.0" in text and "workflow_dispatch" in text
 
 
 # --- install failure modes (offline, no dependencies) --------------------------------------------

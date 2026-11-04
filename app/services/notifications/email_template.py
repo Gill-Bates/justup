@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Any
 
 from ...utils.formatters import format_duration
+from ...utils.status_palette import STATUS_PALETTE
 
 _log = logging.getLogger(__name__)
 
@@ -134,6 +135,9 @@ ALLOWED_PLACEHOLDERS = frozenset(
         # Status display (colour, text, short label for templates)
         "status.emoji",
         "status.color",
+        "status.accent_color",
+        "status.foreground_color",
+        "status.text_color",
         "status.text",
         "status.label",  # short status word for a redundant text pill (DOWN / RESOLVED / ...)
         # Downtime
@@ -315,7 +319,7 @@ DEFAULT_HTML_TEMPLATE = """<!DOCTYPE html>
 
         <!-- STATUS ACCENT LINE -->
         <tr><td style="padding:0 28px;">
-          <div style="height:4px;background-color:{{status.color}};border-radius:4px;
+          <div style="height:4px;background-color:{{status.accent_color}};border-radius:4px;
                       font-size:1px;line-height:1px;">&nbsp;</div>
         </td></tr>
 
@@ -326,7 +330,7 @@ DEFAULT_HTML_TEMPLATE = """<!DOCTYPE html>
               <tr>
                 <td valign="middle" style="padding:0;">
                   <span style="display:inline-block;width:12px;height:12px;border-radius:50%;
-                               background-color:{{status.color}};vertical-align:middle;">&nbsp;</span>
+                               background-color:{{status.accent_color}};vertical-align:middle;">&nbsp;</span>
                   <span class="ju-title"
                         style="vertical-align:middle;padding-left:10px;font-size:24px;
                                font-weight:700;color:#1b2733;letter-spacing:-0.01em;">
@@ -335,8 +339,8 @@ DEFAULT_HTML_TEMPLATE = """<!DOCTYPE html>
                 </td>
                 <td valign="middle" align="right" style="padding:0;">
                   <span style="display:inline-block;font-size:12px;font-weight:700;
-                               letter-spacing:0.04em;color:{{status.color}};
-                               border:1px solid {{status.color}};border-radius:999px;
+                               letter-spacing:0.04em;color:{{status.text_color}};
+                               border:1px solid {{status.text_color}};border-radius:999px;
                                padding:4px 12px;white-space:nowrap;">{{status.label}}</span>
                 </td>
               </tr>
@@ -386,7 +390,7 @@ DEFAULT_HTML_TEMPLATE = """<!DOCTYPE html>
             <table role="presentation" width="100%" cellspacing="0" cellpadding="0" class="ju-panel"
                    style="background-color:#f7f9fb;border:1px solid #e9eef4;border-radius:10px;">
               <tr><td style="padding:14px 16px 6px 16px;">
-                <span style="color:{{status.color}};font-weight:700;">&#9650;</span>
+                <span style="color:{{status.text_color}};font-weight:700;">&#9650;</span>
                 <span class="ju-title"
                       style="padding-left:6px;font-size:15px;font-weight:700;color:#1b2733;">
                   Incident Details
@@ -400,7 +404,7 @@ DEFAULT_HTML_TEMPLATE = """<!DOCTYPE html>
                         style="padding:7px 0;color:#5b6b7b;border-top:1px solid #e9eef4;">Status</td>
                     <td align="right" style="padding:7px 0;border-top:1px solid #e9eef4;">
                       <span style="display:inline-block;font-size:12px;font-weight:700;
-                                   color:#ffffff;background-color:{{status.color}};
+                                   color:{{status.foreground_color}};background-color:{{status.accent_color}};
                                    border-radius:999px;padding:3px 11px;">{{alert.status}}</span>
                     </td>
                   </tr>
@@ -437,7 +441,7 @@ DEFAULT_HTML_TEMPLATE = """<!DOCTYPE html>
             <table role="presentation" width="100%" cellspacing="0" cellpadding="0" class="ju-panel"
                    style="background-color:#f7f9fb;border:1px solid #e9eef4;border-radius:10px;">
               <tr><td style="padding:14px 16px 6px 16px;">
-                <span style="color:#16815c;font-weight:700;">&#9678;</span>
+                <span style="color:#5b6b7b;font-weight:700;">&#9678;</span>
                 <span class="ju-title"
                       style="padding-left:6px;font-size:15px;font-weight:700;color:#1b2733;">
                   Target Details
@@ -474,7 +478,7 @@ DEFAULT_HTML_TEMPLATE = """<!DOCTYPE html>
             <table role="presentation" width="100%" cellspacing="0" cellpadding="0" class="ju-panel"
                    style="background-color:#f7f9fb;border:1px solid #e9eef4;border-radius:10px;">
               <tr><td style="padding:14px 16px 6px 16px;">
-                <span style="color:#16815c;font-weight:700;">&#9707;</span>
+                <span style="color:#5b6b7b;font-weight:700;">&#9707;</span>
                 <span class="ju-title"
                       style="padding-left:6px;font-size:15px;font-weight:700;color:#1b2733;">SLA</span>
               </td></tr>
@@ -625,13 +629,8 @@ def render_template(template: str, context: dict[str, Any], *, mode: str = "html
 
         raw = str(value) if value is not None else ""
 
-        # DEBUG: Log the value
-        _log.debug(
-            "Placeholder %r → value length: %d, starts with: %r",
-            placeholder,
-            len(raw),
-            raw[:80] if len(raw) > 0 else "",
-        )
+        # Never log the value itself: it can carry internal hosts or URL secrets.
+        _log.debug("Placeholder %r → value length: %d", placeholder, len(raw))
 
         # Pre-rendered HTML: pass through without escaping
         if placeholder in _RAW_HTML_PLACEHOLDERS:
@@ -641,9 +640,14 @@ def render_template(template: str, context: dict[str, Any], *, mode: str = "html
             return raw
 
         # CSS injection protection for color values
-        if placeholder == "status.color":
+        if placeholder in {"status.color", "status.accent_color", "status.foreground_color", "status.text_color"}:
             if not re.fullmatch(r"#[0-9a-fA-F]{6}", raw):
-                return "#6b7280"  # Fallback to gray
+                return {
+                    "status.color": "#6b7280",
+                    "status.accent_color": "#6c757d",
+                    "status.foreground_color": "#ffffff",
+                    "status.text_color": "#5b6b7b",
+                }[placeholder]
             return raw
 
         if plain:
@@ -715,17 +719,27 @@ def _format_sla(value: float | str | None) -> str:
 # Used for visual distinction in email subject and HTML header. Colours match the app
 # status palette; status is never conveyed by colour alone (text + short label carry it).
 STATUS_DISPLAY_MAP: dict[str, tuple[str, str, str]] = {
-    "DOWN": ("🔴", "#c43427", "Service DOWN"),
-    "OPEN": ("🔴", "#c43427", "Service DOWN"),
-    "UP": ("🟢", "#16815c", "Service UP"),
-    "RESOLVED": ("🟢", "#16815c", "Service RESOLVED"),
-    "WARN": ("🟡", "#926e06", "Degraded"),
-    "WARNING": ("🟡", "#926e06", "Degraded"),
-    "UNKNOWN": ("⚪", "#5b6b7b", "Unknown"),
+    "DOWN": ("🔴", STATUS_PALETTE["danger"].text, "Service DOWN"),
+    "OPEN": ("🔴", STATUS_PALETTE["danger"].text, "Service DOWN"),
+    "UP": ("🟢", STATUS_PALETTE["success"].text, "Service UP"),
+    "RESOLVED": ("🟢", STATUS_PALETTE["success"].text, "Service RESOLVED"),
+    "WARN": ("🟡", STATUS_PALETTE["warning"].text, "Degraded"),
+    "WARNING": ("🟡", STATUS_PALETTE["warning"].text, "Degraded"),
+    "UNKNOWN": ("⚪", STATUS_PALETTE["neutral"].text, "Unknown"),
 }
 
 # Default fallback for unknown status values
-_DEFAULT_STATUS_DISPLAY = ("⚪", "#5b6b7b", "Unknown")
+_DEFAULT_STATUS_DISPLAY = ("⚪", STATUS_PALETTE["neutral"].text, "Unknown")
+
+_STATUS_VARIANTS = {
+    "DOWN": "danger",
+    "OPEN": "danger",
+    "UP": "success",
+    "RESOLVED": "success",
+    "WARN": "warning",
+    "WARNING": "warning",
+    "UNKNOWN": "neutral",
+}
 
 # Short, upper-case status word for the redundant text pill (never colour alone).
 STATUS_LABEL_MAP: dict[str, str] = {
@@ -738,15 +752,10 @@ STATUS_LABEL_MAP: dict[str, str] = {
     "UNKNOWN": "UNKNOWN",
 }
 
-# Check badge colors: check_type -> (background, text_color)
-CHECK_BADGE_COLORS: dict[str, tuple[str, str]] = {
-    "PING": ("#198754", "#ffffff"),  # Bootstrap bg-success green / white
-    "HTTP": ("#198754", "#ffffff"),  # Bootstrap bg-success
-    "HTTPS": ("#198754", "#ffffff"),  # Bootstrap bg-success
-    "TCP": ("#dbeafe", "#1e40af"),  # blue
-    "DNS": ("#fef9c3", "#854d0e"),  # yellow
-}
-_DEFAULT_BADGE = ("#f3f4f6", "#374151")  # gray
+# Check types are metadata, never status: every type badge uses the neutral palette entry,
+# in every mail state. This is the single place that decides the colour of the detail rows.
+_NEUTRAL = STATUS_PALETTE["neutral"]
+CHECK_BADGE_COLORS: tuple[str, str] = (_NEUTRAL.background, _NEUTRAL.foreground)
 
 
 def _render_check_badges(check_type: str) -> str:
@@ -763,18 +772,18 @@ def _render_check_badges(check_type: str) -> str:
 
     # Handle empty, "None" string (from str(None)), or "N/A"
     if not raw or raw.upper() in ("NONE", "N/A"):
-        return "<span style='color:#9ca3af;'>N/A</span>"
+        return f"<span style='color:{_NEUTRAL.text};'>N/A</span>"
 
     # Split on common separators: +  ,  ;  whitespace
     parts = re.split(r"[+,;\s]+", raw)
     parts = [p.strip().upper() for p in parts if p.strip()]
 
     if not parts:
-        return "<span style='color:#9ca3af;'>N/A</span>"
+        return f"<span style='color:{_NEUTRAL.text};'>N/A</span>"
 
     badges: list[str] = []
     for check in parts:
-        bg, fg = CHECK_BADGE_COLORS.get(check, _DEFAULT_BADGE)
+        bg, fg = CHECK_BADGE_COLORS
         # Each badge is a mini-table (bulletproof in email clients)
         # Use inline-block span wrapped in VML for Outlook fallback
         badge_html = (
@@ -916,6 +925,7 @@ def build_alert_context(alert_data: dict[str, Any], target_data: dict[str, Any])
     alert_status = str(alert_data.get("status", "UNKNOWN")).upper()
     status_emoji, status_color, status_text = STATUS_DISPLAY_MAP.get(alert_status, _DEFAULT_STATUS_DISPLAY)
     status_label = STATUS_LABEL_MAP.get(alert_status, "UNKNOWN")
+    status_palette = STATUS_PALETTE[_STATUS_VARIANTS.get(alert_status, "neutral")]
 
     # Sanitize reason and render check badges
     reason_raw = alert_data.get("reason", "N/A")
@@ -941,6 +951,9 @@ def build_alert_context(alert_data: dict[str, Any], target_data: dict[str, Any])
         "status": {
             "emoji": status_emoji,
             "color": status_color,
+            "accent_color": status_palette.background,
+            "foreground_color": status_palette.foreground,
+            "text_color": status_palette.text,
             "text": status_text,
             "label": status_label,
         },

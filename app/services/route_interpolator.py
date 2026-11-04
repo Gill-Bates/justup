@@ -22,7 +22,7 @@ import bisect
 import copy
 from typing import Any
 
-from app.services.route_timeline import NO_REPLY_LABEL
+from app.services.route_timeline import NO_REPLY_LABEL, no_reply_run_label
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Constants / Types
@@ -260,7 +260,7 @@ def ensure_destination_hop(
 
 
 def _make_collapsed_summary(batch: list[Hop]) -> Hop:
-    """Create a summary hop for a batch of collapsed interpolated hops."""
+    """Create a summary row for consecutive hops without reply (counted from the measured hop numbers)."""
     first = batch[0]
     last = batch[len(batch) - 1]
     count = len(batch)
@@ -270,10 +270,11 @@ def _make_collapsed_summary(batch: list[Hop]) -> Hop:
     return {
         "hop_display": hop_display,
         "ip_display": "—",
-        "hostname_display": NO_REPLY_LABEL if count == 1 else f"({count} hops interpolated)",
+        "hostname_display": NO_REPLY_LABEL if count == 1 else no_reply_run_label(count),
         "latency_display": "—",
         "loss_display": "—",
         "status": STATUS_INTERPOLATED,
+        "status_display": STATUS_TIMEOUT,  # what the user sees: no reply, not an estimate
         "_collapsed": True,
         "_interpolated": True,
         "_raw_hops": list(batch),  # Defensive copy to avoid reference issues

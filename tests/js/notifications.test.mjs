@@ -284,6 +284,7 @@ test("the context line carries only the body/actor and never prints null", () =>
   assert.equal(N.detailLine({ body: "", actor: "root" }), "root");
   assert.equal(N.detailLine({ body: null, actor: null }), "");
   assert.equal(N.detailLine(null), "");
+  assert.equal(N.detailLine({ title: "Same text", body: "same TEXT" }), "", "context repeating the title is dropped");
 });
 
 test("every category has an icon and unknown ones fall back to the bell", () => {
@@ -461,31 +462,31 @@ test("a ready-PDF preview row carries its attachment URL; other rows carry none"
 const MIN = 60 * 1000, HOUR = 60 * MIN, DAY = 24 * HOUR;
 const iso = (ms) => new Date(ms).toISOString();
 
-test("relTime renders short English ages with correct singular/plural", () => {
+test("relTime renders compact English ages", () => {
   const now = Date.parse("2026-06-15T12:00:00Z");
   const at = (ago) => N.relTime(iso(now - ago), now);
   assert.equal(at(0), "Now");
   assert.equal(at(59 * 1000), "Now"); // still under a minute
-  assert.equal(at(1 * MIN), "1 min ago");
-  assert.equal(at(15 * MIN), "15 min ago");
-  assert.equal(at(59 * MIN), "59 min ago");
-  assert.equal(at(1 * HOUR), "1 hour ago");
-  assert.equal(at(3 * HOUR), "3 hours ago");
-  assert.equal(at(23 * HOUR), "23 hours ago");
-  assert.equal(at(1 * DAY), "1 day ago");
-  assert.equal(at(7 * DAY), "7 days ago");
-  assert.equal(at(120 * DAY), "120 days ago");
+  assert.equal(at(1 * MIN), "1m ago");
+  assert.equal(at(15 * MIN), "15m ago");
+  assert.equal(at(59 * MIN), "59m ago");
+  assert.equal(at(1 * HOUR), "1h ago");
+  assert.equal(at(3 * HOUR), "3h ago");
+  assert.equal(at(23 * HOUR), "23h ago");
+  assert.equal(at(1 * DAY), "1d ago");
+  assert.equal(at(7 * DAY), "7d ago");
+  assert.equal(at(120 * DAY), "120d ago");
 });
 
 test("relTime crosses each unit boundary cleanly", () => {
   const now = Date.parse("2026-06-15T12:00:00Z");
   const at = (ago) => N.relTime(iso(now - ago), now);
   assert.equal(at(60 * 1000 - 1), "Now"); // just under one minute
-  assert.equal(at(60 * 1000), "1 min ago"); // exactly one minute
-  assert.equal(at(HOUR - 1), "59 min ago"); // just under one hour
-  assert.equal(at(HOUR), "1 hour ago");
-  assert.equal(at(DAY - 1), "23 hours ago"); // just under one day
-  assert.equal(at(DAY), "1 day ago");
+  assert.equal(at(60 * 1000), "1m ago"); // exactly one minute
+  assert.equal(at(HOUR - 1), "59m ago"); // just under one hour
+  assert.equal(at(HOUR), "1h ago");
+  assert.equal(at(DAY - 1), "23h ago"); // just under one day
+  assert.equal(at(DAY), "1d ago");
 });
 
 test("relTime never shows a missing, invalid or future timestamp as Now", () => {
@@ -554,15 +555,15 @@ test("refreshRelativeTimes updates ages from the datetime attribute without rebu
   const control = list.children[0].querySelector(".ju-notif-pop-btn");
   const movesBefore = list.moves;
 
-  // One hour after creation the visible age must change to "1 hour ago" without any re-render.
+  // One hour after creation the visible age must change to "1h ago" without any re-render.
   N.refreshRelativeTimes(list, doc, Date.parse(created) + HOUR);
-  assert.equal(timeEl.textContent, "1 hour ago");
+  assert.equal(timeEl.textContent, "1h ago");
   assert.equal(list.moves, movesBefore); // no DOM node was moved or recreated
   assert.equal(list.children[0].querySelector(".ju-notif-pop-btn"), control); // same control, focus-safe
 
   // Three hours: plural.
   N.refreshRelativeTimes(list, doc, Date.parse(created) + 3 * HOUR);
-  assert.equal(timeEl.textContent, "3 hours ago");
+  assert.equal(timeEl.textContent, "3h ago");
 });
 
 test("refreshRelativeTimes ignores a time element without a datetime and never writes an empty age", () => {
@@ -570,12 +571,12 @@ test("refreshRelativeTimes ignores a time element without a datetime and never w
   const list = doc.createElement("ul");
   const bare = doc.createElement("time");
   bare.className = "ju-notif-pop-time";
-  bare.textContent = "7 days ago";
+  bare.textContent = "7d ago";
   list.appendChild(bare);
   doc.roots.push(list);
   // No datetime attribute: it must be left untouched (not blanked).
   N.refreshRelativeTimes(list, doc, Date.now());
-  assert.equal(bare.textContent, "7 days ago");
+  assert.equal(bare.textContent, "7d ago");
 });
 
 test("the public API exposes the relative formatter so the time logic is not duplicated", () => {

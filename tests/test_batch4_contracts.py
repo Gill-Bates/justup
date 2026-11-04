@@ -241,6 +241,27 @@ def test_interleaved_reader_never_caches_old_value_after_commit(two_conns):
     assert settings_cache.get_setting_cached(b, "k2") == "new2"
 
 
+@pytest.mark.parametrize("auto_commit", [True, False])
+def test_manual_transaction_setting_write_cannot_leave_stale_cache(two_conns, auto_commit):
+    a, b = two_conns
+    assert settings_cache.get_setting_cached(b, "k1") == "old1"
+    a.execute("BEGIN")
+    sqlite_db.set_setting(a, "k1", "new1", auto_commit=auto_commit)
+    assert settings_cache.get_setting_cached(b, "k1") == "old1"
+    a.commit()
+    assert settings_cache.get_setting_cached(b, "k1") == "new1"
+
+
+def test_manual_transaction_setting_delete_cannot_leave_stale_cache(two_conns):
+    a, b = two_conns
+    assert settings_cache.get_setting_cached(b, "k1") == "old1"
+    a.execute("BEGIN")
+    sqlite_db.delete_setting(a, "k1")
+    assert settings_cache.get_setting_cached(b, "k1") == "old1"
+    a.commit()
+    assert settings_cache.get_setting_cached(b, "k1") is None
+
+
 def test_update_settings_endpoint_invalidates_after_commit_and_on_rollback(two_conns):
     from app.api import settings as settings_api
 

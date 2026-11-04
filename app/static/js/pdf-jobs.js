@@ -83,12 +83,20 @@ var MAX_JOB_AGE_MS = 5 * 60 * 1000; // 5 minutes
 
 	function getPendingJobs() {
 		var now = Date.now();
+		var expired = jobs.filter(function (j) {
+			return (now - (j.addedAt || 0)) >= MAX_JOB_AGE_MS;
+		});
 		var active = jobs.filter(function (j) {
 			return (now - (j.addedAt || 0)) < MAX_JOB_AGE_MS;
 		});
 		if (active.length !== jobs.length) {
 			jobs = active;
 			saveJobs();
+			expired.forEach(function (job) {
+				window.dispatchEvent(new CustomEvent('pdf-job-monitoring-expired', {
+					detail: { jobId: job.jobId, targetId: job.targetId }
+				}));
+			});
 		}
 		return active.slice();
 	}

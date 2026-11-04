@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 import sqlite3
 import threading
 import time
@@ -44,6 +43,7 @@ from ..utils.crypto import encrypt_secret
 from ..utils.deps import get_conn, get_tsdb_dir
 from ..utils.http_status import DEFAULT_HTTP_SUCCESS_CODES
 from ..utils.rate_limit import rate_limit
+from ..utils.tcp_ports import parse_port_list
 from .auth import get_current_user, require_admin
 
 _log = logging.getLogger(__name__)
@@ -126,27 +126,11 @@ def _validate_tcp_ports(ports: str | None) -> str:
     Raises:
         HTTPException: If any port is invalid
     """
-    if not ports or not ports.strip():
-        return DEFAULT_TCP_PORTS
-
-    parts = re.split(r"[,\s]+", ports.strip())
-    validated = set()
-
-    for raw_p in parts:
-        p = raw_p.strip()
-        if not p:
-            continue
-        if not (p.isascii() and p.isdigit()):
-            raise HTTPException(status_code=422, detail=f"Invalid TCP port: '{p}' (must be a number)")
-        port = int(p)
-        if not 1 <= port <= 65535:
-            raise HTTPException(status_code=422, detail=f"Invalid TCP port: {port} out of range (1-65535)")
-        validated.add(port)
-
-    if not validated:
-        return DEFAULT_TCP_PORTS
-
-    return ",".join(str(p) for p in sorted(validated))
+    try:
+        parsed = parse_port_list(ports)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return ",".join(str(p) for p in parsed) if parsed else DEFAULT_TCP_PORTS
 
 
 def _encrypt_password(password: str | object | None) -> str | None:
@@ -352,6 +336,8 @@ def create(payload: TargetCreate, request: Request, conn=Depends(get_conn), _use
         new_id = sqlite_db.create_target(conn, values_db, manage_transaction=False)
         if recipient_ids:
             sqlite_db.set_target_recipients(conn, new_id, list(dict.fromkeys(recipient_ids)), manage_transaction=False)
+        # After the explicit list (which replaces assignments): recipients flagged "all targets" always join.
+        sqlite_db.assign_flagged_recipients(conn, new_id)
         notifications.notify_target_created(conn, target_id=new_id, name=values_db["name"], actor=_user)
     event_bus.publish("target.changed", {"target_id": new_id})
 
@@ -506,6 +492,11 @@ def _patch_locked(target_id: int, payload: TargetUpdate, conn):
 
     # Validate effective state (semantic consistency)
     _validate_target_consistency(effective)
+    # Judge the merged credentials only when the patch touches them, so stored legacy rows stay editable.
+    if patch_db.keys() & {"http_basic_auth_enabled", "http_username", "http_password"} and (
+        _merge("http_basic_auth_enabled") and not (_merge("http_username") and _merge("http_password"))
+    ):
+        raise HTTPException(status_code=422, detail="HTTP Basic Auth enabled but username or password missing")
 
     # Check for host collisions using COMPLETE effective state
     # This ensures collision detection sees all hosts, not just patched ones

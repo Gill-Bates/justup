@@ -18,10 +18,14 @@ from __future__ import annotations
 
 import contextlib
 import functools
+import hashlib
 import ipaddress
+import itertools
+import json
 import logging
 import math
 import os
+import re
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor, wait
 from contextvars import ContextVar
@@ -32,7 +36,7 @@ from typing import Any, TypedDict
 from app.services import geo_resolver as gr
 from app.services.geo_resolver import MAX_CITY_RADIUS_KM
 from app.services.ip_lookup import lookup_online_sources, public_ip
-from app.services.pop_codes import lookup_pop_code
+from app.services.pop_codes import lookup_pop_code, observe_unknown_pop
 from app.utils.constants import (
     DEFAULT_ONLINE_GEO_FALLBACK_ENABLED,
     GEOIP_DB_RELPATH,
@@ -71,6 +75,11 @@ META_CONFIDENCE = "_confidence"
 META_GEO_UNAVAILABLE = "_geo_unavailable"  # Destination reached but no geo coords
 META_IS_TERMINAL = "_is_terminal"  # Explicit end-of-route signal for renderer
 META_IS_IPV6 = "_is_ipv6"  # Mark IPv6 addresses for special handling
+META_MAP_ROLE = "map_role"  # how a renderer draws the point: MAP_ROLE_*
+META_LOC_NOTE = "loc_note"  # source/uncertainty text of an approximate position, for tooltips
+META_SEGMENT_NOTE = "segment_note"  # hops the segment to the next point crosses without a map position
+META_MAP_RADIUS_KM = "map_radius_km"  # accuracy radius a renderer may draw around an approximate position
+MAX_MAP_RADIUS_KM = 250.0  # larger radii would cover the map and are not drawn
 
 # --- IPv6 specific constants ---
 # IPv6 addresses are long and cause layout issues in PDFs/tables
@@ -382,6 +391,51 @@ def geolocate_ip(ip: str) -> GeoLocation | None:
     return None
 
 
+_ISO_COUNTRY_CODES = frozenset(
+    re.findall(
+        r"[A-Z]{2}",
+        """
+    AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ BA BB BD BE BF BG BH BI BJ BL BM BN BO BQ BR BS BT BV BW BY BZ
+    CA CC CD CF CG CH CI CK CL CM CN CO CR CU CV CW CX CY CZ DE DJ DK DM DO DZ EC EE EG EH ER ES ET FI FJ FK FM
+    FO FR GA GB GD GE GF GG GH GI GL GM GN GP GQ GR GS GT GU GW GY HK HM HN HR HT HU ID IE IL IM IN IO IQ IR IS
+    IT JE JM JO JP KE KG KH KI KM KN KP KR KW KY KZ LA LB LC LI LK LR LS LT LU LV LY MA MC MD ME MF MG MH MK ML
+    MM MN MO MP MQ MR MS MT MU MV MW MX MY MZ NA NC NE NF NG NI NL NO NP NR NU NZ OM PA PE PF PG PH PK PL PM PN
+    PR PS PT PW PY QA RE RO RS RU RW SA SB SC SD SE SG SH SI SJ SK SL SM SN SO SR SS ST SV SX SY SZ TC TD TF TG
+    TH TJ TK TL TM TN TO TR TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW""",
+    )
+)
+
+
+def geolocate_country(ip: str) -> str | None:
+    """Return a local GeoLite2 country code even when the record has no coordinates."""
+    try:
+        address = ipaddress.ip_address(ip)
+    except ValueError:
+        return None
+    if (
+        address.is_private
+        or address.is_loopback
+        or address.is_link_local
+        or address.is_reserved
+        or address.is_multicast
+    ):
+        return None
+    for _attempt in range(_MAX_READER_ATTEMPTS):
+        reader = _get_reader()
+        if not reader:
+            return None
+        try:
+            _, record = _read_record(reader, ip)
+        except _ReaderSwappedError:
+            continue
+        except Exception as exc:  # noqa: BLE001 - GeoIP failure must not affect quality monitoring
+            _log.debug("GeoIP country lookup failed for %s: %s", ip, exc)
+            return None
+        code = record.get("country") if record else None
+        return code.upper() if isinstance(code, str) and code.upper() in _ISO_COUNTRY_CODES else None
+    return None
+
+
 def infer_location_from_hostname(hostname: str | None) -> dict[str, Any] | None:
     """
     Infer geographic location from rDNS hostname using known POP codes.
@@ -609,6 +663,18 @@ RM_ACCURACY = "accuracy"  # GeoAccuracy value
 RM_SYNTHETIC = "is_synthetic"
 RM_DESTINATION = "is_destination"
 RM_MAPPABLE = "mappable"  # True only when accuracy is precise and coords are valid
+RM_MAP_ROLE = "map_role"  # MAP_ROLE_* of the hop, from the same rule as the geo points
+
+# How a located hop is drawn. Web map and PDF read this value; neither decides it again.
+MAP_ROLE_ROUTE = "route"  # reliable position (or the destination): a solid, named hop
+MAP_ROLE_ESTIMATE = "estimate"  # approximate position: a chain node drawn hollow ("~"), its links are dashed
+MAP_ROLE_NONE = "none"  # nothing to draw (no usable position)
+
+_SOURCE_LABEL = {
+    CONFIDENCE_GEOIP: "GeoIP",
+    CONFIDENCE_HOSTNAME: "hostname hint",
+    CONFIDENCE_ONLINE: "online lookup",
+}
 
 _CONFIDENCE_TO_SOURCE = {
     CONFIDENCE_HOSTNAME: GeoSource.HOSTNAME,
@@ -622,17 +688,9 @@ def _coarse_source(source: GeoSource) -> GeoSource:
     return GeoSource.ONLINE if source == GeoSource.ONLINE else GeoSource.GEOIP_COARSE
 
 
-def _classify_location(loc: dict[str, Any] | None) -> tuple[GeoSource, GeoAccuracy]:
-    """Map a resolved location dict to a (source, accuracy) pair.
-
-    Only a POP hint or a GeoLite2 city within a small accuracy radius is mappable.
-    Online coordinates without a published radius remain approximate.
-    """
-    if not loc:
-        return GeoSource.NONE, GeoAccuracy.UNKNOWN
-
+def _has_coords(loc: dict[str, Any]) -> bool:
     lat, lon = loc.get("lat"), loc.get("lon")
-    has_coords = (
+    return (
         isinstance(lat, (int, float))
         and not isinstance(lat, bool)
         and isinstance(lon, (int, float))
@@ -642,6 +700,18 @@ def _classify_location(loc: dict[str, Any] | None) -> tuple[GeoSource, GeoAccura
         and -90 <= lat <= 90
         and -180 <= lon <= 180
     )
+
+
+def _classify_location(loc: dict[str, Any] | None) -> tuple[GeoSource, GeoAccuracy]:
+    """Map a resolved location dict to a (source, accuracy) pair.
+
+    A POP hint or a GeoLite2 city within a small accuracy radius is precise; other
+    city candidates can still be plotted with their approximate accuracy retained.
+    """
+    if not loc:
+        return GeoSource.NONE, GeoAccuracy.UNKNOWN
+
+    has_coords = _has_coords(loc)
     source = _CONFIDENCE_TO_SOURCE.get(loc.get(META_CONFIDENCE), GeoSource.GEOIP)
 
     if not has_coords:
@@ -691,6 +761,89 @@ def location_view(loc: dict[str, Any] | None) -> dict[str, Any]:
     return {"city": None, "country": country, "precision": LOC_COUNTRY if country else LOC_NONE}
 
 
+@functools.lru_cache(maxsize=256)
+def country_center(country: str) -> tuple[float, float] | None:
+    """Area centroid of the country's largest Natural Earth land polygon."""
+    path = Path(__file__).resolve().parent.parent / "static" / "vendor" / "geo" / "world-110m.geojson"
+    world = json.loads(path.read_text(encoding="utf-8"))
+    for feature in world.get("features", []):
+        if (feature.get("properties") or {}).get("iso") != country.upper():
+            continue
+        geometry = feature.get("geometry") or {}
+        polygons = geometry.get("coordinates") or []
+        if geometry.get("type") == "Polygon":
+            polygons = [polygons]
+        largest_area, center = 0.0, None
+        for polygon in polygons:
+            if not polygon or len(polygon[0]) < 3:
+                continue
+            ring = polygon[0]
+            edges = list(itertools.pairwise([*ring, ring[0]]))
+            cross = [start[0] * end[1] - end[0] * start[1] for start, end in edges]
+            area = sum(cross)
+            if abs(area) > largest_area:
+                largest_area = abs(area)
+                lon = sum((start[0] + end[0]) * weight for (start, end), weight in zip(edges, cross, strict=True)) / (
+                    3 * area
+                )
+                lat = sum((start[1] + end[1]) * weight for (start, end), weight in zip(edges, cross, strict=True)) / (
+                    3 * area
+                )
+                center = (lat, lon)
+        return center
+    return None
+
+
+def _map_location(loc: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not loc or location_view(loc)["precision"] != LOC_COUNTRY:
+        return loc
+    center = country_center(str(loc["country"]))
+    if center is None:
+        return loc
+    return {
+        **loc,
+        "lat": center[0],
+        "lon": center[1],
+        "city": None,
+        "position_city": None,
+        "accuracy_class": "approximate",
+        "accuracy_radius_km": None,
+        "_country_center": True,
+    }
+
+
+def map_role(loc: dict[str, Any] | None, *, is_destination: bool = False) -> str:
+    """The single rule for how a located hop is drawn (web map, PDF and route model share it).
+
+    Every located hop is a node of the one route chain. A precise position is a reliable node. An
+    approximate one with a city of its own is an estimate node (hollow "~" marker, dashed links);
+    the destination stays the chain's end and carries its uncertainty. Country centers are estimates.
+    """
+    if not loc or not _has_coords(loc):
+        return MAP_ROLE_NONE
+    accuracy = _classify_location(loc)[1]
+    if loc.get("_country_center"):
+        return MAP_ROLE_ESTIMATE
+    if accuracy == GeoAccuracy.PRECISE:
+        return MAP_ROLE_ROUTE
+    if accuracy == GeoAccuracy.APPROXIMATE and location_view(loc)["city"]:
+        return MAP_ROLE_ROUTE if is_destination else MAP_ROLE_ESTIMATE
+    return MAP_ROLE_NONE
+
+
+def location_note(loc: dict[str, Any] | None) -> str | None:
+    """Source and uncertainty of an approximate position ("GeoIP estimate, radius about 100 km")."""
+    if not loc:
+        return None
+    if loc.get("_country_center"):
+        return "Country center; exact location unknown"
+    note = f"{_SOURCE_LABEL.get(loc.get(META_CONFIDENCE), 'Location')} estimate"
+    radius = loc.get("accuracy_radius_km")
+    if isinstance(radius, int | float) and not isinstance(radius, bool) and math.isfinite(radius) and radius > 0:
+        note += f", radius about {radius:g} km"
+    return note
+
+
 def _route_node(
     hop_num: int,
     ip: str | None,
@@ -726,6 +879,7 @@ def _route_node(
         RM_SYNTHETIC: is_synthetic,
         RM_DESTINATION: is_destination,
         RM_MAPPABLE: accuracy == GeoAccuracy.PRECISE,
+        RM_MAP_ROLE: map_role(_map_location(loc) if public_ip(ip) else loc, is_destination=is_destination),
     }
 
 
@@ -771,9 +925,9 @@ def build_route_model(
 
     Integration status: this is the explicit shared surface for the four-state
     geo classification (``GeoSource``/``GeoAccuracy``). The shipped web UI and PDF
-    currently render from ``mtr_hops_to_geo_points`` and the enriched hops; moving
-    those renderers onto this model (so ``mappable``/``geo_source``/``accuracy``
-    reach the template and schematic) is the next step and is not wired yet.
+    render from ``mtr_hops_to_geo_points`` and the enriched hops; both take the
+    drawing role of a hop from ``map_role`` (``RM_MAP_ROLE`` here, ``map_role`` on
+    the geo points), so a hop's role cannot differ between the two views.
     """
     nodes: list[dict[str, Any]] = []
     if not hops:
@@ -825,6 +979,29 @@ def build_route_model(
     return nodes
 
 
+def _hop_ranges(hops: list[int]) -> str:
+    """ "9–12, 14" for the hop numbers a segment crosses."""
+    parts: list[str] = []
+    for hop in sorted(set(hops)):
+        if parts and parts[-1][1] == hop - 1:
+            parts[-1][1] = hop
+        else:
+            parts.append([hop, hop])
+    return ", ".join(str(a) if a == b else f"{a}–{b}" for a, b in parts)
+
+
+def _link(tail: dict, gap: bool, next_approximate: bool, skipped: list[int]) -> None:
+    """Style the segment leaving ``tail``: solid only between two reliable positions without a gap.
+
+    Dashed means the path is estimated or unknown: an end is approximate, or hops in between have
+    no map position (their numbers go into ``segment_note``). No coordinate is ever invented.
+    """
+    if gap or next_approximate or tail.get("_approximate"):
+        tail["segment_to_next"] = SEGMENT_DASHED
+    if skipped:
+        tail[META_SEGMENT_NOTE] = f"Hops {_hop_ranges(skipped)} not on the map"
+
+
 @_batched_online
 def mtr_hops_to_geo_points(
     hops: list[dict],
@@ -832,12 +1009,14 @@ def mtr_hops_to_geo_points(
     destination_geo: dict | None = None,
 ) -> list[dict]:
     """
-    Convert MTR hops to geo points with interpolation support.
+    Convert MTR hops to the geo points both the web map and the PDF draw.
 
-    This is the new unified function for both UI and PDF that handles:
-    - Normal hops with geolocation
-    - Interpolated hops (ICMP blocked segments)
-    - Destination injection if not reached via MTR
+    The points are the nodes of ONE chain from the first mappable hop to the destination, in hop
+    order. Every point carries a ``map_role`` (``route`` = reliable, ``estimate`` = approximate, drawn
+    hollow). A point's ``segment_to_next`` is ``dashed`` when the path to the next node is estimated
+    or unknown: an end is approximate/estimated, or hops in between did not answer, were
+    interpolated or have no usable position (listed in ``segment_note``); otherwise it is ``solid``.
+    A real geographic back-jump stays visible; no coordinate is invented for a skipped hop.
 
     Args:
         hops: List of MTR hop dicts (with status: ok/partial/timeout/interpolated)
@@ -845,21 +1024,27 @@ def mtr_hops_to_geo_points(
         destination_geo: Pre-resolved geo data for destination
 
     Returns:
-        List of geo points with segment_type for visualization:
-        - segment_type: SEGMENT_SOLID (normal) or SEGMENT_DASHED (interpolated)
-
-    Note: Interpolated hops ONLY affect line styling (dashed segments).
-    They do NOT create markers and are NEVER geolocated directly.
+        Geo points in hop order. Hops without a usable position produce no point and are never
+        geolocated, interpolated or filled from a neighbour.
     """
     points: list[dict] = []
     if not hops:
         return points
+    destination_geo = _map_location(destination_geo)
 
-    # Track segment type to mark the final segment before destination injection.
-    # This variable is updated throughout the loop but only used at the end:
-    # if the route ends with interpolated hops, the segment to the injected
-    # destination should be dashed. Reset to SOLID after each real geolocated point.
-    prev_segment_type = SEGMENT_SOLID
+    route_key = hashlib.sha256(
+        repr(
+            tuple(
+                (str(h.get("hop", ""))[:8], str(h.get("ip", ""))[:45], str(h.get("hostname", ""))[:253])
+                for h in hops[:64]
+            )
+        ).encode()
+    ).hexdigest()
+
+    tail: dict | None = None  # last chain node: the one whose segment_to_next the next node decides
+    skipped: list[int] = []  # hops without a map position between the tail and the next node
+    gap = False  # an unmeasured stretch lies between the tail and the next node
+    prev_hop: int | None = None
 
     for h in hops:
         status = h.get("status") or ""
@@ -872,113 +1057,145 @@ def mtr_hops_to_geo_points(
             _log.debug("Hop %s: Missing status, inferring 'ok' from valid IP %s", hop_num, ip)
         status = normalized
 
-        # Handle interpolated hops - DON'T add as points, only mark segment
-        # Interpolated hops should only affect line styling, not create markers
-        if status == STATUS_INTERPOLATED or h.get(META_INTERPOLATED):
-            if points:
-                points[-1]["segment_to_next"] = SEGMENT_DASHED
-            prev_segment_type = SEGMENT_DASHED
-            continue
+        # A missing hop number is an unmeasured stretch too.
+        if isinstance(hop_num, int) and prev_hop is not None and hop_num > prev_hop + 1:
+            gap = True
+            skipped.extend(range(prev_hop + 1, hop_num))
+        if isinstance(hop_num, int):
+            prev_hop = hop_num
 
-        # Skip pure timeout hops (they have no usable data)
-        if status == STATUS_TIMEOUT or ip in ("*", "-", "???"):
-            continue
-
-        # Include ok/partial hops - they have valid IPs
-        if status not in (STATUS_OK, STATUS_PARTIAL):
+        if h.get(META_INTERPOLATED) or ip in ("*", "-", "???") or status not in (STATUS_OK, STATUS_PARTIAL):
+            gap = True  # silent, interpolated or unusable hops never get a location
+            if isinstance(hop_num, int):
+                skipped.append(hop_num)
             continue
 
         # The destination IP has ONE location decision (destination_geo), also when it answered as a hop.
-        if destination_ip and ip == destination_ip and destination_geo:
+        is_destination_hop = bool(destination_ip and ip == destination_ip)
+        if is_destination_hop and destination_geo:
             loc = destination_geo
         else:
             # Hostname hint takes priority for known carriers.
             loc = geolocate_with_hostname_hint(ip, hostname)
-        if not loc or _classify_location(loc)[1] != GeoAccuracy.PRECISE:
-            # No reliable location for this hop (private IP, or not in any source).
-            # Do NOT place it at the previous hop's coordinate: that would invent a
-            # position the router does not have. The hop stays off the map and the
-            # gap is shown as a dashed (non-geographic) segment to the next point.
-            if points:
-                points[-1]["segment_to_next"] = SEGMENT_DASHED
-            prev_segment_type = SEGMENT_DASHED
+        if hostname:
+            try:
+                observe_unknown_pop(hostname, ip, route_key, lambda ip=ip: geolocate_ip(ip))
+            except Exception:  # noqa: BLE001 - candidate persistence must not affect route monitoring
+                _log.warning("PoP candidate observation failed", exc_info=True)
+        is_public = public_ip(ip)
+        map_loc = _map_location(loc) if is_public else loc
+        # Match the map projection's country-center conversion before deciding the drawing role.
+        # Otherwise country-only locations are reported as unlocated here while their map point
+        # is correctly shown as an estimate at the country center.
+        role = map_role(map_loc, is_destination=is_destination_hop)
+        if role == MAP_ROLE_NONE:
+            gap = True  # country-only and missing locations have no table city to place on the map
+            if isinstance(hop_num, int):
+                skipped.append(hop_num)
             continue
 
-        _log.debug("Geo resolved hop %s (%s) -> %s [%s]", hop_num, ip, loc.get("city"), loc.get(META_CONFIDENCE))
+        loc = map_loc
+        accuracy = _classify_location(loc)[1]
+        view = location_view(loc)
+        approximate = accuracy == GeoAccuracy.APPROXIMATE
 
-        # Reset to solid after adding a real geolocated point
-        points.append(
-            {
-                "hop": hop_num,
-                "ip": ip,
-                **loc,
-                "segment_to_next": SEGMENT_SOLID,  # Default, may be updated by next hop
-                META_IS_PUBLIC: True,
-            }
-        )
-        prev_segment_type = SEGMENT_SOLID
+        _log.debug("Geo resolved hop %s (%s) -> %s [%s]", hop_num, ip, view["city"], loc.get(META_CONFIDENCE))
+
+        point = {
+            "hop": hop_num,
+            "ip": ip,
+            **loc,
+            "city": view["city"],
+            "country": view["country"],
+            META_IS_PUBLIC: True,
+            "loc_precision": view["precision"],
+            "_approximate": approximate,
+            META_MAP_ROLE: role,
+        }
+        if is_destination_hop:
+            point[META_DESTINATION] = True
+            point[META_IS_TERMINAL] = True
+        if approximate:
+            point[META_LOC_NOTE] = location_note(loc)
+        # Every located hop is a node of ONE chain; the quality of both ends decides how the link is drawn.
+        point["segment_to_next"] = SEGMENT_SOLID  # decided by the next node
+        if tail is not None:
+            _link(tail, gap, approximate, skipped)
+        tail, gap, skipped = point, False, []
+        points.append(point)
 
     # Add destination marker:
-    # 1. If the last hop IP matches the destination -> mark it in-place.
-    # 2. Else, if destination_geo has real coords -> inject a destination point.
-    # A destination without real coordinates is NOT placed on the map.
+    # 1. If the last route point is the destination -> mark it in-place.
+    # 2. Else, if destination_geo has a usable position -> inject a destination point.
+    # A destination without a usable position is NOT placed on the map.
+    if tail is not None and destination_ip and tail.get("ip") == destination_ip:
+        tail[META_DESTINATION] = True
+        tail[META_IS_TERMINAL] = True  # Explicit end signal for renderer
+        tail.pop("segment_to_next", None)  # destination = terminal node, no outgoing edge
+        if META_CONFIDENCE not in tail:
+            tail[META_CONFIDENCE] = CONFIDENCE_GEOIP
+        if not tail.get("city"):
+            tail[META_GEO_UNAVAILABLE] = True  # country-only resolution
 
-    # First: If last hop already reached destination, mark it semantically
-    # This handles the case where destination is geolocated but not marked
-    if points and destination_ip and points[-1].get("ip") == destination_ip:
-        points[-1][META_DESTINATION] = True
-        points[-1][META_IS_TERMINAL] = True  # Explicit end signal for renderer
-        # Destination = terminal node, no outgoing edge
-        points[-1].pop("segment_to_next", None)
-        # Preserve existing confidence or set to geoip
-        if META_CONFIDENCE not in points[-1]:
-            points[-1][META_CONFIDENCE] = CONFIDENCE_GEOIP
-        # Mark geo unavailable if no city (country-only resolution)
-        if not points[-1].get("city"):
-            points[-1][META_GEO_UNAVAILABLE] = True
+    if destination_ip and not any(p.get(META_DESTINATION) for p in points):
+        # Shared with build_route_model: one owner of reached/synthetic + hop number.
+        last_hop, _reached = _destination_disposition(hops, destination_ip)
+        destination_view = location_view(destination_geo)
+        destination_approximate = (
+            bool(destination_geo) and _classify_location(destination_geo)[1] == GeoAccuracy.APPROXIMATE
+        )
+        if map_role(destination_geo, is_destination=True) != MAP_ROLE_NONE:
+            if tail is not None:
+                _link(tail, gap, destination_approximate, skipped)
+            # No segment_to_next: the destination is the terminal node.
+            point = {
+                "hop": last_hop + 1,
+                "ip": destination_ip,
+                "lat": destination_geo.get("lat"),
+                "lon": destination_geo.get("lon"),
+                "city": destination_view["city"],
+                "country": destination_view["country"],
+                "accuracy_class": destination_geo.get("accuracy_class"),
+                "accuracy_radius_km": destination_geo.get("accuracy_radius_km"),
+                META_DESTINATION: True,
+                META_IS_TERMINAL: True,
+                META_IS_PUBLIC: True,
+                META_CONFIDENCE: CONFIDENCE_DESTINATION,
+                "loc_precision": destination_view["precision"],
+                "_approximate": destination_approximate,
+                META_MAP_ROLE: map_role(destination_geo, is_destination=True),
+                "_country_center": bool(destination_geo.get("_country_center")),
+            }
+            if destination_approximate:
+                point[META_LOC_NOTE] = location_note(destination_geo)
+            points.append(point)
+        # No fabricated destination marker when geo is missing: placing the destination at the last
+        # known coordinate would suggest a located target that was never resolved.
 
-    if destination_ip:
-        # Only check explicit META_DESTINATION flag, not IP match
-        # IP match alone doesn't mean it's semantically marked as destination
-        has_destination = any(p.get(META_DESTINATION) for p in points)
-
-        if not has_destination:
-            # Shared with build_route_model: one owner of reached/synthetic + hop number.
-            last_hop, _reached = _destination_disposition(hops, destination_ip)
-
-            # If previous segment was dashed (interpolated block), mark it
-            if prev_segment_type == SEGMENT_DASHED and points:
-                points[-1]["segment_to_next"] = SEGMENT_DASHED
-
-            if destination_geo and _classify_location(destination_geo)[1] == GeoAccuracy.PRECISE:
-                # We have valid geo coordinates for the destination.
-                # Note: No segment_to_next - destination is terminal node
-                points.append(
-                    {
-                        "hop": last_hop + 1,
-                        "ip": destination_ip,
-                        "lat": destination_geo.get("lat"),
-                        "lon": destination_geo.get("lon"),
-                        "city": destination_geo.get("city"),
-                        "country": destination_geo.get("country"),
-                        META_DESTINATION: True,
-                        META_IS_TERMINAL: True,
-                        META_IS_PUBLIC: True,
-                        META_CONFIDENCE: CONFIDENCE_DESTINATION,
-                    }
-                )
-            # No fabricated destination marker when geo is missing: placing the
-            # destination at the last known coordinate would suggest a located
-            # target that was never resolved. The destination then stays off the
-            # map and is communicated as off-map info (web) / a note (PDF) by the
-            # route model.
-
-    # Deduplicate points with same coordinates for cleaner map display.
-    # Uses a single-pass approach: group by coordinates, then reduce.
+    # Merge co-located consecutive hops of the chain for a cleaner map (same role only).
     if len(points) > 2:
         points = _deduplicate_geo_points(points)
-
+    for point in points:
+        radius = point.get("accuracy_radius_km")
+        if point.get("_approximate") and isinstance(radius, int | float) and 0 < radius <= MAX_MAP_RADIUS_KM:
+            point[META_MAP_RADIUS_KM] = float(radius)
     return points
+
+
+def _first_hop(point: dict) -> int:
+    """First hop number a point stands for (start of its `_hop_range`), for hop-order sorting."""
+    try:
+        return int(str(point.get(META_HOP_RANGE) or point.get("hop")).split("-", 1)[0])
+    except ValueError:
+        return 0
+
+
+def route_map_features(points: list[dict]) -> dict[str, bool]:
+    """What a map legend has to explain for these points; the one source for web map and PDF."""
+    return {
+        "has_unknown_link": any(p.get("segment_to_next") == SEGMENT_DASHED for p in points),
+        "has_approximate": any(p.get("_approximate") for p in points),
+    }
 
 
 def _deduplicate_geo_points(points: list[dict]) -> list[dict]:
@@ -998,6 +1215,8 @@ def _deduplicate_geo_points(points: list[dict]) -> list[dict]:
         return (round(p.get("lat", 0), GEO_DEDUP_DECIMALS), round(p.get("lon", 0), GEO_DEDUP_DECIMALS))
 
     def _follows(run_last: dict, p: dict) -> bool:
+        if p.get(META_MAP_ROLE) != run_last.get(META_MAP_ROLE):
+            return False  # an estimate never merges into a reliable hop (or the reverse)
         try:
             return int(p.get("hop")) == int(run_last.get("hop")) + 1
         except (TypeError, ValueError):
@@ -1011,8 +1230,9 @@ def _deduplicate_geo_points(points: list[dict]) -> list[dict]:
             runs.append([p])
 
     if len(runs) == 1:
-        # Same-location route: keep origin and destination so consumers still get two points
-        runs = [[points[0]], [points[-1]]]
+        # Same-location route: keep a grouped origin run plus the destination as separate nodes.
+        # Retain the middle hop numbers in the range so plotted-hop counts remain truthful.
+        runs = [points[:-1], [points[-1]]]
 
     deduped: list[dict] = []
     for idx, run in enumerate(runs):
@@ -1020,8 +1240,29 @@ def _deduplicate_geo_points(points: list[dict]) -> list[dict]:
         if len(run) > 1:
             hop_nums = [pt.get("hop", 0) for pt in run]
             point[META_HOP_RANGE] = f"{min(hop_nums)}-{max(hop_nums)}"
-            if any(pt.get("segment_to_next") == SEGMENT_DASHED for pt in run):
-                point["segment_to_next"] = SEGMENT_DASHED
+            # The merged node leaves the way its last member does (inner links join one place).
+            leaving = run[-1].get("segment_to_next")
+            if leaving is not None:
+                point["segment_to_next"] = leaving
+            if run[-1].get(META_SEGMENT_NOTE):
+                point[META_SEGMENT_NOTE] = run[-1][META_SEGMENT_NOTE]
+            approximate = [
+                pt for pt in run if pt.get("_approximate") or pt.get("accuracy_class") == gr.ACCURACY_APPROXIMATE
+            ]
+            if approximate:
+                point["_approximate"] = True
+                point["accuracy_class"] = gr.ACCURACY_APPROXIMATE
+                point["loc_precision"] = LOC_APPROXIMATE
+                radii = [
+                    pt["accuracy_radius_km"]
+                    for pt in approximate
+                    if isinstance(pt.get("accuracy_radius_km"), int | float)
+                    and not isinstance(pt["accuracy_radius_km"], bool)
+                    and math.isfinite(pt["accuracy_radius_km"])
+                    and pt["accuracy_radius_km"] >= 0
+                ]
+                if radii:
+                    point["accuracy_radius_km"] = max(radii)
         deduped.append(point)
 
     return deduped

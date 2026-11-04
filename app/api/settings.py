@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 import os
 import signal
@@ -51,7 +52,10 @@ from ..utils.backup import (
     apply_restore,
     compute_backup_hmac,
     extract_backup,
+    inspect_backup_archive,
+    migrate_staged_application_database,
     parse_backup_filename,
+    serialize_backup_manifest,
     snapshot_pdf_reports,
     snapshot_sqlite_dir,
     verify_backup_hmac,
@@ -641,16 +645,20 @@ def create_backup(request: Request, conn=Depends(get_conn), _admin=Depends(requi
             tempfile.TemporaryDirectory(prefix="justup-backup-snapshot-") as snapshot_root,
             tarfile.open(tmp_path, mode="w:bz2") as tar,
         ):
+            sqlite_snapshot: Path | None = None
             # Only backup specific directories (sqlite, tsdb, pdf_reports)
             # Other files like GeoLite2-City.mmdb are excluded
             for subdir in BACKUP_DIRECTORIES:
                 subdir_path = data_dir / subdir
                 if not subdir_path.exists():
+                    if subdir == "sqlite":
+                        raise BackupError("Backup failed: application database directory is missing")
                     continue
                 if subdir == "sqlite":
                     snapshot = Path(snapshot_root) / "sqlite"
                     snapshot_sqlite_dir(subdir_path, snapshot)
                     subdir_path = snapshot
+                    sqlite_snapshot = snapshot / "justup.db"
                 elif subdir == "tsdb":
                     snapshot = Path(snapshot_root) / "tsdb"
                     tsdb_db.snapshot_tsdb(subdir_path, snapshot)
@@ -661,6 +669,12 @@ def create_backup(request: Request, conn=Depends(get_conn), _admin=Depends(requi
                     subdir_path = snapshot
                 tar.add(subdir_path, arcname=f"data/{subdir}")
                 _log.debug("Added %s to backup", subdir)
+            if sqlite_snapshot is None or not sqlite_snapshot.is_file():
+                raise BackupError("Backup failed: application database data/sqlite/justup.db is missing")
+            manifest_bytes = serialize_backup_manifest(sqlite_snapshot)
+            manifest = tarfile.TarInfo("data/backup-manifest.json")
+            manifest.size = len(manifest_bytes)
+            tar.addfile(manifest, io.BytesIO(manifest_bytes))
 
         hmac_signature = compute_backup_hmac(tmp_path)
 
@@ -815,6 +829,12 @@ async def restore_backup(
                 detail="Backup corrupt! Cannot be imported. (HMAC mismatch - wrong instance or tampered file)",
             )
 
+        try:
+            manifest = await asyncio.to_thread(inspect_backup_archive, tmp_upload_path)
+        except BackupError as exc:
+            _log.error("Rejected backup metadata: %s", exc)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
         data_dir = request.app.state.data_dir
 
         _log.warning(
@@ -828,7 +848,7 @@ async def restore_backup(
         )
         _log.info("Restoring backup %s to %s", filename, data_dir)
 
-        def _extract_and_swap() -> list[str]:
+        def _extract_and_swap() -> tuple[list[str], int, int]:
             # Reject a second concurrent restore before any extraction begins.
             if not _RESTORE_GUARD.acquire(blocking=False):
                 raise RestoreBusyError("another restore is already in progress")
@@ -837,13 +857,15 @@ async def restore_backup(
                 data_dir.mkdir(parents=True, exist_ok=True)
                 with tempfile.TemporaryDirectory(prefix=".restore_staging_", dir=data_dir) as tmpdir:
                     # Validates structure and the integrity of every contained database before anything is touched
-                    extracted = extract_backup(tmp_upload_path, Path(tmpdir))
-                    return _quiesced_swap(extracted, data_dir, conn)
+                    extracted = extract_backup(tmp_upload_path, Path(tmpdir), manifest=manifest)
+                    original_version, migrated_version = migrate_staged_application_database(extracted)
+                    restored = _quiesced_swap(extracted, data_dir, conn)
+                    return restored, original_version, migrated_version
             finally:
                 _RESTORE_GUARD.release()
 
         try:
-            restored_dirs = await asyncio.to_thread(_extract_and_swap)
+            restored_dirs, original_schema_version, migrated_schema_version = await asyncio.to_thread(_extract_and_swap)
         except RestoreBusyError as exc:
             _log.warning("Restore aborted: %s", exc)
             raise HTTPException(
@@ -863,7 +885,13 @@ async def restore_backup(
                 status_code=500,
                 detail=f"Restore AND rollback failed! Manual intervention required. Backup at: {exc.rollback_dir}",
             ) from exc
-        _log.info("Restored %d directories: %s", len(restored_dirs), ", ".join(restored_dirs))
+        _log.info(
+            "Restored %d directories: %s (schema %d -> %d)",
+            len(restored_dirs),
+            ", ".join(restored_dirs),
+            original_schema_version,
+            migrated_schema_version,
+        )
     finally:
         await file.close()
         await asyncio.to_thread(tmp_upload_path.unlink, missing_ok=True)
@@ -883,7 +911,19 @@ async def restore_backup(
 
     background_tasks.add_task(restart_app)
 
-    return {"ok": True, "message": "Backup restored successfully. Application is restarting..."}
+    message = "Backup compatible. Restore successful. Application is restarting..."
+    if original_schema_version < migrated_schema_version:
+        message = (
+            f"Backup compatible; database schema migrated from {original_schema_version} to "
+            f"{migrated_schema_version}. Restore successful. Application is restarting..."
+        )
+    return {
+        "ok": True,
+        "message": message,
+        "migrated": original_schema_version < migrated_schema_version,
+        "backup_schema_version": original_schema_version,
+        "current_schema_version": migrated_schema_version,
+    }
 
 
 # ============================================================================

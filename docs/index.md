@@ -3,7 +3,7 @@ hide:
   - navigation
 ---
 <p align="center">
-  <img src="assets/justup-logo.svg" width="320" alt="justUp! Logo">
+  <img class="justup-docs-logo" src="assets/justup-logo.svg" width="320" alt="justUp! Logo">
 </p>
 <p align="center">
   <strong>Uptime monitoring – done right!</strong>

@@ -136,6 +136,29 @@ def _drain_stream(stream) -> None:
         pass
 
 
+def _read_line_until(stream: io.TextIOBase, timeout: float, max_bytes: int = 4096) -> str | None:
+    """Read one line from a pipe within ``timeout`` seconds in total; None if no complete line arrived.
+
+    Reads raw bytes via the file descriptor so a partial line cannot block past the deadline.
+    A line cut off by EOF is returned as is.
+    """
+    fd = stream.fileno()
+    deadline = time.monotonic() + timeout
+    data = b""
+    while b"\n" not in data and len(data) < max_bytes:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None
+        ready, _, _ = select.select([fd], [], [], remaining)
+        if not ready:
+            return None
+        chunk = os.read(fd, max_bytes - len(data))
+        if not chunk:
+            break  # EOF
+        data += chunk
+    return data.split(b"\n", 1)[0].decode("utf-8", errors="replace")
+
+
 def _start_pipe_drain(proc: subprocess.Popen) -> list[threading.Thread]:
     """Start daemon threads that discard stdout/stderr of a long-running child."""
     threads = []
@@ -614,7 +637,7 @@ class SignalCliBackend(SignalBackend):
         background waiting for the user to scan the QR code. Call wait_for_link()
         with the returned session_id after the user has scanned, or cancel_link() to abort.
 
-        Platform note: Uses select.select() which is POSIX-only. Windows is not
+        Platform note: Uses select.select() on a pipe, which is POSIX-only. Windows is not
         supported for device linking (Docker/Linux target environment).
 
         Thread-safe: Uses lock to prevent concurrent link attempts.
@@ -658,16 +681,16 @@ class SignalCliBackend(SignalBackend):
 
             self._link_process = proc
 
-            # Read the first line (the sgnl:// URI) with timeout
-            ready, _, _ = select.select([proc.stdout], [], [], QR_TIMEOUT)
+            # Read the first line (the sgnl:// URI) within one overall deadline
+            raw_line = _read_line_until(proc.stdout, QR_TIMEOUT)
 
-            if not ready:
+            if raw_line is None:
                 _log.warning("signal-cli link timed out waiting for URI")
                 self._cleanup_link_process()
                 self._link_session_id = None
                 return None, None
 
-            link_uri = proc.stdout.readline().strip()
+            link_uri = raw_line.strip()
 
             if not link_uri or not link_uri.startswith("sgnl://"):
                 _log.warning("Invalid link URI from signal-cli: %s", link_uri[:50] if link_uri else "(empty)")

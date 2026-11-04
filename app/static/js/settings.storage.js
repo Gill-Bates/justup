@@ -128,13 +128,13 @@ function updateSmtpStatusBadge(data) {
     const pill = document.createElement('span');
     pill.className = 'badge';
     if (!enabled) {
-        pill.classList.add('bg-secondary');
+        pill.classList.add('ju-status-badge--neutral');
         pill.textContent = 'Disabled';
     } else if (configured) {
-        pill.classList.add('bg-success');
+        pill.classList.add('ju-status-badge--success');
         pill.textContent = 'Configured';
     } else {
-        pill.classList.add('bg-warning', 'text-dark');
+        pill.classList.add('ju-status-badge--warning');
         pill.textContent = 'Not Configured';
     }
     badge.appendChild(pill);
@@ -374,7 +374,7 @@ export async function executeRestore() {
                 if (passwordInput) passwordInput.value = '';
                 notify('success', data.message || 'Backup restored successfully! Reloading...');
                 // Reload to reflect restored settings, targets, and state
-                setTimeout(() => location.reload(), 1500);
+                setTimeout(() => location.reload(), data.migrated ? 4000 : 1500); // a migration note needs reading time
             } else {
                 const error = await getErrorMessage(resp);
                 if (errorDiv) {
@@ -560,12 +560,8 @@ function initAuthToggle() {
 
         if (pendingAuthDisabled) {
             messageEl.textContent = 'Are you sure you want to DISABLE authentication? All pages will be publicly accessible!';
-            modal.querySelector('.modal-header').classList.remove('bg-success');
-            modal.querySelector('.modal-header').classList.add('bg-warning');
         } else {
             messageEl.textContent = 'Are you sure you want to ENABLE authentication?';
-            modal.querySelector('.modal-header').classList.remove('bg-warning');
-            modal.querySelector('.modal-header').classList.add('bg-success');
         }
 
         // Revert checkbox until user confirms in modal (prevents premature state change)

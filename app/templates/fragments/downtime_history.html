@@ -3,7 +3,7 @@
 <div class="downtime-scroll" role="region" aria-label="Downtime history" tabindex="0" data-range-label="{{ range_label | default('30d') }}">
 	<p class="downtime-summary">
 		<strong>{{ periods | length }}</strong> {{ 'downtime' if periods | length == 1 else 'downtimes' }}
-		{% if periods | selectattr('end', 'none') | list | length %}<span class="badge bg-danger">Ongoing</span>{% endif %}
+		{% if periods | selectattr('end', 'none') | list | length %}<span class="badge ju-status-badge--danger">Ongoing</span>{% endif %}
 	</p>
 	<ol class="downtime-list">
 		{% for p in periods %}
@@ -22,12 +22,12 @@
 						{{ p.end.strftime('%Y-%m-%d %H:%M:%S') }} UTC
 					</span>
 					{% else %}
-					<span class="badge bg-danger">Ongoing</span>
+					<span class="badge ju-status-badge--danger">Ongoing</span>
 					{% endif %}
 				</div>
 				<div class="downtime-services">
 					{% for svc in p.failed_services %}
-					<span class="badge bg-danger">{{ svc }}</span>
+					<span class="badge ju-status-badge--danger">{{ svc }}</span>
 					{% endfor %}
 				</div>
 			</div>

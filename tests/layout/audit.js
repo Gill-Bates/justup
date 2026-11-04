@@ -59,15 +59,61 @@
 	const all = Array.from(content.querySelectorAll("*")).filter((el) => !el.closest(".ju-sidebar") && visible(el));
 	const cr = content.getBoundingClientRect();
 	const doc = document.documentElement;
+	const queueBody = content.querySelector('[data-widget-id="delivery-queue"] .dashboard-monitor-body');
+	if (queueBody && visible(queueBody) && queueBody.scrollHeight > queueBody.clientHeight + TOL) {
+		issue("delivery-queue-ghost-scroll", queueBody, { scrollHeight: queueBody.scrollHeight, clientHeight: queueBody.clientHeight });
+	}
 	out.info = {
 		viewport: [vw, vh],
 		docScroll: [doc.scrollWidth, doc.scrollHeight],
 		content: r2(cr),
 		main: r2(main.getBoundingClientRect()),
-		fit: shell ? getComputedStyle(shell).getPropertyValue("--ju-fit-height").trim() : "",
 		elements: all.length,
+		queueScroll: queueBody && visible(queueBody) ? [queueBody.scrollHeight, queueBody.clientHeight] : null,
 	};
-
+	if (shell && topbar && footer) {
+		const sr = shell.getBoundingClientRect();
+		const tr = topbar.getBoundingClientRect();
+		const fr = footer.getBoundingClientRect();
+		const mr = main.getBoundingClientRect();
+		const mainOverflow = getComputedStyle(main).overflowY;
+		const mainExcess = main.scrollHeight - main.clientHeight;
+		// Bottom padding of shell or content column (safe-area inset) lies outside the footer box.
+		const safeBottom = [shell, content].reduce((sum, el) => sum + (parseFloat(getComputedStyle(el).paddingBottom) || 0), 0);
+		out.info.mainScroll = [main.scrollTop, main.scrollHeight, main.clientHeight, mainOverflow];
+		if (sr.top < -TOL || sr.bottom > vh + TOL || sr.height > vh + TOL) issue("shell-viewport-overflow", shell, { shell: r2(sr), vh });
+		if (doc.scrollHeight > doc.clientHeight + TOL || Math.abs(window.scrollY) > TOL) issue("document-scrolls", doc, { scrollHeight: doc.scrollHeight, clientHeight: doc.clientHeight, scrollY: window.scrollY });
+		if (tr.top < -TOL || tr.bottom > vh + TOL) issue("topbar-outside-viewport", topbar, { rect: r2(tr), vh });
+		if (fr.top < -TOL || fr.bottom > vh + TOL) issue("footer-outside-viewport", footer, { rect: r2(fr), vh });
+		else if (fr.bottom < vh - safeBottom - TOL) issue("footer-above-viewport-bottom", footer, { rect: r2(fr), vh, safeBottom });
+		if (mainExcess > TOL && (!(mainOverflow === "auto" || mainOverflow === "scroll") || cfg.scrollPos === "bottom" && main.scrollTop < mainExcess - TOL)) {
+			issue("main-not-scrollable", main, { scrollTop: main.scrollTop, scrollHeight: main.scrollHeight, clientHeight: main.clientHeight, overflowY: mainOverflow });
+		}
+		// Form actions (shared `.ui-form-actions` bars with Save and Cancel; any other visible submit
+		// control is checked as well) must be reachable: a persistent (sticky/fixed) one fully visible
+		// between main and footer at every scroll position, a scrolling one at the scroll end.
+		const barSel = ".ui-form-actions";
+		const bars = Array.from(main.querySelectorAll(barSel)).filter(visible);
+		const loose = Array.from(main.querySelectorAll("form button[type=submit], form input[type=submit]")).filter((el) => visible(el) && !el.closest(barSel));
+		const controls = bars.flatMap((bar) => Array.from(bar.querySelectorAll("a[href], button, input:not([type=hidden]), select, textarea")).filter(visible));
+		const isPersistent = (el) => {
+			for (let p = el; p && p !== main; p = p.parentElement) if (/^(sticky|fixed)$/.test(getComputedStyle(p).position)) return true;
+			return false;
+		};
+		for (const el of [...bars, ...controls, ...loose]) {
+			const ar = el.getBoundingClientRect();
+			const persistent = isPersistent(el);
+			const outside = ar.bottom > mr.bottom + TOL || ar.bottom > fr.top + TOL;
+			if (persistent ? outside || ar.top < mr.top - TOL : cfg.scrollPos === "bottom" && ar.top >= mr.top - TOL && outside) {
+				issue("form-actions-unreachable", el, { persistent, rect: r2(ar), main: r2(mr) });
+			}
+			// A control that is in view must not lie under the footer or any other element.
+			const inView = ar.top >= mr.top - TOL && ar.bottom <= mr.bottom + TOL;
+			if (el.matches(barSel) || !inView) continue;
+			const hit = document.elementFromPoint(ar.left + ar.width / 2, ar.top + ar.height / 2);
+			if (hit && hit !== el && !el.contains(hit) && !hit.contains(el)) issue("form-actions-covered", el, { rect: r2(ar), coveredBy: hit.className || hit.tagName });
+		}
+	}
 	// 1. Document-level horizontal overflow.
 	if (doc.scrollWidth > doc.clientWidth + TOL) {
 		issue("doc-overflow-x", doc, { scrollWidth: doc.scrollWidth, clientWidth: doc.clientWidth });
@@ -95,6 +141,18 @@
 			} else if (!(cs.textOverflow === "ellipsis" || cs.textOverflow === "clip" && cs.whiteSpace === "nowrap") && !matchesAny(el, cfg.clipX)) {
 				issue("clipped-x", el, { overflowX: cs.overflowX, scrollWidth: el.scrollWidth, clientWidth: el.clientWidth });
 			}
+		}
+	}
+
+	// 3b. A dashboard widget shows no scrollbar except inside a declared overflow area
+	//     (cfg.widgetScroll). Compact KPI tiles in particular must fit their content.
+	for (const el of all) {
+		if (!el.closest(".grid-stack-item") || matchesAny(el, cfg.widgetScroll)) continue;
+		const cs = getComputedStyle(el);
+		const overflowY = (cs.overflowY === "auto" || cs.overflowY === "scroll") && el.scrollHeight - el.clientHeight > 1;
+		const overflowX = (cs.overflowX === "auto" || cs.overflowX === "scroll") && el.scrollWidth - el.clientWidth > 1;
+		if (overflowY || overflowX) {
+			issue("widget-scrollbar", el, { scrollHeight: el.scrollHeight, clientHeight: el.clientHeight, scrollWidth: el.scrollWidth, clientWidth: el.clientWidth });
 		}
 	}
 
@@ -152,7 +210,7 @@
 			const w = Math.min(v.right, b.right) - Math.max(v.left, b.left);
 			const h = Math.min(v.bottom, b.bottom) - Math.max(v.top, b.top);
 			if (w > TOL && h > TOL && v.right - v.left > TOL && v.bottom - v.top > TOL) {
-				issue("covered-by-" + name, el, { rect: r2(v), box: r2(b) });
+				issue(name === "footer" ? "content-covered-by-footer" : "covered-by-" + name, el, { rect: r2(v), box: r2(b) });
 				break;
 			}
 		}
@@ -233,6 +291,29 @@
 	}
 	for (const toolbar of content.querySelectorAll(".target-toolbar")) {
 		compareText(Array.from(toolbar.querySelectorAll(":scope > .target-toolbar-group")), "target-toolbar");
+		if (!visible(toolbar)) continue;
+		// Information architecture: the controls stay between the KPI cards and the charts.
+		const kpi = document.querySelector("#target-info-cards > .target-kpi-row");
+		const chart = document.querySelector("#target-dashboard-pane .target-combined-card");
+		const box = toolbar.getBoundingClientRect();
+		if (kpi && chart && visible(kpi) && visible(chart)
+			&& (kpi.getBoundingClientRect().bottom > box.top + TOL || box.bottom > chart.getBoundingClientRect().top + TOL)) {
+			issue("target-toolbar-order", toolbar, { toolbar: r2(box), kpi: r2(kpi.getBoundingClientRect()), chart: r2(chart.getBoundingClientRect()) });
+		}
+		// Controls that share a row must share a centre line, whatever their own height.
+		const controls = Array.from(toolbar.querySelectorAll(
+			"#quick-range, .target-custom-range > summary, #reset-zoom-btn, .target-recipients-summary, .target-recipients-empty, .target-autoclose-switch",
+		)).filter(visible).map((el) => ({ el, rect: el.getBoundingClientRect() }));
+		for (let i = 0; i < controls.length; i++) {
+			for (let j = i + 1; j < controls.length; j++) {
+				const a = controls[i].rect;
+				const b = controls[j].rect;
+				const sameRow = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > Math.min(a.height, b.height) / 2;
+				if (sameRow && Math.abs((a.top + a.bottom) / 2 - (b.top + b.bottom) / 2) > 2) {
+					issue("target-toolbar-misaligned", controls[i].el, { with: desc(controls[j].el), rect: r2(a), withRect: r2(b) });
+				}
+			}
+		}
 	}
 	for (const heading of content.querySelectorAll(".target-panel-heading")) {
 		compareText(Array.from(heading.querySelectorAll(":scope > .target-panel-title, :scope > .target-panel-sub")), "target-panel-heading");
@@ -369,9 +450,46 @@
 			if (t.tBodies[0]?.rows.length && cards !== narrow) issue("table-mode-mismatch", t, { viewport: vp.clientWidth, cards });
 		}
 	}
-	// 8. Fit shells must not scroll the document.
-	if (out.info.fit && out.info.fit !== "auto" && doc.scrollHeight > vh + TOL) {
-		issue("fit-document-scrolls", doc, { scrollHeight: doc.scrollHeight, vh });
+	// 10. Badge groups (DESIGN.md, "Badges"): every `.ju-badges` / `[data-ju-badges]` container is measured. The
+	//     rows of badges sit vertically centred in the space the group offers, the label is centred in
+	//     each badge box, and no badge overlaps a sibling or leaves (is clipped by) its group.
+	const px = (value) => parseFloat(value) || 0;
+	for (const group of content.querySelectorAll(".ju-badges, [data-ju-badges]")) {
+		if (!visible(group)) continue;
+		const badges = [...group.children].filter((el) => el.matches(".badge, [data-ju-badge]") && visible(el));
+		if (!badges.length) continue;
+		const gcs = getComputedStyle(group);
+		const box = group.getBoundingClientRect();
+		const rects = badges.map((el) => el.getBoundingClientRect());
+		const inner = {
+			top: box.top + px(gcs.paddingTop) + px(gcs.borderTopWidth), bottom: box.bottom - px(gcs.paddingBottom) - px(gcs.borderBottomWidth),
+			left: box.left + px(gcs.paddingLeft) + px(gcs.borderLeftWidth), right: box.right - px(gcs.paddingRight) - px(gcs.borderRightWidth),
+		};
+		const rowTop = Math.min(...rects.map((r) => r.top));
+		const rowBottom = Math.max(...rects.map((r) => r.bottom));
+		const above = rowTop - inner.top;
+		const below = inner.bottom - rowBottom;
+		if (rects.some((r) => r.left < inner.left - TOL || r.right > inner.right + TOL) || above < -TOL || below < -TOL) {
+			issue("badge-clipped-by-group", group, { group: r2(inner), badges: rects.map(r2) });
+		} else if (Math.abs(above - below) > TOL) {
+			issue("badge-group-not-centered", group, { above: Math.round(above * 10) / 10, below: Math.round(below * 10) / 10 });
+		}
+		badges.forEach((el, i) => {
+			// Visible label extent; screen-reader-only children are positioned out of the flow and skipped.
+			const parts = [...el.childNodes].filter((node) => (node.nodeType === 3 && node.textContent.trim()) || (node.nodeType === 1 && !node.matches(".visually-hidden")))
+				.map((node) => { const range = document.createRange(); range.selectNode(node); return range.getBoundingClientRect(); }).filter((r) => r.height);
+			const labelTop = Math.min(...parts.map((r) => r.top));
+			const labelBottom = Math.max(...parts.map((r) => r.bottom));
+			if (parts.length && Math.abs((labelTop - rects[i].top) - (rects[i].bottom - labelBottom)) > TOL) {
+				issue("badge-text-not-centered", el, { top: Math.round(labelTop - rects[i].top), bottom: Math.round(rects[i].bottom - labelBottom) });
+			}
+			if (el.scrollWidth > el.clientWidth + TOL) issue("badge-text-clipped", el, { scrollWidth: el.scrollWidth, clientWidth: el.clientWidth });
+			for (let j = i + 1; j < badges.length; j++) {
+				const overlapX = Math.min(rects[i].right, rects[j].right) - Math.max(rects[i].left, rects[j].left);
+				const overlapY = Math.min(rects[i].bottom, rects[j].bottom) - Math.max(rects[i].top, rects[j].top);
+				if (overlapX > 1 && overlapY > 1) issue("badge-overlap", el, { other: desc(badges[j]) });
+			}
+		});
 	}
 	return out;
 }

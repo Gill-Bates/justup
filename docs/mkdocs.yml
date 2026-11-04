@@ -33,7 +33,7 @@ theme:
   name: material
   language: en
   logo: assets/justup-logo.svg
-  favicon: assets/justup-logo.svg
+  favicon: assets/justup-favicon.svg
   palette:
     # Automatic — follows the system preference on first visit.
     - media: "(prefers-color-scheme)"

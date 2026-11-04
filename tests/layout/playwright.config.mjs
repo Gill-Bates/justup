@@ -1,0 +1,46 @@
+//
+// tests/layout/playwright.config.mjs
+// Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
+//
+
+import { defineConfig } from "@playwright/test";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const browsers = (process.env.JUSTUP_LAYOUT_BROWSERS || "chromium").split(",").map((name) => name.trim()).filter(Boolean);
+const supported = new Set(["chromium", "firefox", "webkit"]);
+const unknown = browsers.filter((name) => !supported.has(name));
+if (!browsers.length || unknown.length) throw new Error(`Unsupported layout browser selection: ${unknown.join(", ") || "empty"}`);
+
+const reporters = [["list"]];
+if (process.env.JUSTUP_LAYOUT_JUNIT) reporters.push(["junit", { outputFile: process.env.JUSTUP_LAYOUT_JUNIT }]);
+if (process.env.JUSTUP_LAYOUT_JSON) reporters.push(["json", { outputFile: process.env.JUSTUP_LAYOUT_JSON }]);
+
+export default defineConfig({
+	forbidOnly: true,
+	testDir: path.dirname(fileURLToPath(import.meta.url)),
+	testMatch: "*.spec.mjs",
+	timeout: 180_000,
+	globalTimeout: 1_500_000,
+	expect: { timeout: 10_000 },
+	fullyParallel: true,
+	workers: process.env.CI ? 2 : "50%",
+	retries: 0,
+	reporter: reporters,
+	outputDir: process.env.JUSTUP_LAYOUT_OUTPUT || path.join(os.tmpdir(), `justup-layout-${process.pid}`),
+	use: {
+		trace: "retain-on-failure",
+		screenshot: "only-on-failure",
+		video: "retain-on-failure",
+	},
+	projects: browsers.map((name) => ({
+		name,
+		use: {
+			browserName: name,
+			launchOptions: {
+				...(name === "chromium" ? { ignoreDefaultArgs: ["--hide-scrollbars"], args: ["--disable-threaded-animation"] } : {}),
+			},
+		},
+	})),
+});

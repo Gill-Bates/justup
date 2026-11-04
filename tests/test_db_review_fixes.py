@@ -13,16 +13,19 @@ import json
 import sqlite3
 import threading
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
+from fractions import Fraction
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
 from app.db import notifications as inbox
-from app.db import pop_lookup, tsdb
 from app.db import sqlite as sqlite_db
+from app.db import tsdb
 from app.models.groups import GroupUpdate
 from app.models.targets import normalize_ports
+from app.utils.tcp_ports import parse_port, parse_port_list
 from tests import _support  # noqa: F401 - imported for its sys.path side effect
 
 
@@ -85,6 +88,37 @@ def test_tcp_port_list_rejects_bool_and_fractional(bad):
 
 def test_tcp_port_list_accepts_ints_numeric_strings_and_whole_floats():
     assert normalize_ports([80, "443", 8080.0]) == "80,443,8080"
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        Decimal("443.5"),
+        Decimal("NaN"),
+        Decimal("Infinity"),
+        Fraction(887, 2),
+        float("nan"),
+        float("inf"),
+        443.5,
+        True,
+        b"80",
+        "80.5",
+        "٨٠",
+        0,
+        65536,
+        Decimal(65536),
+        -1,
+    ],
+)
+def test_tcp_port_parser_rejects_fractions_and_unsupported_types_before_conversion(bad):
+    with pytest.raises(ValueError, match="Invalid TCP port"):
+        parse_port_list([bad])
+
+
+@pytest.mark.parametrize("good", [443, "443", " 443 ", 443.0, Decimal(443), Decimal("4.43E+2"), Fraction(443, 1)])
+def test_tcp_port_parser_accepts_whole_numbers_of_every_supported_type(good):
+    assert parse_port_list([good]) == [443]
+    assert parse_port(good) == 443
 
 
 # ─── G2: compaction merge keeps distinct points sharing a timestamp ───────────
@@ -218,37 +252,6 @@ def test_parallel_deliveries_are_all_counted(tmp_path):
     sqlite_db.close_connection(boot)
 
 
-# ─── G4: ambiguous hostname hits are not resolved arbitrarily ────────────────
-
-
-def _add_pop(conn, canonical, alias, lat, lon, *, priority=1):
-    conn.execute(
-        "INSERT INTO pop_locations (canonical_code, alias_code, city, country, lat, lon, source,"
-        " confidence, priority, created_at, updated_at, retired) VALUES (?,?,?,?,?,?,'test',100,?,'x','x',0)",
-        (canonical, alias, canonical, "XX", lat, lon, priority),
-    )
-
-
-def test_hostname_lookup_with_conflicting_equal_rank_aliases_returns_none(mem):
-    _add_pop(mem, "aaa", "dup", 10.0, 10.0)
-    _add_pop(mem, "zzz", "dup", -30.0, 100.0)
-    assert pop_lookup.lkp_h(mem, "core1.dup.example.net") is None
-
-
-def test_hostname_lookup_same_site_ties_resolve_deterministically(mem):
-    _add_pop(mem, "fra", "dup", 50.0, 8.6)
-    _add_pop(mem, "frank", "dup", 50.0, 8.6)
-    hit = pop_lookup.lkp_h(mem, "core1.dup.example.net")
-    assert hit is not None and hit["canonical_code"] == "fra"
-
-
-def test_hostname_lookup_priority_breaks_conflict(mem):
-    _add_pop(mem, "aaa", "dup", 10.0, 10.0, priority=2)
-    _add_pop(mem, "zzz", "dup", -30.0, 100.0, priority=1)
-    hit = pop_lookup.lkp_h(mem, "core1.dup.example.net")
-    assert hit is not None and hit["canonical_code"] == "zzz"
-
-
 # ─── DRY contract tests (no behaviour change) ────────────────────────────────
 
 
@@ -269,3 +272,35 @@ def test_dashboard_row_bound_matches_schema_check(mem):
 
     sql = mem.execute("SELECT sql FROM sqlite_schema WHERE name = 'dashboard_layouts'").fetchone()
     assert f"y + h <= {dashboard_layouts.DASHBOARD_MAX_Y}" in sql[0]
+
+
+@pytest.mark.parametrize(
+    ("raw", "stored", "ports"),
+    [
+        ("80,443", "80,443", [80, 443]),
+        ("8080 443 443 80", "80,443,8080", [80, 443, 8080]),
+        ([8080, "80"], "80,8080", [80, 8080]),
+        (22, "22", [22]),
+    ],
+)
+def test_tcp_port_rule_is_shared_by_model_and_scheduler(raw, stored, ports):
+    from app.monitor.scheduler import _stored_tcp_ports
+
+    assert normalize_ports(raw) == stored
+    assert _stored_tcp_ports(stored) == ports == _stored_tcp_ports(raw)
+
+
+@pytest.mark.parametrize("bad", ["80,abc", "0", "70000", "80.5", "\u00b2", "80;443", [80, True]])
+def test_invalid_port_list_is_rejected_by_model_and_never_defaults_to_port_80(bad):
+    from app.monitor.scheduler import _stored_tcp_ports
+
+    with pytest.raises(ValueError):
+        normalize_ports(bad)
+    assert _stored_tcp_ports(bad) == []
+
+
+def test_empty_port_value_means_default_in_model_and_scheduler():
+    from app.monitor.scheduler import _stored_tcp_ports
+
+    assert normalize_ports("", default="80") == "80"
+    assert _stored_tcp_ports("") == _stored_tcp_ports(None) == [80]

@@ -17,6 +17,10 @@ _log = logging.getLogger(__name__)
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
+DEFAULT_HOST = "0.0.0.0"  # noqa: S104 - documented default bind for a containerised server
+DEFAULT_PORT = 8000
+DEFAULT_LOG_LEVEL = "INFO"
+
 
 class ConfigValidationError(Exception):
     """Raised when critical configuration is missing or invalid."""
@@ -30,9 +34,9 @@ class Config:
     db_path: Path
     tsdb_dir: Path
     data_dir: Path
-    host: str = "0.0.0.0"  # noqa: S104 - documented default bind for a containerised server
-    port: int = 8000
-    log_level: str = "INFO"
+    host: str = DEFAULT_HOST
+    port: int = DEFAULT_PORT
+    log_level: str = DEFAULT_LOG_LEVEL
 
 
 MONITOR_REFRESH_SECONDS: int = 30
@@ -103,7 +107,10 @@ def _db_path_for(data_dir: Path) -> Path:
 
 
 def load_config() -> Config:
-    """Load configuration from environment variables (optionally via .env)."""
+    """Load configuration from environment variables (optionally via .env).
+
+    Raises ``ConfigValidationError`` for a ``JUSTUP_PORT`` outside 1-65535; non-numeric values fall back.
+    """
     load_dotenv()
 
     data_dir = _env_data_dir()
@@ -120,17 +127,19 @@ def load_config() -> Config:
         pass
 
     allowed_levels = {"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"}
-    log_level = os.getenv("LOG_LEVEL", "INFO").upper()
+    log_level = os.getenv("LOG_LEVEL", DEFAULT_LOG_LEVEL).upper()
     if log_level not in allowed_levels:
-        _log.warning("Ignoring invalid LOG_LEVEL %r, using INFO", log_level)
-        log_level = "INFO"
+        _log.warning("Ignoring invalid LOG_LEVEL %r, using %s", log_level, DEFAULT_LOG_LEVEL)
+        log_level = DEFAULT_LOG_LEVEL
 
-    host = os.getenv("JUSTUP_HOST", "0.0.0.0")  # noqa: S104 - documented default bind for a containerised server
+    host = os.getenv("JUSTUP_HOST", DEFAULT_HOST)
     try:
-        port = int(os.getenv("JUSTUP_PORT", "8000"))
+        port = int(os.getenv("JUSTUP_PORT", str(DEFAULT_PORT)))
     except ValueError:
-        _log.warning("Ignoring invalid JUSTUP_PORT %r, using 8000", os.getenv("JUSTUP_PORT"))
-        port = 8000
+        _log.warning("Ignoring invalid JUSTUP_PORT %r, using %d", os.getenv("JUSTUP_PORT"), DEFAULT_PORT)
+        port = DEFAULT_PORT
+    if not 1 <= port <= 65535:
+        raise ConfigValidationError("JUSTUP_PORT must be between 1 and 65535")
 
     return Config(
         base_dir=_PROJECT_ROOT,

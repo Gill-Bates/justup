@@ -16,10 +16,9 @@ const describe = (data) => ctx.QualityState.describe(data);
 
 test("unknown state renders badge and score neutral grey", () => {
   const v = describe({ state: "unknown", score: 42.5 });
-  assert.equal(v.badgeClass, "bg-secondary");
+  assert.equal(v.badgeClass, "ju-status-badge--neutral");
   assert.equal(v.badgeText, "Unknown");
-  assert.match(v.scoreClass, /text-body-secondary/);
-  assert.doesNotMatch(v.scoreClass, /text-danger/);
+  assert.equal(v.scoreClass, "dashboard-widget-value fw-bold");
 });
 
 test("missing or incomplete data is grey, never red", () => {
@@ -27,25 +26,27 @@ test("missing or incomplete data is grey, never red", () => {
     { state: "down", score: null }, { state: "ok", score: "" }, { state: "ok", score: "abc" }]) {
     const v = describe(data);
     assert.equal(v.state, "unknown");
-    assert.equal(v.badgeClass, "bg-secondary");
-    assert.match(v.scoreClass, /text-body-secondary/);
+    assert.equal(v.badgeClass, "ju-status-badge--neutral");
+    assert.equal(v.scoreClass, "dashboard-widget-value fw-bold");
     assert.equal(v.scoreText, "--");
   }
 });
 
 test("an unrecognised state with a score is grey but keeps the measured number", () => {
   const v = describe({ state: "bogus", score: 50 });
-  assert.equal(v.badgeClass, "bg-secondary");
-  assert.match(v.scoreClass, /text-body-secondary/);
+  assert.equal(v.badgeClass, "ju-status-badge--neutral");
+  assert.equal(v.scoreClass, "dashboard-widget-value fw-bold");
   assert.equal(v.scoreText, "50.0");
 });
 
-test("measured states keep their colours", () => {
-  assert.match(describe({ state: "ok", score: 90 }).scoreClass, /text-success/);
-  assert.match(describe({ state: "degraded", score: 55 }).scoreClass, /text-warning/);
+test("status badges keep their semantic colors while scores remain neutral", () => {
+  assert.equal(describe({ state: "ok", score: 90 }).badgeClass, "ju-status-badge--success");
+  assert.equal(describe({ state: "ok", score: 90 }).scoreClass, "dashboard-widget-value fw-bold");
+  assert.equal(describe({ state: "degraded", score: 55 }).badgeClass, "ju-status-badge--warning");
+  assert.equal(describe({ state: "degraded", score: 55 }).scoreClass, "dashboard-widget-value fw-bold");
   const down = describe({ state: "down", score: 10 });
-  assert.match(down.scoreClass, /text-danger/);
-  assert.equal(down.badgeClass, "bg-danger");
+  assert.equal(down.scoreClass, "dashboard-widget-value fw-bold");
+  assert.equal(down.badgeClass, "ju-status-badge--danger");
   assert.equal(describe({ state: "ok", score: 90 }).scoreText, "90.0");
 });
 
@@ -60,4 +61,10 @@ test("measured states keep their score-based description", () => {
   assert.equal(describe({ state: "ok", score: 90 }).label, "Excellent connectivity");
   assert.equal(describe({ state: "degraded", score: 65 }).label, "Good connectivity");
   assert.equal(describe({ state: "down", score: 10 }).label, "Poor connectivity");
+});
+test("target badge without country is labelled unknown/anycast, with country keeps the code", () => {
+  const unknown = ctx.QualityState.describeTarget("1.1.1.1", null);
+  assert.match(unknown.label, /^Country unknown \(anycast or no location data\): 1\.1\.1\.1$/);
+  assert.ok(unknown.title);
+  assert.deepEqual({ ...ctx.QualityState.describeTarget("8.8.8.8", "US") }, { label: "US: 8.8.8.8", title: "" });
 });

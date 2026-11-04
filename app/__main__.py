@@ -93,9 +93,13 @@ def main() -> None:
     import uvicorn
 
     from .main import create_app
-    from .utils.config import load_config
+    from .utils.config import ConfigValidationError, load_config
 
-    cfg = load_config()
+    try:
+        cfg = load_config()
+    except ConfigValidationError as exc:
+        print(f"\n❌ FATAL: {exc}\n", file=sys.stderr)  # noqa: T201 - startup abort before logging is configured
+        raise SystemExit(1) from exc
     app = create_app()
 
     config = uvicorn.Config(

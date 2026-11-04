@@ -47,6 +47,7 @@ docker/vendor/wheels/*
 *.tgz
 *.rar
 *.7z
+*.backup
 full_codebase_*.txt
 Architektur.txt
 

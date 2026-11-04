@@ -630,3 +630,89 @@ def test_abandoned_run_cannot_pass_itself_off_as_the_current_run(tmp_path: Path)
     asyncio.run(scenario())
     assert old_epoch_seen == [1] and sched._run_epoch == 2
     assert outcome == ["refused"]
+
+
+def _stubborn_hanger(release: threading.Event, started: list[int]):
+    async def run():
+        started.append(1)
+        while not release.is_set():
+            try:
+                await asyncio.sleep(0.005)  # never beats: the supervisor sees a hang
+            except asyncio.CancelledError:
+                continue  # ignores cancellation until released
+        if len(started) > 1:
+            await asyncio.Event().wait()  # the restarted instance behaves
+
+    return run
+
+
+def test_hung_service_that_ignores_cancellation_is_held_degraded_without_double_start(caplog):
+    caplog.set_level(logging.DEBUG, logger=LOGGER)
+    policy = SupervisionPolicy(
+        jitter=0.0, check_interval=0.01, cancel_timeout=0.05, backoff_initial=0.0, backoff_max=0.0
+    )
+    release = threading.Event()
+    started: list[int] = []
+    alerts = []
+
+    async def scenario():
+        sup, clock, _delays = _make(policy)
+        sup._notifier = alerts.append
+        sup.add(ServiceSpec("svc", _stubborn_hanger(release, started), heartbeat_timeout=10.0))
+        await _until(lambda: len(started) == 1)
+        clock.now += 11
+        await _until(lambda: "cancel_timeout" in _events(caplog, "svc"))
+        await asyncio.sleep(0.2)  # several cancel_timeout periods: the old task is still running
+        held = (len(started), sup.snapshot()["svc"]["state"], sup.is_degraded())
+        release.set()
+        await _until(lambda: len(started) == 2)  # restart only after the old task ended
+        await sup.stop()
+        return held
+
+    held = asyncio.run(scenario())
+    assert held == (1, ServiceState.DEGRADED.value, True)
+    assert [a.reason for a in alerts if a.kind == "degraded"] == ["hang_not_cancellable"]
+
+
+def test_supervisor_stop_is_bounded_when_hung_service_ignores_cancellation():
+    policy = SupervisionPolicy(jitter=0.0, check_interval=0.01, cancel_timeout=0.05)
+    release = threading.Event()
+    started: list[int] = []
+
+    async def scenario():
+        sup, clock, _delays = _make(policy)
+        sup.add(ServiceSpec("svc", _stubborn_hanger(release, started), heartbeat_timeout=10.0))
+        await _until(lambda: len(started) == 1)
+        clock.now += 11
+        await asyncio.sleep(0.15)  # supervisor is now waiting on the stuck task
+        loop = asyncio.get_running_loop()
+        t0 = loop.time()
+        await sup.stop(timeout=0.05, cancel_timeout=0.1)
+        elapsed = loop.time() - t0
+        release.set()
+        await asyncio.sleep(0.1)
+        return elapsed, len(started)
+
+    elapsed, count = asyncio.run(scenario())
+    assert elapsed < 1.0
+    assert count == 1
+
+
+def test_cancelled_supervisor_does_not_wait_forever_for_a_stuck_task():
+    policy = SupervisionPolicy(jitter=0.0, check_interval=0.01, cancel_timeout=0.05)
+    release = threading.Event()
+    started: list[int] = []
+
+    async def scenario():
+        sup, _clock, _delays = _make(policy)
+        sup.add(ServiceSpec("svc", _stubborn_hanger(release, started)))
+        await _until(lambda: len(started) == 1)
+        sup_task = sup._services["svc"].task
+        sup_task.cancel()
+        await asyncio.wait({sup_task}, timeout=1.0)
+        finished = sup_task.done()
+        release.set()
+        await asyncio.sleep(0.05)
+        return finished
+
+    assert asyncio.run(scenario()) is True

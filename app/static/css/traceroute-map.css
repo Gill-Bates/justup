@@ -254,7 +254,7 @@ code.tr-ip {
 }
 
 .tr-step-btn:focus-visible {
-    outline: 2px solid var(--bs-primary);
+    outline: 2px solid var(--ju-focus-ring);
     outline-offset: 2px;
 }
 
@@ -315,7 +315,6 @@ code.tr-ip {
 }
 
 /* Measurement axis: text + icon always accompany these cues */
-.tr-step[data-measurement="interpolated"] .tr-step-dot,
 .tr-step[data-measurement="mixed"] .tr-step-dot {
     border-style: dotted;
     border-color: var(--tr-muted);
@@ -323,7 +322,6 @@ code.tr-ip {
     color: var(--tr-muted);
 }
 
-.tr-step[data-measurement="interpolated"] .tr-step-icon,
 .tr-step[data-measurement="mixed"] .tr-step-icon {
     color: var(--tr-muted);
 }
@@ -428,7 +426,7 @@ code.tr-ip {
     }
 
     .tr-route-track:focus-visible {
-        outline: 2px solid var(--bs-primary);
+        outline: 2px solid var(--ju-focus-ring);
         outline-offset: -2px;
     }
 
@@ -687,7 +685,7 @@ code.tr-ip {
 }
 
 .tr-table-scroll:focus-visible {
-    outline: 2px solid var(--bs-primary);
+    outline: 2px solid var(--ju-focus-ring);
     outline-offset: -2px;
 }
 
@@ -789,24 +787,6 @@ code.tr-ip {
     font-weight: 600;
 }
 
-.tr-badge--ok {
-    border-color: var(--bs-success-border-subtle);
-    background: var(--bs-success-bg-subtle);
-    color: var(--bs-success-text-emphasis);
-}
-
-.tr-badge--warn {
-    border-color: var(--bs-warning-border-subtle);
-    background: var(--bs-warning-bg-subtle);
-    color: var(--bs-warning-text-emphasis);
-}
-
-.tr-badge--bad {
-    border-color: var(--bs-danger-border-subtle);
-    background: var(--bs-danger-bg-subtle);
-    color: var(--bs-danger-text-emphasis);
-}
-
 .tr-badge--na {
     border-color: var(--bs-border-color);
     background: var(--tr-inset);
@@ -899,6 +879,11 @@ code.tr-ip {
     background: var(--tr-marker-end);
 }
 
+.tr-legend-dot--approximate {
+    border: 2px dashed var(--tr-marker-hop);
+    background: transparent;
+}
+
 .tr-legend-dash {
     display: inline-block;
     width: 1.1rem;
@@ -944,7 +929,7 @@ code.tr-ip {
 }
 
 .traceroute-map-container .leaflet-control-zoom a:focus-visible {
-    outline: 2px solid var(--bs-primary);
+    outline: 2px solid var(--ju-focus-ring);
     outline-offset: -2px;
 }
 
@@ -1015,6 +1000,23 @@ code.tr-ip {
     min-width: 2rem;
     padding-inline: 0.35rem;
     border-radius: 1rem;
+}
+
+.traceroute-hop-marker--approximate {
+    border-style: dashed;
+    border-color: var(--bs-body-color);
+}
+
+/* An estimate is a hollow marker: the router is not proven to sit exactly here. */
+.traceroute-hop-marker--estimate {
+    background: var(--bs-body-bg);
+    color: var(--bs-body-color);
+}
+
+@media (forced-colors: active) {
+    .traceroute-hop-marker--approximate {
+        border-color: CanvasText;
+    }
 }
 
 .traceroute-hop-marker-icon.is-linked .traceroute-hop-marker {

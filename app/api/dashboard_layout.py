@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 from datetime import datetime, timedelta
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
@@ -25,6 +26,7 @@ from ..db import sqlite as sqlite_db
 from ..db import tsdb as tsdb_db
 from ..db.dashboard_layouts import (
     DASHBOARD_MAX_Y,
+    DASHBOARD_WIDGET_MIN_SIZES,
     delete_dashboard_layout,
     get_dashboard_layout,
     set_dashboard_layout,
@@ -67,14 +69,15 @@ class DashboardWidgetLayout(BaseModel):
     w: int = Field(ge=1, le=12)
     h: int = Field(ge=1, le=100)
     visible: bool = True
+    height_mode: Literal["auto", "manual"]
 
 
 class DashboardLayout(BaseModel):
-    """The stored layout contract: version pinned to 1, at most one entry per known widget."""
+    """The sole active layout contract: version 2 with an explicit height mode per widget."""
 
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    version: int = Field(ge=1, le=1)
+    version: Literal[2]
     widgets: list[DashboardWidgetLayout] = Field(max_length=len(DASHBOARD_WIDGETS))
 
 
@@ -87,6 +90,9 @@ def validate_dashboard_layout(body: DashboardLayout) -> None:
     if len(set(ids)) != len(ids):
         raise HTTPException(422, "Duplicate widget id")
     for widget in body.widgets:
+        min_w, min_h = DASHBOARD_WIDGET_MIN_SIZES[widget.id]
+        if widget.w < min_w or widget.h < min_h:
+            raise HTTPException(422, f"Widget {widget.id} is smaller than its minimum size ({min_w}x{min_h})")
         if widget.x + widget.w > 12:
             raise HTTPException(422, f"Widget {widget.id} extends past the 12-column grid")
         if widget.y + widget.h > DASHBOARD_MAX_Y:

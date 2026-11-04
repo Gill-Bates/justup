@@ -14,7 +14,6 @@ import json
 import logging
 import math
 import random
-import re
 import threading
 import uuid
 from collections import deque
@@ -24,7 +23,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from urllib.parse import urlparse, urlsplit, urlunsplit
+from urllib.parse import urlsplit, urlunsplit
 
 from app.db import retention as db_retention
 from app.db import sqlite as sqlite_db
@@ -41,6 +40,7 @@ from app.services.notifications import (
 )
 from app.services.notifications.signal_backend import get_signal_backend
 from app.utils import maintenance
+from app.utils.cert_target import resolve_cert_target
 from app.utils.constants import (
     DEFAULT_METRICS_TIMEOUT_MINUTES,
     METRICS_TIMEOUT_MINUTES_MAX,
@@ -50,7 +50,9 @@ from app.utils.constants import (
 from app.utils.crypto import decrypt_secret
 from app.utils.ssrf import redact_url
 from app.utils.status_helper import cert_severity
+from app.utils.tcp_ports import parse_port_list
 from app.utils.time import utcnow
+from app.utils.uptime_metric import enabled_availability_metrics
 
 _log = logging.getLogger(__name__)
 
@@ -184,41 +186,26 @@ def _decrypt_password(stored: str | None) -> str | None:
         return None
 
 
-def _parse_tcp_ports(value: str | int | None) -> list[int]:
+def _lock_ttl_seconds(interval: int) -> int:
+    """Initial target-lock lifetime; the running check renews it, so it only bounds a crashed run."""
+    return interval * 2
+
+
+def _lock_renew_period(ttl_seconds: int) -> float:
+    """Renew well before expiry so one delayed beat cannot lose the lock."""
+    return ttl_seconds / 3
+
+
+def _stored_tcp_ports(value: str | int | None) -> list[int]:
+    """Ports to check for a stored value: empty means the default port 80, an invalid list means no ports.
+
+    An invalid stored list must never turn into a check of another service; the TCP check then reports
+    the target as misconfigured (see ``_run_target``).
     """
-    Parse TCP ports from various input formats.
-
-    Accepts:
-      - None or empty → [80]
-      - Integer → [int]
-      - String "80" → [80]
-      - String "80,443,8080" → [80, 443, 8080]
-      - String "80 443 8080" → [80, 443, 8080]
-
-    Returns sorted unique list of valid ports (1-65535).
-    """
-    if value is None:
-        return [80]
-    if isinstance(value, int):
-        return [value] if 1 <= value <= 65535 else [80]
-    value_str = str(value).strip()
-    if not value_str:
-        return [80]
-
-    parts = re.split(r"[,\s]+", value_str)
-    ports = set()
-    for raw_p in parts:
-        p = raw_p.strip()
-        if not p:
-            continue
-        try:
-            port = int(p)
-            if 1 <= port <= 65535:
-                ports.add(port)
-        except ValueError:
-            continue
-
-    return sorted(ports) if ports else [80]
+    try:
+        return parse_port_list(value) or [80]
+    except ValueError:
+        return []
 
 
 def _stored_datetime(value: datetime | str | None) -> datetime | None:
@@ -1039,7 +1026,7 @@ class MonitorScheduler:
                 "ignore_cert_errors": bool(r["ignore_cert_errors"]),
                 "host": r["host"],
                 "tcp_host": r["tcp_host"],
-                "tcp_ports": _parse_tcp_ports(r["tcp_ports"] or "80"),
+                "tcp_ports": _stored_tcp_ports(r["tcp_ports"]),
                 "max_retries": int(r["max_retries"]),
                 "auto_close_alert": bool(r["auto_close_alert"]),
                 "_jitter_offset": _stable_jitter_offset(tid),
@@ -1116,7 +1103,7 @@ class MonitorScheduler:
 
         interval = max(5, int(cfg["interval_seconds"]))
         offset = cfg.get("_jitter_offset", 0)
-        ttl_seconds = interval * 2
+        ttl_seconds = _lock_ttl_seconds(interval)
 
         rt = self._rt.get(target_id)
         if not rt:
@@ -1142,6 +1129,9 @@ class MonitorScheduler:
             rt.next_due = _align_to_interval(utcnow(), interval, offset)
             return
 
+        # The lock outlives a slow check: it is renewed while the check runs and verified before results are written.
+        lock_lost = asyncio.Event()
+        heartbeat = asyncio.create_task(self._keep_target_lock(target_id, ttl_seconds, generation, lock_lost))
         try:
 
             def _log_check_failure(
@@ -1289,23 +1279,12 @@ class MonitorScheduler:
                 snapshot["cert_days_left"] = None
                 cert_host = None
                 cert_port = 443
-                if cfg["enable_cert_expiration"] and cfg.get("http_url"):
+                if cfg["enable_cert_expiration"]:
                     try:
-                        parsed = urlparse(str(cfg["http_url"]))
-                        cert_host = parsed.hostname
-                        if parsed.port:
-                            cert_port = parsed.port
-                        elif cfg.get("http_port"):
-                            cert_port = int(cfg["http_port"])
-                        elif cfg.get("cert_port"):
-                            # Legacy (deprecated): cert_port used to double as request port
-                            cert_port = int(cfg["cert_port"])
-                        else:
-                            cert_port = 443 if parsed.scheme == "https" else 80
-                    except (ValueError, KeyError) as e:
-                        _log.warning("Target %s: failed to parse http_url for cert check: %s", target_id, e)
-                if not cert_host and cfg["enable_cert_expiration"]:
-                    cert_host = cfg.get("host")
+                        cert_host, cert_port = resolve_cert_target(cfg)
+                    except ValueError as e:
+                        _log.warning("Target %s: invalid certificate target configuration: %s", target_id, e)
+                        cert_host = cfg.get("cert_host") or cfg.get("host")
                 if cert_host:
                     res = await checks.cert_expiration(
                         cert_host,
@@ -1331,10 +1310,18 @@ class MonitorScheduler:
                 # TCP Connect (Multi-Port)
                 if cfg["enable_tcp_connect"]:
                     t_host = str(cfg.get("tcp_host") or cfg.get("host") or "")
-                    tcp_ports: list[int] = cfg.get("tcp_ports") or [80]
+                    tcp_ports: list[int] = cfg.get("tcp_ports") or []
 
-                    if not t_host:
-                        _log.warning("Target %s: tcp enabled but no host configured", target_id)
+                    if not t_host or not tcp_ports:
+                        if not tcp_ports:
+                            _log_check_failure(
+                                "tcp_config",
+                                f"TCP check for target {target_id} skipped: stored tcp_ports is invalid",
+                                attempt,
+                                max_retries,
+                            )
+                        else:
+                            _log.warning("Target %s: tcp enabled but no host configured", target_id)
                         for port in tcp_ports:
                             snapshot[f"tcp_up_{port}"] = 0
                             snapshot[f"tcp_ms_{port}"] = None
@@ -1421,6 +1408,11 @@ class MonitorScheduler:
             if target_id not in self._targets:
                 return
 
+            # Fencing: results of a check whose lock is gone could duplicate another scheduler's measurement.
+            if lock_lost.is_set() or not await self._renew_target_lock(target_id, ttl_seconds, generation):
+                _log.warning("Target %s: check lock was lost, discarding results", target_id)
+                return
+
             # Write-once policy: persist at most one point per metric per interval
             try:
                 with maintenance.work_section(generation):
@@ -1429,14 +1421,13 @@ class MonitorScheduler:
                             self._refresh_requested = True
                             return
 
+                    # One stamp for all points of this cycle: the availability aggregation relies on it
+                    # (app/utils/uptime_metric.py) and must not depend on how long storing takes.
+                    cycle_at = utcnow()
+                    points: list[tuple[str, int | float]] = []
+
                     def put(metric: str, value: int | float) -> None:
-                        tsdb_db.append_point(
-                            self._tsdb_dir,
-                            target_id=target_id,
-                            metric=metric,
-                            value=value,
-                            retention_days=int(cfg["retention_days"]),
-                        )
+                        points.append((metric, value))
 
                     if cfg["enable_ping"] and snapshot["ping_up"] is not None:
                         put("ping_up", int(snapshot["ping_up"]))
@@ -1455,7 +1446,7 @@ class MonitorScheduler:
                         if snapshot["tcp_latency_ms"] is not None:
                             put("tcp_ms", float(snapshot["tcp_latency_ms"]))
 
-                        for port in cfg.get("tcp_ports") or [80]:
+                        for port in cfg.get("tcp_ports") or []:
                             port_up = snapshot.get(f"tcp_up_{port}")
                             port_ms = snapshot.get(f"tcp_ms_{port}")
                             if port_up is not None:
@@ -1465,6 +1456,20 @@ class MonitorScheduler:
 
                     if cfg["enable_cert_expiration"] and snapshot["cert_days_left"] is not None:
                         put("cert_days_left", float(snapshot["cert_days_left"]))
+
+                # Disk writes run in a worker thread so a slow volume cannot stall the event loop.
+                written = await asyncio.to_thread(
+                    self._thread_call(self._epoch_for_thread(), self._write_metric_points),
+                    generation,
+                    target_id,
+                    int(cfg["retention_days"]),
+                    cycle_at,
+                    points,
+                    lock_lost,
+                )
+                if not written:
+                    _log.warning("Target %s: check lock was lost while storing, discarding results", target_id)
+                    return
             except maintenance.MaintenanceActiveError:
                 return
             except Exception as e:  # noqa: BLE001 - scheduler-loop resilience boundary: log and continue
@@ -1500,42 +1505,18 @@ class MonitorScheduler:
                 return TargetStatus.UP  # Already str constant
 
             async def _compute_uptime_percent(hours: int = 24) -> float | None:
-                """Compute uptime percentage for the given time window."""
-                leading = None
-                if cfg["enable_http_check"]:
-                    leading = "http_up"
-                elif cfg["enable_ping"]:
-                    leading = "ping_up"
-                elif cfg["enable_tcp_connect"]:
-                    leading = "tcp_up"
-                if not leading:
+                """Uptime of the window under the same rule as the overall status: all enabled checks up."""
+                metrics = enabled_availability_metrics(cfg)
+                if not metrics:
                     return None
-
-                # Query all data points from the specified time window for a meaningful
-                # uptime percentage.  The old code used only the last ~10 points
-                # (5-minute window) which produced jumpy, implausible values
-                # (100% → 90% → 100%) because a single failure in 10 checks
-                # already equals 10%.  Using 24h/30d matches the UI labels
-                # and gives smooth, accurate percentages.
-                since_ts = now - timedelta(hours=hours)
-
-                points = await asyncio.to_thread(
-                    tsdb_db.query,
+                up, total = await asyncio.to_thread(
+                    tsdb_db.count_availability,
                     self._tsdb_dir,
                     target_id=target_id,
-                    metric=leading,
-                    since=since_ts,
-                    limit=500_000,
-                    latest=True,
+                    metrics=metrics,
+                    since=now - timedelta(hours=hours),
                 )
-                if not points:
-                    return None
-                valid = [p for p in points if p.value in (0, 1)]
-                if not valid:
-                    return None
-                total_checks = float(len(valid))
-                up_checks = float(sum(1 for p in valid if p.value == 1))
-                return (up_checks / total_checks * 100.0) if total_checks > 0 else None
+                return (up / total * 100.0) if total else None
 
             overall_status = _overall_status_from_snapshot()
             try:
@@ -1621,7 +1602,61 @@ class MonitorScheduler:
 
         finally:
             rt.next_due = _align_to_interval(utcnow(), interval, offset)
+            heartbeat.cancel()
+            with suppress(asyncio.CancelledError):
+                await heartbeat
             await self._release_target_lock(target_id)
+
+    def _write_metric_points(
+        self,
+        generation: int | None,
+        target_id: int,
+        retention_days: int,
+        at: datetime,
+        points: list[tuple[str, int | float]],
+        lock_lost: asyncio.Event,
+    ) -> bool:
+        """Persist one cycle's points with a shared stamp (worker thread); False if the lock was lost first."""
+        with maintenance.work_section(generation):
+            for metric, value in points:
+                if lock_lost.is_set():
+                    return False
+                tsdb_db.append_point(
+                    self._tsdb_dir,
+                    target_id=target_id,
+                    metric=metric,
+                    value=value,
+                    retention_days=retention_days,
+                    at=at,
+                )
+        return True
+
+    async def _renew_target_lock(self, target_id: int, ttl_seconds: int, generation: int | None) -> bool:
+        """Extend our lock; False when another run holds it or it cannot be verified (fail closed)."""
+        try:
+            with maintenance.work_section(generation), self._db_conn() as conn:
+                return sqlite_db.renew_target_lock(conn, target_id, self._run_id, ttl_seconds)
+        except Exception as e:  # noqa: BLE001 - an unverifiable lock must not let the results through
+            _log.warning("Failed to renew lock for target %d: %s", target_id, e)
+            return False
+
+    async def _keep_target_lock(
+        self, target_id: int, ttl_seconds: int, generation: int | None, lock_lost: asyncio.Event
+    ) -> None:
+        """Renew the target lock until cancelled; sets ``lock_lost`` once another run holds it."""
+        while True:
+            await asyncio.sleep(_lock_renew_period(ttl_seconds))
+            try:
+                with maintenance.work_section(generation), self._db_conn() as conn:
+                    held = sqlite_db.renew_target_lock(conn, target_id, self._run_id, ttl_seconds)
+            except maintenance.MaintenanceActiveError:
+                continue
+            except Exception as e:  # noqa: BLE001 - a failed beat is retried; the fence re-verifies before writing
+                _log.warning("Failed to renew lock for target %d: %s", target_id, e)
+                continue
+            if not held:
+                lock_lost.set()
+                return
 
     async def _release_target_lock(self, target_id: int) -> None:
         """Release a check lock after maintenance, using the database's current generation."""

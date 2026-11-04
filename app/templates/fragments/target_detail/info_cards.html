@@ -23,29 +23,29 @@
 		<div class="card target-kpi-card target-kpi-card--checks">
 			<div class="card-body">
 				<p class="target-kpi-label">Checks</p>
-				<div class="target-kpi-badges">
+				<div class="ju-badges target-kpi-badges">
 					{% if target.enable_http_check %}
 					<span class="badge
-{% if target.http_status == 'up' %}bg-success
-{% elif target.http_status == 'down' %}bg-danger
-{% else %}bg-secondary{% endif %}">
+{% if target.http_status == 'up' %}ju-status-badge--success
+{% elif target.http_status == 'down' %}ju-status-badge--danger
+{% else %}ju-status-badge--neutral{% endif %}">
 						HTTP<span class="visually-hidden">: {{ target.http_status or 'unknown' }}</span>
 					</span>
 					{% endif %}
 					{% if target.enable_ping %}
 					<span class="badge
-{% if target.ping_status == 'up' %}bg-success
-{% elif target.ping_status == 'down' %}bg-danger
-{% else %}bg-secondary{% endif %}">
+{% if target.ping_status == 'up' %}ju-status-badge--success
+{% elif target.ping_status == 'down' %}ju-status-badge--danger
+{% else %}ju-status-badge--neutral{% endif %}">
 						PING<span class="visually-hidden">: {{ target.ping_status or 'unknown' }}</span>
 					</span>
 					{% endif %}
 					{% if target.enable_cert_expiration %}
 					<span class="badge
-{% if target.cert_status == 'ok' %}bg-success
-{% elif target.cert_status == 'warning' %}bg-warning text-dark
-{% elif target.cert_status in ('critical', 'expired') %}bg-danger
-{% else %}bg-secondary{% endif %}">
+{% if target.cert_status == 'ok' %}ju-status-badge--success
+{% elif target.cert_status == 'warning' %}ju-status-badge--warning
+{% elif target.cert_status in ('critical', 'expired') %}ju-status-badge--danger
+{% else %}ju-status-badge--neutral{% endif %}">
 						CERT<span class="visually-hidden">: {{ target.cert_status or 'unknown' }}</span>
 					</span>
 					{% endif %}
@@ -55,9 +55,9 @@
 					{% if ports | length == 1 %}
 					{# Single port: show simple TCP badge #}
 					<span class="badge
-{% if target.tcp_status == 'up' %}bg-success
-{% elif target.tcp_status == 'down' %}bg-danger
-{% else %}bg-secondary{% endif %}">
+{% if target.tcp_status == 'up' %}ju-status-badge--success
+{% elif target.tcp_status == 'down' %}ju-status-badge--danger
+{% else %}ju-status-badge--neutral{% endif %}">
 						TCP:{{ ports[0] }}<span class="visually-hidden">: {{ target.tcp_status or 'unknown' }}</span>
 					</span>
 					{% else %}
@@ -65,9 +65,9 @@
 					{% for port in ports %}
 					{% set ps = port_status.get(port | trim, 'unknown') %}
 					<span class="badge
-{% if ps == 'up' %}bg-success
-{% elif ps == 'down' %}bg-danger
-{% else %}bg-secondary{% endif %}">
+{% if ps == 'up' %}ju-status-badge--success
+{% elif ps == 'down' %}ju-status-badge--danger
+{% else %}ju-status-badge--neutral{% endif %}">
 						TCP:{{ port | trim }}<span class="visually-hidden">: {{ ps }}</span>
 					</span>
 					{% endfor %}

@@ -20,9 +20,9 @@
 			def('status-offline', 'Offline', 3, 0, 3, 2, 1, 2),
 			def('status-disabled', 'Disabled', 6, 0, 3, 2, 1, 2),
 			def('status-total', 'Total', 9, 0, 3, 2, 1, 2),
-			def('quality', 'Monitor quality', 0, 2, 3, 3, 2, 2),
+			def('quality', 'Monitor quality', 0, 2, 3, 3, 2, 3),
 			def('downtime', 'Downtime overview (24h)', 3, 2, 6, 4, 3, 3),
-			def('alerts-open', 'Active alerts', 9, 2, 3, 4, 3, 3),
+			def('alerts-open', 'Alerts', 9, 2, 3, 4, 3, 3),
 			def('delivery-queue', 'Delivery queue', 9, 2, 3, 3, 3, 3, true, true),
 			def('uptime-day', 'Uptime (24h)', 0, 10, 3, 2, 3, 2, false),
 			def('cert-expiry', 'Certificate expiry', 3, 10, 3, 4, 3, 3, false),
@@ -33,7 +33,7 @@
 		forRole(isAdmin) {
 			return this.registry.filter((entry) => !entry.adminOnly || isAdmin).map((entry) => (
 				entry.id === 'alerts-open' && isAdmin
-					? { ...entry, defaultX: 0, defaultY: 6, defaultSize: { w: 6, h: 4 } }
+					? { ...entry, defaultX: 9, defaultY: 5, defaultSize: { w: 3, h: 3 } }
 					: entry
 			));
 		},

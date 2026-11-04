@@ -70,27 +70,39 @@
 		if (!response.ok) throw new Error('Request failed');
 		return response.json();
 	}
-	function queue(body, data) {
-		const [label, tone] = queueState(data);
-		const status = node('div', undefined, `d-flex align-items-center gap-1 text-${tone}`);
-		const icon = node('span', label === 'Queue clear' ? 'check_circle' : label === 'Status unavailable' ? 'help_outline' : label === 'Processing' ? 'sync' : 'warning', 'material-icons');
-		icon.setAttribute('aria-hidden', 'true'); status.append(icon, node('span', label)); body.append(status);
-		if (label !== 'Status unavailable') {
-			number(body, data.pending + data.processing, 'outstanding messages');
-			const metrics = node('div', undefined, 'dashboard-monitor-metrics');
-			const names = { pending: 'Pending', processing: 'Processing', failed: 'Failed (24 h)' };
-			for (const key of ['pending', 'processing', 'failed']) {
-				const value = key === 'failed' ? failedCount(data) : data[key];
-				const cell = node('div'); cell.title = names[key];
-				cell.setAttribute('aria-label', `${names[key]}: ${value}`);
-				cell.append(node('span', names[key]), node('strong', String(value))); metrics.append(cell);
-			}
-			body.append(metrics);
-		} else number(body, '–', 'Delivery queue status unavailable');
+	// Header status badge shared by every status widget: icon plus text, never colour alone.
+	const STATUS_ICONS = { success: 'check_circle', secondary: 'help_outline', info: 'sync' };
+	function setStatus(tile, label, tone) {
+		const badge = tile.querySelector('.dashboard-monitor-status');
+		if (!badge) throw new Error('Widget status badge is missing');
+		const iconName = STATUS_ICONS[tone] || 'warning';
+		const icon = node('span', iconName, 'material-icons');
+		icon.setAttribute('aria-hidden', 'true');
+		badge.className = `dashboard-monitor-status badge ju-status-badge--${tone === 'secondary' ? 'neutral' : tone} ms-auto d-inline-flex align-items-center gap-1`;
+		badge.replaceChildren(icon, node('span', label));
 	}
-	function alerts(body, data) {
-		if (!count(data.total) || !Array.isArray(data.items)) throw new Error('Invalid alerts');
-		number(body, data.total, 'open monitoring alerts');
+	// Small values: the number comes first in the DOM and on screen, its label below it.
+	function metrics(body, entries) {
+		const group = node('dl', undefined, 'dashboard-monitor-metrics');
+		for (const [name, value] of entries) {
+			const cell = node('div');
+			cell.append(node('dt', name), node('dd', String(value))); group.append(cell);
+		}
+		body.append(group);
+	}
+	function queue(body, data, tile) {
+		const [label, tone] = queueState(data);
+		setStatus(tile, label, tone);
+		if (label !== 'Status unavailable') {
+			metrics(body, [['Pending', data.pending], ['Processing', data.processing], ['Failed (24 h)', failedCount(data)]]);
+		} else unavailable(body, 'Delivery queue metrics unavailable');
+	}
+	// Counts come from one server-side summary (UTC windows); the header badge carries the open total.
+	const alertSummary = (signal) => json('/alerts/summary', signal);
+	function alerts(body, data, tile) {
+		if (!['open', 'acknowledged_24h', 'started_24h', 'resolved_24h'].every((key) => count(data[key]))) throw new Error('Invalid alerts');
+		setStatus(tile, data.open ? `${data.open} open` : 'No active alerts', data.open ? 'danger' : 'success');
+		metrics(body, [['Acknowledged (24 h)', data.acknowledged_24h], ['Started (24 h)', data.started_24h], ['Resolved (24 h)', data.resolved_24h]]);
 	}
 	function monitors(body, data, kind) {
 		if (!Array.isArray(data.targets)) throw new Error('Invalid monitors');
@@ -176,21 +188,22 @@
 		try {
 			let data;
 			if (id === 'delivery-queue') data = await json('/settings/notification-queue/stats', controller.signal);
-			else if (id === 'alerts-open') data = await json('/alerts?status=open&page_size=5', controller.signal);
+			else if (id === 'alerts-open') data = await alertSummary(controller.signal);
 			else if (id === 'quality-trend') data = await json('/quality/history?hours=24', controller.signal);
 			else if (id === 'uptime-day') data = await json('/me/dashboard-layout/uptime', controller.signal);
 			else data = await json('/me/dashboard-layout/monitors', controller.signal);
 			if (pending.get(tile) !== controller || !visible(tile)) return;
 			if (id !== 'quality-trend') body.replaceChildren();
-			if (id === 'delivery-queue') queue(body, data);
-			else if (id === 'alerts-open') alerts(body, data);
+			if (id === 'delivery-queue') queue(body, data, tile);
+			else if (id === 'alerts-open') alerts(body, data, tile);
 			else if (id === 'quality-trend') quality(body, data);
 			else if (id === 'uptime-day') uptime(body, data);
 			else monitors(body, data, id);
 		} catch (error) {
 			if (controller.signal.aborted || pending.get(tile) !== controller || !visible(tile)) return;
 			if (id === 'quality-trend' && chart) { chart.destroy(); chart = null; }
-			body.replaceChildren(); unavailable(body);
+			if (tile.querySelector('.dashboard-monitor-status')) setStatus(tile, 'Status unavailable', 'secondary');
+			body.replaceChildren(); unavailable(body, id === 'delivery-queue' ? 'Delivery queue metrics unavailable' : 'Status unavailable');
 		} finally { if (pending.get(tile) === controller) pending.delete(tile); }
 	}
 	function refresh(force = false) {

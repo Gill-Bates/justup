@@ -746,7 +746,7 @@
 			     ACTIONS
 			     ═══════════════════════════════════════════════════════════════════ -->
 				<hr class="my-4">
-				<div class="d-flex justify-content-between">
+				<div class="ui-form-actions d-flex justify-content-between">
 					<a href="/ui/targets" class="btn btn-outline-secondary">
 						<span class="material-icons" aria-hidden="true">arrow_back</span> Cancel
 					</a>
@@ -1267,8 +1267,8 @@
 			const tilesHtml = recipients.map(r => {
 				const checked = selectedIds.includes(r.id) ? 'checked' : '';
 				const statusBadge = r.is_enabled
-					? '<span class="badge bg-success">Active</span>'
-					: '<span class="badge bg-secondary">Disabled</span>';
+					? '<span class="badge ju-status-badge--success">Active</span>'
+					: '<span class="badge ju-status-badge--neutral">Disabled</span>';
 
 				const channels = [];
 				if (r.phone) {

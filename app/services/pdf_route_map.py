@@ -17,6 +17,7 @@ The antimeridian is not handled: a route that crosses it is drawn the long way r
 
 from __future__ import annotations
 
+import itertools
 import json
 import math
 import threading
@@ -31,7 +32,24 @@ from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.pdfgen.canvas import FILL_EVEN_ODD
 from reportlab.platypus import Flowable
 
+from app.services.route_map_rules import (
+    DASH_ARRAY,
+    LINE_HALO_PX,
+    LINE_WEIGHT_PX,
+    MARKER_GAP_PX,
+    MAX_CITY_LABELS,
+    MIN_ARROW_SEGMENT_PX,
+    PALETTE,
+    select_labels,
+)
 from app.services.route_timeline import logical_hop_count, mapped_hop_numbers, route_start_is_mapped
+from app.services.traceroute_geo import (
+    MAP_ROLE_ESTIMATE,
+    META_MAP_RADIUS_KM,
+    META_MAP_ROLE,
+    SEGMENT_DASHED,
+    route_map_features,
+)
 
 GEO_DIR = Path(__file__).resolve().parent.parent / "static" / "vendor" / "geo"
 BASEMAP_FILE = GEO_DIR / "world-110m.geojson"
@@ -39,21 +57,48 @@ LABELS_FILE = GEO_DIR / "labels.json"
 
 MIN_EXTENT_DEG = 3.0  # smallest visible span, so a single region stays recognisable
 KM_PER_DEG_LAT = 111.19
-MAX_RADIUS_KM = 250.0  # larger accuracy radii are not drawn: they would cover the map
 GROUP_RADIUS = 7.5 * mm  # consecutive hops closer than this share one marker
 FONT_SIZE = 8.0
 ATTRIBUTION = "Basemap: Natural Earth (public domain)"
 NO_MAP_NOTE = "No hop could be placed on a map."
 
+_PX = 0.75  # points per CSS pixel: the shared line rules are written in pixels
+_THEME = PALETTE["light"]  # a printed report always uses the light palette
+_ROUTE = colors.HexColor(_THEME["route"])
+_HALO = colors.HexColor(_THEME["halo"])
 _INK = colors.HexColor("#12294a")
 _START = colors.HexColor("#146c43")
 _DEST = colors.HexColor("#a14d00")
-_LAND = colors.HexColor("#eceff3")
-_LAND_LINE = colors.HexColor("#aab3c0")
-_SEA = colors.HexColor("#f8fafc")
+DESTINATION_COLOR = _DEST  # shared with the network path diagram so both show the same destination marker
+_LAND = colors.HexColor(_THEME["land"])
+_LAND_LINE = colors.HexColor(_THEME["border"])
+_SEA = colors.HexColor(_THEME["water"])
+_LABEL = colors.HexColor(_THEME["label"])
 _MUTED = colors.HexColor("#5c6670")
 
 Rect = tuple[float, float, float, float]
+
+
+def draw_destination_diamond(
+    c, cx: float, cy: float, half: float, fill, font_bold: str, font_size: float, glyph: str = "D"
+) -> None:
+    """Destination marker: a filled diamond with a white glyph, identical on the map, its legend and the path."""
+    c.saveState()
+    c.setDash()
+    c.setLineWidth(0.8)
+    c.setStrokeColor(colors.white)
+    c.setFillColor(fill)
+    path = c.beginPath()
+    path.moveTo(cx, cy + half)
+    path.lineTo(cx + half, cy)
+    path.lineTo(cx, cy - half)
+    path.lineTo(cx - half, cy)
+    path.close()
+    c.drawPath(path, fill=1, stroke=1)
+    c.setFillColor(colors.white)
+    c.setFont(font_bold, font_size)
+    c.drawCentredString(cx, cy - font_size * 0.35, glyph)
+    c.restoreState()
 
 
 # ─── Basemap data ────────────────────────────────────────────────────────────────
@@ -200,11 +245,15 @@ def is_approximate(point: dict[str, Any]) -> bool:
     )
 
 
+def is_estimate(point: dict[str, Any]) -> bool:
+    """An approximate position the server keeps off the route line (``map_role``)."""
+    return point.get(META_MAP_ROLE) == MAP_ROLE_ESTIMATE
+
+
 def accuracy_radius_km(point: dict[str, Any]) -> float | None:
-    radius = point.get("accuracy_radius_km")
-    if isinstance(radius, (int, float)) and not isinstance(radius, bool) and 0 < radius <= MAX_RADIUS_KM:
-        return float(radius)
-    return None
+    """The radius the server allows to be drawn around an approximate position."""
+    radius = point.get(META_MAP_RADIUS_KM)
+    return float(radius) if isinstance(radius, (int, float)) and not isinstance(radius, bool) and radius > 0 else None
 
 
 @dataclass(frozen=True)
@@ -276,7 +325,9 @@ def build_marker_groups(
 ) -> list[MarkerGroup]:
     """Cluster, label and classify the markers; mirrors the web map's grouping and "S"/"D" rules."""
     xy = [view.project(p["lat"], p["lon"]) for p in points]
-    index_groups = _group_consecutive(xy, GROUP_RADIUS, [bool(p.get("_destination")) for p in points])
+    # The destination and every estimate keep a marker of their own, like the web map.
+    solo = [bool(p.get("_destination")) or is_estimate(p) for p in points]
+    index_groups = _group_consecutive(xy, GROUP_RADIUS, solo)
     centers = [(sum(xy[i][0] for i in g) / len(g), sum(xy[i][1] for i in g) / len(g)) for g in index_groups]
     displays = _fan_out(centers, GROUP_RADIUS)
     groups: list[MarkerGroup] = []
@@ -302,6 +353,8 @@ def build_marker_groups(
             kind, label = "start", "·".join(["S", *others([start])])
         elif dest is not None:
             kind, label = "destination", "·".join([*others([dest]), "D"])
+        elif any(is_estimate(points[i]) for i in g):
+            kind, label = "estimate", "~" + "·".join(labels)
         else:
             kind, label = "hop", "·".join(labels)
         primary = points[dest if dest is not None else start if start is not None else g[0]]
@@ -329,7 +382,8 @@ class RouteMapModel:
     start_hop: int | None
     start_mapped: bool
     destination: dict[str, Any] | None
-    has_interpolation: bool
+    has_unknown_link: bool
+    has_approximate: bool
 
     @property
     def subtitle(self) -> str:
@@ -340,8 +394,6 @@ class RouteMapModel:
 def build_route_map_model(
     geo_points: Iterable[dict[str, Any]],
     display_hops: Sequence[dict[str, Any]],
-    *,
-    has_interpolation: bool = False,
 ) -> RouteMapModel | None:
     """Build the model from the web map's inputs; ``None`` when no hop can be placed."""
     points = plotted_points(geo_points)
@@ -353,6 +405,7 @@ def build_route_map_model(
             start_hop = int(display_hops[0].get("hop"))
         except (TypeError, ValueError):
             start_hop = None
+    features = route_map_features(points)
     return RouteMapModel(
         points=tuple(points),
         plotted_hops=len(mapped_hop_numbers(points)),
@@ -360,16 +413,44 @@ def build_route_map_model(
         start_hop=start_hop,
         start_mapped=start_hop is not None and route_start_is_mapped(start_hop, points),
         destination=next((p for p in reversed(points) if p.get("_destination")), None),
-        has_interpolation=has_interpolation,
+        has_unknown_link=features["has_unknown_link"],
+        has_approximate=features["has_approximate"],
     )
 
 
-def segment_is_dashed(first: dict[str, Any], second: dict[str, Any]) -> bool:
-    return (
-        first.get("segment_to_next") == "dashed"
-        or bool(second.get("_interpolated"))
-        or second.get("segment_type") == "dashed"
-    )
+def route_segments(points: Sequence[dict[str, Any]]) -> list[tuple[int, int, bool]]:
+    """Chain links as (from index, to index, dashed): every plotted point is a node, in hop order.
+
+    The server decides which links are estimated or unknown (``segment_to_next``); this only reads it.
+    """
+    return [
+        (a, b, points[a].get("segment_to_next") == SEGMENT_DASHED) for a, b in itertools.pairwise(range(len(points)))
+    ]
+
+
+def dash_pattern(weight_pt: float) -> tuple[float, float]:
+    """The shared dash rule (stroke, gap in px at the shared weight) scaled to this line weight."""
+    stroke, gap = (float(v) for v in DASH_ARRAY.split())
+    return stroke * _PX * weight_pt / (LINE_WEIGHT_PX * _PX), gap * _PX * weight_pt / (LINE_WEIGHT_PX * _PX)
+
+
+def _seg_hits_rect(a: tuple[float, float], b: tuple[float, float], rect: Rect) -> bool:
+    """Liang-Barsky: does the segment a-b cross the rectangle?"""
+    t0, t1 = 0.0, 1.0
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    for p, q in ((-dx, a[0] - rect[0]), (dx, rect[2] - a[0]), (-dy, a[1] - rect[1]), (dy, rect[3] - a[1])):
+        if p == 0:
+            if q < 0:
+                return False
+            continue
+        t = q / p
+        if p < 0:
+            t0 = max(t0, t)
+        else:
+            t1 = min(t1, t)
+        if t0 > t1:
+            return False
+    return True
 
 
 # ─── Geometry helpers ────────────────────────────────────────────────────────────
@@ -492,19 +573,21 @@ class RouteMap(Flowable):
         c.clipPath(frame, stroke=0, fill=0)
         self._draw_land(view)
         placed: list[Rect] = [self._marker_rect(g) for g in groups]
-        self._draw_country_names(view, placed)
+        labels = select_labels(self.model.points)
+        chain = self._chain(groups)
+        self._draw_country_names(view, placed, chain, labels["countries"])
         self._draw_accuracy(view, groups)
-        self._draw_route(view, groups)
+        self._draw_route(view, groups, chain)
         for g in groups:
             self._draw_marker(g)
-        self._draw_city_names(groups, placed)
+        self._draw_city_names(view, groups, placed, chain, labels["cities"])
         c.restoreState()
         c.setStrokeColor(_LAND_LINE)
         c.setLineWidth(0.6)
         c.rect(0, 0, self.width, self.frame_h, fill=0, stroke=1)
         self._draw_scale(view)
         c.translate(0, -self._FOOT_H)
-        self._draw_footer(groups)
+        self._draw_footer()
         c.restoreState()
 
     def _draw_header(self) -> None:
@@ -543,26 +626,28 @@ class RouteMap(Flowable):
         x, y = group.display
         return x - w / 2, y - h / 2, x + w / 2, y + h / 2
 
-    def _draw_country_names(self, view: View, placed: list[Rect]) -> None:
+    def _draw_country_names(
+        self,
+        view: View,
+        placed: list[Rect],
+        chain: Sequence[tuple[tuple[float, float], tuple[float, float], bool]],
+        countries: Sequence[dict[str, Any]],
+    ) -> None:
+        """Name only the countries of the path (shared selection); a name never covers a marker or a link."""
         c = self.canv
-        basemap = self._basemap or load_basemap()
-        lon0, lat0, lon1, lat1 = view.bounds()
         c.setFont(self.font, 7)
-        c.setFillColor(colors.HexColor("#8a94a1"))
-        shown = 0
-        for name, lat, lon, _zoom in sorted(basemap.countries, key=lambda item: (item[3], item[0])):
-            if shown >= 8 or len(name) > 16 or not (lon0 < lon < lon1 and lat0 < lat < lat1):
-                continue
-            x, y = view.project(lat, lon)
+        c.setFillColor(_LABEL)
+        for item in countries:
+            name = item["name"]
+            x, y = view.project(item["lat"], item["lon"])
             w = stringWidth(name, self.font, 7)
             rect = (x - w / 2, y - 3, x + w / 2, y + 7)
             if rect[0] < 1 or rect[2] > view.width - 1 or rect[1] < 1 or rect[3] > view.height - 1:
                 continue
-            if any(_overlaps(rect, r) for r in placed):
+            if any(_overlaps(rect, r) for r in placed) or any(_seg_hits_rect(a, b, rect) for a, b, _ in chain):
                 continue
             c.drawCentredString(x, y, name.upper() if len(name) <= 3 else name)
             placed.append(rect)
-            shown += 1
 
     def _draw_accuracy(self, view: View, groups: Sequence[MarkerGroup]) -> None:
         c = self.canv
@@ -576,25 +661,55 @@ class RouteMap(Flowable):
                     c.circle(g.center[0], g.center[1], radius, fill=0, stroke=1)
         c.setDash()
 
-    def _draw_route(self, view: View, groups: Sequence[MarkerGroup]) -> None:
-        c = self.canv
+    def _chain(self, groups: Sequence[MarkerGroup]) -> list[tuple[tuple[float, float], tuple[float, float], bool]]:
+        """Chain links between the displayed marker positions, cut off at the marker edges."""
         pts = self.model.points
-        xy = [view.project(p["lat"], p["lon"]) for p in pts]
-        c.setStrokeColor(_INK)
-        c.setFillColor(_INK)
-        c.setLineCap(1)
-        for i in range(len(pts) - 1):
-            a, b = xy[i], xy[i + 1]
-            if a == b:
+        owner = {m: g for g in groups for m in g.members}
+        links = []
+        for first, second, dashed in route_segments(pts):
+            ga, gb = owner[first], owner[second]
+            if ga is gb:
                 continue
-            dashed = segment_is_dashed(pts[i], pts[i + 1])
-            c.setLineWidth(1.2 if dashed else 1.6)
-            c.setDash(*((4, 3.5) if dashed else ()))
-            c.line(a[0], a[1], b[0], b[1])
-            c.setDash()
+            a, b = ga.display, gb.display
             length = math.hypot(b[0] - a[0], b[1] - a[1])
-            if length > 14 * mm:
+            if length == 0:
+                continue
+            ux, uy = (b[0] - a[0]) / length, (b[1] - a[1]) / length
+            ta, tb = self._edge(ga, ux, uy), self._edge(gb, -ux, -uy)
+            if length <= ta + tb:
+                continue  # the markers touch: nothing to connect
+            links.append(((a[0] + ux * ta, a[1] + uy * ta), (b[0] - ux * tb, b[1] - uy * tb), dashed))
+        return links
+
+    def _edge(self, group: MarkerGroup, ux: float, uy: float) -> float:
+        """Distance from the marker centre to its edge along (ux, uy), plus the shared gap."""
+        w, h = self._marker_size(group)
+        t = min(w / 2 / abs(ux) if ux else math.inf, h / 2 / abs(uy) if uy else math.inf)
+        return t + MARKER_GAP_PX * _PX
+
+    def _draw_route(
+        self,
+        view: View,
+        groups: Sequence[MarkerGroup],
+        chain: Sequence[tuple[tuple[float, float], tuple[float, float], bool]],
+    ) -> None:
+        c = self.canv
+        xy = [view.project(p["lat"], p["lon"]) for p in self.model.points]
+        weight = LINE_WEIGHT_PX * _PX
+        halo = (LINE_WEIGHT_PX + LINE_HALO_PX) * _PX
+        c.setLineCap(0)
+        for pass_color, width in ((_HALO, halo), (_ROUTE, weight)):  # contrast outline first, line on top
+            c.setStrokeColor(pass_color)
+            c.setLineWidth(width)
+            for a, b, dashed in chain:
+                c.setDash(*(dash_pattern(width) if dashed else ()))
+                c.line(a[0], a[1], b[0], b[1])
+        c.setDash()
+        c.setFillColor(_ROUTE)
+        for a, b, dashed in chain:
+            if not dashed and math.hypot(b[0] - a[0], b[1] - a[1]) > MIN_ARROW_SEGMENT_PX * _PX:
                 self._arrow((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, math.atan2(b[1] - a[1], b[0] - a[0]))
+        c.setStrokeColor(_ROUTE)
         c.setLineWidth(0.6)
         c.setDash(1, 2)
         for g in groups:
@@ -614,7 +729,7 @@ class RouteMap(Flowable):
         path.lineTo(-size * 0.7, size * 0.7)
         path.lineTo(-size * 0.7, -size * 0.7)
         path.close()
-        c.setFillColor(_INK)
+        c.setFillColor(_ROUTE)
         c.drawPath(path, fill=1, stroke=0)
         c.restoreState()
 
@@ -647,32 +762,49 @@ class RouteMap(Flowable):
         c.setFont(self.font_bold, FONT_SIZE)
         c.drawCentredString(x, y - FONT_SIZE * 0.35, g.label)
 
-    def _draw_city_names(self, groups: Sequence[MarkerGroup], placed: list[Rect]) -> None:
+    def _draw_city_names(
+        self,
+        view: View,
+        groups: Sequence[MarkerGroup],
+        placed: list[Rect],
+        chain: Sequence[tuple[tuple[float, float], tuple[float, float], bool]],
+        cities: Sequence[dict[str, Any]],
+    ) -> None:
+        """Hop cities beside their marker, then a few orientation cities; one cap, no overlap with anything."""
         c = self.canv
         c.setFont(self.font, FONT_SIZE)
-        c.setFillColor(_INK)
-        for g in groups:
-            point = self.model.points[g.members[0]]
-            name = str(point.get("city") or "")
-            if not name:
-                continue
-            w, h = self._marker_size(g)
+        by_position = {(self.model.points[m]["lat"], self.model.points[m]["lon"]): g for g in groups for m in g.members}
+        drawn = 0
+        for item in cities:
+            if drawn >= MAX_CITY_LABELS:
+                break
+            name = item["name"]
             tw = stringWidth(name, self.font, FONT_SIZE)
-            x, y = g.display
-            gap = 1.2 * mm
-            for tx, ty in (
-                (x + w / 2 + gap, y - 3),
-                (x - w / 2 - gap - tw, y - 3),
-                (x - tw / 2, y + h / 2 + 1.5),
-                (x - tw / 2, y - h / 2 - FONT_SIZE),
-            ):
+            group = by_position.get((item["lat"], item["lon"]))
+            if group is not None:
+                w, h = self._marker_size(group)
+                x, y = group.display
+                gap = 1.2 * mm
+                spots = (
+                    (x + w / 2 + gap, y - 3),
+                    (x - w / 2 - gap - tw, y - 3),
+                    (x - tw / 2, y + h / 2 + 1.5),
+                    (x - tw / 2, y - h / 2 - FONT_SIZE),
+                )
+                c.setFillColor(_INK)
+            else:
+                x, y = view.project(item["lat"], item["lon"])
+                spots = ((x + 2 * mm, y - 3),)
+                c.setFillColor(_LABEL)
+            for tx, ty in spots:
                 rect = (tx - 1, ty - 1.5, tx + tw + 1, ty + FONT_SIZE)
                 if rect[0] < 1 or rect[2] > self.width - 1 or rect[1] < 1 or rect[3] > self.frame_h - 1:
                     continue
-                if any(_overlaps(rect, r) for r in placed):
+                if any(_overlaps(rect, r) for r in placed) or any(_seg_hits_rect(a, b, rect) for a, b, _ in chain):
                     continue
                 c.drawString(tx, ty, name)
                 placed.append(rect)
+                drawn += 1
                 break
 
     def _draw_scale(self, view: View) -> None:
@@ -690,17 +822,18 @@ class RouteMap(Flowable):
         c.setFont(self.font, 7)
         c.drawRightString(x + length, y + 1.8, f"{km:g} km")
 
-    def _draw_footer(self, groups: Sequence[MarkerGroup]) -> None:
+    def _draw_footer(self) -> None:
         c = self.canv
         items = [("hop", "Hop")]
         if self.model.start_mapped:
             items.insert(0, ("start", "Start"))
         if self.model.destination:
             items.append(("destination", "Destination"))
-        if self.model.has_interpolation:
-            items.append(("dashed", "Interpolated"))
-        if any(g.approximate for g in groups):
-            items.append(("approx", "Approximate"))
+        if self.model.has_approximate:
+            items.append(("approx", "Approximate (~)"))
+        items.append(("solid", "Link measured"))
+        if self.model.has_unknown_link:
+            items.append(("dashed", "Link estimated or unknown"))
         x, y = 0.0, 5.6 * mm
         c.setFont(self.font, FONT_SIZE)
         for kind, text in items:
@@ -722,9 +855,11 @@ class RouteMap(Flowable):
         r = 1.5 * mm
         c.saveState()
         c.setLineWidth(1.2)
-        if kind == "dashed":
-            c.setStrokeColor(_INK)
-            c.setDash(3, 2.5)
+        if kind in ("dashed", "solid"):
+            weight = LINE_WEIGHT_PX * _PX
+            c.setStrokeColor(_ROUTE)
+            c.setLineWidth(weight)
+            c.setDash(*(dash_pattern(weight) if kind == "dashed" else ()))
             c.line(x, y, x + 8 * mm, y)
             c.restoreState()
             return x + 9 * mm
@@ -736,14 +871,7 @@ class RouteMap(Flowable):
             c.setDash(2, 1.5)
             c.circle(cx, y, r, fill=1, stroke=1)
         elif kind == "destination":
-            c.setFillColor(fill)
-            path = c.beginPath()
-            path.moveTo(cx, y + r * 1.25)
-            path.lineTo(cx + r * 1.25, y)
-            path.lineTo(cx, y - r * 1.25)
-            path.lineTo(cx - r * 1.25, y)
-            path.close()
-            c.drawPath(path, fill=1, stroke=0)
+            draw_destination_diamond(c, cx, y, r * 1.6, fill, self.font_bold, 6.5)
         elif kind == "start":
             c.setFillColor(fill)
             c.roundRect(cx - r, y - r, 2 * r, 2 * r, 0.5 * mm, fill=1, stroke=0)

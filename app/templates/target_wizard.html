@@ -1,7 +1,6 @@
 {% extends "base.html" %}
 {% block title %}New Target – justUp!{% endblock %}
 
-{% block shell_class %}ju-shell--fit{% endblock %}
 {% block styles %}
 <link href="/static/css/target-wizard.css" rel="stylesheet">
 {% endblock %}
@@ -78,22 +77,23 @@
       <section class="target-wizard-step" data-step="2" aria-labelledby="step-checks-title" hidden>
         <div class="wizard-step-intro"><h2 id="step-checks-title" tabindex="-1">Monitoring checks</h2><p>These are suggested starting values. Adjust them now or later in the full editor.</p></div>
         <div class="wizard-check-grid">
-          <div class="wizard-check-option"><div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="wizard-http" name="enable_http_check"><label class="form-check-label" for="wizard-http">HTTP check</label></div></div>
+          <div class="wizard-check-option"><div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="wizard-http" name="enable_http_check" aria-controls="wizard-group-http-url wizard-group-http-method wizard-group-http-codes wizard-group-ignore-cert"><label class="form-check-label" for="wizard-http">HTTP check</label></div></div>
           <div class="wizard-check-option"><div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="wizard-ping" name="enable_ping"><label class="form-check-label" for="wizard-ping">ICMP ping</label></div></div>
-          <div class="wizard-check-option"><div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="wizard-tcp" name="enable_tcp_connect"><label class="form-check-label" for="wizard-tcp">TCP connection</label></div></div>
-          <div class="wizard-check-option"><div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="wizard-cert" name="enable_cert_expiration"><label class="form-check-label" for="wizard-cert">Monitor certificate expiry</label></div></div>
+          <div class="wizard-check-option"><div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="wizard-tcp" name="enable_tcp_connect" aria-controls="wizard-group-tcp"><label class="form-check-label" for="wizard-tcp">TCP connection</label></div></div>
+          <div class="wizard-check-option"><div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="wizard-cert" name="enable_cert_expiration" aria-controls="wizard-group-ignore-cert"><label class="form-check-label" for="wizard-cert">Monitor certificate expiry</label></div></div>
         </div>
+        <p id="wizard-checks-status" class="visually-hidden" role="status"></p>
+        <div class="wizard-check-detail" id="wizard-group-tcp" data-check-group="tcp" hidden><label for="wizard-extra-ports" class="form-label">TCP ports *</label><input id="wizard-extra-ports" class="form-control" type="text" maxlength="200" placeholder="e.g. 22,443" aria-describedby="wizard-extra-ports-help"><div id="wizard-extra-ports-help" class="form-text">Choose every TCP port explicitly. Each port is tested with its own connection on the host from the previous step.</div></div>
         <details class="wizard-advanced" id="wizard-advanced"><summary><span class="material-icons" aria-hidden="true">tune</span>Advanced settings</summary>
           <div class="row g-3 mt-1">
-            <div class="col-12 col-md-6" id="wizard-extra-ports-wrap" hidden><label for="wizard-extra-ports" class="form-label">TCP ports *</label><input id="wizard-extra-ports" class="form-control" type="text" maxlength="200" placeholder="e.g. 22,443"><div class="form-text">Choose every TCP port explicitly.</div></div>
-            <div class="col-12 col-md-6"><label for="wizard-http-url" class="form-label">Full HTTP URL</label><input id="wizard-http-url" name="http_url" class="form-control" type="url" maxlength="2048"></div>
-            <div class="col-12 col-md-3"><label for="wizard-method" class="form-label">HTTP method</label><select id="wizard-method" name="http_method" class="form-select"><option value="GET">GET</option><option value="HEAD">HEAD</option></select></div>
-            <div class="col-12 col-md-3"><label for="wizard-codes" class="form-label">Success codes</label><input id="wizard-codes" name="http_success_codes" class="form-control" type="text" maxlength="200" placeholder="200-399"></div>
+            <div class="col-12 col-md-6" id="wizard-group-http-url" data-check-group="http" hidden><label for="wizard-http-url" class="form-label">Full HTTP URL</label><input id="wizard-http-url" name="http_url" class="form-control" type="url" maxlength="2048"></div>
+            <div class="col-12 col-md-3" id="wizard-group-http-method" data-check-group="http" hidden><label for="wizard-method" class="form-label">HTTP method</label><select id="wizard-method" name="http_method" class="form-select"><option value="GET">GET</option><option value="HEAD">HEAD</option></select></div>
+            <div class="col-12 col-md-3" id="wizard-group-http-codes" data-check-group="http" hidden><label for="wizard-codes" class="form-label">Success codes</label><input id="wizard-codes" name="http_success_codes" class="form-control" type="text" maxlength="200" placeholder="200-399"></div>
             <div class="col-12 col-md-4"><label for="wizard-interval" class="form-label">Interval (seconds)</label><input id="wizard-interval" name="interval_seconds" class="form-control" type="number" min="{{ limits.interval_seconds.min }}" max="{{ limits.interval_seconds.max }}" required></div>
             <div class="col-12 col-md-4"><label for="wizard-retries" class="form-label">Retries</label><input id="wizard-retries" name="max_retries" class="form-control" type="number" min="{{ limits.max_retries.min }}" max="{{ limits.max_retries.max }}" required></div>
             <div class="col-12 col-md-4"><label for="wizard-retention" class="form-label">Retention (days)</label><input id="wizard-retention" name="retention_days" class="form-control" type="number" min="{{ limits.retention_days.min }}" max="{{ limits.retention_days.max }}" required></div>
             <div class="col-12 col-md-6"><div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="wizard-auto-close" name="auto_close_alert"><label class="form-check-label" for="wizard-auto-close">Close alerts automatically after recovery</label></div></div>
-            <div class="col-12 col-md-6"><div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="wizard-ignore-cert" name="ignore_cert_errors"><label class="form-check-label" for="wizard-ignore-cert">Ignore TLS certificate errors</label></div><div class="form-text">Disables certificate validation for the HTTP request.</div></div>
+            <div class="col-12 col-md-6" id="wizard-group-ignore-cert" data-check-group="tls" hidden><div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="wizard-ignore-cert" name="ignore_cert_errors"><label class="form-check-label" for="wizard-ignore-cert">Ignore TLS certificate errors</label></div><div class="form-text">Disables certificate validation for the HTTP request and the certificate check.</div></div>
           </div>
         </details>
       </section>
@@ -120,4 +120,4 @@
 </div>
 {% endblock %}
 
-{% block scripts %}<script src="/static/js/target-wizard.js" defer></script>{% endblock %}
+{% block scripts %}<script src="/static/js/utils/optional-groups.js" defer></script><script src="/static/js/utils/check-groups.js" defer></script><script src="/static/js/target-wizard.js" defer></script>{% endblock %}

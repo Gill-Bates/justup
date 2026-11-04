@@ -39,6 +39,34 @@
 	--ui-card-border: var(--ju-panel-line, #dee2e6);
 	--ui-shadow-subtle: 0 1px 3px rgb(0 0 0 / 15%);
 
+	/* Modal dialogs: single source for shell, form rhythm and size variants (DESIGN.md, "Modal dialogs"). */
+	--ui-modal-pad-x: 1.25rem;
+	--ui-modal-pad-y: 1rem;
+	--ui-modal-gap: 1rem;
+	--ui-modal-gap-xxs: 0.125rem;
+	--ui-modal-gap-xs: 0.25rem;
+	--ui-modal-gap-sm: 0.375rem;
+	--ui-modal-gap-md: 0.5rem;
+	--ui-modal-gap-lg: 0.75rem;
+	--ui-modal-width-confirm: 28rem;
+	--ui-modal-width-form: 32rem;
+	--ui-modal-width-wide: 40rem;
+	--ui-modal-title-size: 1.125rem;
+	--ui-modal-title-line-height: 1.3;
+	--ui-modal-text-small: 0.875rem;
+	--ui-modal-text-base: 1rem;
+	--ui-modal-icon-size: 1.375rem;
+	--ui-modal-close-size: 2.25rem;
+	--ui-modal-action-size: 2.375rem;
+	--ui-modal-result-min: 1.5rem;
+	--ui-modal-border-width: 1px;
+	--ui-modal-border-emphasis: 0.25rem;
+	--ui-modal-radius: var(--bs-border-radius-lg);
+	--ui-modal-border: var(--ju-panel-line, #dee2e6);
+	--ui-modal-shadow: 0 0.5rem 1.5rem rgb(0 0 0 / 20%);
+	--ui-icon-inline: 1.125rem;
+	--ui-target-min: 1.5rem;
+
 	/* Table row sizing - central control */
 	--table-row-padding-y: 0.75rem;
 	--table-row-padding-x: 0.9rem;
@@ -48,6 +76,12 @@
 	--range-thumb-size: 1.5rem;
 
 	/* must match actual thumb size */
+}
+
+@media (pointer: coarse) {
+	:root {
+		--ui-target-min: 2.75rem;
+	}
 }
 
 @media (width <=576px) {
@@ -223,15 +257,10 @@ textarea.smtp-editor-frame {
 	margin-bottom: 0.25rem;
 }
 
-/* Desktop fit mode for the SMTP editor: the shell is viewport-bound (gentelella-layout.css), both
+/* Desktop fill mode for the SMTP editor: main is viewport-bound (gentelella-layout.css), both
    cards end at the footer and scroll inside their body. Below the media condition the normal
    scrolling layout above applies. */
 @media (width >=992px) and (height >=600px) {
-	.ju-shell:has(#smtp-pane.active .settings-editor--fill) {
-		--ju-fit-height: 100dvh;
-		--ju-fit-overflow: auto;
-	}
-
 	.ju-content:has(#smtp-pane.active .settings-editor--fill)>main {
 		display: grid;
 		grid-template-rows: minmax(0, 1fr);
@@ -360,7 +389,7 @@ textarea.smtp-editor-frame {
 }
 
 .settings-details>summary:focus-visible {
-	outline: 2px solid var(--bs-primary);
+	outline: 2px solid var(--ju-focus-ring);
 	outline-offset: -2px;
 }
 
@@ -436,7 +465,7 @@ textarea.smtp-editor-frame {
 
 .summary-grid .card-status .small,
 .dashboard-hero .small {
-	font-size: 0.9rem !important;
+	font-size: 0.9rem;
 }
 
 /* Target Detail Info Cards - matching typography (layout: .ui-grid--fit) */
@@ -566,6 +595,8 @@ textarea.smtp-editor-frame {
 	--range-steps: 6;
 
 	position: relative;
+	container-type: inline-size;
+	container-name: range-tick-scale;
 }
 
 .range-wrapper[data-range-positions="10"] {
@@ -633,12 +664,20 @@ textarea.smtp-editor-frame {
 	box-shadow: none;
 }
 
+.form-range:focus::-webkit-slider-thumb {
+	box-shadow: none;
+}
+
+.form-range:focus::-moz-range-thumb {
+	box-shadow: none;
+}
+
 .form-range:focus-visible::-webkit-slider-thumb {
-	box-shadow: 0 0 0 1px var(--bs-primary), 0 0 0 0.25rem var(--ju-panel-bg), 0 0 0 0.375rem var(--bs-primary);
+	box-shadow: 0 0 0 1px var(--ju-focus-ring), 0 0 0 0.25rem var(--ju-panel-bg), 0 0 0 0.375rem var(--ju-focus-ring);
 }
 
 .form-range:focus-visible::-moz-range-thumb {
-	box-shadow: 0 0 0 1px var(--bs-primary), 0 0 0 0.25rem var(--ju-panel-bg), 0 0 0 0.375rem var(--bs-primary);
+	box-shadow: 0 0 0 1px var(--ju-focus-ring), 0 0 0 0.25rem var(--ju-panel-bg), 0 0 0 0.375rem var(--ju-focus-ring);
 }
 
 .form-range:disabled::-webkit-slider-thumb {
@@ -766,6 +805,23 @@ textarea.smtp-editor-frame {
 .range-wrapper[data-active-index="8"] .tick:nth-child(9) .tick-mark,
 .range-wrapper[data-active-index="9"] .tick:nth-child(10) .tick-mark {
 	visibility: hidden;
+}
+
+@container range-tick-scale (max-width: 260px) {
+	.range-ticks .tick:nth-child(2) .tick-label,
+	.range-ticks .tick:nth-child(4) .tick-label,
+	.range-ticks .tick:nth-child(6) .tick-label,
+	.range-ticks .tick:nth-child(8) .tick-label,
+	.range-ticks .tick:nth-child(9) .tick-label {
+		visibility: hidden;
+	}
+}
+
+@container range-tick-scale (max-width: 180px) {
+	.range-ticks .tick:nth-child(3) .tick-label,
+	.range-ticks .tick:nth-child(7) .tick-label {
+		visibility: hidden;
+	}
 }
 
 /* Column widths */
@@ -937,6 +993,64 @@ textarea.smtp-editor-frame {
 	padding: 2rem 1rem;
 }
 
+/* ----- Search field (filter-as-you-type) -----
+   .ui-search          positioning box, full width up to a readable maximum
+   .ui-search-input    the shared .form-control with room for the icon and the clear button
+   .ui-search-clear    icon button inside the field, shown while the field has a value */
+.ui-search {
+	position: relative;
+	width: 100%;
+	max-width: 28rem;
+}
+
+.ui-search-input {
+	min-height: var(--ui-target-min);
+	padding-inline: 2.5rem 2.75rem;
+}
+
+/* The shared clear button replaces the browser's own one. */
+.ui-search-input::-webkit-search-cancel-button {
+	display: none;
+}
+
+.ui-search-icon {
+	position: absolute;
+	inset-block-start: 50%;
+	inset-inline-start: 0.75rem;
+	transform: translateY(-50%);
+	color: var(--bs-secondary-color);
+	font-size: var(--ui-icon-inline);
+	pointer-events: none;
+}
+
+.ui-search-clear {
+	position: absolute;
+	inset-block-start: 50%;
+	inset-inline-end: 0.25rem;
+	display: grid;
+	place-items: center;
+	min-width: var(--ui-target-min);
+	min-height: var(--ui-target-min);
+	transform: translateY(-50%);
+	padding: 0;
+	border: 0;
+	border-radius: var(--bs-border-radius);
+	background: transparent;
+	color: var(--bs-secondary-color);
+}
+
+.ui-search-clear:hover {
+	color: var(--bs-body-color);
+}
+
+.ui-search-clear .material-icons {
+	font-size: var(--ui-icon-inline);
+}
+
+.targets-search-term {
+	overflow-wrap: anywhere;
+}
+
 /* ----- Responsive data tables -----
    One contract for every data table (docs/development/contributing.md, "Table contract"):
    .ju-table-viewport  scroll and size container; role="region", tabindex="0" and an aria-label make it keyboard operable.
@@ -956,7 +1070,7 @@ textarea.smtp-editor-frame {
 }
 
 .ju-table-viewport:focus-visible {
-	outline: 2px solid var(--bs-primary);
+	outline: 2px solid var(--ju-focus-ring);
 	outline-offset: -2px;
 }
 
@@ -977,12 +1091,6 @@ textarea.smtp-editor-frame {
 	overflow-wrap: anywhere;
 }
 
-.ju-data-table .check-badges {
-	display: flex;
-	flex-wrap: wrap;
-	align-items: center;
-	gap: 4px;
-}
 
 .ju-data-table .check-badges .badge {
 	min-width: auto;
@@ -1023,10 +1131,19 @@ textarea.smtp-editor-frame {
 	}
 }
 
-/* Card mode: every column stays visible as a label/value row. */
+/* Card mode: every column stays visible as a label/value row. The header stays in the DOM and
+   accessibility tree (clipped, not display:none) so cells keep their column names. */
 @container ju-table (width <40rem) {
 	.rtable thead {
-		display: none;
+		display: table-header-group;
+
+		/* Beats the Bootstrap sticky utility, which would otherwise keep the clipped header in flow. */
+		position: absolute !important;
+		width: 1px;
+		height: 1px;
+		overflow: hidden;
+		clip-path: inset(50%);
+		white-space: nowrap;
 	}
 
 	.rtable tbody tr {
@@ -1364,6 +1481,31 @@ textarea.smtp-editor-frame {
 	line-height: 1;
 }
 
+.ju-status-badge--success {
+	background-color: var(--bs-success);
+	color: var(--bs-white);
+}
+
+.ju-status-badge--warning {
+	background-color: var(--bs-warning);
+	color: var(--bs-black);
+}
+
+.ju-status-badge--danger {
+	background-color: var(--bs-danger);
+	color: var(--bs-white);
+}
+
+.ju-status-badge--info {
+	background-color: var(--bs-info);
+	color: var(--bs-black);
+}
+
+.ju-status-badge--neutral {
+	background-color: var(--bs-secondary);
+	color: var(--bs-white);
+}
+
 /* Compact badges in tables */
 .table .badge {
 	font-size: 0.7rem;
@@ -1374,6 +1516,23 @@ textarea.smtp-editor-frame {
 	color: var(--ui-muted-color);
 	border: 1px solid var(--ui-muted-border);
 	font-weight: 500;
+}
+
+/* Badge group: every row of badges uses this container (DESIGN.md, "Badges"). It is measured by
+   tests/layout/audit.js; --fill takes the space left in its parent and centres the rows in it. */
+.ju-badges {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	align-content: center;
+	gap: var(--ju-badges-gap, var(--ui-stat-gap));
+	min-width: 0;
+}
+
+.ju-badges--fill {
+	flex: 1 1 auto;
+	min-height: 0;
+	justify-content: center;
 }
 
 /* ----- Tag input (generic chip list, see js/utils/tag-input.js) ----- */
@@ -1918,24 +2077,6 @@ textarea.smtp-editor-frame {
 		border-radius: 0.5rem;
 	}
 
-	/* Modals */
-	.modal {
-		--bs-modal-margin: 0.5rem;
-	}
-
-	.modal-content {
-		border-radius: var(--bs-border-radius-lg);
-	}
-
-	.modal-footer {
-		display: grid;
-		gap: 0.5rem;
-	}
-
-	.modal-footer .btn {
-		width: 100%;
-	}
-
 	/* Button groups wrap */
 	.ui-page .d-flex.gap-2 {
 		flex-wrap: wrap;
@@ -2038,10 +2179,6 @@ textarea.smtp-editor-frame {
 	caret-color: transparent;
 }
 
-.signal-code-box:focus {
-	border-color: var(--bs-primary);
-	box-shadow: 0 0 0 0.2rem rgb(var(--bs-primary-rgb), 0.25);
-}
 
 .signal-code-box.is-invalid {
 	border-color: var(--bs-danger);
@@ -2160,7 +2297,7 @@ textarea.smtp-editor-frame {
 }
 
 #settingsTabs .nav-link:focus-visible {
-	outline: 2px solid var(--bs-primary);
+	outline: 2px solid var(--ju-focus-ring);
 	outline-offset: -2px;
 }
 
@@ -2390,11 +2527,6 @@ textarea.smtp-editor-frame {
 	height: auto;
 }
 
-/* The SVG is black; inverted wherever an ancestor selects the dark theme. */
-[data-bs-theme="dark"] .ju-logo {
-	filter: invert(1);
-}
-
 .status-up {
 	color: var(--status-up);
 }
@@ -2423,9 +2555,6 @@ textarea.smtp-editor-frame {
 	transition: all 0.3s ease;
 }
 
-.htmx-request:not(:where(#targets-table, #targets-table *)) {
-	opacity: 0.5;
-}
 
 .htmx-indicator {
 	opacity: 0;
@@ -2583,25 +2712,30 @@ body.server-offline #server-offline-overlay {
 #server-offline-overlay .card {
 	--bs-card-bg: rgb(var(--bs-body-bg-rgb) / 72%);
 
-	width: min(820px, calc(100vw - 2rem));
+	width: min(560px, calc(100vw - 2rem));
 	backdrop-filter: blur(14px) saturate(160%);
 }
 
 #server-offline-overlay .card-body {
-	padding: 3rem;
+	padding: 2rem;
+}
+
+#server-offline-overlay .server-offline-icon {
+	font-size: 3rem;
+	line-height: 1;
 }
 
 #server-offline-overlay h2 {
-	font-size: 2.25rem;
+	font-size: 1.75rem;
 }
 
 #server-offline-overlay p {
-	font-size: 1.25rem;
+	font-size: 1.1rem;
 }
 
 #server-offline-overlay .spinner-border {
-	width: 2.25rem;
-	height: 2.25rem;
+	width: 1.75rem;
+	height: 1.75rem;
 }
 
 /* Footer sits at the bottom of the content column (see .ju-content). */
@@ -2616,15 +2750,17 @@ body.server-offline #server-offline-overlay {
 	font-size: 0.75rem;
 	line-height: 1.25;
 	color: var(--bs-secondary-color);
-	border-top: 1px solid var(--ju-panel-line);
 }
 
+/* The hairline spans only the footer text, not the full content width. */
 .ju-footer-content {
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
 	flex-wrap: wrap;
 	gap: 0.15rem 0;
+	padding: 0.5rem 1rem 0;
+	border-top: 1px solid var(--ju-panel-line);
 }
 
 .ju-footer-link {
@@ -2670,13 +2806,6 @@ body.server-offline #server-offline-overlay {
    Focus indicators, modal viewport geometry, status contrast,
    reduced motion and forced-colors support.
    ============================================= */
-:root {
-	--ju-focus-ring: #0b4bd1;
-}
-
-[data-bs-theme="dark"] {
-	--ju-focus-ring: #8fb4ff;
-}
 
 /* Light theme: the Bootstrap orange/amber tints fall below 3:1 on white. */
 :root:not([data-bs-theme="dark"]) {
@@ -2684,20 +2813,80 @@ body.server-offline #server-offline-overlay {
 	--status-warning: #8a6500;
 }
 
+/* Focus indication (DESIGN.md "Focus indication"): tokens live in gentelella-layout.css. */
+.form-control:focus,
+.form-select:focus,
+.signal-code-box:focus {
+	border-color: var(--ju-focus-field-border);
+	box-shadow: none;
+}
+
+:is(.form-control, .form-select, .form-check-input):is(.is-valid, .is-invalid):focus,
+.was-validated :is(.form-control, .form-select, .form-check-input):is(:valid, :invalid):focus {
+	box-shadow: none;
+}
+
+.form-check-input {
+	border-color: var(--ju-control-edge);
+}
+
+.form-check-input:focus {
+	box-shadow: none;
+}
+
+.form-check-input:focus:not(:checked) {
+	border-color: var(--ju-control-edge);
+}
+
+.btn {
+	--bs-btn-focus-box-shadow: none;
+}
+
+.pagination,
+.accordion,
+.btn-close {
+	--bs-pagination-focus-box-shadow: none;
+	--bs-accordion-btn-focus-box-shadow: none;
+	--bs-btn-close-focus-shadow: none;
+}
+
+.nav-link:focus-visible {
+	box-shadow: none;
+}
+
+/* Text-like fields mark focus with their border; everything else with a narrow outline. */
 a:focus-visible,
 button:focus-visible,
 summary:focus-visible,
 [tabindex]:focus-visible,
-.form-control:focus-visible,
-.form-select:focus-visible,
 .form-check-input:focus-visible,
 .btn:focus-visible,
 .btn-close:focus-visible,
 .page-link:focus-visible,
 .accordion-button:focus-visible,
 .nav-link:focus-visible {
-	outline: 2px solid var(--ju-focus-ring);
-	outline-offset: 2px;
+	outline: var(--ju-focus-outline-width) solid var(--ju-focus-ring);
+	outline-offset: var(--ju-focus-outline-offset);
+}
+
+/* Switch: the off thumb and track edge must stay visible on any surface (WCAG 1.4.11). */
+.form-switch .form-check-input:not(:checked) {
+	background-image: var(--ju-switch-thumb-off);
+}
+
+/* Operable controls show a hand, disabled toggles not-allowed, text fields keep the I-beam. */
+a[href],
+summary,
+[role="tab"],
+.form-check-input:not(:disabled),
+.form-check-label[for],
+.form-check-input:not(:disabled) ~ .form-check-label {
+	cursor: pointer;
+}
+
+.form-check-input:disabled,
+.form-check-input:disabled ~ .form-check-label {
+	cursor: not-allowed;
 }
 
 /* Bootstrap's amber text is 1.5:1 on the light warning tint. */
@@ -2739,6 +2928,29 @@ main:focus {
 	outline: none;
 	overflow-y: auto;
 	padding: env(safe-area-inset-top, 0) env(safe-area-inset-right, 0) env(safe-area-inset-bottom, 0) env(safe-area-inset-left, 0);
+}
+
+@media (width <=576px) {
+	#server-offline-overlay .card-body {
+		padding: 1.25rem;
+	}
+
+	#server-offline-overlay .server-offline-icon {
+		font-size: 2.75rem;
+	}
+
+	#server-offline-overlay h2 {
+		font-size: 1.5rem;
+	}
+
+	#server-offline-overlay p {
+		font-size: 1rem;
+	}
+
+	#server-offline-overlay .spinner-border {
+		width: 1.5rem;
+		height: 1.5rem;
+	}
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -2804,5 +3016,315 @@ main:focus {
 
 	.ju-scrollbar-accent::-webkit-scrollbar-thumb:hover {
 		background-color: color-mix(in srgb, var(--bs-primary) 80%, white);
+	}
+}
+
+/* =============================================
+   11. MODAL DIALOGS (DESIGN.md, "Modal dialogs")
+   One shared shell, three variants (form, confirm, critical) and the
+   reusable form, switch, channel and consequence components. No dialog
+   defines its own look; markup only picks a variant and these classes.
+   ============================================= */
+.modal {
+	--bs-modal-width: var(--ui-modal-width-form);
+	--bs-modal-padding: var(--ui-modal-pad-x);
+	--bs-modal-header-padding-x: var(--ui-modal-pad-x);
+	--bs-modal-header-padding-y: var(--ui-modal-pad-y);
+	--bs-modal-header-padding: var(--ui-modal-pad-y) var(--ui-modal-pad-x);
+	--bs-modal-border-color: var(--ui-modal-border);
+	--bs-modal-header-border-color: var(--ui-modal-border);
+	--bs-modal-footer-border-color: var(--ui-modal-border);
+	--bs-modal-border-radius: var(--ui-modal-radius);
+	--bs-modal-inner-border-radius: calc(var(--ui-modal-radius) - var(--ui-modal-border-width));
+	--bs-modal-box-shadow: var(--ui-modal-shadow);
+	--bs-modal-footer-gap: var(--ui-modal-gap-md);
+
+	overscroll-behavior: contain;
+}
+
+.ju-modal--form {
+	--bs-modal-width: var(--ui-modal-width-form);
+}
+
+.ju-modal--confirm,
+.ju-modal--critical {
+	--bs-modal-width: var(--ui-modal-width-confirm);
+}
+
+.ju-modal--wide {
+	--bs-modal-width: var(--ui-modal-width-wide);
+}
+
+@media (width <=576px) {
+	.modal {
+		--bs-modal-margin: var(--ui-modal-gap-md);
+	}
+}
+
+/* Header: icon + title on the left, close button on the right. */
+.modal-header {
+	align-items: center;
+	gap: var(--ui-modal-gap-lg);
+}
+
+.ju-modal-title {
+	display: flex;
+	align-items: center;
+	gap: var(--ui-modal-gap-md);
+	min-width: 0;
+	margin: 0;
+	font-size: var(--ui-modal-title-size);
+	font-weight: 600;
+	line-height: var(--ui-modal-title-line-height);
+	overflow-wrap: anywhere;
+}
+
+.ju-modal-title .material-icons.ju-modal-icon {
+	flex: none;
+	font-size: var(--ui-modal-icon-size);
+	line-height: 1;
+	color: var(--bs-secondary-color);
+}
+
+.ju-modal--critical .ju-modal-title .material-icons.ju-modal-icon {
+	color: var(--bs-danger-text-emphasis);
+}
+
+.modal-header .btn-close {
+	flex: none;
+	box-sizing: border-box;
+	width: max(var(--ui-modal-close-size), var(--ui-target-min));
+	height: max(var(--ui-modal-close-size), var(--ui-target-min));
+	margin: calc(0px - var(--ui-modal-gap-xs)) calc(0px - var(--ui-modal-gap-md)) calc(0px - var(--ui-modal-gap-xs)) auto;
+	padding: 0;
+	opacity: 0.75;
+}
+
+.modal-header .btn-close:hover {
+	opacity: 1;
+}
+
+/* Body: vertical rhythm comes from one gap token, not from per-element margins. */
+.modal-body {
+	display: flex;
+	flex-direction: column;
+	gap: var(--ui-modal-gap);
+	overscroll-behavior: contain;
+}
+
+.modal-body p {
+	margin: 0;
+}
+
+.modal-body :is(input, select, textarea, button) {
+	scroll-margin-block: var(--ui-modal-gap);
+}
+
+/* Footer: Cancel (secondary) before the primary action; stacked and full width on phones. */
+.modal-footer .btn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: var(--ui-modal-gap-sm);
+	min-height: max(var(--ui-modal-action-size), var(--ui-target-min));
+}
+
+.modal .btn .material-icons {
+	font-size: var(--ui-icon-inline);
+	line-height: 1;
+}
+
+@media (width <=576px) {
+	.modal-footer {
+		flex-direction: column;
+		align-items: stretch;
+	}
+}
+
+/* Text roles inside a dialog body. */
+.ju-modal-lead {
+	font-weight: 600;
+}
+
+.ju-modal-note {
+	display: flex;
+	align-items: flex-start;
+	gap: var(--ui-modal-gap-sm);
+	font-size: var(--ui-modal-text-small);
+	color: var(--bs-secondary-color);
+}
+
+.material-icons.ju-icon-inline {
+	flex: none;
+	font-size: var(--ui-icon-inline);
+	line-height: 1;
+	vertical-align: text-bottom;
+}
+
+/* Consequence block of a critical dialog: icon and text, never color alone. */
+.ju-modal-consequence {
+	display: flex;
+	align-items: flex-start;
+	gap: var(--ui-modal-gap-md);
+	padding: var(--ui-modal-gap-lg);
+	border: var(--ui-modal-border-width) solid var(--bs-danger-border-subtle);
+	border-inline-start-width: var(--ui-modal-border-emphasis);
+	border-radius: var(--ui-modal-radius);
+	background: var(--bs-danger-bg-subtle);
+	color: var(--bs-danger-text-emphasis);
+	font-weight: 600;
+}
+
+/* Form-level error: text plus a leading rule; JS toggles .d-none. */
+.ju-modal-error {
+	padding-inline-start: calc(var(--ui-modal-gap-md) + var(--ui-modal-gap-xxs));
+	border-inline-start: var(--ui-modal-border-emphasis) solid currentcolor;
+	color: var(--bs-danger-text-emphasis);
+	font-weight: 500;
+}
+
+/* Inline field error: text plus icon directly below the field (never color alone). */
+.ju-field-error {
+	display: flex;
+	align-items: flex-start;
+	gap: var(--ui-modal-gap-xs);
+	margin-top: var(--ui-modal-gap-xs);
+	color: var(--bs-danger-text-emphasis);
+	font-size: var(--ui-modal-text-small);
+	font-weight: 500;
+}
+
+.ju-field-error .material-icons {
+	flex: none;
+	font-size: var(--ui-icon-inline);
+}
+
+/* Forms: label above control, help/error directly below, one gap between fields. */
+.ju-modal-form {
+	display: flex;
+	flex-direction: column;
+	gap: var(--ui-modal-gap);
+	margin: 0;
+}
+
+.ju-field {
+	display: flex;
+	flex-direction: column;
+	gap: var(--ui-modal-gap-sm);
+}
+
+.modal .form-label {
+	margin: 0;
+}
+
+.modal .form-text {
+	margin: 0;
+	font-size: var(--ui-modal-text-small);
+}
+
+.ju-required {
+	margin-inline-start: var(--ui-modal-gap-xxs);
+	color: var(--bs-danger-text-emphasis);
+}
+
+.ju-fieldset {
+	min-width: 0;
+	margin: 0;
+	padding: 0;
+	border: 0;
+}
+
+.ju-fieldset>*+* {
+	margin-top: var(--ui-modal-gap-lg);
+}
+
+.ju-legend .material-icons.ju-icon-inline {
+	margin-inline-end: var(--ui-modal-gap-sm);
+}
+
+.ju-legend {
+	float: none;
+	width: auto;
+	margin: 0;
+	padding: 0;
+	font-size: var(--ui-modal-text-base);
+	font-weight: 500;
+	line-height: inherit;
+}
+
+/* Switch row: real checkbox with role="switch"; label (and help below) is the large target. */
+.ju-switch {
+	margin: 0;
+}
+
+.ju-switch .form-check-input {
+	margin-top: calc((var(--ui-target-min) - 1em) / 2);
+}
+
+.ju-switch .form-check-label {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--ui-modal-gap-sm);
+	min-height: var(--ui-target-min);
+}
+
+.ju-switch .form-text {
+	margin-top: 0;
+}
+
+/* Channel row (Signal, Email): switch, value field, help, one text-labelled test action. */
+.ju-channel {
+	display: flex;
+	flex-direction: column;
+	gap: var(--ui-modal-gap-md);
+	padding-top: var(--ui-modal-gap);
+	border-top: var(--ui-modal-border-width) solid var(--ui-modal-border);
+}
+
+.ju-fieldset>.ju-channel {
+	margin-top: var(--ui-modal-gap-lg);
+}
+
+.ju-channel .form-check-label {
+	font-weight: 600;
+}
+
+.ju-channel-body {
+	display: flex;
+	flex-direction: column;
+	gap: var(--ui-modal-gap-sm);
+}
+
+.ju-channel-action {
+	display: flex;
+	align-items: center;
+}
+
+.ju-channel-action .btn {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--ui-modal-gap-sm);
+	min-height: var(--ui-target-min);
+}
+
+.ju-test-result {
+	display: flex;
+	flex-direction: column;
+	gap: var(--ui-modal-gap-xs);
+	min-height: var(--ui-modal-result-min);
+	font-size: var(--ui-modal-text-small);
+}
+
+.ju-test-result-line {
+	display: flex;
+	align-items: flex-start;
+	gap: var(--ui-modal-gap-sm);
+}
+
+@media (forced-colors: active) {
+	.ju-modal-consequence,
+	.ju-modal-error,
+	.ju-channel {
+		border-color: CanvasText;
 	}
 }

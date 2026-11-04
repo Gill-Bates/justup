@@ -56,7 +56,13 @@ from ..db import tsdb as tsdb_db
 from ..models.settings import SettingsUpdate
 from ..models.targets import target_row_to_dict
 from ..monitor.quality_probe import DEFAULT_QUALITY_TARGETS
-from ..services.route_timeline import STATE_LABELS, expand_sequence_hops, logical_hop_count, mapped_hop_numbers
+from ..services.route_timeline import (
+    STATE_LABELS,
+    expand_sequence_hops,
+    logical_hop_count,
+    mapped_hop_numbers,
+    timeline_measurement,
+)
 from ..services.route_timeline import build_route_timeline as _build_route_timeline
 from ..utils.auth_helpers import (
     is_password_change_exempt_path,
@@ -76,6 +82,7 @@ from ..utils.constants import (
     UI_PAGE_SIZE_ALERTS,
     UI_PAGE_SIZE_DEFAULT,
     UI_PAGE_SIZE_TARGETS,
+    UI_PAGE_SIZE_TARGETS_ALL,
     CheckStatus,
     SettingKeys,
 )
@@ -98,7 +105,7 @@ from ..utils.status_helper import (
 )
 from ..utils.storage_stats import compute_storage_stats
 from ..utils.time import assume_utc, utcnow
-from ..utils.uptime_metric import enabled_availability_metrics, select_uptime_metric, uptime_level
+from ..utils.uptime_metric import enabled_availability_metrics, uptime_level
 from ..utils.version import BUILD_INFO, VERSION
 from . import notifications as notifications_api
 
@@ -279,16 +286,17 @@ _NO_STORE_HEADERS = {"Cache-Control": "private, no-store"}
 
 # --- Inline HTML Helpers (prevent XSS, centralize styling) ---
 
-# Valid Bootstrap badge colors (prevents class injection)
-VALID_BADGE_COLORS = {"primary", "secondary", "success", "danger", "warning", "info", "light", "dark"}
+# Valid status badge tones (prevents class injection)
+VALID_BADGE_COLORS = {"secondary", "success", "danger", "warning", "info"}
 
 
 def _html_badge(text: str, color: str = "secondary", icon: str | None = None) -> str:
-    """Generate a Bootstrap badge with optional Material icon."""
+    """Generate a status badge with optional Material icon."""
     color = color if color in VALID_BADGE_COLORS else "secondary"
     escaped = html.escape(text)
     icon_html = f'<span class="material-icons me-1">{html.escape(icon)}</span>' if icon else ""
-    return f'<span class="badge bg-{color}">{icon_html}{escaped}</span>'
+    variant = "neutral" if color == "secondary" else color
+    return f'<span class="badge ju-status-badge--{variant}">{icon_html}{escaped}</span>'
 
 
 def _html_error(text: str) -> str:
@@ -1235,17 +1243,23 @@ def fragment_status_summary(request: Request, conn=Depends(get_conn)):
 
 
 @router.get("/ui/fragments/targets-table", response_class=HTMLResponse, dependencies=[Depends(rate_limit("30/minute"))])
-def fragment_targets_table(request: Request, page: int = Query(1, ge=1), conn=Depends(get_conn)):
-    """Targets table - requires auth."""
+def fragment_targets_table(
+    request: Request,
+    page: int = Query(1, ge=1),
+    show_all: bool = Query(False, alias="all"),
+    conn=Depends(get_conn),
+):
+    """Targets table - requires auth. ``all=1`` returns every target unpaginated for the client-side search."""
     user = resolve_user_or_htmx_redirect(request, conn)
     if isinstance(user, Response):
         return user
 
-    page_size = UI_PAGE_SIZE_TARGETS
-    rows, total = sqlite_db.list_targets_paginated(conn, page=page, page_size=page_size)
+    page_size = UI_PAGE_SIZE_TARGETS_ALL if show_all else UI_PAGE_SIZE_TARGETS
+    rows, total = sqlite_db.list_targets_paginated(conn, page=1 if show_all else page, page_size=page_size)
     # Polling keeps the current page; fall back to the last one if it vanished (deleted targets).
+    # The search view keeps the requested page number in the carrier so leaving the search returns to it.
     last_page = max(1, (total + page_size - 1) // page_size)
-    if page > last_page:
+    if not show_all and page > last_page:
         page = last_page
         rows, total = sqlite_db.list_targets_paginated(conn, page=page, page_size=page_size)
 
@@ -1289,6 +1303,7 @@ def fragment_targets_table(request: Request, page: int = Query(1, ge=1), conn=De
             "page": page,
             "total_pages": total_pages,
             "total": total,
+            "show_all": show_all,
             "user": dict(user),
         },
     )
@@ -1370,13 +1385,13 @@ def fragment_uptime(target_id: int, request: Request, conn=Depends(get_conn)):
         uptime = cached["uptime_percent"]
 
     if uptime is None:
-        metric = select_uptime_metric(row)
-        if metric:
+        metrics = enabled_availability_metrics(row)
+        if metrics:
             try:
-                up, total = tsdb_db.count_binary_points(
+                up, total = tsdb_db.count_availability(
                     get_tsdb_dir(request),
                     target_id=target_id,
-                    metric=metric,
+                    metrics=metrics,
                     since=datetime.now(UTC) - timedelta(hours=24),
                 )
                 if total:
@@ -1708,6 +1723,7 @@ async def _run_traceroute_fragment(request: Request, target_id: int, lookup_host
         is_ipv6_address,
         location_view,
         mtr_hops_to_geo_points,
+        route_map_features,
         shorten_ipv6_for_display,
     )
 
@@ -1811,7 +1827,9 @@ async def _run_traceroute_fragment(request: Request, target_id: int, lookup_host
         hop_data["ip_full"] = ip_raw
         hop_data["ip_display"] = shorten_ipv6_for_display(ip_raw) if ip_raw != "—" else "—"
         hop_data["is_ipv6"] = is_ipv6_address(ip_raw)
-        hop_data["status_display"] = hop_data.get("status", "timeout")
+        # A hop without reply shows as such, also when the interpolator filled its latency internally.
+        silent = timeline_measurement(hop_data) == "timeout"
+        hop_data["status_display"] = "timeout" if silent else hop_data.get("status", "timeout")
 
         lat = hop_data.get("latency_ms")
         if lat:
@@ -1876,6 +1894,7 @@ async def _run_traceroute_fragment(request: Request, target_id: int, lookup_host
             "hops": display_hops,
             "geo_points": geo_points,
             "has_interpolation": has_interpolation,
+            "map_features": route_map_features(geo_points),
             "geo_unavailable_reason": geo_unavailable_reason,
             "unavailable_reason": None,
             "route_start_hop": route_start.get("hop_display") or route_start.get("hop"),
@@ -1982,12 +2001,12 @@ def fragment_signal_link_status(request: Request, conn=Depends(get_conn)):
         if status.linked:
             count = len(status.accounts)
             return HTMLResponse(f"""
-                <span class="badge bg-success">
+                <span class="badge ju-status-badge--success">
                     <span class="material-icons me-1">link</span>Linked ({count} account{"s" if count != 1 else ""})
                 </span>
             """)
         return HTMLResponse("""
-                <span class="badge bg-secondary">
+                <span class="badge ju-status-badge--neutral">
                     <span class="material-icons me-1">link_off</span>Not Linked
                 </span>
             """)
@@ -2042,25 +2061,25 @@ def fragment_signal_status(request: Request, conn=Depends(get_conn)):
         """)
 
     badges = []
-    badges.append("""<span class="badge bg-success me-1">
+    badges.append("""<span class="badge ju-status-badge--success me-1">
         <span class="material-icons align-middle me-1" style="font-size: 14px;">cloud_done</span>Reachable
     </span>""")
 
     if status.registered:
-        badges.append("""<span class="badge bg-success me-1">
+        badges.append("""<span class="badge ju-status-badge--success me-1">
             <span class="material-icons align-middle me-1" style="font-size: 14px;">verified_user</span>Registered
         </span>""")
     else:
-        badges.append("""<span class="badge bg-warning text-dark me-1">
+        badges.append("""<span class="badge ju-status-badge--warning me-1">
             <span class="material-icons align-middle me-1" style="font-size: 14px;">person_off</span>Not Registered
         </span>""")
 
     if status.linked:
-        badges.append("""<span class="badge bg-success me-1">
+        badges.append("""<span class="badge ju-status-badge--success me-1">
             <span class="material-icons align-middle me-1" style="font-size: 14px;">link</span>Linked
         </span>""")
     else:
-        badges.append("""<span class="badge bg-secondary me-1">
+        badges.append("""<span class="badge ju-status-badge--neutral me-1">
             <span class="material-icons align-middle me-1" style="font-size: 14px;">link_off</span>Not Linked
         </span>""")
 

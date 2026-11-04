@@ -447,7 +447,64 @@
     return out;
   }
 
+  /** Number of categorical series colors (--ju-dv-1 … --ju-dv-8). */
+  var SERIES_SLOT_COUNT = 8;
+  var SERIES_BASE_SLOT = { http: 0, ping: 1, tcp: 2 };
+
+  /**
+   * Stable palette slot per series key. HTTP and Ping have fixed slots; TCP ports follow in
+   * ascending port order, so a color never depends on legend visibility or on the order
+   * the sources arrive in. Beyond the palette size the slot wraps and `lap` shifts the dash pattern.
+   * @param {string[]} keys - series keys ("http", "ping", "tcp", "tcp:<port>")
+   * @returns {Object<string, {slot: number, lap: number}>}
+   */
+  function seriesSlots(keys) {
+    var ports = (keys || [])
+      .filter(function (k) {
+        return k.indexOf("tcp:") === 0;
+      })
+      .map(function (k) {
+        return Number(k.slice(4));
+      })
+      .sort(function (a, b) {
+        return a - b;
+      });
+    var slots = {};
+    (keys || []).forEach(function (key) {
+      var index =
+        key.indexOf("tcp:") === 0
+          ? SERIES_BASE_SLOT.tcp + ports.indexOf(Number(key.slice(4)))
+          : SERIES_BASE_SLOT[key];
+      if (index === undefined || index < 0) index = 0;
+      slots[key] = {
+        slot: index % SERIES_SLOT_COUNT,
+        lap: Math.floor(index / SERIES_SLOT_COUNT),
+      };
+    });
+    return slots;
+  }
+
+  /**
+   * Visibility of the peak layer. One switch drives all peak lines; a series hidden in the
+   * legend shows no peaks, and the right axis is only visible while a peak line is.
+   * @param {{msVisible: boolean, hasPeakData: boolean}[]} series
+   * @param {boolean} showPeaks
+   * @returns {{visible: boolean[], axisVisible: boolean}}
+   */
+  function peakVisibility(series, showPeaks) {
+    var visible = series.map(function (s) {
+      return !!(showPeaks && s.msVisible && s.hasPeakData);
+    });
+    return {
+      visible: visible,
+      axisVisible: visible.some(Boolean),
+    };
+  }
+
   var api = {
+    seriesSlots: seriesSlots,
+    peakVisibility: peakVisibility,
+    SERIES_SLOT_COUNT: SERIES_SLOT_COUNT,
     slaFor: slaFor,
     buildLatencySources: buildLatencySources,
     STATUS_CLASSES: STATUS_CLASSES,

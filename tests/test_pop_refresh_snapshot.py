@@ -4,8 +4,8 @@
 # Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 #
 
-# ruff: noqa: SLF001, ARG001, ARG005
-"""PeeringDB refresh: retirement only after a complete source snapshot."""
+# ruff: noqa: SLF001, ARG005
+"""PeeringDB city evidence never retires historical hostname aliases."""
 
 from __future__ import annotations
 
@@ -15,7 +15,6 @@ from contextlib import contextmanager
 
 import pytest
 
-from app.db import pop_locations
 from app.db import sqlite as sqlite_db
 from app.services import pop_refresh
 from app.utils import maintenance
@@ -45,8 +44,6 @@ def conn(monkeypatch) -> sqlite3.Connection:
         yield c
 
     monkeypatch.setattr(pop_refresh, "_db_connection", _same)
-    monkeypatch.setattr(pop_locations, "MIN_PROCESSED_FOR_RETIRE", 1)
-    monkeypatch.setattr(pop_locations, "MAX_RETIRE_PERCENT", 100)
     return c
 
 
@@ -59,11 +56,11 @@ def _retired(c) -> int:
     return c.execute("SELECT retired FROM pop_locations WHERE alias_code='ZZZ'").fetchone()[0]
 
 
-def test_full_snapshot_retires_unseen(conn, monkeypatch) -> None:
+def test_full_snapshot_keeps_unseen_hostname_alias(conn, monkeypatch) -> None:
     monkeypatch.setattr(pop_refresh, "_fetch_with_retry", lambda url: _facs())
     res = pop_refresh._do_peeringdb_refresh(lambda: conn)
     assert res.error is None
-    assert _retired(conn) == 1
+    assert _retired(conn) == 0
 
 
 def test_record_limit_skips_retire(conn, monkeypatch) -> None:
@@ -71,14 +68,23 @@ def test_record_limit_skips_retire(conn, monkeypatch) -> None:
     monkeypatch.setattr(pop_refresh, "MAX_RECORDS_PER_RUN", 1)
     res = pop_refresh._do_peeringdb_refresh(lambda: conn)
     assert res.error and "partial" in res.error
-    assert res.processed == 1
+    assert res.processed == 0  # oversized snapshots are rejected before order-dependent selection
     assert res.retired == 0
     assert _retired(conn) == 0
 
 
-def test_alias_limit_skips_retire(conn, monkeypatch) -> None:
-    monkeypatch.setattr(pop_refresh, "_fetch_with_retry", lambda url: _facs(3))
-    monkeypatch.setattr(pop_refresh, "MAX_NEW_ALIASES_PER_RUN", 1)
+def test_city_group_limit_skips_retire(conn, monkeypatch) -> None:
+    monkeypatch.setattr(
+        pop_refresh,
+        "_fetch_with_retry",
+        lambda url: {
+            "data": [
+                {"city": "Frankfurt", "country": "DE", "latitude": 50.1, "longitude": 8.6},
+                {"city": "Berlin", "country": "DE", "latitude": 52.5, "longitude": 13.4},
+            ]
+        },
+    )
+    monkeypatch.setattr(pop_refresh, "MAX_CITY_GROUPS_PER_RUN", 1)
     res = pop_refresh._do_peeringdb_refresh(lambda: conn)
     assert res.error and "partial" in res.error
     assert _retired(conn) == 0
@@ -86,13 +92,10 @@ def test_alias_limit_skips_retire(conn, monkeypatch) -> None:
 
 def test_db_error_skips_retire(conn, monkeypatch) -> None:
     monkeypatch.setattr(pop_refresh, "_fetch_with_retry", lambda url: _facs())
-
-    def _boom(*a, **k):
-        raise sqlite3.OperationalError("disk")
-
-    monkeypatch.setattr(pop_locations, "upsert_pop_location", _boom)
+    conn.execute("DROP TABLE pop_city_evidence")
+    conn.commit()
     res = pop_refresh._do_peeringdb_refresh(lambda: conn)
-    assert res.error and "partial" in res.error
+    assert res.error and "database" in res.error
     assert _retired(conn) == 0
 
 

@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import logging
 from typing import TYPE_CHECKING, Any
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 from ..db import sqlite as sqlite_db
 from ..models.users import hash_token
@@ -100,24 +100,32 @@ def get_fallback_admin(conn) -> User | None:
     return _row_to_user(row)
 
 
+_REDIRECT_DECODE_ROUNDS = 3
+
+
 def _safe_redirect_target(target: str, default: str = "/ui/login") -> str:
     """Validate redirect target to prevent open redirects.
 
-    Only allows relative paths starting with '/'.
-    Rejects protocol-relative URLs (//evil.com) and absolute URLs.
+    Only allows relative paths starting with a single '/'. Rejects absolute and protocol-relative
+    URLs, backslashes and control characters (browsers treat '\\' like '/'), also after
+    percent-decoding up to a few rounds.
     """
     if not target:
         return default
-    # Block absolute URLs and protocol-relative URLs
-    parsed = urlparse(target)
-    if parsed.scheme or parsed.netloc:
-        return default
-    # Must start with / (relative to origin)
-    if not target.startswith("/"):
-        return default
-    # Block protocol-relative URLs disguised as paths
-    if target.startswith("//"):
-        return default
+    forms = [target]
+    for _ in range(_REDIRECT_DECODE_ROUNDS):
+        decoded = unquote(forms[-1])
+        if decoded == forms[-1]:
+            break
+        forms.append(decoded)
+    for form in forms:
+        if any(char == "\\" or ord(char) < 0x20 or ord(char) == 0x7F for char in form):
+            return default
+        if not form.startswith("/") or form.startswith("//"):
+            return default
+        parsed = urlparse(form)
+        if parsed.scheme or parsed.netloc:
+            return default
     return target
 
 

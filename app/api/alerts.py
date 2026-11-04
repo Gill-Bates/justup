@@ -16,7 +16,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ..db import sqlite as sqlite_db
-from ..models.alerts import AlertListResponse, AlertPublic
+from ..models.alerts import AlertListResponse, AlertPublic, AlertSummary
 from ..services import event_bus
 from ..utils.deps import get_conn
 from ..utils.formatters import row_to_alert_dict
@@ -73,6 +73,20 @@ def list_alerts(
         page_size=page_size,
         total_pages=total_pages,
     )
+
+
+# Declared before "/{alert_id}" so "summary" is not parsed as an alert id.
+@router.get("/summary", response_model=AlertSummary)
+def alert_summary(
+    conn: sqlite3.Connection = Depends(get_conn),
+    _current_user: dict = Depends(get_current_user),
+):
+    """Dashboard counters: open now; acknowledged, started and resolved in the last 24 h (UTC).
+
+    ``started_24h`` counts ``started_at``, ``resolved_24h`` counts ``ended_at`` of resolved alerts
+    (acknowledging also resolves) and ``acknowledged_24h`` counts ``acknowledged_at``.
+    """
+    return AlertSummary(**sqlite_db.summarize_alerts(conn))
 
 
 @router.get("/{alert_id}", response_model=AlertPublic)

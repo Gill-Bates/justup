@@ -1,4 +1,4 @@
-/* The shell is viewport-bound (ju-shell--fit), so only the active step scrolls inside the card. */
+/* Main is viewport-bound; the active wizard step owns scrolling inside its card. */
 .ju-content>main:has(.target-wizard-page) {
 	display: flex;
 	flex-direction: column;
@@ -136,7 +136,7 @@
 }
 
 .target-type-card:focus-within {
-	outline: 2px solid var(--bs-primary);
+	outline: 2px solid var(--ju-focus-ring);
 	outline-offset: 3px;
 }
 
@@ -212,6 +212,15 @@
 
 .wizard-check-option .form-check {
 	margin: 0;
+}
+
+.wizard-check-detail {
+	max-width: 28rem;
+	margin-top: 1rem;
+}
+
+.wizard-check-detail[hidden] {
+	display: none;
 }
 
 .wizard-advanced {
@@ -308,7 +317,7 @@
 	}
 }
 
-@media (width <=700px) {
+@container ju-page (width < 40rem) {
 	.target-type-grid,
 	.wizard-check-grid {
 		grid-template-columns: minmax(0, 1fr);

@@ -30,6 +30,7 @@ Lifecycle:
 from __future__ import annotations
 
 import logging
+import math
 import random
 import re
 import sqlite3
@@ -42,12 +43,7 @@ from typing import Any
 
 from ..db import pop_locations
 from ..db import sqlite as sqlite_db
-from ..db.pop_locations import (
-    CONFIDENCE_HIGH,
-    PRIORITY_ALIAS,
-    SOURCE_PEERINGDB,
-    SOURCE_UNLOCODE,
-)
+from ..db.pop_locations import SOURCE_PEERINGDB, SOURCE_UNLOCODE
 from ..utils import maintenance
 from ..utils.time import parse_utc, utcnow
 
@@ -82,7 +78,7 @@ MAX_ALIAS_LENGTH = 10
 MAX_CITY_LENGTH = 100
 MAX_COUNTRY_LENGTH = 5
 MAX_RECORDS_PER_RUN = 50000  # Prevent unbounded growth
-MAX_NEW_ALIASES_PER_RUN = 5000  # Alias explosion protection
+MAX_CITY_GROUPS_PER_RUN = 5000  # Bound city-level evidence growth
 MIN_LAT = -90.0
 MAX_LAT = 90.0
 MIN_LON = -180.0
@@ -374,12 +370,10 @@ class PopRefreshResult:
 
 PEERINGDB_FAC_URL = "https://api.peeringdb.com/api/fac"
 # Batch size for DB operations (performance optimization)
-DB_BATCH_SIZE = 100
 
 # ---------------------------------------------------------------------------
-# City-to-POP code mapping (authoritative, from seed data)
-# This is used to resolve PeeringDB city names to canonical POP codes.
-# PeeringDB data is only imported as ALIAS, never creating new canonicals.
+# Curated city-to-code hints for grouping PeeringDB city evidence.
+# These hints do not prove a router hostname alias.
 # ---------------------------------------------------------------------------
 
 # Major network hubs with standard 3-letter codes
@@ -483,22 +477,96 @@ CITY_TO_POP_CODE: dict[str, str] = {
 
 def _lookup_pop_code_by_city(city: str) -> str | None:
     """
-    Lookup canonical POP code by city name.
+    Lookup a curated city code hint by city name.
 
-    Uses authoritative mapping from seed data.
-    Only returns codes for known major network hubs.
+    Only returns codes for known major network hubs; callers must also check country.
 
     Args:
         city: City name from external source
 
     Returns:
-        Canonical 3-letter POP code or None
+        City code hint or None
     """
     if not city:
         return None
 
-    normalized = city.lower().strip()
+    normalized = pop_locations.normalize_city(city).casefold()
     return CITY_TO_POP_CODE.get(normalized)
+
+
+_SEED_COUNTRIES = pop_locations.seed_country_map()
+_SEED_COUNTRIES.update(
+    {
+        "bkk": "TH",
+        "blr": "IN",
+        "bog": "CO",
+        "cai": "EG",
+        "cpt": "ZA",
+        "dxb": "AE",
+        "eze": "AR",
+        "gig": "BR",
+        "gru": "BR",
+        "jkt": "ID",
+        "jnb": "ZA",
+        "kul": "MY",
+        "lim": "PE",
+        "lyo": "FR",
+        "maa": "IN",
+        "mex": "MX",
+        "pek": "CN",
+        "scl": "CL",
+        "sel": "KR",
+        "sha": "CN",
+        "tlv": "IL",
+        "tpe": "TW",
+        "yul": "CA",
+        "yvr": "CA",
+        "yyz": "CA",
+    }
+)
+MAX_FACILITY_SPREAD_KM = 50.0
+
+
+def city_code_for_country(city: object, country: object) -> str | None:
+    """Return a curated city code only when the supplied country matches it."""
+    if not isinstance(city, str) or not isinstance(country, str):
+        return None
+    code = _lookup_pop_code_by_city(city)
+    return code if code and _SEED_COUNTRIES.get(code) == pop_locations.normalize_country(country) else None
+
+
+def _facility_distance_km(a: tuple[float, float], b: tuple[float, float]) -> float:
+    """Great-circle distance for detecting contradictory facility coordinates."""
+    lat1, lon1, lat2, lon2 = map(math.radians, (*a, *b))
+    angle = math.sin((lat2 - lat1) / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin((lon2 - lon1) / 2) ** 2
+    return 12742.0 * math.asin(min(1.0, math.sqrt(angle)))
+
+
+def _group_facilities(
+    facilities: list[dict], run_id: str
+) -> tuple[dict[tuple[str, str], list[ValidationResult]], int, int]:
+    groups: dict[tuple[str, str], list[ValidationResult]] = {}
+    skipped = validation_errors = 0
+    for fac in facilities:
+        if not isinstance(fac, dict):
+            validation_errors += 1
+            continue
+        city, country = fac.get("city"), fac.get("country")
+        code = city_code_for_country(city, country)
+        normalized_country = pop_locations.normalize_country(country) if isinstance(country, str) else ""
+        if not code:
+            skipped += 1
+            _log.debug(
+                "[%s] Skipping unverified PeeringDB city/country %r/%r", run_id, str(city)[:80], str(country)[:10]
+            )
+            continue
+        result = validate_pop_record(code, code, city, country, fac.get("latitude"), fac.get("longitude"))
+        if not result.valid:
+            validation_errors += 1
+            _log.debug("[%s] Invalid PeeringDB facility for %r/%r: %s", run_id, city[:80], country[:10], result.error)
+            continue
+        groups.setdefault((code, normalized_country), []).append(result)
+    return groups, skipped, validation_errors
 
 
 def refresh_from_peeringdb(get_conn) -> PopRefreshResult:
@@ -588,11 +656,11 @@ def _apply_peeringdb_snapshot(get_conn, facilities: list[dict]) -> PopRefreshRes
     """
     Import a fetched PeeringDB snapshot while a maintenance work section is held.
 
-    IMPORTANT: PeeringDB is only used as an ALIAS source, not for creating
-    new canonical codes. Only facilities in cities with known POP codes
-    (from CITY_TO_POP_CODE) are imported.
+    PeeringDB facilities supply city-level evidence only. They never create,
+    refresh or retire productive router aliases.
 
-    Uses single connection with batch commits for performance.
+    Writes each validated city group through one database connection. ``processed``
+    counts accepted facilities; ``inserted`` and ``updated`` count city evidence rows.
     """
     with _db_connection(get_conn) as conn:
         run_id = pop_locations.start_import_run(conn, SOURCE_PEERINGDB)
@@ -612,97 +680,80 @@ def _apply_peeringdb_snapshot(get_conn, facilities: list[dict]) -> PopRefreshRes
     try:
         _log.info("[%s] Received %d facilities from PeeringDB", run_id, len(facilities))
 
-        # ─── PHASE: PROCESS (single connection, batch commits) ───
-        phase = "process_facilities"
-        batch_count = 0
-
-        with _db_connection(get_conn) as conn:
-            for fac in facilities:
-                if processed >= MAX_RECORDS_PER_RUN:
-                    _log.warning("[%s] Hit max records limit (%d), stopping", run_id, MAX_RECORDS_PER_RUN)
-                    partial_reason = f"max records limit ({MAX_RECORDS_PER_RUN}) reached"
-                    break
-
-                # Alias explosion protection
-                if inserted >= MAX_NEW_ALIASES_PER_RUN:
-                    _log.warning(
-                        "[%s] Hit max new aliases limit (%d), stopping inserts", run_id, MAX_NEW_ALIASES_PER_RUN
-                    )
-                    partial_reason = f"max new aliases limit ({MAX_NEW_ALIASES_PER_RUN}) reached"
-                    break
-
-                city = fac.get("city", "")
-                country = fac.get("country", "")
-                lat = fac.get("latitude")
-                lon = fac.get("longitude")
-
-                if lat is None or lon is None:
-                    skipped += 1
-                    continue
-
-                # Resolve POP code from city (authoritative mapping only)
-                # PeeringDB is ALIAS source - we only import if we have a canonical
-                pop_code = _lookup_pop_code_by_city(city)
-                if not pop_code:
-                    skipped += 1
-                    continue
-
-                result = validate_pop_record(
-                    canonical_code=pop_code,
-                    alias_code=pop_code,
-                    city=city,
-                    country=country,
-                    lat=lat,
-                    lon=lon,
-                )
-
-                if not result.valid:
-                    validation_errors += 1
-                    error_category = ErrorCategory.VALIDATION
-                    _log.debug("[%s] Validation failed for city=%s: %s", run_id, city, result.error)
-                    continue
-
-                existing = pop_locations.lookup_pop_by_tokens(conn, [result.alias_code])
-                was_update = existing is not None
-
-                try:
-                    success = pop_locations.upsert_pop_location(
-                        conn,
-                        canonical_code=result.canonical_code,
-                        alias_code=result.alias_code,
-                        city=result.city,
-                        country=result.country,
-                        lat=result.lat,
-                        lon=result.lon,
-                        source=SOURCE_PEERINGDB,
-                        confidence=CONFIDENCE_HIGH,
-                        # ALIAS priority - PeeringDB never creates canonicals
-                        priority=PRIORITY_ALIAS,
-                        import_run_id=run_id,
-                    )
-
-                    if success:
-                        if was_update:
-                            updated += 1
+        # Reject an oversized snapshot before selecting any subset: input order must not pick winners.
+        if len(facilities) > MAX_RECORDS_PER_RUN:
+            partial_reason = f"max records limit ({MAX_RECORDS_PER_RUN}) reached"
+        else:
+            groups, skipped, validation_errors = _group_facilities(facilities, run_id)
+            if len(groups) > MAX_CITY_GROUPS_PER_RUN:
+                partial_reason = f"max city groups limit ({MAX_CITY_GROUPS_PER_RUN}) reached"
+            else:
+                with _db_connection(get_conn) as conn:
+                    for (code, country), records in sorted(groups.items()):
+                        coords = sorted((record.lat, record.lon) for record in records)
+                        centroid = (
+                            sum(point[0] for point in coords) / len(coords),
+                            sum(point[1] for point in coords) / len(coords),
+                        )
+                        if any(_facility_distance_km(point, centroid) > MAX_FACILITY_SPREAD_KM / 2 for point in coords):
+                            skipped += len(records)
+                            _log.warning(
+                                "[%s] Skipping spatially conflicting PeeringDB facilities for %s/%s",
+                                run_id,
+                                code,
+                                country,
+                            )
+                            continue
+                        anchors = conn.execute(
+                            "SELECT city, lat, lon, source FROM pop_locations WHERE country = ? "
+                            "AND source IN ('manual', 'seed') AND retired = 0 "
+                            "AND (canonical_code = ? OR alias_code = ? OR city = ? COLLATE NOCASE) "
+                            "ORDER BY CASE source WHEN 'manual' THEN 0 ELSE 1 END, priority, alias_code",
+                            (country, code, code, min(record.city for record in records)),
+                        ).fetchall()
+                        if anchors:
+                            city, lat, lon, position_source = anchors[0]
+                            if any(
+                                _facility_distance_km((item[1], item[2]), centroid) > MAX_FACILITY_SPREAD_KM
+                                or _facility_distance_km((item[1], item[2]), (lat, lon)) > MAX_FACILITY_SPREAD_KM
+                                for item in anchors
+                            ):
+                                skipped += len(records)
+                                _log.warning(
+                                    "[%s] Curated city position conflicts with facilities for %s/%s",
+                                    run_id,
+                                    code,
+                                    country,
+                                )
+                                continue
                         else:
-                            inserted += 1
-
-                    processed += 1
-                    batch_count += 1
-
-                    # Batch commit for performance
-                    if batch_count >= DB_BATCH_SIZE:
-                        conn.commit()
-                        batch_count = 0
-
-                except Exception as db_err:  # noqa: BLE001 - refresh boundary: categorise and continue so one row/phase error never aborts the run
-                    error_category = ErrorCategory.DATABASE
-                    _log.warning("[%s] DB error for city=%s: %s", run_id, city, db_err)
-                    partial_reason = partial_reason or "database errors while importing records"
-                    continue
-
-            if batch_count > 0:
-                conn.commit()
+                            city = min(record.city for record in records)
+                            lat, lon = (round(value, 5) for value in centroid)
+                            position_source = "facility-centroid"
+                        existed = conn.execute(
+                            "SELECT 1 FROM pop_city_evidence WHERE city_code = ? AND country = ?",
+                            (code, country),
+                        ).fetchone()
+                        cursor = conn.execute(
+                            """INSERT INTO pop_city_evidence
+                            (city_code, city, country, lat, lon, facility_count, position_source, updated_at)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                            ON CONFLICT(city_code, country) DO UPDATE SET
+                                city = excluded.city, lat = excluded.lat, lon = excluded.lon,
+                                facility_count = excluded.facility_count,
+                                position_source = excluded.position_source, updated_at = excluded.updated_at
+                            WHERE city != excluded.city OR lat != excluded.lat OR lon != excluded.lon
+                               OR facility_count != excluded.facility_count
+                               OR position_source != excluded.position_source""",
+                            (code, city, country, lat, lon, len(records), position_source, utcnow().isoformat()),
+                        )
+                        if cursor.rowcount:
+                            if existed:
+                                updated += 1
+                            else:
+                                inserted += 1
+                        processed += len(records)
+                    conn.commit()
 
         # ─── PHASE: COMPLETE ─────────────────────────────────────
         phase = "complete"
@@ -717,23 +768,19 @@ def _apply_peeringdb_snapshot(get_conn, facilities: list[dict]) -> PopRefreshRes
         )
 
     except Exception as e:  # noqa: BLE001 - refresh boundary: categorise and continue so one row/phase error never aborts the run
-        error_category = error_category or ErrorCategory.NETWORK
+        error_category = error_category or (
+            ErrorCategory.DATABASE if isinstance(e, sqlite3.Error) else ErrorCategory.PARSE
+        )
         error_msg = f"[{error_category}][phase={phase}] {e}"
         _log.error("[%s] PeeringDB refresh failed in phase '%s': %s", run_id, phase, e)
 
     if partial_reason and not error_msg:
-        # Imported rows stay; the run is flagged and retirement is skipped below
+        # An incomplete snapshot is recorded but never changes productive aliases.
         error_msg = f"[partial][phase=process_facilities] incomplete snapshot: {partial_reason}"
-        _log.warning("[%s] %s; skipping retire", run_id, error_msg)
+        _log.warning("[%s] %s", run_id, error_msg)
 
-    # ─── PHASE: RETIRE ───────────────────────────────────────────
+    # A facility snapshot does not prove that a router alias has disappeared.
     retired = 0
-    if not error_msg and processed > 0:
-        phase = "retire"
-        with _db_connection(get_conn) as conn:
-            # Pass processed count for safety threshold check
-            retired = pop_locations.retire_stale_entries(conn, SOURCE_PEERINGDB, run_id, records_processed=processed)
-        _log.info("[%s] Retired %d stale entries", run_id, retired)
 
     # ─── PHASE: FINALIZE ─────────────────────────────────────────
     phase = "finalize"

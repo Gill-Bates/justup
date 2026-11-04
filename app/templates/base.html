@@ -9,10 +9,11 @@
 	<meta name="viewport" content="width=device-width, initial-scale=1">
 	<title>{% block title %}justUp!{% endblock %}</title>
 	<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+	<link rel="preload" href="/static/fonts/IBM-Plex-Sans-Variable.woff2" as="font" type="font/woff2" crossorigin>
+	<link rel="preload" href="/static/fonts/MaterialIcons-Regular.ttf" as="font" type="font/ttf" crossorigin>
 	<link href="/static/css/bootstrap.min.css" rel="stylesheet">
 	<link href="/static/css/material-icons.css" rel="stylesheet">
 	<link href="/static/css/gentelella-layout.css" rel="stylesheet">
-	<link href="/static/css/sidebar-handle.css" rel="stylesheet">
 	<link href="/static/css/ui.css" rel="stylesheet">
 	<link href="/static/css/notifications.css" rel="stylesheet">
 	<link href="/static/css/leaflet.css" rel="stylesheet">
@@ -33,14 +34,16 @@
 		class="visually-hidden-focusable position-absolute top-0 start-0 m-2 p-2 bg-body border rounded z-3">
 		Skip to main content
 	</a>
-	{# Layout mode: ju-shell--fit (viewport-bound) or ju-shell--fit-lg (from 992px); empty = normal page flow #}
-	<div id="app-shell" class="ju-shell {% block shell_class %}{% endblock %}">
+	<div id="app-shell" class="ju-shell">
 		<div class="ju-content">
 			<header class="ju-topbar">
-				<button class="btn ju-sidebar-handle" type="button" id="sidebar-toggle"
-					aria-controls="app-sidebar" aria-expanded="true" aria-label="Toggle navigation">
+				<button class="btn ju-topbar-button ju-topbar-toggle" type="button" id="sidebar-toggle"
+					aria-controls="app-sidebar" aria-expanded="true" aria-label="Toggle navigation" title="Toggle navigation">
 					<span class="material-icons" aria-hidden="true">menu</span>
 				</button>
+				<a class="ju-topbar-brand" href="/" aria-label="justUp! home">
+					<img src="/static/img/justup_1c.svg" class="ju-logo" alt="" width="112" height="48">
+				</a>
 				<div class="ju-topbar-actions">
 					<div class="ju-bell-wrap">
 						<button type="button" class="btn ju-topbar-button ju-bell" id="notif-bell"
@@ -63,8 +66,7 @@
 						<span class="visually-hidden" id="notif-live" role="status" aria-live="polite"></span>
 					</div>
 					<span class="ju-topbar-divider" aria-hidden="true"></span>
-					<div class="ju-user-info" id="user-info" hx-get="/ui/fragments/user-info"
-						hx-trigger="load" hx-swap="innerHTML"></div>
+					<div class="ju-user-info" id="user-info">{{ user.username if user else '' }}</div>
 					<button type="button" class="btn btn-sm ju-topbar-button" id="theme-toggle"
 						title="Toggle Dark Mode" aria-label="Toggle theme">
 						<span class="material-icons" id="theme-icon" aria-hidden="true">dark_mode</span>
@@ -80,8 +82,10 @@
 			<nav class="ju-sidebar" id="app-sidebar" aria-label="Main navigation">
 				<div class="ju-sidebar-header">
 				<a class="ju-sidebar-brand" href="/" aria-label="justUp! home">
-					<img src="/static/img/justup_1c.svg" class="ju-logo" alt="justUp!" width="100" height="37">
-					<span class="ju-brand-mark" aria-hidden="true">J</span>
+					<img src="/static/img/justup_1c_white.svg" class="ju-logo ju-logo--white" alt="" width="112" height="48">
+					<span class="ju-brand-mark" aria-hidden="true">
+						<img class="ju-brand-icon" src="/static/img/justup-mark.svg" alt="" width="24" height="28">
+					</span>
 				</a>
 				<button type="button" class="ju-sidebar-close" id="sidebar-close" aria-label="Close navigation">
 					<span class="material-icons" aria-hidden="true">close</span>
@@ -125,6 +129,12 @@
 							</li>
 							{% endif %}
 				</ul>
+				<div class="ju-sidebar-controls">
+					<button type="button" class="ju-nav-link ju-sidebar-toggle" id="sidebar-collapse"
+						aria-controls="app-sidebar" aria-expanded="true" aria-label="Collapse sidebar">
+						<span class="material-icons" aria-hidden="true">menu_open</span><span class="ju-nav-text ju-sidebar-toggle-label">Collapse sidebar</span>
+					</button>
+				</div>
 				<div class="ju-profile">
 					<img src="/static/avatar.png" class="ju-profile-avatar" alt="" width="48" height="48">
 					<div class="ju-profile-text">
@@ -177,7 +187,7 @@
 		<div class="card shadow-lg border-0">
 			<div class="card-body p-4 text-center">
 				<div class="mb-2">
-					<span class="material-icons text-warning" style="font-size: 4rem;" aria-hidden="true">wifi_off</span>
+					<span class="material-icons text-warning server-offline-icon" aria-hidden="true">wifi_off</span>
 				</div>
 				<h2 class="h4 mb-2" id="server-offline-title">Server offline</h2>
 				<p class="text-body-secondary mb-3" id="server-offline-desc">Trying to reconnect…</p>
@@ -190,6 +200,8 @@
 	</div>
 
 	<script src="/static/js/bootstrap.bundle.min.js"></script>
+	<script src="/static/js/utils/modal-focus.js"></script>
+	<script src="/static/js/utils/field-errors.js"></script>
 	<script src="/static/js/utils/confirm-dialog.js"></script>
 	<script src="/static/js/live-events.js"></script>
 	<script src="/static/js/utils/quality-state.js"></script>

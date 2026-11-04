@@ -74,13 +74,13 @@ export async function loadSignalStatus() {
         if (!container) return;
         
         // Show loading state and hide mode selection until we know the status
-        container.innerHTML = '<span class="badge bg-secondary"><span class="spinner-border spinner-border-sm me-1" style="width: 12px; height: 12px;"></span>Checking...</span>';
+        container.innerHTML = '<span class="badge ju-status-badge--neutral"><span class="spinner-border spinner-border-sm me-1" style="width: 12px; height: 12px;"></span>Checking...</span>';
         if (modeSelection) modeSelection.style.display = 'none';
 
         try {
             const resp = await apiFetch(SIGNAL_API.status);
             if (!resp.ok) {
-                container.innerHTML = '<span class="badge bg-secondary">Status unavailable</span>';
+                container.innerHTML = '<span class="badge ju-status-badge--neutral">Status unavailable</span>';
                 if (deviceInfo) deviceInfo.textContent = 'Could not connect to signal-cli';
                 if (modeSelection) modeSelection.style.display = 'block';
                 return;
@@ -125,7 +125,7 @@ export async function loadSignalStatus() {
             
             if (errorMsg) {
                 const badge = document.createElement('span');
-                badge.className = 'badge bg-danger';
+                badge.className = 'badge ju-status-badge--danger';
                 badge.title = errorMsg;
                 const badgeIcon = document.createElement('span');
                 badgeIcon.className = 'material-icons me-1';
@@ -135,7 +135,7 @@ export async function loadSignalStatus() {
                 badgeFragment.appendChild(badge);
             } else if (registered) {
                 const badge = document.createElement('span');
-                badge.className = 'badge bg-success';
+                badge.className = 'badge ju-status-badge--success';
                 const badgeIcon = document.createElement('span');
                 badgeIcon.className = 'material-icons me-1';
                 badgeIcon.textContent = 'check_circle';
@@ -144,7 +144,7 @@ export async function loadSignalStatus() {
                 badgeFragment.appendChild(badge);
             } else if (reachable) {
                 const badge = document.createElement('span');
-                badge.className = 'badge bg-warning text-dark';
+                badge.className = 'badge ju-status-badge--warning';
                 badge.title = 'signal-cli ready but no account linked';
                 const badgeIcon = document.createElement('span');
                 badgeIcon.className = 'material-icons me-1';
@@ -167,7 +167,7 @@ export async function loadSignalStatus() {
                 }
             } else {
                 const badge = document.createElement('span');
-                badge.className = 'badge bg-secondary';
+                badge.className = 'badge ju-status-badge--neutral';
                 const badgeIcon = document.createElement('span');
                 badgeIcon.className = 'material-icons me-1';
                 badgeIcon.textContent = 'help_outline';
@@ -213,7 +213,7 @@ export async function loadSignalStatus() {
             }
         } catch (e) {
             console.warn('Failed to load Signal status:', e);
-            container.innerHTML = '<span class="badge bg-secondary">Status unavailable</span>';
+            container.innerHTML = '<span class="badge ju-status-badge--neutral">Status unavailable</span>';
             if (deviceInfo) deviceInfo.textContent = 'Connection error';
             if (modeSelection) modeSelection.style.display = 'block';
             

@@ -13,6 +13,7 @@ import test from "node:test";
 import yaml from "js-yaml";
 
 const workflow = yaml.load(readFileSync(new URL("../../.github/workflows/docker-build.yml", import.meta.url), "utf8"));
+const ciWorkflow = yaml.load(readFileSync(new URL("../../.github/workflows/ci.yml", import.meta.url), "utf8"));
 
 function stepIndex(steps, predicate, label) {
   const index = steps.findIndex(predicate);
@@ -57,6 +58,42 @@ function assertReleaseGates(document) {
   assert.match(steps[publishIndex].run, /imagetools create --tag "\$\{IMAGE_NAME\}:\$\{VERSION\}" "\$\{IMAGE_NAME\}@\$\{INDEX_DIGEST\}"/);
   assert.match(steps[publishIndex].run, /verify manifest-version\.json digests/);
 }
+
+test("CI runs on every branch and supports manual dispatch", () => {
+  assert.deepEqual(ciWorkflow.on.push.branches, ["**"]);
+  assert.ok(Object.hasOwn(ciWorkflow.on, "workflow_dispatch"));
+});
+
+test("notification, wizard and SMTP browser suites are listed and run once with JUnit output", () => {
+  const steps = ciWorkflow.jobs.browser.steps;
+  const selected = steps.filter((step) => step.run?.includes("--grep '@notifications|@wizard|@smtp-ui'"));
+  const listStep = selected.find((step) => step.run.includes("--list"));
+  const runSteps = selected.filter((step) => !step.run.includes("--list"));
+
+  assert.ok(listStep, "the expected browser test set must be listed in CI");
+  assert.match(listStep.run, /--list --reporter=json/);
+  for (const spec of ["notifications.spec.mjs", "wizard.spec.mjs", "smtp.spec.mjs"]) {
+    assert.ok(listStep.run.includes(spec), `discovery must require ${spec}`);
+  }
+  assert.equal(runSteps.length, 1, "the three browser suites must execute in one Chromium run");
+  assert.equal(runSteps[0].env.JUSTUP_LAYOUT_JUNIT, "${{ runner.temp }}/notification-wizard-smtp.xml");
+});
+
+test("source scan bypasses setup-trivy only after checksum-verifying the pinned release binary", () => {
+  const job = ciWorkflow.jobs["source-scan"];
+  const installIndex = stepIndex(job.steps, (step) => step.name === "Install checksum-verified Trivy", "verified Trivy install");
+  const scanIndex = stepIndex(job.steps, (step) => step.name === "Trivy source scan", "Trivy source scan");
+  const install = job.steps[installIndex];
+  const scan = job.steps[scanIndex];
+
+  assert.ok(installIndex < scanIndex, "verified binary must be installed before scanning");
+  assert.match(install.run, /sha256sum --check --strict/);
+  assert.match(install.run, /releases\/download\/v\$\{TRIVY_VERSION\}\/trivy_\$\{TRIVY_VERSION\}_Linux-64bit\.tar\.gz/);
+  assert.match(job.env.TRIVY_SHA256, /^[a-f0-9]{64}$/);
+  assert.equal(job.env.TRIVY_VERSION, "0.70.0");
+  assert.equal(scan.with.version, "v0.70.0");
+  assert.equal(scan.with["skip-setup-trivy"], "true");
+});
 
 test("release publication is gated by image purity and verified candidate manifests", () => {
   assert.doesNotThrow(() => assertReleaseGates(workflow));

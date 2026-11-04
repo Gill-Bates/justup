@@ -58,6 +58,8 @@ let pageConfig = {
 	enableTcp: false,
 	enableCert: false,
 };
+let activeDowntimeQuery = '';
+let downtimeHistorySwapGuard = null;
 
 /**
  * Read page configuration from the #target-config element's data-attributes.
@@ -475,9 +477,22 @@ function _reloadDowntimeHistory({ skeleton = true } = {}) {
 	if (skeleton) bodyEl.replaceChildren(_downtimeSkeleton());
 
 	if (typeof htmx !== 'undefined') {
+		const requestUrl = `/ui/fragments/downtime-history/${pageConfig.targetId}?since=${since}&until=${until}`;
+		activeDowntimeQuery = new URL(requestUrl, window.location.href).search;
+		if (!downtimeHistorySwapGuard) {
+			downtimeHistorySwapGuard = function (evt) {
+				if (evt.detail?.target?.id !== 'downtime-history-body') return;
+				const responseUrl = evt.detail.xhr?.responseURL;
+				if (!responseUrl) return;
+				if (new URL(responseUrl, window.location.href).search !== activeDowntimeQuery) {
+					evt.detail.shouldSwap = false;
+				}
+			};
+			document.body.addEventListener('htmx:beforeSwap', downtimeHistorySwapGuard);
+		}
 		htmx.ajax('GET',
-			`/ui/fragments/downtime-history/${pageConfig.targetId}?since=${since}&until=${until}`,
-			{ target: '#downtime-history-body', swap: 'innerHTML' }
+			requestUrl,
+			{ source: '#downtime-history-body', target: '#downtime-history-body', swap: 'innerHTML' }
 		);
 	}
 }
@@ -722,5 +737,9 @@ document.addEventListener('DOMContentLoaded', () => {
 		}
 		_cleanup();
 		document.body.removeEventListener('htmx:beforeSwap', cleanupOnSwap);
+		if (downtimeHistorySwapGuard) {
+			document.body.removeEventListener('htmx:beforeSwap', downtimeHistorySwapGuard);
+			downtimeHistorySwapGuard = null;
+		}
 	});
 });

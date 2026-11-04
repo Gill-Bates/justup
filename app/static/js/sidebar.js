@@ -15,6 +15,8 @@
 	var sidebar = document.getElementById('app-sidebar');
 	if (!toggle || !sidebar) return;
 
+	// Desktop collapse control inside the sidebar; the topbar toggle opens the drawer on mobile.
+	var collapse = document.getElementById('sidebar-collapse');
 	var backdrop = document.getElementById('sidebar-backdrop');
 	// Keep in sync with the 991.98px breakpoint in gentelella-layout.css and dashboard-grid.js.
 	var mobile = window.matchMedia('(max-width: 991.98px)');
@@ -24,8 +26,28 @@
 		return mobile.matches ? root.classList.contains('ju-nav-open') : !root.classList.contains('ju-nav-sm');
 	}
 
+	var tipTargets = sidebar.querySelectorAll('.ju-nav-link, .ju-profile');
+	// Icon-only rail entries get a native tooltip; the expanded menu shows the text itself.
+	function syncTooltips() {
+		var rail = !mobile.matches && root.classList.contains('ju-nav-sm');
+		tipTargets.forEach(function (el) {
+			var label = el.querySelector('.ju-nav-text, .ju-profile-name');
+			var text = label ? label.textContent.trim() : '';
+			if (rail && text) el.setAttribute('title', text);
+			else el.removeAttribute('title');
+		});
+	}
 	function sync() {
-		toggle.setAttribute('aria-expanded', isOpen() ? 'true' : 'false');
+		var open = isOpen() ? 'true' : 'false';
+		toggle.setAttribute('aria-expanded', open);
+		if (collapse) {
+			var text = open === 'true' ? 'Collapse sidebar' : 'Expand sidebar';
+			collapse.setAttribute('aria-expanded', open);
+			collapse.setAttribute('aria-label', text);
+			collapse.querySelector('.ju-sidebar-toggle-label').textContent = text;
+			collapse.querySelector('.material-icons').textContent = open === 'true' ? 'menu_open' : 'menu';
+		}
+		syncTooltips();
 	}
 
 	function closeDrawer(returnFocus) {
@@ -34,6 +56,12 @@
 		if (returnFocus) toggle.focus();
 	}
 
+	function toggleRail() {
+		var collapsed = root.classList.toggle('ju-nav-sm');
+		try { localStorage.setItem(STORAGE_KEY, collapsed ? 'collapsed' : 'expanded'); } catch (e) { /* storage blocked */ }
+		sync();
+	}
+	if (collapse) collapse.addEventListener('click', toggleRail);
 	toggle.addEventListener('click', function () {
 		if (mobile.matches) {
 			var open = !root.classList.contains('ju-nav-open');
@@ -76,7 +104,10 @@
 
 	sidebar.addEventListener('click', function (evt) {
 		var link = evt.target.closest('a[href]');
-		if (link && mobile.matches) root.classList.remove('ju-nav-open');
+		if (link && mobile.matches) {
+			root.classList.remove('ju-nav-open');
+			sync();
+		}
 	});
 
 	// Disclosure groups: a button with aria-expanded shows or hides the controlled list.

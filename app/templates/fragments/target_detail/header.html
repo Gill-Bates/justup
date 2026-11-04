@@ -23,9 +23,9 @@
 					<h1 class="target-detail-title text-break">{{ target.name }}</h1>
 					<span id="target-status" class="target-detail-status"
 						hx-get="/ui/fragments/target-status/{{ target.id }}?labelled=1" hx-trigger="load, justup-target-{{ target.id }} from:body throttle:1s, justup-live-sync from:body throttle:1s" hx-swap="innerHTML">
-						<span class="target-status-pill target-status-pill--unknown">
-							<i class="material-icons" aria-hidden="true">help</i><span>Unknown</span>
-						</span>
+						{% with status=target.overall_status, labelled=true %}
+						{% include "fragments/target_status.html" %}
+						{% endwith %}
 					</span>
 				</div>
 			</div>

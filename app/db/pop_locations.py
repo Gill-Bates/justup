@@ -65,6 +65,16 @@ def _normalize_country(country: str) -> str:
     return country.strip().upper() if country else ""
 
 
+def normalize_city(city: str) -> str:
+    """Canonical comparison spelling for a city supplied by an external source."""
+    return _normalize_city(city)
+
+
+def normalize_country(country: str) -> str:
+    """Canonical comparison spelling for an ISO country code."""
+    return _normalize_country(country)
+
+
 # ---------------------------------------------------------------------------
 # Sources and confidence levels
 # ---------------------------------------------------------------------------
@@ -199,6 +209,13 @@ _SEED_DATA: list[tuple[str, str, str, str, float, float]] = [
     ("ath", "ath", "Athens", "GR", 37.9838, 23.7275),
     ("ist", "ist", "Istanbul", "TR", 41.0082, 28.9784),
 ]
+
+
+def seed_country_map() -> dict[str, str]:
+    """Return the curated country for each known canonical or alias code."""
+    countries = {alias: country for _canonical, alias, _city, country, _lat, _lon in _SEED_DATA}
+    countries.update({canonical: country for canonical, _alias, _city, country, _lat, _lon in _SEED_DATA})
+    return countries
 
 
 def _validate_seed_data() -> None:

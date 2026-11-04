@@ -10,7 +10,13 @@
 	<div class="card-body">
 		<div class="combined-layout{% if target.enable_http_check %} combined-layout--donut{% endif %}">
 			<div class="combined-main">
-				<div id="combined-legend" class="combined-legend" role="group" aria-label="Show or hide series"></div>
+				<div class="combined-toolbar">
+					<div id="combined-legend" class="combined-legend" role="group" aria-label="Show or hide series"></div>
+					<div id="combined-peaks" class="form-check form-switch ju-switch combined-peaks" hidden>
+						<input class="form-check-input" type="checkbox" role="switch" id="combined-peaks-toggle" checked>
+						<label class="form-check-label" for="combined-peaks-toggle">Show peaks</label>
+					</div>
+				</div>
 				<div id="combined-plot" class="target-combined-plot">
 					<canvas id="chart-combined" role="img" aria-label="Response time and HTTP status over time. Loading data."></canvas>
 				</div>

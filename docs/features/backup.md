@@ -6,8 +6,9 @@ restore from it.
 ## Backup
 
 The archive `justup_backup_<date>_<time>_<64 hex>.tar.bz2` contains the SQLite
-databases, the measurements, and the PDF reports. The 64 hex characters are the
-HMAC-SHA256 signature.
+databases, the measurements, PDF reports, and `data/backup-manifest.json`. The
+64 hex characters are the HMAC-SHA256 signature over the complete archive,
+including the manifest.
 
 - Databases are consistent snapshots. Monitoring keeps running during a backup.
 - Measurement series are copied as complete series. The files are not captured at a
@@ -23,8 +24,33 @@ It is not stored in the archive.
     A restored backup needs the matching `SECRET_KEY`, because stored secrets are
     encrypted. Store the key apart from the backup.
 
-!!! danger "Breaking change in 1.0.0"
-    Backups from earlier versions are rejected and must be recreated.
+!!! danger "Legacy backup format"
+    Backups without a versioned manifest, including backups from before 1.0.0,
+    are rejected. Create a new backup with a version that writes the manifest.
+
+### Format and compatibility
+
+The manifest records format version `1`, the application version and build ID,
+the SQLite `user_version` read from the archived snapshot, a schema fingerprint,
+and the UTC creation time. Its table, index, view, and trigger metadata is read
+from that same snapshot; it contains object names and definition hashes, not
+database rows. The fingerprint verifies the archived structure. The normal
+SQLite compatibility check, not a comparison with a fresh-install fingerprint,
+decides whether the target release supports that structure.
+
+Application and schema versions are compared independently:
+
+| Application version | Database schema | Result |
+| --- | --- | --- |
+| Same or older | Same | Restore without migration |
+| Same or older | Older, with a complete migration path | Migrate the staged database, then restore |
+| Newer | Any | Reject before extraction |
+| Any | Newer than supported, or without a complete migration path | Reject before extraction |
+
+Versions must be numeric and comparable. Development builds are accepted only
+when both sides report `dev` and their non-empty build IDs match exactly.
+Missing, invalid, duplicate, inconsistent, or unsupported manifest metadata is
+rejected. The application database `data/sqlite/justup.db` is required.
 
 ### Confidentiality
 
@@ -44,19 +70,57 @@ first key. Changing the first `SECRET_KEY` signs all users out.
 ## Restore
 
 1. Upload the archive and enter the admin password.
-2. justUp! verifies the signature and the archive structure, then checks every
-   database. A backup whose application database has a schema this release does
-   not support (for example from a pre-release build) is rejected with HTTP 400;
-   nothing is changed.
-3. It enters maintenance mode: new checks, jobs, and backups stop, and running work
+2. justUp! verifies the signature, then the archive paths and the manifest, and compares the
+   versions (see below) before it extracts anything.
+3. It extracts into a staging directory and checks the archived databases: the schema must match
+   the manifest, the application database must contain no triggers or views, and every database
+   must pass the integrity check.
+4. A backup with an older database schema is migrated in the staging directory, never in the live
+   database. The result must pass `integrity_check` and `foreign_key_check`, match the current
+   schema, and leave no `-wal`/`-shm` file behind.
+5. It enters maintenance mode: new checks, jobs, and backups stop, and running work
    gets up to 30 s to finish. New database connections get HTTP 503.
-4. It swaps in the restored data.
+6. It swaps in the restored data.
 
-If a step fails before the swap or the swap is rolled back, nothing changes and
-operation resumes. After a successful restore, the instance stays in maintenance
-mode until you restart the container.
+A backup that fails step 2 to 4 is rejected with HTTP 400 and nothing is changed: the live data
+stays in place, no restart is triggered, and the message names the cause. If the swap fails, it is
+rolled back and operation resumes. After a successful restore, the instance stays in maintenance
+mode until you restart the container. A migrated backup is already at the current schema, so the
+restart runs no migration.
 
 Set the proxy timeout so that the upload and the restore fit.
+
+### Compatibility
+
+Release number and database schema are compared separately.
+
+| Backup release | Backup schema | Result |
+|---|---|---|
+| same or older | same | Restored, no migration |
+| same or older | older | Migrated, if a complete migration path exists; otherwise rejected |
+| newer | any | Rejected: upgrade justUp! first |
+| any | newer | Rejected: upgrade justUp! first |
+
+There is no downgrade. Releases are ordered numerically (`1.0.10` is newer than `1.0.9`); a
+pre-release (`rc1`, `beta2`, ...) is older than its final release. Versions that cannot be ordered
+safely are rejected: `.postN` or other suffixes, and two different pre-releases of one version. A
+development build (`dev`) only restores backups with an identical build ID.
+
+### Failed migration
+
+The migration runs in one transaction on the staged copy. If it fails, the staged copy is
+discarded and the response says that the migration failed. Details are in the server log. The
+uploaded backup file is not modified.
+
+### Limits
+
+- A backup whose database has foreign key violations, or contains triggers or views (the schema
+  defines none), is rejected. A backup of a database that already violates its own constraints
+  cannot be restored.
+- A restore needs the same `SECRET_KEY` (and signing key) as the instance that wrote the backup;
+  encrypted settings are restored as they are.
+- Measurements are restored as archived. Target IDs do not change in a migration, so series stay
+  assigned to their targets. Databases and series are not captured at one common point in time.
 
 ## Storage and purge
 

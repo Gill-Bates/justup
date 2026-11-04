@@ -146,6 +146,7 @@ def _row_to_public(row: Mapping[str, Any], targets: Sequence[Mapping[str, Any]] 
         phone=row["phone"] or None,
         email=row["email"] or None,
         is_enabled=bool(row["is_enabled"]),
+        enable_for_all_targets=bool(row["enable_for_all_targets"]),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
         targets=[TargetBrief(id=t["id"], name=t["name"]) for t in (targets or [])],
@@ -268,6 +269,7 @@ def create_recipient(payload: RecipientCreate, conn=Depends(get_conn), _user=Dep
             phone=normalized_phone,
             email=payload.email,
             is_enabled=payload.is_enabled,
+            enable_for_all_targets=payload.enable_for_all_targets,
         )
     except sqlite_db.DuplicatePhoneError as exc:
         # The pre-check above is racy (signal lookup in between); the write itself re-checks atomically.
@@ -275,7 +277,7 @@ def create_recipient(payload: RecipientCreate, conn=Depends(get_conn), _user=Dep
     except sqlite3.IntegrityError as exc:
         _raise_duplicate_phone(exc)
     row = sqlite_db.get_recipient(conn, new_id)
-    recipient = _row_to_public(row, [])
+    recipient = _row_to_public(row, sqlite_db.get_recipient_targets(conn, new_id))
     return RecipientResponse(recipient=recipient, warnings=warnings)
 
 

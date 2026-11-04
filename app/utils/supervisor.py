@@ -77,6 +77,7 @@ class SupervisionPolicy:
     failure_min_span: float = 120.0  # ... once the series also lasted this long (a burst of retries is no outage)
     maintenance_poll: float = 0.5
     check_interval: float = 1.0  # granularity of the stability/heartbeat checks
+    cancel_timeout: float = 10.0  # grace after cancelling a hung service before it counts as not safely ended
 
 
 @dataclass(frozen=True)
@@ -107,7 +108,7 @@ class ServiceAlert:
     state: str = ""  # service state when the alert was raised
     exc_type: str | None = None
     crashes_total: int = 0
-    reason: str = ""  # "crash_loop" | "hangs" | "failure_series" | ""
+    reason: str = ""  # "crash_loop" | "hangs" | "failure_series" | "hang_not_cancellable" | ""
 
 
 @dataclass
@@ -371,11 +372,13 @@ class ServiceSupervisor:
                     self._clear_hangs(svc)
                 if hb_timeout is not None and now - svc.last_beat > hb_timeout:
                     task.cancel()
-                    await asyncio.gather(task, return_exceptions=True)
+                    if not await self._reaped(task) and not await self._wait_until_ended(svc, task):
+                        return None  # shutdown began while the old task was still running
                     return ServiceHungError(f"no heartbeat for {hb_timeout:.0f}s")
         except asyncio.CancelledError:
             task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
+            if not await self._reaped(task):
+                self._event(logging.ERROR, svc, "cancel_timeout", waited=f"{p.cancel_timeout:.1f}s")
             raise
         if task.cancelled():
             return None if self._stopping else asyncio.CancelledError()
@@ -385,6 +388,30 @@ class ServiceSupervisor:
         if self._stopping:
             return None
         return ServiceExitedError("service returned without a stop request")
+
+    async def _reaped(self, task: asyncio.Task) -> bool:
+        """Wait up to ``cancel_timeout`` for a cancelled task; False if it is still running."""
+        done, _ = await asyncio.wait({task}, timeout=self._policy.cancel_timeout)
+        return bool(done)
+
+    async def _wait_until_ended(self, svc: _Service, task: asyncio.Task) -> bool:
+        """Hold the restart while a hung task ignores cancellation; True once it ended, False on shutdown.
+
+        A second instance of the same service must never run next to the stuck one, so the
+        service is degraded, announced once, and re-cancelled until the old task is gone.
+        """
+        p = self._policy
+        already = svc.state is ServiceState.DEGRADED
+        svc.state = ServiceState.DEGRADED
+        self._event(logging.ERROR, svc, "cancel_timeout", waited=f"{p.cancel_timeout:.1f}s", restart="held")
+        if not already:
+            self._notify(svc, "degraded", reason="hang_not_cancellable")
+        while not task.done():
+            if self._stopping:
+                return False
+            task.cancel()
+            await asyncio.wait({task}, timeout=p.cancel_timeout)
+        return True
 
     def _mark_stable(self, svc: _Service) -> None:
         if svc.fail_streak > 0:

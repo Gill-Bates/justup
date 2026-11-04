@@ -23,6 +23,7 @@ except ImportError as e:  # pragma: no cover - platform-specific guard
 
 import contextlib
 import gzip
+import heapq
 import itertools
 import json
 import logging
@@ -34,13 +35,14 @@ import shutil
 import threading
 import time
 from collections import deque
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Self
 
 from ..utils.time import ensure_utc, parse_utc, utcnow
+from ..utils.uptime_metric import combine_availability
 from . import tsdb_segments as seg
 
 _log = logging.getLogger(__name__)
@@ -734,6 +736,44 @@ def count_binary_points(
             if pt is not None and pt.value in (0, 1):
                 total += 1
                 up += pt.value == 1
+    return up, total
+
+
+def count_availability(
+    tsdb_dir: Path,
+    *,
+    target_id: int,
+    metrics: Sequence[str],
+    since: datetime | None = None,
+    until: datetime | None = None,
+) -> tuple[int, int]:
+    """Return ``(up, total)`` over the overall-availability samples of the given binary metrics.
+
+    One sample per check cycle, up only if all given metrics are up (see ``combine_availability``).
+    Streams every series, so memory stays constant for any window.
+    """
+    if len(metrics) == 1:
+        return count_binary_points(tsdb_dir, target_id=target_id, metric=metrics[0], since=since, until=until)
+    since_u = ensure_utc(since) if since else None
+    until_u = ensure_utc(until) if until else None
+
+    def events(metric: str, lines: Iterator[str]) -> Iterator[tuple[datetime, str, int]]:
+        for raw_line in lines:
+            pt = _parse_point(raw_line, since_u, until_u)
+            if pt is not None and pt.value in (0, 1):
+                yield pt.ts, metric, int(pt.value)
+
+    up = total = 0
+    with contextlib.ExitStack() as stack:
+        streams = []
+        for metric in metrics:
+            p = _series_path(tsdb_dir, target_id, metric)
+            if _series_exists(p):
+                lines = stack.enter_context(contextlib.closing(_iter_series_lines(p, since_u, until_u)))
+                streams.append(events(metric, lines))
+        for _ts, value in combine_availability(heapq.merge(*streams, key=lambda e: e[0])):
+            total += 1
+            up += value == 1
     return up, total
 
 

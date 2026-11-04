@@ -180,8 +180,9 @@ def _check_remote_meta() -> dict[str, object] | None:
 def _update_reason(geoip_path: Path, local_size: int, remote: dict[str, object] | None) -> str | None:
     """Return why the local database should be replaced, or None to keep it.
 
-    Validators win over size; size is only a fallback. With no usable indicator
-    the database is refreshed once it exceeds GEOIP_MAX_AGE_SECONDS.
+    Comparable validators win over size; size is only a fallback. When neither shows a change
+    (no stored validator, same size) the database is still refreshed once it exceeds
+    GEOIP_MAX_AGE_SECONDS, so a stale file cannot persist forever.
     """
     if remote is None:
         return None  # remote unreachable: keep the existing database
@@ -192,8 +193,6 @@ def _update_reason(geoip_path: Path, local_size: int, remote: dict[str, object] 
     size = remote.get("size")
     if isinstance(size, int) and size != local_size:
         return f"size changed (local: {local_size:,}, remote: {size:,})"
-    if remote.get("etag") or remote.get("last_modified") or isinstance(size, int):
-        return None
     try:
         age = time.time() - geoip_path.stat().st_mtime
     except OSError:
@@ -328,8 +327,8 @@ def bootstrap(db_path: Path, tsdb_dir: Path, data_dir: Path | None = None) -> bo
     admin_created = False
 
     try:
-        # init_schema builds the v1.0.0 baseline on a new database and refuses an incompatible one
-        # (IncompatibleSchemaError) without touching it.
+        # init_schema creates the current schema on a new database, migrates a supported older one in
+        # one transaction and refuses an incompatible one (IncompatibleSchemaError) without touching it.
         cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='users'")
         is_fresh_install = cursor.fetchone() is None
 

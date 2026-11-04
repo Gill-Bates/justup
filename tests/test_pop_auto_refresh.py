@@ -78,6 +78,93 @@ def _facs(n: int = 2) -> dict:
     return {"data": [{"city": city, "country": "DE", "latitude": 50.1, "longitude": 8.6} for _ in range(n)]}
 
 
+def _facility(city: str, country: str, lat: float | None, lon: float | None) -> dict:
+    return {"city": city, "country": country, "latitude": lat, "longitude": lon}
+
+
+def test_peeringdb_city_country_and_facility_order_are_deterministic(conn) -> None:
+    pop_locations.upsert_pop_location(conn, "fra", "fra", "Old", "DE", 49, 8, "peeringdb", 70, 10)
+    records = [
+        _facility("Frankfurt", "US", 40, -70),
+        _facility("Frankfurt", "DE", 50.10, 8.60),
+        _facility("Frankfurt", "DE", 50.12, 8.62),
+    ]
+    first = pop_refresh._apply_peeringdb_snapshot(lambda: conn, records)
+    row = conn.execute(
+        "SELECT city, country, lat, lon, confidence, updated_at FROM pop_locations WHERE alias_code='fra'"
+    ).fetchone()
+    city = conn.execute("SELECT city, country, lat, lon, facility_count, updated_at FROM pop_city_evidence").fetchone()
+    second = pop_refresh._apply_peeringdb_snapshot(lambda: conn, list(reversed(records)))
+    assert first.error is None and second.error is None
+    assert (first.processed, first.inserted, first.updated) == (2, 1, 0)
+    assert (second.processed, second.inserted, second.updated) == (2, 0, 0)
+    assert tuple(
+        conn.execute(
+            "SELECT city, country, lat, lon, confidence, updated_at FROM pop_locations WHERE alias_code='fra'"
+        ).fetchone()
+    ) == tuple(row)
+    assert tuple(
+        conn.execute("SELECT city, country, lat, lon, facility_count, updated_at FROM pop_city_evidence").fetchone()
+    ) == tuple(city)
+    assert tuple(row[:5]) == ("Old", "DE", 49.0, 8.0, 70)
+    assert tuple(city[:5]) == ("Frankfurt", "DE", 50.11, 8.61, 2)
+    assert conn.execute("SELECT COUNT(*) FROM pop_city_evidence WHERE country='US'").fetchone()[0] == 0
+    changed = pop_refresh._apply_peeringdb_snapshot(lambda: conn, [_facility("Frankfurt", "DE", 50.15, 8.65)])
+    assert (changed.processed, changed.inserted, changed.updated) == (1, 0, 1)
+
+
+def test_peeringdb_never_invents_alias_or_overwrites_seed(conn) -> None:
+    pop_locations.upsert_pop_location(conn, "fra", "fra", "Frankfurt", "DE", 50.1, 8.6, "seed", 100, 0)
+    before = tuple(conn.execute("SELECT * FROM pop_locations WHERE alias_code='fra'").fetchone())
+    result = pop_refresh._apply_peeringdb_snapshot(lambda: conn, [_facility("Frankfurt", "DE", 50.2, 8.7)])
+    assert result.error is None and result.inserted == 1
+    assert tuple(conn.execute("SELECT * FROM pop_locations WHERE alias_code='fra'").fetchone()) == before
+    assert conn.execute("SELECT position_source FROM pop_city_evidence WHERE city_code='fra'").fetchone()[0] == "seed"
+
+
+def test_peeringdb_unseeded_city_is_evidence_not_hostname_alias(conn) -> None:
+    result = pop_refresh._apply_peeringdb_snapshot(lambda: conn, [_facility("Lyon", "FR", 45.76, 4.84)])
+    assert result.error is None and result.inserted == 1
+    assert conn.execute("SELECT COUNT(*) FROM pop_locations").fetchone()[0] == 0
+    assert tuple(conn.execute("SELECT city_code, country, position_source FROM pop_city_evidence").fetchone()) == (
+        "lyo",
+        "FR",
+        "facility-centroid",
+    )
+
+
+def test_peeringdb_refresh_preserves_existing_quality_metadata(conn) -> None:
+    pop_locations.upsert_pop_location(conn, "fra", "fra", "Old", "DE", 49, 8, "peeringdb", 92, 4)
+    pop_refresh._apply_peeringdb_snapshot(lambda: conn, [_facility("Frankfurt", "DE", 50.1, 8.6)])
+    assert tuple(
+        conn.execute("SELECT source, confidence, priority FROM pop_locations WHERE alias_code='fra'").fetchone()
+    ) == ("peeringdb", 92, 4)
+
+
+def test_peeringdb_skips_missing_invalid_and_conflicting_positions(conn) -> None:
+    pop_locations.upsert_pop_location(conn, "fra", "fra", "Old", "DE", 49, 8, "peeringdb", 70, 10)
+    result = pop_refresh._apply_peeringdb_snapshot(
+        lambda: conn,
+        [
+            _facility("Frankfurt", "DE", None, 8.6),
+            _facility("Frankfurt", "DE", 999, 8.6),
+            _facility("Frankfurt", "DE", 50.1, 8.6),
+            _facility("Frankfurt", "DE", 51.1, 8.6),
+        ],
+    )
+    assert result.validation_errors == 2
+    assert result.skipped >= 2
+    assert conn.execute("SELECT lat FROM pop_locations WHERE alias_code='fra'").fetchone()[0] == 49
+    assert conn.execute("SELECT COUNT(*) FROM pop_city_evidence").fetchone()[0] == 0
+
+
+def test_peeringdb_skips_facilities_far_from_curated_city(conn) -> None:
+    pop_locations.upsert_pop_location(conn, "fra", "fra", "Frankfurt", "DE", 50.1, 8.6, "seed", 100, 0)
+    result = pop_refresh._apply_peeringdb_snapshot(lambda: conn, [_facility("Frankfurt", "DE", 51.5, 8.6)])
+    assert result.error is None and result.inserted == 0
+    assert conn.execute("SELECT COUNT(*) FROM pop_city_evidence").fetchone()[0] == 0
+
+
 # --------------------------------------------------------------------------- #
 # compute_next_action: pure decision (scenarios 1-7)
 # --------------------------------------------------------------------------- #

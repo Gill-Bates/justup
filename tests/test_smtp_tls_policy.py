@@ -257,6 +257,40 @@ def test_user_without_stored_password_is_refused_even_with_tls_off(conn):
         smtp_transport.send_message(_message(), config)
 
 
+@pytest.mark.parametrize(
+    ("stored", "expected"), [(1, 1), (25, 25), (587, 587), (65535, 65535), ("2525", 2525), (587.0, 587)]
+)
+def test_stored_smtp_port_accepts_whole_numbers_in_range(conn, stored, expected):
+    _configure_smtp(conn, smtp_port=stored)
+    config, _ = smtp_settings.load_connection(conn)
+    assert config.port == expected
+    assert smtp_settings.load_public_smtp_settings(conn)["smtp_port"] == expected
+
+
+@pytest.mark.parametrize("raw", [None, "null", '""', '"  "'])
+def test_missing_smtp_port_uses_the_default(conn, raw):
+    _configure_smtp(conn)
+    if raw is not None:
+        conn.execute(
+            "INSERT OR REPLACE INTO settings(key, value, updated_at) VALUES(?, ?, 'x')",
+            (SettingKeys.SMTP_PORT.value, raw),
+        )
+        conn.commit()
+    config, _ = smtp_settings.load_connection(conn)
+    assert config.port == smtp_settings.DEFAULT_SMTP_PORT
+    assert smtp_settings.load_public_smtp_settings(conn)["smtp_port"] is None
+
+
+@pytest.mark.parametrize("stored", [0, 65536, -1, -587, True, False, 587.5, "abc", "5 87", "587.5", [587]])
+def test_invalid_stored_smtp_port_is_a_configuration_error_not_a_silent_default(conn, stored, caplog):
+    _configure_smtp(conn, smtp_port=stored)
+    with pytest.raises(smtp_transport.SMTPConfigurationError, match="SMTP port"):
+        smtp_settings.load_connection(conn)
+    with caplog.at_level(logging.WARNING, logger=smtp_settings.__name__):
+        assert smtp_settings.load_public_smtp_settings(conn)["smtp_port"] is None  # the UI keeps rendering
+    assert "smtp_port is invalid" in caplog.text
+
+
 def test_disabled_or_incomplete_smtp_is_not_activated_by_the_tls_default(conn):
     with pytest.raises(RuntimeError, match="not enabled"):
         smtp_settings.load_connection(conn)

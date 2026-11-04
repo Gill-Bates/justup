@@ -155,15 +155,15 @@ test("combined legend accessible names match visible labels and titles retain de
   };
   vm.runInNewContext(chartSource, context);
   const datasets = [
-    { label: "HTTP response time", _kind: "ms", _srcId: "http", _srcKey: "http", data: [] },
-    { label: "HTTP response time peak response time", _kind: "peak", _srcId: "http", _srcKey: "http", data: [{ y: 120 }] },
-    { label: "TCP connect :443", _kind: "ms", _srcId: "tcp", _srcKey: "tcp:443", data: [] },
+    { label: "HTTP response time", _kind: "ms", _srcId: "http", _srcKey: "http", _slot: 0, data: [] },
+    { label: "HTTP response time peak response time", _kind: "peak", _srcId: "http", _srcKey: "http", _slot: 0, data: [{ y: 120 }] },
+    { label: "TCP connect :443", _kind: "ms", _srcId: "tcp", _srcKey: "tcp:443", _slot: 2, data: [] },
     { label: "HTTP status", _kind: "status", data: [] },
   ];
   const visibility = new Map();
   let textRenders = 0;
   const chart = {
-    data: { datasets }, _palette: { http: "#123456", tcp: "#654321", down: "#c0283a" },
+    data: { datasets }, _palette: { series: ["#123456", "#222222", "#654321"], down: "#c0283a" },
     _bandCount: 1, _bandsVisible: true, _bandSourceLabel: "HTTP", _presentClasses: [],
     options: { plugins: { annotation: { annotations: { down0: {} } } } },
     isDatasetVisible: index => visibility.get(index) ?? true,
@@ -173,13 +173,13 @@ test("combined legend accessible names match visible labels and titles retain de
   const legend = makeElement();
   context._renderCombinedLegend(chart, legend, makeElement());
   assert.deepEqual(legend.children.map((button) => button.children.at(-1).textContent), [
-    "HTTP", "HTTP peak", "TCP 443", "Status", "Down (HTTP)",
+    "HTTP", "TCP 443", "Status", "Down (HTTP)",
   ]);
   assert.deepEqual(legend.children.map((button) => button.attributes["aria-label"]), [
-    "HTTP", "HTTP peak", "TCP 443", "Status", "Down (HTTP)",
+    "HTTP", "TCP 443", "Status", "Down (HTTP)",
   ]);
   assert.deepEqual(legend.children.map((button) => button.title), [
-    "HTTP response time", "HTTP response time peak response time", "TCP connect :443", "HTTP status", "Downtime (HTTP)",
+    "HTTP response time", "TCP connect :443", "HTTP status", "Downtime (HTTP)",
   ]);
   assert.equal(datasets[0].label, "HTTP response time");
   legend.children[0].listeners.click();
@@ -338,7 +338,8 @@ test("zoom reloads finer buckets once and reset restores the overview", async ()
     data: { datasets }, scales: { x: { min: T0, max: T0 + 7 * 86400000 } },
     options: chartOptions, config: { options: chartOptions },
     chartArea: { width: 900 }, canvas: { clientWidth: 900 }, _bandCount: 1, _palette: { down: "#f00" },
-    update() { }, _renderLegend() { },
+    update() { }, _renderLegend() { }, _showPeaks: true,
+    isDatasetVisible: () => true, setDatasetVisibility() { },
   };
   context.appState.charts.set("chart", chart);
   chart._reloadVisible = context._createCombinedZoomLoader(chart, "chart", {
@@ -353,6 +354,7 @@ test("zoom reloads finer buckets once and reset restores the overview", async ()
   assert.equal(chart.data.datasets[0].data.length, 3);
   assert.deepEqual(plain(chart.data.datasets[1].data.map(p => p.y)), [500, null, 180]);
   assert.equal(chart.data.datasets[2].data[0].code, 503);
+  assert.equal(chart.options.scales.yPeak.display, true);
   chart._palette.down = "#0f0";
   chart.scales.x.min = T0;
   chart.scales.x.max = T0 + 7 * 86400000;

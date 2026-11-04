@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -109,6 +110,8 @@ def test_concurrent_append_and_prune_keep_queries_consistent(tmp_path):
     def writer():
         try:
             for i in range(200, 400):
+                if stop.is_set():
+                    break
                 tsdb.append_point(
                     tmp_path, target_id=1, metric="ping_ms", value=i, retention_days=30, at=now + timedelta(seconds=i)
                 )
@@ -130,10 +133,129 @@ def test_concurrent_append_and_prune_keep_queries_consistent(tmp_path):
         except BaseException as e:  # noqa: BLE001
             errors.append(e)
 
-    threads = [threading.Thread(target=writer), threading.Thread(target=reader)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join(30)
+    threads = [threading.Thread(target=writer, daemon=True), threading.Thread(target=reader, daemon=True)]
+    try:
+        for thread in threads:
+            thread.start()
+        threads[0].join(timeout=10)
+    finally:
+        stop.set()
+        for thread in threads:
+            thread.join(timeout=5)
+    alive = [thread.name for thread in threads if thread.is_alive()]
+    assert not alive, f"TSDB concurrency workers did not stop: {alive}"
     assert not errors
     assert len(tsdb.query(tmp_path, target_id=1, metric="ping_ms", limit=1000)) == 400
+
+
+def _availability_series(tmp_path: Path, samples: dict[str, list[int]], *, skew_seconds: float = 0.01) -> None:
+    """One point per cycle and metric, 30 s apart; each further metric lands a few ms after the previous one."""
+    start = datetime.now(UTC).replace(microsecond=0) - timedelta(hours=1)  # inside retention
+    for offset, (metric, values) in enumerate(samples.items()):
+        for cycle, value in enumerate(values):
+            at = start + timedelta(seconds=30 * cycle + skew_seconds * offset)
+            tsdb.append_point(tmp_path, target_id=1, metric=metric, value=value, retention_days=30, at=at)
+
+
+def test_availability_is_down_when_any_enabled_metric_is_down(tmp_path):
+    _availability_series(tmp_path, {"http_up": [1, 1, 1, 1], "ping_up": [0, 0, 0, 0]})
+    assert tsdb.count_availability(tmp_path, target_id=1, metrics=("http_up", "ping_up")) == (0, 4)
+    # The leading metric alone is what used to be reported as uptime.
+    assert tsdb.count_binary_points(tmp_path, target_id=1, metric="http_up") == (4, 4)
+
+
+def test_availability_counts_a_cycle_once_and_needs_every_metric_up(tmp_path):
+    _availability_series(tmp_path, {"http_up": [1, 1, 0, 1], "ping_up": [1, 0, 1, 1], "tcp_up": [1, 1, 1, 1]})
+    assert tsdb.count_availability(tmp_path, target_id=1, metrics=("http_up", "ping_up", "tcp_up")) == (2, 4)
+
+
+def test_availability_ignores_metrics_that_have_no_point_in_a_cycle(tmp_path):
+    _availability_series(tmp_path, {"http_up": [1, 1, 1], "ping_up": [1]})
+    assert tsdb.count_availability(tmp_path, target_id=1, metrics=("http_up", "ping_up")) == (3, 3)
+    assert tsdb.count_availability(tmp_path, target_id=1, metrics=("http_up", "ping_up", "tcp_up")) == (3, 3)
+
+
+def test_availability_without_any_series_is_empty(tmp_path):
+    assert tsdb.count_availability(tmp_path, target_id=1, metrics=("http_up", "ping_up")) == (0, 0)
+
+
+def test_availability_ignores_series_of_checks_that_are_no_longer_enabled(tmp_path):
+    _availability_series(tmp_path, {"http_up": [1, 1, 1], "ping_up": [0, 0, 0]})
+    assert tsdb.count_availability(tmp_path, target_id=1, metrics=("http_up",)) == (3, 3)
+
+
+def _shared_cycles(tmp_path: Path, samples: dict[str, list[int]], *, start: datetime | None = None) -> datetime:
+    """Points written the way the scheduler does: all metrics of one cycle carry the same timestamp."""
+    start = start or datetime.now(UTC).replace(microsecond=0) - timedelta(hours=1)
+    for metric, values in samples.items():
+        for cycle, value in enumerate(values):
+            at = start + timedelta(seconds=30 * cycle)
+            tsdb.append_point(tmp_path, target_id=1, metric=metric, value=value, retention_days=30, at=at)
+    return start
+
+
+def test_cycle_points_with_a_shared_timestamp_form_one_sample_for_any_number_of_services(tmp_path):
+    _shared_cycles(tmp_path, {"http_up": [1, 1, 0], "ping_up": [1, 0, 1], "tcp_up": [1, 1, 1]})
+    assert tsdb.count_availability(tmp_path, target_id=1, metrics=("http_up", "ping_up", "tcp_up")) == (1, 3)
+
+
+def test_legacy_points_stamped_individually_within_two_seconds_still_form_one_sample(tmp_path):
+    _availability_series(tmp_path, {"http_up": [1, 1], "ping_up": [0, 1]}, skew_seconds=1.9)
+    assert tsdb.count_availability(tmp_path, target_id=1, metrics=("http_up", "ping_up")) == (1, 2)
+
+
+def test_legacy_points_more_than_two_seconds_apart_are_documented_as_separate_samples(tmp_path):
+    # Fallback limit for data written before the shared cycle timestamp: grouping is by time window only.
+    _availability_series(tmp_path, {"http_up": [1], "ping_up": [0]}, skew_seconds=3.0)
+    assert tsdb.count_availability(tmp_path, target_id=1, metrics=("http_up", "ping_up")) == (1, 2)
+
+
+def test_shared_and_legacy_cycles_in_one_window_are_each_counted_once(tmp_path):
+    start = datetime.now(UTC).replace(microsecond=0) - timedelta(hours=2)
+    _shared_cycles(tmp_path, {"http_up": [1, 0], "ping_up": [0, 0]}, start=start)  # series files are append-only
+    _availability_series(tmp_path, {"http_up": [1, 1], "ping_up": [1, 0]})
+    assert tsdb.count_availability(tmp_path, target_id=1, metrics=("http_up", "ping_up")) == (1, 4)
+
+
+def test_a_check_enabled_later_does_not_count_against_earlier_cycles(tmp_path):
+    start = datetime.now(UTC).replace(microsecond=0) - timedelta(hours=1)
+    _shared_cycles(tmp_path, {"http_up": [1, 1, 1, 1]}, start=start)
+    for cycle in (2, 3):
+        at = start + timedelta(seconds=30 * cycle)
+        tsdb.append_point(tmp_path, target_id=1, metric="ping_up", value=0, retention_days=30, at=at)
+    assert tsdb.count_availability(tmp_path, target_id=1, metrics=("http_up", "ping_up")) == (2, 4)
+
+
+def test_a_window_edge_between_two_cycles_never_splits_a_cycle(tmp_path):
+    start = _shared_cycles(tmp_path, {"http_up": [1, 1, 1], "ping_up": [1, 0, 1]})
+    since = start + timedelta(seconds=30)
+    assert tsdb.count_availability(tmp_path, target_id=1, metrics=("http_up", "ping_up"), since=since) == (1, 2)
+    assert tsdb.count_availability(
+        tmp_path, target_id=1, metrics=("http_up", "ping_up"), since=since + timedelta(seconds=1)
+    ) == (1, 1)
+
+
+def test_cycles_are_unchanged_by_compaction_into_segments(tmp_path):
+    start = datetime.now(UTC).replace(microsecond=0) - timedelta(days=5)
+    _shared_cycles(tmp_path, {"http_up": [1, 1, 0, 1], "ping_up": [1, 0, 0, 1]}, start=start)
+    metrics = ("http_up", "ping_up")
+    before = tsdb.count_availability(tmp_path, target_id=1, metrics=metrics)
+    tsdb.housekeep_target(tmp_path, 1, 30, throttle=False)
+    assert before == (2, 4)
+    assert tsdb.count_availability(tmp_path, target_id=1, metrics=metrics) == before
+
+
+def test_availability_aggregation_streams_a_large_series_in_bounded_time(tmp_path):
+    cycles = 20000
+    start = datetime.now(UTC).replace(microsecond=0) - timedelta(days=20)
+    for metric in ("http_up", "ping_up"):
+        p = tsdb._series_path(tmp_path, 1, metric)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with p.open("w", encoding="utf-8") as f:
+            for i in range(cycles):
+                ts = (start + timedelta(seconds=60 * i)).isoformat()
+                f.write(json.dumps({"ts": ts, "value": int(i % 10 != 0 or metric == "http_up")}) + "\n")
+    began = time.perf_counter()
+    result = tsdb.count_availability(tmp_path, target_id=1, metrics=("http_up", "ping_up"))
+    assert result == (cycles - cycles // 10, cycles)
+    assert time.perf_counter() - began < 10

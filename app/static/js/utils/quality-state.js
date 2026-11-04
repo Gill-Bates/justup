@@ -5,17 +5,17 @@
 
 /**
  * Presentation of the monitor quality state for the dashboard widget.
- * Unknown, missing or incomplete data is always neutral grey: no measurement, no error colour.
+ * The badge carries status color; the score stays a neutral primary value in every state.
  * @module utils/quality-state
  */
 (function (root) {
 	'use strict';
 
 	var BADGES = {
-		ok: { cls: 'bg-success', text: 'OK', scoreCls: 'text-success' },
-		degraded: { cls: 'bg-warning text-dark', text: 'Degraded', scoreCls: 'text-warning' },
-		down: { cls: 'bg-danger', text: 'Down', scoreCls: 'text-danger' },
-		unknown: { cls: 'bg-secondary', text: 'Unknown', scoreCls: 'text-body-secondary' },
+		ok: { cls: 'ju-status-badge--success', text: 'OK' },
+		degraded: { cls: 'ju-status-badge--warning', text: 'Degraded' },
+		down: { cls: 'ju-status-badge--danger', text: 'Down' },
+		unknown: { cls: 'ju-status-badge--neutral', text: 'Unknown' },
 	};
 
 	/** Finite score or null for null, undefined, empty and non-numeric values. */
@@ -35,7 +35,7 @@
 		// Without a measured score the state has no basis, so it is shown as unknown.
 		if (score === null) state = 'unknown';
 		var b = BADGES[state];
-		// Unknown has no measurement basis: neutral text regardless of any score.
+		// Unknown has no measurement basis, but score typography stays shared with measured states.
 		var label = 'Connectivity status unavailable';
 		if (state !== 'unknown') label = score >= 80 ? 'Excellent connectivity' : score >= 60 ? 'Good connectivity' : 'Poor connectivity';
 		return {
@@ -43,10 +43,22 @@
 			badgeClass: b.cls,
 			badgeText: b.text,
 			scoreText: score === null ? '--' : score.toFixed(1),
-			scoreClass: 'display-4 fw-bold ' + b.scoreCls,
+			scoreClass: 'dashboard-widget-value fw-bold',
 			label: label,
 		};
 	}
 
-	root.QualityState = { describe: describe };
+	/**
+	 * Accessible text for a probe-target badge; no country code means the location is unknown,
+	 * which is the normal case for anycast resolvers (GeoLite2 has no single country for them).
+	 * @param {string} address - target without scheme
+	 * @param {string|null} country - ISO 3166-1 alpha-2 code or null
+	 * @returns {{label: string, title: string}}
+	 */
+	function describeTarget(address, country) {
+		if (country) return { label: country + ': ' + address, title: '' };
+		var text = 'Country unknown (anycast or no location data)';
+		return { label: text + ': ' + address, title: text };
+	}
+	root.QualityState = { describe: describe, describeTarget: describeTarget };
 })(typeof window !== 'undefined' ? window : globalThis);

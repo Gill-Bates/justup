@@ -213,7 +213,15 @@ def test_validate_members_rejects_files_for_directory_entries(name):
 
 def test_validate_members_accepts_files_below_and_empty_directories():
     backup_mod.validate_members(
-        _members([("data", None), ("data/sqlite", None), ("data/tsdb", None), ("data/sqlite/justup.db", b"x")])
+        _members(
+            [
+                ("data", None),
+                ("data/sqlite", None),
+                ("data/tsdb", None),
+                ("data/sqlite/justup.db", b"x"),
+                ("data/backup-manifest.json", b"{}"),
+            ]
+        )
     )
 
 
@@ -421,6 +429,62 @@ def test_geoip_update_reason_max_age_without_indicator(tmp_path):
     old = time.time() - bootstrap.GEOIP_MAX_AGE_SECONDS - 60
     os.utime(db, (old, old))
     assert bootstrap._update_reason(db, 1, remote)
+
+
+def _aged(db, seconds_old):
+    """Pin the clock and the file age so the age rule is deterministic."""
+    now = 2_000_000_000.0
+    os.utime(db, (now - seconds_old, now - seconds_old))
+    return now
+
+
+@pytest.mark.parametrize(
+    "remote",
+    [
+        {"size": 10, "etag": '"b"', "last_modified": None},  # remote validator, none stored locally
+        {"size": 10, "etag": None, "last_modified": "Mon, 01 Jan 2026 00:00:00 GMT"},
+        {"size": 10, "etag": None, "last_modified": None},  # only the size, unchanged
+        {"size": None, "etag": '"b"', "last_modified": None},  # validator without size
+    ],
+)
+def test_geoip_update_reason_falls_back_to_max_age_without_comparable_validator(tmp_path, monkeypatch, remote):
+    db = tmp_path / "GeoLite2-City.mmdb"
+    db.write_bytes(b"x" * 10)  # no meta sidecar
+    monkeypatch.setattr(bootstrap.time, "time", lambda: _aged(db, bootstrap.GEOIP_MAX_AGE_SECONDS + 60))
+    assert bootstrap._update_reason(db, 10, remote) == "database older than maximum age"
+    monkeypatch.setattr(bootstrap.time, "time", lambda: _aged(db, bootstrap.GEOIP_MAX_AGE_SECONDS - 60))
+    assert bootstrap._update_reason(db, 10, remote) is None
+
+
+def test_geoip_update_reason_age_does_not_override_validators_or_size(tmp_path, monkeypatch):
+    db = tmp_path / "GeoLite2-City.mmdb"
+    db.write_bytes(b"x" * 10)
+    bootstrap._meta_path(db).write_text(json.dumps({"etag": '"a"', "last_modified": ""}))
+    monkeypatch.setattr(bootstrap.time, "time", lambda: _aged(db, bootstrap.GEOIP_MAX_AGE_SECONDS * 3))
+    # an unchanged validator proves the remote file is the same one: keep, however old the file is
+    assert bootstrap._update_reason(db, 10, {"size": 10, "etag": '"a"', "last_modified": None}) is None
+    # a changed validator updates a young file with an unchanged size
+    monkeypatch.setattr(bootstrap.time, "time", lambda: _aged(db, 60))
+    assert bootstrap._update_reason(db, 10, {"size": 10, "etag": '"b"', "last_modified": None}) == "etag changed"
+    # a changed size wins over the age rule
+    bootstrap._meta_path(db).unlink()
+    assert "size changed" in bootstrap._update_reason(db, 10, {"size": 11, "etag": None, "last_modified": None})
+    # an unreachable remote keeps even an old database
+    monkeypatch.setattr(bootstrap.time, "time", lambda: _aged(db, bootstrap.GEOIP_MAX_AGE_SECONDS * 3))
+    assert bootstrap._update_reason(db, 10, None) is None
+
+
+def test_geoip_stale_database_is_downloaded_when_size_and_validators_are_inconclusive(tmp_path, monkeypatch):
+    target = tmp_path / "GeoLite2-City.mmdb"
+    target.write_bytes(b"x" * 10)
+    old = time.time() - bootstrap.GEOIP_MAX_AGE_SECONDS - 60
+    os.utime(target, (old, old))
+    monkeypatch.setattr(bootstrap, "_verify_mmdb", lambda _p: True)
+    monkeypatch.setattr(bootstrap, "_check_remote_meta", lambda: {"size": 10, "etag": '"b"', "last_modified": None})
+    _stub_download(monkeypatch, _FakeResponse(b"y" * 10, {"Content-Length": "10", "ETag": '"b"'}))
+    assert bootstrap._download_geoip_db(target) == target
+    assert target.read_bytes() == b"y" * 10  # replaced, not kept
+    assert bootstrap._read_meta(target) == {"etag": '"b"'}  # the next start compares validators
 
 
 # --- CR-09: dotenv parsing --------------------------------------------------------------------

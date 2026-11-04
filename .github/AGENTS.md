@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-09-21 | Updated: 2026-11-01 -->
+<!-- Generated: 2026-09-21 | Updated: 2026-11-03 -->
 # .github
 
 ## Purpose
@@ -27,11 +27,11 @@ GitHub repository automation and assets: CI/CD workflows (PR gate with Python, c
 - Workflow actions are pinned (some by commit SHA for supply-chain safety); keep pins when editing.
 - Do not commit secrets; workflows read Docker Hub credentials from repository secrets.
 - Renovate config is strict JSON (4-space indent).
-- `ci.yml` is the only workflow that gates a PR. `docker-build.yml` only runs on tags — keep that division when adding checks: deterministic checks and the focused strict Chromium UI regressions belong in `ci.yml`; the full UX/UI browser matrix remains local.
+- `ci.yml` runs on pushes to all branches and gates PRs targeting `main`. The release workflow calls it again for the tagged commit. `docker-build.yml` only starts from version tags or a manual tag dispatch — keep that division when adding checks: deterministic checks, focused Chromium UI regressions and the Chromium + WebKit shell viewport matrix belong in `ci.yml`; the full UX/UI browser matrix remains local.
 
 ### Testing Requirements
 - No local test runner for the workflows themselves; validate YAML syntax and rely on the PR run. Validate `renovate.json` with `npx renovate-config-validator` if available.
-- The steps inside them are reproducible locally — see `workflows/AGENTS.md`. The `python` job runs Ruff and parallel pytest, the `frontend` job runs ESLint/Stylelint (`npm run lint`) and `node --test` (`npm test`), and the `browser` job runs the layout, modal and SMTP suites in strict Chromium mode; the full browser matrix remains local.
+- The steps inside them are reproducible locally — see `workflows/AGENTS.md`. The `python` job runs Ruff and parallel pytest, the `frontend` job runs ESLint/Stylelint (`npm run lint`) and `node --test` (`npm test`), and the `browser` job runs Playwright Test layout cases in Chromium and WebKit, GridStack interactions in Chromium, plus modal, notification-row, wizard, SMTP, sidebar transition, notification dropdown and authentication checks in Chromium. The full browser matrix remains local.
 - The release workflow checks each built image's libsignal native library (packaging plus dlopen) and runtime-image purity, publishes only a verified candidate index, and compares installed toolchain versions across architectures; it does not prove that Signal starts or sends a message. `security.yml` rescans the published image weekly (untested until its first Actions run).
 
 ### Common Patterns

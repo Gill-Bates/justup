@@ -5,11 +5,20 @@
  * GridStack layout of the dashboard (view, edit mode, stacked phone/tablet fallback).
  */
 
-/* --ju-dash-gap is the gutter between tiles and must stay 2 x GRID_MARGIN in js/dashboard-grid.js:
-   GridStack insets every tile by its margin on each side. */
+/* Geometry contract (DESIGN.md, "Edit Mode Geometry Contract"). GridStack owns coordinates and sizes.
+   dashboard-grid.js reads --ju-dash-gutter, --ju-dash-cell-height and --ju-dash-handle-height from here,
+   so tiles, empty-cell slots, the drag placeholder and the handle band all derive from these values. */
 .dashboard-grid {
 	--ju-dash-gap: var(--ui-space-tile);
 	--ju-dash-gutter: calc(var(--ju-dash-gap) / 2);
+	--ju-dash-cell-height: 72px;
+	--ju-dash-radius: var(--bs-border-radius-lg);
+	--ju-dash-handle-height: 1.5rem;
+	--ju-dashboard-title-size: 0.875rem;
+	--ju-dashboard-body-size: 0.875rem;
+	--ju-dashboard-caption-size: 0.75rem;
+	--ju-dashboard-value-size: 2.5rem;
+	--ju-dashboard-card-padding: var(--ui-card-padding);
 
 	min-height: 4rem;
 
@@ -18,40 +27,93 @@
 	margin-block-end: calc(-1 * var(--gs-item-margin-bottom, var(--ju-dash-gutter)));
 }
 
-.dashboard-grid #quality-score {
-	font-size: 2.5rem;
+.dashboard-grid .dashboard-widget-value {
+	font-size: var(--ju-dashboard-value-size) !important;
+	line-height: 1;
 }
 
-.quality-targets-tooltip {
-	--bs-tooltip-bg: var(--ju-panel-bg);
-	--bs-tooltip-color: var(--bs-body-color);
-}
-
-.quality-targets-tooltip .tooltip-inner {
-	max-width: 20rem;
-	border: 1px solid var(--ju-panel-line);
-}
-
-.quality-targets-tooltip-content {
-	display: flex;
-	flex-wrap: wrap;
-	justify-content: center;
-	gap: 0.25rem;
-}
-
-.dashboard-grid #quality-label,
-.dashboard-grid #downtime-success p,
-.dashboard-grid #downtime-success small,
-.dashboard-grid #downtime-empty p,
-.dashboard-grid #downtime-empty small,
-.dashboard-grid #downtime-error p,
-.dashboard-grid #downtime-error small {
-	position: absolute;
-	width: 1px;
-	height: 1px;
+.dashboard-grid [data-widget-id="quality"] .quality-body {
+	padding: var(--ju-dashboard-card-padding);
+	min-height: 0;
 	overflow: hidden;
-	clip-path: inset(50%);
+}
+
+.dashboard-grid .dashboard-hero-body {
+	padding-block: var(--ui-space-tile-compact);
+	display: flex;
+	flex-direction: column;
+	justify-content: center;
+	gap: var(--ui-stat-gap);
+}
+
+.dashboard-grid .dashboard-hero-metric {
+	justify-content: space-between !important;
+	flex-direction: row-reverse;
+	gap: var(--ui-space-tile-compact);
+}
+
+.dashboard-grid .dashboard-widget-label {
+	font-size: var(--ju-dashboard-caption-size) !important;
+	font-weight: 600;
+	letter-spacing: 0.04em;
+}
+
+.quality-targets {
+	width: 100%;
+	overflow: hidden;
+	margin-block: var(--ui-space-tile-compact);
+}
+
+.quality-target {
 	white-space: nowrap;
+	font-size: 0.75rem;
+	font-weight: 500;
+	line-height: 1.35;
+	padding: 0.15rem 0.35rem;
+	border: 1px solid var(--ju-panel-line);
+	background: var(--bs-tertiary-bg);
+	color: var(--bs-body-color);
+}
+
+.quality-target-flag {
+	display: inline-flex;
+	width: 1rem;
+	height: 0.75rem;
+	flex: 0 0 auto;
+	vertical-align: middle;
+	margin-inline-end: 0.2rem;
+}
+
+.quality-target-flag img {
+	display: block;
+	width: 100%;
+	height: 100%;
+	object-fit: contain;
+}
+
+.quality-target-flag--unknown {
+	width: 0.85rem;
+	height: 0.85rem;
+	background-color: currentcolor;
+	mask: url("../img/icons/flag.svg") center / contain no-repeat;
+}
+
+.quality-widget-icon {
+	display: inline-block;
+	width: 1em;
+	height: 1em;
+	margin-inline-end: 0.25em;
+	vertical-align: -0.15em;
+	background-color: currentcolor;
+	mask: url("../img/icons/thermometer-half.svg") center / contain no-repeat;
+}
+
+.quality-target-overflow {
+	font-variant-numeric: tabular-nums;
+}
+
+.quality-targets > [hidden] {
+	display: none;
 }
 
 /* Hidden until dashboard-grid.js applied the stored layout; the delayed keyframe is the failsafe
@@ -68,52 +130,132 @@
 }
 
 .dashboard-grid .grid-stack-item-content {
-	display: flex;
-	border-radius: var(--bs-border-radius-lg);
+	display: grid;
+	grid-template: minmax(0, 1fr) / minmax(0, 1fr);
+	border-radius: var(--ju-dash-radius);
 }
 
-.dashboard-grid .grid-stack-item-content> :not(.dashboard-widget-header) {
-	width: 100%;
+.dashboard-grid .grid-stack-item-content> :not(.dashboard-widget-handle) {
 	min-width: 0;
 }
 
-/* Edit mode: a button strip over the tile top is the drag handle and the keyboard control. It is
-   out of flow so toggling edit mode never shifts the tile content. */
+.dashboard-widget-card {
+	/* One inner spacing per widget: the body owns it. ui-card would add a second layer around it. */
+	padding: 0;
+	display: flex;
+	flex-direction: column;
+	grid-area: 1 / 1;
+	min-width: 0;
+	min-height: 0;
+	height: auto !important;
+	overflow: hidden;
+	border-radius: var(--ju-dash-radius);
+}
+
+/* The handle band lives inside the frame: the card keeps filling the whole grid cell and only
+   reserves the band as padding, so entering edit mode never moves or resizes a frame. */
+.dashboard-grid--editing .dashboard-widget-card {
+	padding-block-start: var(--ju-dash-handle-height);
+}
+
 .dashboard-widget-header {
-	position: absolute;
-	inset: 0 0 auto;
+	flex: 0 0 auto;
 	z-index: 2;
+	display: flex;
+	flex-wrap: nowrap;
+	align-items: center;
+	gap: var(--ui-stat-gap);
+	min-height: 3rem;
+	padding: 0.75rem var(--ju-dashboard-card-padding);
+	font-size: var(--ju-dashboard-title-size);
+	font-weight: 600;
+	line-height: 1.25;
+}
+
+.dashboard-widget-header > :first-child {
+	flex: 0 0 auto;
+}
+
+.dashboard-widget-body {
+	flex: 1 1 auto;
+	min-width: 0;
+	min-height: 0;
+	overflow: auto;
+
+	/* The only declared overflow area of a widget: reached at a manual height below the content. */
+	scrollbar-width: thin;
+	scrollbar-color: var(--bs-border-color) transparent;
+	padding: var(--ju-dashboard-card-padding);
+	font-size: var(--ju-dashboard-body-size);
+	line-height: 1.4;
+}
+
+.dashboard-widget-body--flush {
+	padding: 0;
+}
+
+/* A flush body (table) has no padding of its own, so the corner grip would sit on its last row. */
+.dashboard-grid--editing .dashboard-widget-body--flush {
+	padding-block-end: var(--ju-dash-handle-height);
+}
+
+.dashboard-widget-handle {
+	position: relative;
+	z-index: 2;
+	grid-area: 1 / 1;
+	align-self: start;
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	height: 1.5rem;
+	height: var(--ju-dash-handle-height);
 	padding: 0;
 	border: 0;
-	border-radius: var(--bs-border-radius-lg) var(--bs-border-radius-lg) 0 0;
+	border-radius: var(--ju-dash-radius) var(--ju-dash-radius) 0 0;
 	background: transparent;
 	color: var(--bs-secondary-color);
 	cursor: grab;
 	touch-action: none;
 }
 
-.dashboard-widget-header:active {
+.dashboard-widget-handle[hidden] {
+	display: none;
+}
+
+.dashboard-widget-handle:active {
 	cursor: grabbing;
 }
 
-.dashboard-widget-header:hover,
-.dashboard-widget-header:focus-visible {
+.dashboard-widget-handle:hover,
+.dashboard-widget-handle:focus-visible {
 	background: var(--bs-tertiary-bg);
 	color: var(--bs-body-color);
 }
 
-.dashboard-widget-header:focus-visible {
-	outline: 2px solid var(--bs-primary);
+.dashboard-widget-handle:focus-visible {
+	outline: 2px solid var(--ju-focus-ring);
 	outline-offset: -2px;
 }
 
-.dashboard-widget-header .material-icons {
+.dashboard-widget-handle .material-icons {
 	font-size: 1rem;
 	line-height: 1;
+}
+
+.dashboard-widget-empty {
+	display: grid;
+	place-content: center;
+	min-height: 8rem;
+	padding: var(--ju-dashboard-card-padding);
+	text-align: center;
+}
+
+.dashboard-widget-empty .material-icons {
+	font-size: 2rem;
+}
+
+.dashboard-downtime-table {
+	max-block-size: 14rem;
+	overflow: auto;
 }
 
 .dashboard-grid:not(.dashboard-grid--editing) .ui-resizable-handle {
@@ -151,13 +293,16 @@
 	display: block;
 	height: 100%;
 	border: 1px dashed var(--bs-border-color);
-	border-radius: var(--bs-border-radius-lg);
-	background: var(--bs-tertiary-bg);
+	border-radius: var(--ju-dash-radius);
+
+	/* Same semantic surface tokens as the cards, so the gradient follows light and dark mode. */
+	background: linear-gradient(160deg, var(--bs-tertiary-bg), color-mix(in srgb, var(--bs-tertiary-bg) 60%, var(--bs-body-bg)));
 }
 
-.dashboard-grid--editing .grid-stack-item-content {
-	outline: 1px dashed var(--bs-border-color);
-	outline-offset: 2px;
+/* The drag placeholder is GridStack's own element; it only borrows the shared radius and border. */
+.dashboard-grid > .grid-stack-placeholder > .placeholder-content {
+	border: 1px dashed var(--bs-primary);
+	border-radius: var(--ju-dash-radius);
 }
 
 /* Dragging/resizing must not select text or icons inside tiles. */
@@ -170,26 +315,37 @@
 	opacity: 0.75;
 }
 
-/* Inset the corner grip from the tile's rounded edge and keep a 24px touch target. */
+/* Corner grip: a 24px target inside the frame corner; GridStack's own rotated chevron is replaced by a
+   local diagonal double arrow, painted from currentcolor so it follows theme and hover state. */
 .dashboard-grid--editing.dashboard-grid .grid-stack-item>.ui-resizable-se {
 	width: 24px;
 	height: 24px;
 	right: calc(var(--gs-item-margin-right, var(--ju-dash-gutter)) + 6px);
 	bottom: calc(var(--gs-item-margin-bottom, var(--ju-dash-gutter)) + 6px);
 	background-image: none;
+	transform: none;
+	cursor: nwse-resize;
 	color: var(--bs-body-color);
 }
 
 .dashboard-grid--editing.dashboard-grid .grid-stack-item>.ui-resizable-se::after {
 	content: "";
 	position: absolute;
-	right: 0.25rem;
-	bottom: 0.25rem;
-	width: 0.625rem;
-	height: 0.625rem;
-	border-right: 2px solid currentcolor;
-	border-bottom: 2px solid currentcolor;
+	inset: 4px;
+	background-color: currentcolor;
+	mask: url("../img/icons/resize-se.svg") center / contain no-repeat;
 	pointer-events: none;
+}
+
+.dashboard-grid--editing.dashboard-grid .grid-stack-item>.ui-resizable-se:is(:hover, :focus-visible, .ui-resizable-resizing, .ui-resizable-armed) {
+	color: var(--bs-primary);
+}
+
+@media (forced-colors: active) {
+	.dashboard-grid--editing.dashboard-grid .grid-stack-item>.ui-resizable-se::after {
+		forced-color-adjust: none;
+		background-color: ButtonText;
+	}
 }
 
 .dashboard-grid--editing .ui-resizable-handle:hover {
@@ -197,7 +353,7 @@
 }
 
 .dashboard-grid--editing .grid-stack-item.ui-draggable-dragging .grid-stack-item-content {
-	outline-color: var(--bs-primary);
+	outline: 2px solid var(--ju-focus-ring);
 }
 
 /* Phone/tablet fallback. Keep 991.98px in sync with MOBILE_QUERY in dashboard-grid.js.
@@ -225,10 +381,20 @@
 	}
 
 	.dashboard-grid>.grid-stack-item>.grid-stack-item-content {
+		grid-template-rows: auto;
 		position: relative !important;
 		inset: auto;
 		margin: 0 !important;
 		overflow: visible !important;
+	}
+
+	.dashboard-grid [data-widget-id="quality"] .quality-body,
+	.dashboard-grid [data-widget-id="quality"] .quality-targets {
+		overflow: visible;
+	}
+
+	.dashboard-grid [data-widget-id="quality"] .quality-targets {
+		flex: none;
 	}
 }
 
@@ -244,13 +410,22 @@
 .dashboard-monitor-body {
 	display: flex;
 	flex-direction: column;
-	gap: 0.5rem;
+	gap: var(--ui-space-tile-compact);
 	min-width: 0;
 	font-variant-numeric: tabular-nums;
 }
 
+.dashboard-monitor-body--compact {
+	gap: var(--ui-stat-gap);
+	padding-block: 0.5rem;
+}
+
+.dashboard-grid [data-widget-id="delivery-queue"] .dashboard-monitor-body--compact {
+	padding-block: 0.25rem;
+}
+
 .dashboard-monitor-number {
-	font-size: 1.75rem;
+	font-size: var(--ju-dashboard-value-size);
 	font-weight: 600;
 	line-height: 1.1;
 }
@@ -262,7 +437,7 @@
 	flex-wrap: wrap;
 	gap: 0.25rem 0.5rem;
 	min-width: 0;
-	font-size: 0.8125rem;
+	font-size: var(--ju-dashboard-body-size);
 }
 
 .dashboard-monitor-row a {
@@ -273,13 +448,34 @@
 .dashboard-monitor-metrics {
 	display: grid;
 	grid-template-columns: repeat(3, minmax(0, 1fr));
-	gap: 0.5rem;
-	font-size: 0.75rem;
+	gap: var(--ui-space-tile-compact);
+	margin: 0;
+	font-size: var(--ju-dashboard-caption-size);
 }
 
-.dashboard-monitor-metrics strong {
+.dashboard-monitor-metrics > div {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+
+.dashboard-monitor-metrics dt {
+	order: 2;
 	display: block;
-	font-size: 1rem;
+	min-height: 1.5em;
+	color: var(--bs-secondary-color);
+	font-weight: 400;
+}
+
+
+.dashboard-monitor-metrics dd {
+	order: 1;
+	margin: 0;
+	display: block;
+	font-size: var(--ju-dashboard-body-size);
+	font-weight: 600;
 }
 
 .dashboard-monitor-chart {
@@ -295,6 +491,20 @@
 @container (min-width: 26rem) {
 	.dashboard-monitor-extra {
 		display: flex;
+	}
+}
+
+@container (max-width: 22rem) {
+	.dashboard-monitor-body {
+		gap: var(--ui-stat-gap);
+	}
+
+	.dashboard-monitor-number {
+		font-size: 1.75rem;
+	}
+
+	.dashboard-monitor-metrics {
+		gap: var(--ui-stat-gap);
 	}
 }
 

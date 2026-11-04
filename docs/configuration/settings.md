@@ -33,8 +33,10 @@ values are [environment variables](environment.md).
   without scheme must be a bare host name or IP address and is pinged, so
   `host:80` or `host/path` are rejected. Separate entries with comma, Tab, or Enter. Defaults: `https://1.1.1.1`,
   `8.8.8.8`, `9.9.9.9`, `https://www.de-cix.net`, `https://cloudflare.com`.
-  **Reset to defaults** restores them. Invalid entries and fewer than 3 targets
-  are not saved.
+  **Reset to defaults** restores them. Invalid entries, fewer than 3 or more than 20
+  distinct targets are not saved. A list saved before the limit existed is probed
+  with its first 20 entries and logs a warning. One probe run stops after 20 s;
+  unfinished targets count as failed.
 - **Minimum Score** (`quality_min_score`, default 70) and **RTT Threshold**
   (`quality_rtt_threshold_ms`, default 500): see [Quality gate](../features/quality-gate.md).
 - **Provider Lookup**: resolves public target IPs to ASN and ISP. With an ip-api

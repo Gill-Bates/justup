@@ -32,6 +32,7 @@ from ..utils.constants import (
     TARGET_RETENTION_DAYS_MIN,
 )
 from ..utils.http_status import DEFAULT_HTTP_SUCCESS_CODES, parse_status_code_spec
+from ..utils.tcp_ports import parse_port_list
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 # Default TCP port for new targets (HTTP). Users should explicitly set 443 for HTTPS-only.
@@ -106,64 +107,13 @@ def normalize_ports(value, *, default: str | None = None) -> str | None:
 
     Returns:
             Normalized comma-separated port string, or default if input is empty.
-            Duplicates are removed while preserving order.
+            Ports are unique and ascending, the same rule the scheduler executes (utils.tcp_ports).
 
     Raises:
             ValueError: If any port is out of range (1-65535) or not a valid integer.
     """
-    if value is None or value == "":
-        return default
-
-    # Reject bool before int check (bool is subclass of int in Python)
-    if isinstance(value, bool):
-        raise ValueError(f"Invalid TCP port: boolean not allowed (got {value})")
-
-    if isinstance(value, int):
-        if not 1 <= value <= 65535:
-            raise ValueError(f"Invalid TCP port: {value} out of range (1-65535)")
-        return str(value)
-
-    if isinstance(value, (list, tuple)):
-        seen: set[int] = set()
-        ports: list[str] = []
-        for p in value:
-            if isinstance(p, bool) or (isinstance(p, float) and not p.is_integer()):
-                raise ValueError(f"Invalid TCP port: {p!r} is not an integer")
-            try:
-                p_int = int(p)
-            except (ValueError, TypeError) as e:
-                raise ValueError(f'Invalid TCP port: "{p}" is not a valid integer') from e
-            if not 1 <= p_int <= 65535:
-                raise ValueError(f"Invalid TCP port: {p_int} out of range (1-65535)")
-            if p_int not in seen:
-                seen.add(p_int)
-                ports.append(str(p_int))
-        return ",".join(ports) if ports else default
-
-    v_str = str(value).strip()
-    if not v_str:
-        return default
-
-    parts = re.split(r"[,\s]+", v_str)
-    seen: set[int] = set()
-    ports: list[str] = []
-    for raw_p in parts:
-        p = raw_p.strip()
-        if not p:
-            continue
-        try:
-            p_int = int(p)
-            if not 1 <= p_int <= 65535:
-                raise ValueError(f"Invalid TCP port: {p_int} out of range (1-65535)")
-            if p_int not in seen:
-                seen.add(p_int)
-                ports.append(str(p_int))
-        except ValueError as e:
-            if "Invalid TCP port" in str(e):
-                raise
-            raise ValueError(f"Invalid TCP port: {p}") from e
-
-    return ",".join(ports) if ports else default
+    ports = parse_port_list(value)
+    return ",".join(str(p) for p in ports) if ports else default
 
 
 class TargetBase(BaseModel):
@@ -411,10 +361,6 @@ class TargetUpdate(BaseModel):
         """
         if self.clear_http_password and self.http_password:
             raise ValueError("Cannot set and clear http_password at the same time")
-
-        # Validate only on an explicit enable; the credentials may already be stored and are checked after merge.
-        if self.http_basic_auth_enabled is True and not self.http_username and not self.http_password:
-            pass
 
         return self
 

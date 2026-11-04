@@ -38,8 +38,10 @@
 	 * @param {Object} stats - Stats object with totalDowntimeMs property
 	 * @returns {HTMLTableCellElement}
 	 */
-	function createServiceCell(stats) {
+	function createServiceCell(stats, label) {
 		const td = document.createElement('td');
+		td.dataset.label = label;
+		td.headers = 'downtime-heading-' + label.toLowerCase();
 		td.className = 'text-end';
 		if (stats.totalDowntimeMs > 0) {
 			td.className += ' text-danger fw-semibold';
@@ -53,6 +55,7 @@
 
 
 	let downtimeLoading = false;
+	let downtimeRefreshPending = false;
 
 	function byId(id) {
 		return document.getElementById(id);
@@ -95,6 +98,8 @@
 			// Built with the DOM API (prevents XSS via href injection)
 			const tdName = document.createElement('td');
 			tdName.className = 'ju-cell-text';
+			tdName.dataset.label = 'Target';
+			tdName.headers = 'downtime-heading-target';
 			const a = document.createElement('a');
 			a.href = '/ui/targets/' + encodeURIComponent(target.target_id);
 			a.className = 'text-decoration-none text-reset fw-semibold';
@@ -106,16 +111,19 @@
 			tdName.appendChild(a);
 			tr.appendChild(tdName);
 
-			['http_up', 'ping_up', 'tcp_up'].forEach(function (key) {
+			[['http_up', 'HTTP'], ['ping_up', 'Ping'], ['tcp_up', 'TCP']].forEach(function ([key, label]) {
 				const seconds = services[key] ? services[key].downtime_seconds : 0;
-				tr.appendChild(createServiceCell({ totalDowntimeMs: seconds * 1000 }));
+				tr.appendChild(createServiceCell({ totalDowntimeMs: seconds * 1000 }, label));
 			});
 			tableBody.appendChild(tr);
 		});
 	}
 
 	async function loadDowntimeOverview() {
-		if (downtimeLoading) return;
+		if (downtimeLoading) {
+			downtimeRefreshPending = true;
+			return;
+		}
 		downtimeLoading = true;
 
 		const since = new Date(Date.now() - LOOKBACK_WINDOW_MS).toISOString();
@@ -144,6 +152,10 @@
 			showState('error');
 		} finally {
 			downtimeLoading = false;
+			if (downtimeRefreshPending) {
+				downtimeRefreshPending = false;
+				void loadDowntimeOverview();
+			}
 		}
 	}
 

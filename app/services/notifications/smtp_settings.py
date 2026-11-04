@@ -21,6 +21,7 @@ from ...utils.constants import DEFAULT_SMTP_USE_TLS, SettingKeys
 from ...utils.crypto import decrypt_secret
 from ...utils.runtime_fields import is_secret_set
 from ...utils.smtp_readiness import SmtpReadiness, smtp_readiness
+from ...utils.tcp_ports import parse_port
 from .smtp_transport import SMTPConfigurationError, SMTPConnection
 
 _log = logging.getLogger(__name__)
@@ -50,10 +51,23 @@ def resolve_use_tls(conn: sqlite3.Connection) -> bool:
 
 
 def _stored_port(conn: sqlite3.Connection) -> int | None:
-    """Return the stored SMTP port as int, or None when absent or not a number."""
+    """Return the stored SMTP port, or None when none is stored (the default applies).
+
+    Raises:
+        ValueError: A value is stored but is not a whole number from 1 to 65535 (the shared TCP port rule).
+    """
+    stored = sqlite_db.get_setting(conn, SettingKeys.SMTP_PORT, None)
+    if stored is None or (isinstance(stored, str) and not stored.strip()):
+        return None
+    return parse_port(stored)
+
+
+def _public_port(conn: sqlite3.Connection) -> int | None:
+    """Port for display: an invalid stored value is logged and shown as empty, never raised into the UI."""
     try:
-        return int(sqlite_db.get_setting(conn, SettingKeys.SMTP_PORT, None))
-    except (TypeError, ValueError):
+        return _stored_port(conn)
+    except ValueError:
+        _log.warning("Stored smtp_port is invalid (expected 1-65535); correct it in the SMTP settings")
         return None
 
 
@@ -63,7 +77,7 @@ def load_public_smtp_settings(conn: sqlite3.Connection) -> dict:
     return {
         "smtp_enabled": bool(get(conn, SettingKeys.SMTP_ENABLED, False)),
         "smtp_host": get(conn, SettingKeys.SMTP_HOST, "") or "",
-        "smtp_port": _stored_port(conn),
+        "smtp_port": _public_port(conn),
         "smtp_from": get(conn, SettingKeys.SMTP_FROM, "") or "",
         "smtp_user": get(conn, SettingKeys.SMTP_USER, "") or "",
         "smtp_use_tls": resolve_use_tls(conn),
@@ -76,8 +90,8 @@ def load_connection(conn: sqlite3.Connection) -> tuple[SMTPConnection, str]:
 
     Raises:
         RuntimeError: SMTP is disabled or host/sender are missing.
-        SMTPConfigurationError: A stored password cannot be decrypted. It is never replaced by
-            an empty password, which would turn the send into an anonymous one.
+        SMTPConfigurationError: A stored password cannot be decrypted (it is never replaced by an
+            empty password, which would turn the send into an anonymous one), or the stored port is invalid.
     """
     readiness = smtp_readiness(conn)
     if readiness is SmtpReadiness.DISABLED:
@@ -98,9 +112,15 @@ def load_connection(conn: sqlite3.Connection) -> tuple[SMTPConnection, str]:
                 "The stored SMTP password cannot be decrypted; re-enter it in the SMTP settings"
             ) from None
 
+    try:
+        port = _stored_port(conn)
+    except ValueError:
+        raise SMTPConfigurationError(
+            "The stored SMTP port is invalid (expected 1-65535); correct it in the SMTP settings"
+        ) from None
     config = SMTPConnection(
         host=host,
-        port=_stored_port(conn) or DEFAULT_SMTP_PORT,
+        port=DEFAULT_SMTP_PORT if port is None else port,
         user=sqlite_db.get_setting(conn, SettingKeys.SMTP_USER),
         password=password,
         use_tls=resolve_use_tls(conn),

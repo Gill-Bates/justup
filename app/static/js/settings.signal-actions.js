@@ -281,7 +281,6 @@ function initUnregisterModal() {
     modal.addEventListener('show.bs.modal', reset);
     // Never leave the password in the DOM after the dialog closed (cancel, Escape or success).
     modal.addEventListener('hidden.bs.modal', reset);
-    modal.addEventListener('shown.bs.modal', () => DOM.unregisterPhonePassword()?.focus());
 
     if (form) {
         form.addEventListener('submit', (e) => {
@@ -370,6 +369,8 @@ function initCaptchaInput() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 let enableToggleAbort = null;
+let signalSaveQueue = Promise.resolve();
+let signalSaveGeneration = 0;
 
 function initEnableToggle() {
     const enabledEl = DOM.signalEnabled();
@@ -393,28 +394,45 @@ function initEnableToggle() {
         }
     }
 
-    enabledEl.addEventListener('change', async function () {
+    enabledEl.addEventListener('change', function () {
         toggleSignalPanel();
+        const wanted = enabledEl.checked;
+        const generation = ++signalSaveGeneration;
 
-        try {
-            const resp = await apiFetch(SIGNAL_API.settings, {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ signal_enabled: this.checked })
-            });
-            if (resp.ok) {
-                notify('success', 'Signal ' + (this.checked ? 'enabled' : 'disabled'));
-            } else {
-                this.checked = !this.checked;
-                toggleSignalPanel();
-                notify('error', 'Failed to save Signal setting');
+        signalSaveQueue = signalSaveQueue.catch(() => {}).then(async () => {
+            try {
+                const resp = await apiFetch(SIGNAL_API.settings, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ signal_enabled: wanted })
+                });
+                if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                if (generation === signalSaveGeneration) {
+                    notify('success', 'Signal ' + (wanted ? 'enabled' : 'disabled'));
+                }
+            } catch (e) {
+                console.warn('Failed to save signal_enabled:', e);
+                if (generation !== signalSaveGeneration) return;
+
+                try {
+                    const stateResp = await apiFetch(SIGNAL_API.settings);
+                    if (!stateResp.ok) throw new Error('HTTP ' + stateResp.status);
+                    const settings = await stateResp.json();
+                    if (typeof settings.signal_enabled !== 'boolean') {
+                        throw new Error('Signal setting missing from response');
+                    }
+                    if (generation === signalSaveGeneration) {
+                        enabledEl.checked = settings.signal_enabled;
+                        toggleSignalPanel();
+                    }
+                } catch (reloadError) {
+                    console.warn('Failed to reload signal_enabled:', reloadError);
+                }
+                if (generation === signalSaveGeneration) {
+                    notify('error', 'Failed to save Signal setting');
+                }
             }
-        } catch (e) {
-            console.warn('Failed to save signal_enabled:', e);
-            this.checked = !this.checked;
-            toggleSignalPanel();
-            notify('error', 'Failed to save Signal setting');
-        }
+        });
     }, { signal: enableToggleAbort.signal });
 }
 

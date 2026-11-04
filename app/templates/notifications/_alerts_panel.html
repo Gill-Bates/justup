@@ -39,7 +39,7 @@
          </div>
 
          <div class="col-12">
-            <div class="sticky-actions d-flex justify-content-center justify-content-md-end gap-2 align-items-center">
+            <div class="ui-form-actions sticky-actions d-flex justify-content-center justify-content-md-end gap-2 align-items-center">
                {% if can_close_alerts %}
                <button type="button" class="btn btn-outline-primary" {% if has_open_alerts %}
                   onclick="closeAllAlerts(); return false;" {% else %} disabled title="No open alerts" {% endif %}>
@@ -92,20 +92,20 @@
                   </td>
 
                   <td data-label="Service">
-                     <div class="check-badges">
+                     <div class="ju-badges check-badges">
                         {% set failed_list = alert.failed_service.split(', ') %}
                         {% if alert.target_services %}
                         {% for svc in alert.target_services %}
                         {% if svc in failed_list %}
-                        <span class="badge bg-danger">{{ svc }}</span>
+                        <span class="badge ju-status-badge--danger">{{ svc }}</span>
                         {% else %}
-                        <span class="badge bg-secondary">{{ svc }}</span>
+                        <span class="badge ju-status-badge--neutral">{{ svc }}</span>
                         {% endif %}
                         {% endfor %}
                         {% else %}
                         {# Fallback: Target deleted or not found, show only failed services #}
                         {% for svc in failed_list %}
-                        <span class="badge bg-danger">{{ svc }}</span>
+                        <span class="badge ju-status-badge--danger">{{ svc }}</span>
                         {% endfor %}
                         {% endif %}
                      </div>

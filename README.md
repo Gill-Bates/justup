@@ -1,5 +1,8 @@
 <p align="center">
-  <img src="app/static/img/justup_1c.svg" width="320" alt="justUp! Logo">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="app/static/img/justup_1c_white.svg">
+    <img src="app/static/img/justup_1c.svg" width="320" alt="justUp! Logo">
+  </picture>
 </p>
 
 <p align="center">

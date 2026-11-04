@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest import mock
@@ -621,3 +622,205 @@ def test_cert_alert_text_follows_thresholds(db_path, tmp_path, days_left, expect
     finally:
         sqlite_db.close_connection(conn)
     assert texts == ([expected] if expected else [])
+
+
+def test_scheduler_checks_certificate_on_explicit_cert_host_and_port(db_path, tmp_path):
+    target_id = _target(
+        db_path,
+        enable_cert_expiration=True,
+        http_url="https://t.example:9443/",
+        http_port=8443,
+        cert_host="cert.example",
+        cert_port=443,
+    )
+    sched = _sched(db_path, tmp_path)
+    sched._refresh_targets(utcnow())
+    cert_check = mock.AsyncMock(return_value=scheduler.checks.CheckResult(ok=False, detail="unreachable"))
+    with (
+        mock.patch.object(scheduler.checks, "cert_expiration", cert_check),
+        mock.patch.object(scheduler.tsdb_db, "query", return_value=[]),
+        mock.patch.object(scheduler.tsdb_db, "append_point"),
+    ):
+        asyncio.run(sched._run_target(target_id, utcnow()))
+    assert cert_check.await_args.args[:2] == ("cert.example", 443)
+
+
+def test_invalid_stored_tcp_ports_report_target_down_instead_of_checking_port_80(db_path, tmp_path):
+    target_id = _target(db_path, enable_tcp_connect=True)
+    conn = sqlite_db.connect(db_path)
+    try:
+        # Only a manual edit can bring an invalid list into the database; the API validates on write.
+        conn.execute("UPDATE targets SET tcp_ports = ? WHERE id = ?", ("80,abc", target_id))
+        conn.commit()
+    finally:
+        sqlite_db.close_connection(conn)
+    sched = _sched(db_path, tmp_path)
+    sched._refresh_targets(utcnow())
+    tcp = mock.AsyncMock(return_value=scheduler.checks.CheckResult(ok=True, latency_ms=1.0))
+    with (
+        mock.patch.object(scheduler.checks, "tcp_connect", tcp),
+        mock.patch.object(scheduler.tsdb_db, "query", return_value=[]),
+        mock.patch.object(scheduler.tsdb_db, "append_point"),
+    ):
+        asyncio.run(sched._run_target(target_id, utcnow()))
+    tcp.assert_not_awaited()
+    conn = sqlite_db.connect(db_path)
+    try:
+        assert sqlite_db.get_target_status(conn, target_id)["overall_status"] == TargetStatus.DOWN
+    finally:
+        sqlite_db.close_connection(conn)
+
+
+def _run_with_slow_tcp_check(db_path, tmp_path, *, renew_period: float, release_takeover: bool = False):
+    """Run one target check that outlives the initial lock TTL while a second scheduler tries to take the lock."""
+    target_id = _target(db_path, enable_tcp_connect=True)
+    sched, other = _sched(db_path, tmp_path), _sched(db_path, tmp_path)
+    sched._run_id, other._run_id = "run-a", "run-b"
+    sched._refresh_targets(utcnow())
+    clock = {"now": utcnow()}
+    takeover: list[bool] = []
+
+    async def slow_tcp(*_args, **_kwargs):
+        for _ in range(5):
+            clock["now"] += timedelta(seconds=60)  # 300 s in total, the initial TTL is 120 s
+            await asyncio.sleep(0.05)
+        conn = sqlite_db.connect(db_path)
+        try:
+            takeover.append(sqlite_db.try_lock_target(conn, target_id, other._run_id, 120))
+            if release_takeover and takeover[-1]:
+                sqlite_db.release_target_lock(conn, target_id, other._run_id)
+        finally:
+            sqlite_db.close_connection(conn)
+        return scheduler.checks.CheckResult(ok=True, latency_ms=1.0)
+
+    append = mock.Mock()
+    with (
+        mock.patch("app.db.sqlite.scheduler_runs.utcnow", lambda: clock["now"]),
+        mock.patch.object(scheduler, "_lock_renew_period", lambda _ttl: renew_period),
+        mock.patch.object(scheduler.checks, "tcp_connect", slow_tcp),
+        mock.patch.object(scheduler.tsdb_db, "query", return_value=[]),
+        mock.patch.object(scheduler.tsdb_db, "append_point", append),
+    ):
+        asyncio.run(sched._run_target(target_id, utcnow()))
+    return takeover, append
+
+
+def test_long_running_check_keeps_its_target_lock_and_writes_its_results(db_path, tmp_path):
+    takeover, append = _run_with_slow_tcp_check(db_path, tmp_path, renew_period=0.01)
+    assert takeover == [False]
+    assert append.called
+
+
+def test_check_that_lost_its_lock_discards_results(db_path, tmp_path):
+    takeover, append = _run_with_slow_tcp_check(db_path, tmp_path, renew_period=3600)
+    assert takeover == [True]
+    append.assert_not_called()
+
+
+def test_uptime_uses_the_same_availability_rule_as_the_overall_status(db_path, tmp_path):
+    target_id = _target(db_path, enable_http_check=True, enable_ping=True)
+    sched = _sched(db_path, tmp_path)
+    sched._refresh_targets(utcnow())
+    http_ok = scheduler.checks.CheckResult(ok=True, latency_ms=1.0, value={"status": 200})
+    ping_down = scheduler.checks.CheckResult(ok=False, detail="unreachable")
+    with (
+        mock.patch.object(scheduler.checks, "http_head", mock.AsyncMock(return_value=http_ok)),
+        mock.patch.object(scheduler.checks, "ping", mock.AsyncMock(return_value=ping_down)),
+    ):
+        asyncio.run(sched._run_target(target_id, utcnow()))
+    conn = sqlite_db.connect(db_path)
+    try:
+        status = sqlite_db.get_target_status(conn, target_id)
+    finally:
+        sqlite_db.close_connection(conn)
+    assert status["overall_status"] == TargetStatus.DOWN
+    assert status["uptime_percent"] == 0.0
+
+
+def test_delayed_metric_storage_keeps_one_check_cycle_one_availability_sample(db_path, tmp_path):
+    target_id = _target(db_path, enable_http_check=True, enable_ping=True)
+    sched = _sched(db_path, tmp_path)
+    sched._refresh_targets(utcnow())
+    http_ok = scheduler.checks.CheckResult(ok=True, latency_ms=1.0, value={"status": 200})
+    ping_down = scheduler.checks.CheckResult(ok=False, detail="unreachable")
+    clock = {"now": utcnow()}
+
+    def slow_clock():
+        # Every clock read inside the TSDB takes 3 s: storage delayed by load or lock waits.
+        clock["now"] += timedelta(seconds=3)
+        return clock["now"]
+
+    with (
+        mock.patch.object(scheduler.checks, "http_head", mock.AsyncMock(return_value=http_ok)),
+        mock.patch.object(scheduler.checks, "ping", mock.AsyncMock(return_value=ping_down)),
+        mock.patch("app.db.tsdb.utcnow", slow_clock),
+    ):
+        asyncio.run(sched._run_target(target_id, utcnow()))
+    conn = sqlite_db.connect(db_path)
+    try:
+        status = sqlite_db.get_target_status(conn, target_id)
+    finally:
+        sqlite_db.close_connection(conn)
+    assert status["overall_status"] == TargetStatus.DOWN
+    assert status["uptime_percent"] == 0.0
+
+
+def test_check_whose_lock_was_taken_over_and_released_still_discards_results(db_path, tmp_path):
+    takeover, append = _run_with_slow_tcp_check(db_path, tmp_path, renew_period=3600, release_takeover=True)
+    assert takeover == [True]
+    append.assert_not_called()
+
+
+def test_slow_tsdb_writes_do_not_stall_the_event_loop_and_share_one_cycle_stamp(db_path, tmp_path):
+    target_id = _target(db_path, enable_http_check=True, enable_ping=True)
+    sched = _sched(db_path, tmp_path)
+    sched._refresh_targets(utcnow())
+    http_ok = scheduler.checks.CheckResult(ok=True, latency_ms=1.0, value={"status": 200})
+    ping_ok = scheduler.checks.CheckResult(ok=True, latency_ms=2.0)
+    written: list[tuple[str, object]] = []
+
+    def slow_append(_dir, *, target_id, metric, value, retention_days, at):  # noqa: ARG001 - mirrors append_point
+        time.sleep(0.3)  # a slow volume; blocks only its worker thread
+        written.append((metric, at))
+
+    async def scenario():
+        gaps: list[float] = []
+        stop = asyncio.Event()
+
+        async def ticker():
+            last = time.monotonic()
+            while not stop.is_set():
+                await asyncio.sleep(0.01)
+                now = time.monotonic()
+                gaps.append(now - last)
+                last = now
+
+        task = asyncio.create_task(ticker())
+        await asyncio.sleep(0.05)
+        await sched._run_target(target_id, utcnow())
+        await asyncio.sleep(0.05)  # lets the ticker record a gap that ended with the run
+        stop.set()
+        await task
+        return max(gaps)
+
+    with (
+        mock.patch.object(scheduler.checks, "http_head", mock.AsyncMock(return_value=http_ok)),
+        mock.patch.object(scheduler.checks, "ping", mock.AsyncMock(return_value=ping_ok)),
+        mock.patch.object(scheduler.tsdb_db, "query", return_value=[]),
+        mock.patch.object(scheduler.tsdb_db, "append_point", slow_append),
+    ):
+        max_gap = asyncio.run(scenario())
+
+    assert [m for m, _ in written] == ["ping_up", "ping_ms", "http_up", "http_ms", "http_status"]
+    assert len({at for _, at in written}) == 1
+    assert max_gap < 0.25, max_gap  # five writes take about 1.5 s in total
+
+
+def test_metric_points_of_a_lost_lock_are_discarded_before_any_write(db_path, tmp_path):
+    sched = _sched(db_path, tmp_path)
+    lost = asyncio.Event()
+    lost.set()
+    with mock.patch.object(scheduler.tsdb_db, "append_point") as append:
+        written = sched._write_metric_points(None, 1, 30, utcnow(), [("ping_up", 1), ("ping_ms", 2.0)], lost)
+    assert written is False
+    append.assert_not_called()

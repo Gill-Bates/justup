@@ -119,3 +119,32 @@ test('start and destination markers keep their S and D labels', () => {
   assert.equal(describe(groupOf({ hop: 1 }, { hop: 2 }), 1, true).visibleLabel, 'S·2');
   assert.equal(describe(groupOf({ hop: 1, _destination: true }), 1, true).visibleLabel, 'S/D');
 });
+test('approximate map positions stay distinguishable in marker groups', () => {
+  assert.equal(describe(groupOf({ hop: 3, _approximate: true }), 1, false).isApproximate, true);
+});
+// Chain as the server emits it for Frankfurt -> Kottenheim (approx.) -> Frankfurt -> Wuppertal -> Ratingen (approx. destination).
+// tests/test_pdf_route_map.py pins the same segment sequence for the PDF reader.
+const owner = [
+  { hop: 7, map_role: 'route', segment_to_next: 'dashed' },
+  { hop: 8, map_role: 'estimate', _approximate: true, segment_to_next: 'dashed' },
+  { hop: 10, map_role: 'route', segment_to_next: 'solid' },
+  { hop: 11, map_role: 'route', segment_to_next: 'dashed' },
+  { hop: 13, map_role: 'route', _destination: true, _approximate: true },
+];
+test('an estimate is a node of the chain and reliable back-jumps stay', () => {
+  const route = sandbox.window.TracerouteMap.routePointsOf(owner);
+  assert.deepEqual(plain(route.map((p) => p.hop)), [7, 8, 10, 11, 13]);
+  const dashed = sandbox.window.TracerouteMap.isDashedSegment;
+  assert.deepEqual(plain(route.slice(0, -1).map((p) => dashed(p))), [true, true, false, true]);
+  // A reliable A-B-A sequence is untouched: every point keeps the route role.
+  const aba = [{ hop: 1, segment_to_next: 'solid' }, { hop: 2, segment_to_next: 'solid' }, { hop: 3 }];
+  assert.equal(sandbox.window.TracerouteMap.routePointsOf(aba).length, 3);
+});
+test('an estimate keeps its own tilde marker and never shares one with a route hop', () => {
+  const groups = groupNearby(owner.map((p, i) => ({ ...p, x: p.hop === 13 ? 200 : i * 2 })), (point) => ({ x: point.x, y: 0 }), 36);
+  assert.deepEqual(plain(groups.map((group) => group.members.map((member) => member.point.hop))), [[7], [8], [10, 11], [13]]);
+  const info = describe(groups[1], 1, false);
+  assert.deepEqual(plain([info.kind, info.visibleLabel, info.isEstimate, info.isApproximate]), ['estimate', '~8', true, true]);
+  const dest = describe(groups[3], 1, false);
+  assert.deepEqual(plain([dest.kind, dest.visibleLabel, dest.isApproximate]), ['destination', 'D', true]);
+});

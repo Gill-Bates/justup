@@ -118,7 +118,7 @@ def _other_stuck_email(conn: sqlite3.Connection, queue_id: int) -> bool:
 
 
 def handoff_incident(channel: str) -> str:
-    """Inbox incident name of one channel's SMTP/Signal hand-off outage."""
+    """Inbox incident name of one channel's hand-off outage (only email has an aggregated detector)."""
     return f"delivery.{channel}.handoff"
 
 
@@ -978,16 +978,16 @@ class NotificationSpooler:
         if row is None or row[0] not in ("email", "signal"):
             return
         channel = row[0]
-        incident = handoff_incident(channel)
         if sent:
             inbox.emit_delivery_sent(conn, channel)
-            if channel == "email":
-                if _other_stuck_email(conn, queue_id):
-                    return  # one accepted mail does not end a disturbance that still holds other mails back
-                sqlite_db.delete_setting(conn, _LAST_FAILURE_SETTING)
+            if channel != "email":
+                return  # only email has an aggregated hand-off incident; Signal reports per message
+            if _other_stuck_email(conn, queue_id):
+                return  # one accepted mail does not end a disturbance that still holds other mails back
+            sqlite_db.delete_setting(conn, _LAST_FAILURE_SETTING)
             inbox.resolve_incident(
                 conn,
-                incident,
+                handoff_incident(channel),
                 title="Email handoff recovered",
                 body="Channel: Email · SMTP handoff succeeded again; delivery to the mailbox is not verifiable",
                 now=_utcnow(),
@@ -1002,9 +1002,11 @@ class NotificationSpooler:
             else "not handed over after all retries"
         )
         inbox.notify_delivery_failed(conn, queue_id=queue_id, channel=channel, target_id=row[1], reason=reason)
+        if channel != "email":
+            return
         inbox.update_incident(
             conn,
-            incident,
+            handoff_incident(channel),
             title="Email handoff failed",
             body=f"Channel: Email · {reason}; message(s) not accepted by the SMTP server; see the spooler log",
             severity="error",

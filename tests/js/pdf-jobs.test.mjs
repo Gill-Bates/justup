@@ -40,7 +40,7 @@ function harness({ storage = "ok", status = [], stored = {}, user = "userA" } = 
       if (item instanceof Error) throw item;
       return item;
     },
-    dispatchEvent: event => events.push(event.detail),
+    dispatchEvent: event => events.push({ type: event.type, ...event.detail }),
     justUpToast: { success: m => toasts.push(["ok", m]), error: m => toasts.push(["error", m]) },
   };
   const body = { appendChild: c => { created.push(c); }, children: [] };
@@ -149,6 +149,18 @@ test("without localStorage access the job still completes in the session", async
   assert.equal(h.window.justUpPdfJobs.getPending().length, 1);
   await h.run(2000);
   assert.equal(h.events.at(-1).success, true);
+});
+
+test("an expired job ends monitoring without reporting job failure", async () => {
+  const h = harness();
+  h.window.justUpPdfJobs.add("j1", 7);
+  await h.run(5 * 60 * 1000 + 1);
+  assert.equal(h.window.justUpPdfJobs.getPending().length, 0);
+  assert.equal(h.events.length, 1);
+  assert.equal(h.events[0].type, "pdf-job-monitoring-expired");
+  assert.equal(h.events[0].success, undefined);
+  assert.equal(h.calls.status, 0);
+  assert.equal(h.window.justUpPdfJobs.getPending().length, 0);
 });
 
 test("an invalid job id is never polled or stored", async () => {

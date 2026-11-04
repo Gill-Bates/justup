@@ -26,16 +26,16 @@ from tests import _support  # noqa: F401 - imported for its sys.path side effect
 
 ROOT = Path(__file__).resolve().parent.parent
 URL = "/me/dashboard-layout"
-_STATUS = {"id": "status-online", "x": 0, "y": 0, "w": 3, "h": 2, "visible": True}
+_STATUS = {"id": "status-online", "x": 0, "y": 0, "w": 3, "h": 2, "visible": True, "height_mode": "auto"}
 _STATUS_WIDGETS = [
     _STATUS,
-    {"id": "status-offline", "x": 3, "y": 0, "w": 3, "h": 2, "visible": True},
-    {"id": "status-disabled", "x": 6, "y": 0, "w": 3, "h": 2, "visible": True},
-    {"id": "status-total", "x": 9, "y": 0, "w": 3, "h": 2, "visible": True},
+    {"id": "status-offline", "x": 3, "y": 0, "w": 3, "h": 2, "visible": True, "height_mode": "auto"},
+    {"id": "status-disabled", "x": 6, "y": 0, "w": 3, "h": 2, "visible": True, "height_mode": "auto"},
+    {"id": "status-total", "x": 9, "y": 0, "w": 3, "h": 2, "visible": True, "height_mode": "auto"},
 ]
-_QUALITY = {"id": "quality", "x": 0, "y": 2, "w": 3, "h": 4, "visible": False}
-_DOWNTIME = {"id": "downtime", "x": 3, "y": 2, "w": 6, "h": 4, "visible": True}
-_VALID = {"version": 1, "widgets": [*_STATUS_WIDGETS, _QUALITY, _DOWNTIME]}
+_QUALITY = {"id": "quality", "x": 0, "y": 2, "w": 3, "h": 4, "visible": False, "height_mode": "auto"}
+_DOWNTIME = {"id": "downtime", "x": 3, "y": 2, "w": 6, "h": 4, "visible": True, "height_mode": "manual"}
+_VALID = {"version": 2, "widgets": [*_STATUS_WIDGETS, _QUALITY, _DOWNTIME]}
 
 
 @pytest.fixture(autouse=True)
@@ -115,10 +115,13 @@ def test_storage_roundtrip_replace_delete_and_cascade(conn):
     assert layouts.get_dashboard_layout(conn, user_id) is None
     layouts.set_dashboard_layout(conn, user_id, _VALID)
     assert layouts.get_dashboard_layout(conn, user_id) == _VALID
-    layouts.set_dashboard_layout(conn, user_id, {"version": 1, "widgets": [_STATUS]})
-    assert layouts.get_dashboard_layout(conn, user_id) == {"version": 1, "widgets": [_STATUS]}
+    layouts.set_dashboard_layout(conn, user_id, {"version": 2, "widgets": [_STATUS]})
+    assert layouts.get_dashboard_layout(conn, user_id) == {"version": 2, "widgets": [_STATUS]}
     with pytest.raises(ValueError):
-        layouts.set_dashboard_layout(conn, user_id, {"version": 1, "widgets": [_STATUS, _STATUS]})
+        layouts.set_dashboard_layout(conn, user_id, {"version": 1, "widgets": [_STATUS]})
+    assert layouts.get_dashboard_layout(conn, user_id) == {"version": 2, "widgets": [_STATUS]}
+    with pytest.raises(ValueError):
+        layouts.set_dashboard_layout(conn, user_id, {"version": 2, "widgets": [_STATUS, _STATUS]})
     assert layouts.get_dashboard_layout(conn, user_id)["widgets"] == [_STATUS]
     conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
     conn.commit()
@@ -150,11 +153,19 @@ def test_save_load_reset_cycle(env):
     assert alice.call("DELETE").status_code == 200  # idempotent
 
 
+def test_v1_layout_is_rejected_without_changing_the_saved_v2_layout(env):
+    alice = env["alice"]
+    assert alice.call("PUT", _VALID).status_code == 200
+    response = alice.call("PUT", {**_VALID, "version": 1})
+    assert response.status_code == 422
+    assert alice.call("GET").json() == {"layout": _VALID}
+
+
 def test_layouts_are_isolated_per_user(env):
     alice, bob = env["alice"], env["bob"]
     assert alice.call("PUT", _VALID).status_code == 200
     assert bob.call("GET").json() == {"layout": None}
-    other = {"version": 1, "widgets": [{**_STATUS, "visible": False}]}
+    other = {"version": 2, "widgets": [{**_STATUS, "visible": False}]}
     assert bob.call("PUT", other).status_code == 200
     assert alice.call("GET").json() == {"layout": _VALID}
     assert bob.call("DELETE").status_code == 200
@@ -163,31 +174,34 @@ def test_layouts_are_isolated_per_user(env):
 
 def test_admin_widget_is_rejected_and_filtered_after_role_change(env):
     alice = env["alice"]
-    queue = {**_STATUS, "id": "delivery-queue"}
-    assert alice.call("PUT", {"version": 1, "widgets": [queue]}).status_code == 403
+    queue = {**_STATUS, "id": "delivery-queue", "h": 3}
+    assert alice.call("PUT", {"version": 2, "widgets": [queue]}).status_code == 403
     connection = sqlite_db.connect(env["app"].state.db_path)
     try:
-        layouts.set_dashboard_layout(connection, env["ids"][0], {"version": 1, "widgets": [_STATUS, queue]})
+        layouts.set_dashboard_layout(connection, env["ids"][0], {"version": 2, "widgets": [_STATUS, queue]})
     finally:
         sqlite_db.close_connection(connection)
-    assert alice.call("GET").json() == {"layout": {"version": 1, "widgets": [_STATUS]}}
+    assert alice.call("GET").json() == {"layout": {"version": 2, "widgets": [_STATUS]}}
 
 
 @pytest.mark.parametrize(
     "layout",
     [
-        {"version": 1, "widgets": [{**_STATUS, "id": "nope"}]},
-        {"version": 1, "widgets": [_STATUS, _STATUS]},
-        {"version": 1, "widgets": [{**_STATUS, "x": 10}]},  # x + w > 12
-        {"version": 1, "widgets": [{**_STATUS, "y": 999, "h": 2}]},  # y + h > 1000
-        {"version": 1, "widgets": [{**_STATUS, "x": -1}]},
-        {"version": 1, "widgets": [{**_STATUS, "w": 0}]},
-        {"version": 1, "widgets": [{**_STATUS, "h": 101}]},
-        {"version": 1, "widgets": [{**_STATUS, "w": "12"}]},
-        {"version": 1, "widgets": [{**_STATUS, "html": "<b>x</b>"}]},
-        {"version": 1, "widgets": [_STATUS] * 4},
-        {"version": 2, "widgets": []},
-        {"version": 1, "widgets": [_STATUS], "extra": 1},
+        {"version": 2, "widgets": [{**_STATUS, "id": "nope"}]},
+        {"version": 2, "widgets": [_STATUS, _STATUS]},
+        {"version": 2, "widgets": [{**_STATUS, "x": 10}]},  # x + w > 12
+        {"version": 2, "widgets": [{**_STATUS, "y": 999, "h": 2}]},  # y + h > 1000
+        {"version": 2, "widgets": [{**_STATUS, "x": -1}]},
+        {"version": 2, "widgets": [{**_STATUS, "w": 0}]},
+        {"version": 2, "widgets": [{**_STATUS, "h": 1}]},
+        {"version": 2, "widgets": [{**_STATUS, "height_mode": "invalid"}]},
+        {"version": 2, "widgets": [{key: value for key, value in _STATUS.items() if key != "height_mode"}]},
+        {"version": 2, "widgets": [{**_STATUS, "h": 101}]},
+        {"version": 2, "widgets": [{**_STATUS, "w": "12"}]},
+        {"version": 2, "widgets": [{**_STATUS, "html": "<b>x</b>"}]},
+        {"version": 2, "widgets": [_STATUS] * 14},
+        {"version": 2, "widgets": [_STATUS], "extra": 1},
+        {"version": 3, "widgets": [_STATUS]},
         {"widgets": []},
         [],
     ],
@@ -203,7 +217,9 @@ def test_widget_allowlist_matches_client_registry_and_template():
     registry = (ROOT / "app/static/js/dashboard-widgets.js").read_text(encoding="utf-8")
     template = (ROOT / "app/templates/dashboard.html").read_text(encoding="utf-8")
     status_fragment = (ROOT / "app/templates/fragments/status_summary.html").read_text(encoding="utf-8")
-    assert set(re.findall(r"def\(['\"]([a-z-]+)['\"]", registry)) == DASHBOARD_WIDGETS
+    registry_widget_ids = re.findall(r"def\(['\"]([a-z-]+)['\"]", registry)
+    assert len(registry_widget_ids) == len(set(registry_widget_ids)), "duplicate widget IDs in client registry"
+    assert set(registry_widget_ids) == DASHBOARD_WIDGETS
     template_widget_ids = set(re.findall(r'data-widget-id="([a-z-]+)"', template))
     assert template_widget_ids == DASHBOARD_WIDGETS
     assert sum(widget_id.startswith("status-") for widget_id in template_widget_ids) == 4
@@ -212,6 +228,24 @@ def test_widget_allowlist_matches_client_registry_and_template():
     assert set(re.findall(r'id="(dashboard-status-[a-z]+)"', status_fragment)) == hero_ids
     assert status_fragment.count('hx-swap-oob="outerHTML"') == 4
     assert len(re.findall(r'data-widget-id="', template)) == len(DASHBOARD_WIDGETS)
+
+
+def test_widget_sizes_agree_between_template_registry_and_server():
+    """Registry and server table must carry identical minimums; the template carries defaults only."""
+    registry = (ROOT / "app/static/js/dashboard-widgets.js").read_text(encoding="utf-8")
+    template = (ROOT / "app/templates/dashboard.html").read_text(encoding="utf-8")
+    definitions = {
+        m.group(1): tuple(int(v) for v in m.groups()[1:])
+        for m in re.finditer(r"def\('([a-z-]+)', '[^']+', (\d+), (\d+), (\d+), (\d+), (\d+), (\d+)", registry)
+    }
+    assert set(definitions) == set(layouts.DASHBOARD_WIDGET_MIN_SIZES) == DASHBOARD_WIDGETS
+    for wid, (x, y, w, h, min_w, min_h) in definitions.items():
+        assert layouts.DASHBOARD_WIDGET_MIN_SIZES[wid] == (min_w, min_h), f"{wid}: registry and server minimum differ"
+        tile = re.search(rf'<div class="grid-stack-item[^"]*"[^>]*gs-id="{wid}"[^>]*>', template)
+        assert tile is not None, wid
+        assert "gs-min-" not in tile.group(), f"{wid}: the template must not carry its own minimum"
+        for key, value in {"x": x, "y": y, "w": w, "h": h}.items():
+            assert f'gs-{key}="{value}"' in tile.group(), f"{wid}: template default {key} differs from the registry"
 
 
 def test_uptime_summary_excludes_unknown_time_and_disabled_targets(env, monkeypatch):

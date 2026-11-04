@@ -56,6 +56,26 @@ def test_tie_conflicting_locations_returns_none_and_logs(conn, caplog):
     assert any("amb" in r.getMessage() for r in caplog.records)
 
 
+def test_hostname_lookup_with_conflicting_equal_rank_aliases_returns_none(conn):
+    _add(conn, "aaa", "dup", 10.0, 10.0)
+    _add(conn, "zzz", "dup", -30.0, 100.0)
+    assert pop_lookup.lkp_h(conn, "core1.dup.example.net") is None
+
+
+def test_hostname_lookup_same_site_ties_resolve_deterministically(conn):
+    _add(conn, "fra", "dup", 50.0, 8.6)
+    _add(conn, "frank", "dup", 50.0, 8.6)
+    hit = pop_lookup.lkp_h(conn, "core1.dup.example.net")
+    assert hit is not None and hit["canonical_code"] == "fra"
+
+
+def test_hostname_lookup_priority_breaks_conflict(conn):
+    _add(conn, "aaa", "dup", 10.0, 10.0, priority=2)
+    _add(conn, "zzz", "dup", -30.0, 100.0, priority=1)
+    hit = pop_lookup.lkp_h(conn, "core1.dup.example.net")
+    assert hit is not None and hit["canonical_code"] == "zzz"
+
+
 def test_priority_or_confidence_difference_resolves_conflict(conn):
     _add(conn, "aaa", "dup", 10.0, 10.0, priority=2)
     _add(conn, "zzz", "dup", -30.0, 100.0, priority=1)

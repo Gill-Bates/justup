@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import errno
+import ipaddress
 import json
 import subprocess
 from pathlib import Path
@@ -52,12 +53,28 @@ def test_resolve_probe_target_blocks_name_resolving_to_blocked_ip() -> None:
         assert _resolve("evil.test", skip_ssrf_check=False) == (None, True)
 
 
-def test_resolve_probe_target_falls_back_to_hostname_without_answer() -> None:
+def test_resolve_probe_target_pins_system_answer_without_public_answer() -> None:
+    pinned = [ipaddress.ip_address("93.184.216.34")]
     with (
         mock.patch.object(checks, "_is_host_blocked_async", mock.AsyncMock(return_value=False)),
         mock.patch.object(checks, "_resolve_host_via_public_dns_first_answer", mock.AsyncMock(return_value=None)),
+        mock.patch.object(checks, "resolve_validated", return_value=pinned),
     ):
-        assert _resolve("example.test", skip_ssrf_check=False) == ("example.test", True)
+        assert _resolve("example.test", skip_ssrf_check=False) == ("93.184.216.34", True)
+
+
+def test_resolve_probe_target_never_returns_bare_name_when_system_answer_is_blocked() -> None:
+    with (
+        mock.patch.object(checks, "_is_host_blocked_async", mock.AsyncMock(return_value=False)),
+        mock.patch.object(checks, "_resolve_host_via_public_dns_first_answer", mock.AsyncMock(return_value=None)),
+        mock.patch.object(checks, "resolve_validated", return_value=None),
+    ):
+        assert _resolve("example.test", skip_ssrf_check=False) == (None, True)
+
+
+def test_resolve_probe_target_skip_ssrf_keeps_hostname_without_answer() -> None:
+    with mock.patch.object(checks, "_resolve_host_via_public_dns_first_answer", mock.AsyncMock(return_value=None)):
+        assert _resolve("example.test", skip_ssrf_check=True) == ("example.test", True)
 
 
 def test_network_unreachable_has_own_label_and_stays_retryable() -> None:

@@ -98,7 +98,7 @@ def test_collapse_summarises_consecutive_interpolated_hops() -> None:
     hops = interpolate_route([_hop(1), _timeout(2), _timeout(3), _hop(4), _timeout(5), _hop(6)])
     rows = collapse_interpolated_hops(hops)
     assert [r.get("hop_display", r.get("hop")) for r in rows] == [1, "2 - 3", 4, "5", 6]
-    assert rows[1]["hostname_display"] == "(2 hops interpolated)"
+    assert rows[1]["hostname_display"] == "2 hops without reply"
     assert rows[3]["hostname_display"] == "No reply"
     assert [h["hop"] for h in rows[1]["_raw_hops"]] == [2, 3]
     assert collapse_interpolated_hops([]) == []

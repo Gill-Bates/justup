@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "justup"
-version = "1.0.1"
+version = "1.0.2"
 description = "justUp! - Lightweight Uptime Monitor"
 requires-python = ">=3.13"
 license = "MIT"
@@ -34,6 +34,7 @@ dependencies = [
     "reportlab==5.1.0",
     "sslyze==6.3.1+justup.1",
     "starlette==1.10.0",
+    "uharfbuzz==0.57.0",
     "uvicorn==0.54.0",
 ]
 

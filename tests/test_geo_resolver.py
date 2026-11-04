@@ -534,6 +534,37 @@ def test_replaced_database_invalidates_cached_results(geodb) -> None:
     assert traceroute_geo.geolocate_ip("8.8.8.8")["lat"] == 2.0  # a cached IP notices the swap
 
 
+def test_country_lookup_accepts_record_without_coordinates(geodb, monkeypatch) -> None:
+    monkeypatch.setattr(
+        traceroute_geo, "_read_record", lambda _reader, _ip: (1, {"country": "DE", "lat": None, "lon": None})
+    )
+    assert traceroute_geo.geolocate_country("8.8.8.8") == "DE"
+    assert traceroute_geo.geolocate_country("127.0.0.1") is None
+    monkeypatch.setattr(traceroute_geo, "_read_record", lambda _reader, _ip: (1, {"country": "ZZ"}))
+    assert traceroute_geo.geolocate_country("8.8.8.8") is None
+
+
+def test_anycast_record_with_only_registered_country_yields_no_country(monkeypatch) -> None:
+    # GeoLite2 gives anycast resolvers (1.1.1.1, 9.9.9.9) a registered_country but no country.
+    from types import SimpleNamespace as Ns
+
+    class Reader:
+        def city(self, _ip):
+            return Ns(
+                location=Ns(latitude=None, longitude=None, accuracy_radius=None),
+                city=Ns(name=None),
+                country=Ns(iso_code=None),
+                registered_country=Ns(iso_code="AU"),
+                subdivisions=Ns(most_specific=Ns(name=None)),
+            )
+
+    monkeypatch.setattr(traceroute_geo, "_reader", None)
+    monkeypatch.setattr(traceroute_geo, "_get_reader", Reader)
+    _, record = traceroute_geo._read_record(Reader(), "1.1.1.1")
+    assert record["country"] is None
+    assert traceroute_geo.geolocate_country("1.1.1.1") is None
+
+
 def test_lookup_holding_a_replaced_reader_retries_and_caches_nothing_stale(geodb, monkeypatch) -> None:
     stale = traceroute_geo._get_reader()  # thread A fetched the reader ...
     real_get = traceroute_geo._get_reader
@@ -584,6 +615,8 @@ def test_concurrent_reloads_never_lose_or_cache_a_wrong_result(geodb) -> None:
         stop.set()
         for t in threads:
             t.join(timeout=2)
+    alive = [t.name for t in threads if t.is_alive()]
+    assert not alive, f"geo lookup workers did not stop: {alive}"
     assert errors == []  # no transient failure is returned as "unknown"
     assert all(v is not None for v in traceroute_geo._geo_cache.values())
     latest = traceroute_geo._get_reader().ident

@@ -8,7 +8,7 @@
 
 from __future__ import annotations
 
-import re
+import ast
 import sqlite3
 from pathlib import Path
 
@@ -22,7 +22,7 @@ from app.models.settings import Settings, SettingsUpdate
 from app.services.notifications.signal_cli_backend import SignalCliBackend
 from app.services.notifications.signal_errors import SignalNotRegistered
 from app.utils import crypto, runtime_settings
-from app.utils.constants import SettingKeys
+from app.utils.constants import QUALITY_MAX_TARGETS, SettingKeys
 from app.utils.crypto import decrypt_secret, encrypt_secret
 from app.utils.runtime_fields import load_runtime_fields, validate_quality_targets
 from tests import _support  # noqa: F401 - imported for its sys.path side effect
@@ -57,6 +57,72 @@ def _env(monkeypatch: pytest.MonkeyPatch) -> None:
     runtime_settings.clear_runtime_cache()
 
 
+def _environment_accesses(source: str) -> tuple[set[str], list[int]]:
+    tree = ast.parse(source)
+    os_aliases = {"os"}
+    getenv_aliases = {"getenv"}
+    environ_aliases = {"environ"}
+    constants = {}
+    for node in tree.body:
+        value = node.value if isinstance(node, (ast.Assign, ast.AnnAssign)) else None
+        if isinstance(value, ast.Constant) and isinstance(value.value, str):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            constants.update({target.id: value.value for target in targets if isinstance(target, ast.Name)})
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            os_aliases.update(alias.asname or alias.name for alias in node.names if alias.name == "os")
+        elif isinstance(node, ast.ImportFrom) and node.module == "os":
+            for alias in node.names:
+                if alias.name == "getenv":
+                    getenv_aliases.add(alias.asname or alias.name)
+                elif alias.name == "environ":
+                    environ_aliases.add(alias.asname or alias.name)
+
+    def is_os_attribute(node: ast.expr, name: str) -> bool:
+        return (
+            isinstance(node, ast.Attribute)
+            and node.attr == name
+            and isinstance(node.value, ast.Name)
+            and node.value.id in os_aliases
+        )
+
+    def is_environ(node: ast.expr) -> bool:
+        return (isinstance(node, ast.Name) and node.id in environ_aliases) or is_os_attribute(node, "environ")
+
+    names: set[str] = set()
+    dynamic_lines: list[int] = []
+    for node in ast.walk(tree):
+        key = None
+        if isinstance(node, ast.Call):
+            function = node.func
+            if (
+                (isinstance(function, ast.Name) and function.id in getenv_aliases)
+                or (
+                    isinstance(function, ast.Attribute)
+                    and function.attr == "getenv"
+                    and isinstance(function.value, ast.Name)
+                    and function.value.id in os_aliases
+                )
+                or (isinstance(function, ast.Attribute) and function.attr == "get" and is_environ(function.value))
+            ):
+                key = node.args[0] if node.args else None
+        elif isinstance(node, ast.Subscript) and is_environ(node.value):
+            key = node.slice
+        if key is not None:
+            literal = (
+                key.value
+                if isinstance(key, ast.Constant) and isinstance(key.value, str)
+                else constants.get(key.id)
+                if isinstance(key, ast.Name)
+                else None
+            )
+            if literal is not None:
+                names.add(literal)
+            else:
+                dynamic_lines.append(node.lineno)
+    return names, dynamic_lines
+
+
 @pytest.fixture
 def data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("JUSTUP_DATA_DIR", str(tmp_path))
@@ -89,29 +155,17 @@ def test_defaults_match_former_env_defaults(conn) -> None:
 @pytest.mark.parametrize(
     "payload",
     [
-        {"rate_limit_auth": "fast"},
-        {"rate_limit_auth": "0/minute"},
-        {"quality_min_score": 101},
-        {"quality_rtt_threshold_ms": 0},
-        {"provider_lookup_cache_ttl_seconds": 5},
+        pytest.param({"rate_limit_auth": "fast"}, id="invalid-rate-limit"),
+        pytest.param({"rate_limit_auth": "0/minute"}, id="zero-rate-limit"),
+        pytest.param({"quality_min_score": 101}, id="quality-score-too-high"),
+        pytest.param({"quality_rtt_threshold_ms": 0}, id="zero-rtt-threshold"),
+        pytest.param({"provider_lookup_cache_ttl_seconds": 5}, id="cache-ttl-too-short"),
+        pytest.param({"pop_refresh_interval_seconds": 10}, id="removed-pop-refresh-interval"),
+        pytest.param({"pop_refresh_initial_delay_seconds": 3600}, id="removed-pop-refresh-delay"),
+        pytest.param({"allow_insecure_ip_api_http": True}, id="removed-insecure-ip-api-http"),
     ],
 )
-def test_update_model_rejects_out_of_range(payload: dict) -> None:
-    with pytest.raises(ValidationError):
-        SettingsUpdate(**payload)
-
-
-@pytest.mark.parametrize(
-    "payload",
-    [
-        {"pop_refresh_interval_seconds": 10},
-        {"pop_refresh_initial_delay_seconds": 3600},
-        {"allow_insecure_ip_api_http": True},
-    ],
-)
-def test_update_model_rejects_removed_pop_settings(payload: dict) -> None:
-    # The two POP refresh settings were removed entirely. A stale client still sending them must be
-    # rejected (extra="forbid"), never have the value silently accepted as effective config.
+def test_update_model_rejects_invalid_or_removed_settings(payload: dict) -> None:
     with pytest.raises(ValidationError):
         SettingsUpdate(**payload)
 
@@ -128,6 +182,19 @@ def test_quality_targets_validation() -> None:
     for unreachable in ("host:80", "a/b", "abc:80", "example.org/path"):
         with pytest.raises(HTTPException):
             validate_quality_targets(f"1.1.1.1,8.8.8.8,{unreachable}")
+
+
+def test_quality_targets_are_limited_in_count_and_deduplicated() -> None:
+    limit = QUALITY_MAX_TARGETS
+    at_limit = ",".join(f"host{i}.example" for i in range(limit))
+    assert validate_quality_targets(at_limit) == at_limit
+    with pytest.raises(HTTPException) as exc:
+        validate_quality_targets(f"{at_limit},host{limit}.example")
+    assert exc.value.status_code == 422 and str(limit) in exc.value.detail
+    # Duplicates neither count towards the maximum nor satisfy the minimum.
+    assert validate_quality_targets(f"{at_limit},host0.example") == at_limit
+    with pytest.raises(HTTPException):
+        validate_quality_targets("1.1.1.1,1.1.1.1,1.1.1.1")
 
 
 def test_runtime_change_applies_without_restart(conn) -> None:
@@ -195,17 +262,34 @@ def test_backend_ignores_sender_env(monkeypatch) -> None:
 
 
 def test_app_reads_only_allowlisted_env_names() -> None:
-    pattern = re.compile(r"""["']((?:UPMON|JUSTUP|SIGNAL|POP|CACHE|DATA|SECRET|LOG|TESTING|PYTEST)[A-Z0-9_]*)["']""")
     found: dict[str, set[str]] = {}
+    dynamic: dict[str, list[int]] = {}
     for path in APP_DIR.rglob("*.py"):
-        text = path.read_text(encoding="utf-8")
-        for line in text.splitlines():
-            if "environ" not in line and "getenv" not in line and "_ENV" not in line:
-                continue
-            for name in pattern.findall(line):
-                found.setdefault(name, set()).add(path.name)
+        names, dynamic_lines = _environment_accesses(path.read_text(encoding="utf-8"))
+        for name in names:
+            found.setdefault(name, set()).add(path.name)
+        if dynamic_lines:
+            dynamic[path.name] = dynamic_lines
     unexpected = {n: f for n, f in found.items() if n not in ALLOWED_ENV_NAMES}
+    assert not dynamic, f"dynamic ENV keys require explicit review: {dynamic}"
     assert not unexpected, f"ENV names outside the bootstrap allowlist: {unexpected}"
+
+
+def test_env_scanner_finds_single_line_multiline_and_subscript_accesses() -> None:
+    source = """
+import os as host_os
+from os import environ as environment, getenv as env_get
+one = host_os.getenv("UNLISTED_ONE")
+two = env_get(
+    "UNLISTED_TWO",
+)
+three = host_os.environ["UNLISTED_THREE"]
+four = environment.get("UNLISTED_FOUR")
+five = host_os.getenv(dynamic_name)
+"""
+    names, dynamic_lines = _environment_accesses(source)
+    assert names == {"UNLISTED_ONE", "UNLISTED_TWO", "UNLISTED_THREE", "UNLISTED_FOUR"}
+    assert dynamic_lines == [10]
 
 
 # --- Online geolocation opt-out is fail-closed ---------------------------------------------------------

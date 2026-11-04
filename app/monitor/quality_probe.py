@@ -28,6 +28,7 @@ States:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import ipaddress
 import logging
 import re
@@ -40,6 +41,7 @@ from urllib.parse import urlparse
 import httpx
 
 from app.utils.constants import (
+    QUALITY_MAX_TARGETS,
     QUALITY_MIN_SCORE_DEFAULT,
     QUALITY_MIN_TARGETS,
     QUALITY_RTT_THRESHOLD_MS_DEFAULT,
@@ -67,6 +69,7 @@ DEFAULT_RTT_THRESHOLD_MS = QUALITY_RTT_THRESHOLD_MS_DEFAULT
 PROBE_TIMEOUT_SECONDS = 4.0  # Generous timeout for real networks
 SCORE_SMOOTHING_FACTOR = 0.3  # EMA: 30% new, 70% previous
 MAX_CONCURRENT_PROBES = 5  # Limit parallel probes to avoid self-DoS
+PROBE_TOTAL_TIMEOUT_SECONDS = 20.0  # Hard cap for one run; the probe cycle is 30 s
 
 # Regex to detect if target is a URL (has scheme)
 URL_PATTERN = re.compile(r"^https?://", re.IGNORECASE)
@@ -111,7 +114,11 @@ def get_quality_targets() -> list[str]:
     """
     raw = str(get_runtime_setting(SettingKeys.QUALITY_TARGETS, "") or "")
     if raw.strip():
-        targets = [t.strip() for t in raw.split(",") if t.strip()]
+        targets = list(dict.fromkeys(t.strip() for t in raw.split(",") if t.strip()))
+        if len(targets) > QUALITY_MAX_TARGETS:
+            # Only a stored list from before the limit gets here; Settings rejects new ones.
+            _log.warning("Quality targets: %d entries, using the first %d", len(targets), QUALITY_MAX_TARGETS)
+            targets = targets[:QUALITY_MAX_TARGETS]
         if len(targets) >= QUALITY_MIN_TARGETS:
             return targets
         _log.warning("Quality targets: %d entries (minimum %d), using defaults", len(targets), QUALITY_MIN_TARGETS)
@@ -160,6 +167,20 @@ async def _measure_http_rtt(client: httpx.AsyncClient, url: str) -> float | None
         return None
 
 
+async def _stop_process(proc: asyncio.subprocess.Process) -> None:
+    """Terminate a still running child: SIGTERM, a short grace period, then SIGKILL; always reaped."""
+    if proc.returncode is not None:
+        return
+    with contextlib.suppress(ProcessLookupError):
+        proc.terminate()
+    try:
+        await asyncio.wait_for(asyncio.shield(proc.wait()), timeout=0.5)
+    except TimeoutError:
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
+        await asyncio.shield(proc.wait())
+
+
 async def _measure_ping_rtt(host: str, timeout: float = PROBE_TIMEOUT_SECONDS) -> float | None:
     """
     Measure round-trip time via ICMP ping.
@@ -189,10 +210,12 @@ async def _measure_ping_rtt(host: str, timeout: float = PROBE_TIMEOUT_SECONDS) -
                 timeout=timeout + 2.0,  # OS timeout + buffer
             )
         except TimeoutError:
-            proc.kill()
-            await proc.wait()
             _log.debug("Quality probe ping %s timed out (asyncio)", host)
             return None
+        finally:
+            # Also reached on cancellation: never leave a ping child behind.
+            await _stop_process(proc)
+
         elapsed_ms = (time.monotonic() - start) * 1000
 
         if proc.returncode == 0:
@@ -276,13 +299,29 @@ async def run_quality_probe() -> QualityResult:
             else:
                 tasks.append(_measure_target_rtt(verified_client, target, probe_semaphore))
 
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        started = {asyncio.ensure_future(task) for task in tasks}
+        try:
+            done, pending = await asyncio.wait(started, timeout=PROBE_TOTAL_TIMEOUT_SECONDS)
+            if pending:
+                _log.warning(
+                    "Quality probe: %d targets unfinished after %.0fs, counted as failed",
+                    len(pending),
+                    PROBE_TOTAL_TIMEOUT_SECONDS,
+                )
+        finally:
+            # Also on cancellation of the whole run: every started task is cancelled and awaited.
+            unfinished = [t for t in started if not t.done()]
+            for task in unfinished:
+                task.cancel()
+            if unfinished:
+                await asyncio.gather(*unfinished, return_exceptions=True)
 
-        for result in results:
-            if isinstance(result, Exception):
-                _log.debug("Quality probe exception: %s", result)
+        for finished in done:
+            try:
+                _target, rtt = finished.result()
+            except Exception as exc:  # noqa: BLE001 - one failed probe must not abort the run
+                _log.debug("Quality probe exception: %s", exc)
                 continue
-            target, rtt = result
             if rtt is not None:
                 rtts.append(rtt)
 

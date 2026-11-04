@@ -8,7 +8,8 @@
 
 Pure data functions without web or Jinja dependencies: node states (measured,
 timeout, interpolated, unreached) kept apart from the location state (mapped,
-unlocated), plus grouping of consecutive hops.
+unlocated), plus grouping of consecutive hops. A hop that did not answer is "No reply",
+whether or not measured hops follow it: nothing is estimated for a hop that never answered.
 """
 
 from __future__ import annotations
@@ -20,19 +21,23 @@ TIMELINE_NO_VALUE = frozenset({"", "*", "-", "—"})
 # Short state wording shared by the web table, the timeline and the PDF (one owner, no duplicates).
 NO_REPLY_LABEL = "No reply"
 LOCATION_UNKNOWN_LABEL = "Location unknown"
-ESTIMATED_LABEL = "Estimated"
 APPROXIMATE_LABEL = "approx."
 STATE_LABELS = {
     "no_reply": NO_REPLY_LABEL,
     "location_unknown": LOCATION_UNKNOWN_LABEL,
-    "estimated": ESTIMATED_LABEL,
     "approx": APPROXIMATE_LABEL,
 }
+
+
+def no_reply_run_label(count: int) -> str:
+    """Wording for a run of consecutive hops without reply; the count comes from the hop numbers."""
+    return f"{count} hops without reply"
+
+
 # measurement state -> (visible/ARIA label, Material icon). Colour is never the only cue.
 TIMELINE_MEASUREMENTS: dict[str, tuple[str, str]] = {
     "measured": ("Measured", "check_circle"),
     "timeout": (NO_REPLY_LABEL, "report_problem"),
-    "interpolated": ("Estimated (interpolated)", "timeline"),
     "unreached": ("Not reached, no reply", "error_outline"),
 }
 
@@ -43,12 +48,10 @@ def timeline_text(value: object) -> str:
 
 
 def timeline_measurement(hop: dict) -> str:
-    """Classify how a hop's data came about: measured, timeout, interpolated or synthetic destination."""
+    """Classify a hop: measured, timeout (no reply, also inside the route) or synthetic destination."""
     if hop.get("_synthetic_destination"):
         return "unreached"
-    if hop.get("_collapsed") or hop.get("_interpolated") or hop.get("status") == "interpolated":
-        return "interpolated"
-    if hop.get("status") == "timeout":
+    if hop.get("_collapsed") or hop.get("_interpolated") or hop.get("status") in ("timeout", "interpolated"):
         return "timeout"
     return "measured"
 
@@ -99,6 +102,8 @@ def timeline_node(hop: dict, *, mapped_hops: set[int], is_first: bool, is_destin
         "measurement_label": measurement_label,
         "location": "mapped" if located else "unlocated",
         "location_label": location_label,
+        # A silent hop has no location to report: its state is just the missing reply.
+        "state_label": measurement_label if silent else f"{location_label} · {measurement_label}",
         "icon": icon,
         "aria_label": ", ".join(
             part
@@ -112,9 +117,9 @@ def timeline_node(hop: dict, *, mapped_hops: set[int], is_first: bool, is_destin
 def timeline_group_key(node: dict) -> str | None:
     if node["kind"] != "hop":
         return None
-    if node["location"] == "unlocated":
-        return "unlocated"
-    return "interpolated" if node["measurement"] == "interpolated" else None
+    if node["measurement"] == "timeout":
+        return "no_reply"
+    return "unlocated" if node["location"] == "unlocated" else None
 
 
 def timeline_group(members: list[dict], key: str) -> dict:
@@ -128,7 +133,7 @@ def timeline_group(members: list[dict], key: str) -> dict:
         if name in measurements
     ]
     mixed = len(measurements) > 1
-    title = {"unlocated": f"{count} hops without map location", "interpolated": f"{count} estimated hops"}.get(
+    title = {"unlocated": f"{count} hops without map location", "no_reply": no_reply_run_label(count)}.get(
         key, f"{count} hops"
     )
     subtitle = "Mixed probe states" if mixed else members[0]["measurement_label"]
@@ -143,7 +148,7 @@ def timeline_group(members: list[dict], key: str) -> dict:
         "subtitle": subtitle,
         "summary": ", ".join(counts),
         "measurement": "mixed" if mixed else members[0]["measurement"],
-        "location": "unlocated" if key == "unlocated" else "mapped",
+        "location": "unlocated" if key in ("unlocated", "no_reply") else "mapped",
         "members": members,
         "count": count,
         "aria_label": f"Hops {first} to {last}, {title}, {', '.join(counts)}",

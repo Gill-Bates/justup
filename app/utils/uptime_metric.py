@@ -8,7 +8,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Iterator, Mapping
+from datetime import datetime, timedelta
 from typing import Any
 
 from .constants import UPTIME_THRESHOLD_GREEN, UPTIME_THRESHOLD_YELLOW
@@ -27,6 +28,32 @@ def _flag(target: Mapping[str, Any] | Any, key: str) -> bool:
 def enabled_availability_metrics(target: Mapping[str, Any] | Any) -> tuple[str, ...]:
     """Return the availability metrics of the checks currently enabled for a target."""
     return tuple(metric for flag, metric in _PRIORITY if _flag(target, flag))
+
+
+# Points written by the scheduler carry one shared timestamp per check cycle (``cycle_at``), so they
+# group by equality however long storing takes. The window only covers legacy points, which were
+# stamped individually a few ms apart; the check interval is at least 5 s, so it never spans two cycles.
+_CYCLE_WINDOW = timedelta(seconds=2)
+
+
+def combine_availability(events: Iterable[tuple[datetime, str, int]]) -> Iterator[tuple[datetime, int]]:
+    """Fold a time-ordered stream of ``(ts, metric, 0|1)`` into one availability sample per check cycle.
+
+    A cycle is up only if every availability metric it contains is up, which is the rule of the overall
+    target status (any enabled check down means down). Metrics without a point in a cycle, for example
+    because the check was enabled later, are not counted against it.
+    """
+    start: datetime | None = None
+    seen: dict[str, int] = {}
+    for ts, metric, value in events:
+        if start is not None and (metric in seen or ts - start > _CYCLE_WINDOW):
+            yield start, int(all(v == 1 for v in seen.values()))
+            start, seen = None, {}
+        if start is None:
+            start = ts
+        seen[metric] = value
+    if start is not None:
+        yield start, int(all(v == 1 for v in seen.values()))
 
 
 def select_uptime_metric(target: Mapping[str, Any] | Any) -> str | None:

@@ -52,16 +52,17 @@ ran the measurement. Unknown values show `—`, never invented zeros.
 
 - On narrow containers the timeline is vertical; on wide ones it is a single
   horizontal track that scrolls.
-- Three or more consecutive hops without map location, or consecutive estimated
-  hops, collapse into one node such as `2–4`. Activate the node to expand it.
+- Three or more consecutive hops without reply, or consecutive hops without map
+  location, collapse into one node such as `2–4` ("3 hops without reply").
+  Activate the node to expand it. The hop count comes from the measured hop
+  numbers, not from an estimate.
 - Select a hop (click, tap, Enter, Space) to highlight its table row and map
   marker and show its details.
 
 | State | Meaning |
 | --- | --- |
 | Measured | The hop replied (partial loss is stated) |
-| No reply | Timeout |
-| Estimated | ICMP-blocked hop between measured hops; values are interpolated |
+| No reply | The hop did not answer. This includes silent hops between measured hops (for example ICMP blocked). No address, host name, latency or location is shown, and nothing is estimated for it |
 | Not reached | Synthetic destination, because the target never answered |
 
 A hop without map location is not a failed hop. It is marked "Location unknown"
@@ -73,13 +74,25 @@ The map is drawn in the browser with Leaflet and a base map served by justUp!. N
 external tile service is used. Country flags load from jsDelivr; if that is blocked,
 the table shows the two-letter country code.
 
+The map shows one continuous chain from the first mappable hop to the destination,
+in hop order. Every located hop is a node, including approximately located hops
+(hollow marker with "~"). A link between two reliably located hops is a solid line.
+A link is dashed when at least one end is estimated or approximate, or when hops in
+between did not answer or have no location; the hop numbers it skips are named in
+its tooltip. Nothing is estimated for a skipped hop: it gets no marker and no
+coordinates. A real geographic back-jump stays visible, and a back-jump caused by an
+approximate position is recognizable by its dashed link. The PDF report draws the
+same chain from the same data.
+
 ## Location sources
 
 justUp! picks one location per hop. Local sources come first; online services are
 only a fallback (see [Online fallback](#online-fallback)). Sources:
 
-- **POP detection** from the hostname (data from PeeringDB and UN/LOCODE, refreshed
-  automatically; status at `GET /api/admin/pop/status`).
+- **POP detection** from curated hostname-code mappings and explicitly reviewed
+  learned aliases. The PeeringDB refresh stores city-level facility evidence but
+  never creates a hostname alias from a facility alone. Refresh status is at
+  `GET /api/admin/pop/status`; UN/LOCODE import remains a placeholder.
 - **GeoLite2-City** (offline). Without the database, traceroute still works, but
   such hops stay off the map. A GeoLite2 point is plotted only when its accuracy
   radius is at most 25 km; otherwise the location stays approximate.
@@ -106,6 +119,14 @@ revisited with real traceroute data.
 
 A POP/CLLI location with verified confidence counts as high-quality local evidence
 and also avoids the online call. A city only guessed from a hostname does not.
+
+Unknown codes seen on on-demand traceroutes are stored as review candidates, not
+used for location lookup. The local GeoLite2 city/country suggestion is coarse
+evidence, not an exact router position. Reprocessing the same route does not add
+another observation, and addresses in one provider/network context do not count
+as independent confirmations. Candidate capture adds no external geolocation
+request. See [PoP candidate review](../development/database-maintenance.md#pop-candidate-review)
+for the explicit review workflow.
 
 Only public IPs are ever sent to ipwho.is / ip-api Pro (HTTPS), subject to cache and
 backoff; private and non-global addresses never are. **Online fallback**

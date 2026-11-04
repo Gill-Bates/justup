@@ -270,13 +270,13 @@
 	// Labels state what is known: "sent" only means the server accepted the message.
 	function _statusBadge(status, retries) {
 		const map = {
-			pending: ['bg-warning text-dark', 'schedule', 'Waiting for handoff', 'Waiting for SMTP handoff'],
-			processing: ['bg-info text-dark', 'sync', 'Handing over', 'Being handed to the server'],
-			sent: ['bg-success', 'check', 'Accepted by server', 'Accepted by the server; final delivery is not verifiable'],
-			failed: ['bg-danger', 'error_outline', 'Handoff failed', 'Handoff to the server failed'],
+			pending: ['ju-status-badge--warning', 'schedule', 'Waiting for handoff', 'Waiting for SMTP handoff'],
+			processing: ['ju-status-badge--info', 'sync', 'Handing over', 'Being handed to the server'],
+			sent: ['ju-status-badge--success', 'check', 'Accepted by server', 'Accepted by the server; final delivery is not verifiable'],
+			failed: ['ju-status-badge--danger', 'error_outline', 'Handoff failed', 'Handoff to the server failed'],
 		};
 		const entry = map[status];
-		if (!entry) return '<span class="badge bg-secondary">' + escapeHtml(status) + '</span>';
+		if (!entry) return '<span class="badge ju-status-badge--neutral">' + escapeHtml(status) + '</span>';
 		const retrying = status === 'pending' && retries > 0;
 		const label = retrying ? 'Retrying handoff' : entry[2];
 		const title = retrying ? 'SMTP handoff is being retried' : entry[3];

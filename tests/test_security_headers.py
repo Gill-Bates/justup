@@ -94,6 +94,7 @@ def test_headers_present_exactly_once(app, path, status):
 def test_enforced_policy_only_restricts_framing_and_report_only_never_enforces():
     assert ENFORCED_CSP == "frame-ancestors 'self'"
     assert "script-src" in REPORT_ONLY_CSP and "report-uri /csp-report" in REPORT_ONLY_CSP
+    assert "img-src 'self' data: blob: https://cdn.jsdelivr.net" in REPORT_ONLY_CSP
 
 
 def test_route_specific_headers_are_kept_not_duplicated(app):

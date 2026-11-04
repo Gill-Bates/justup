@@ -380,72 +380,101 @@
 
 				var labelEl = document.getElementById('quality-label');
 				var badgeEl = document.getElementById('quality-state-badge');
-				var updatedEl = document.getElementById('quality-updated');
-				var targetsTrigger = document.getElementById('quality-targets-tooltip-trigger');
-				var targetsCount = document.getElementById('quality-target-count');
-				if (!labelEl || !badgeEl || !updatedEl || !targetsTrigger || !targetsCount) return;
+				var targetsEl = document.getElementById('quality-targets');
+				if (!labelEl || !badgeEl || !targetsEl) return;
 
 				var consecutiveFailures = 0;
 				var loadingQuality = false;
 				var failureLimit = 2;
 				var requestTimeoutMs = 10000;
-				var targetsContent = document.createElement('div');
-				targetsContent.className = 'quality-targets-tooltip-content';
-				var targetsTooltip = null;
-				function hideTargetsTooltipIfPointerLeaves() {
-					if (targetsTooltip && !targetsTrigger.matches(':hover')) targetsTooltip.hide();
-				}
-				targetsTrigger.addEventListener('show.bs.tooltip', function () {
-					document.addEventListener('pointermove', hideTargetsTooltipIfPointerLeaves);
-				});
-				targetsTrigger.addEventListener('hidden.bs.tooltip', function () {
-					document.removeEventListener('pointermove', hideTargetsTooltipIfPointerLeaves);
-				});
-
-				function renderTargets(list) {
-					targetsContent.textContent = '';
-					if (!Array.isArray(list)) {
-						targetsTrigger.hidden = true;
-						if (targetsTooltip) targetsTooltip.hide();
-						return;
-					}
-					var targetCount = 0;
-					for (var i = 0; i < list.length; i++) {
-						var t = String(list[i] || '');
-						if (!t) continue;
-
-						var isHttp = t.indexOf('http://') === 0 || t.indexOf('https://') === 0;
-						var icon = isHttp ? 'public' : 'dns';
-						var label = isHttp ? t.replace(/^https?:\/\//, '') : t;
-
-						var badge = document.createElement('span');
-						badge.className = 'badge badge-muted';
-						var iconEl = document.createElement('span');
-						iconEl.className = 'material-icons me-1';
-						iconEl.setAttribute('aria-hidden', 'true');
-						iconEl.textContent = icon;
-						badge.appendChild(iconEl);
-						badge.appendChild(document.createTextNode(label));
-						targetsContent.appendChild(badge);
-						targetCount++;
-					}
-					if (targetCount === 0) {
-						targetsTrigger.hidden = true;
-						if (targetsTooltip) targetsTooltip.hide();
-						return;
-					}
-					if (!window.bootstrap || !window.bootstrap.Tooltip) {
-						targetsTrigger.hidden = true;
-						return;
-					}
-					targetsTrigger.hidden = false;
-					targetsCount.textContent = targetCount + (targetCount === 1 ? ' target' : ' targets');
-					targetsTooltip = window.bootstrap.Tooltip.getOrCreateInstance(targetsTrigger, {
-						container: 'body',
-						html: true,
-						title: function () { return targetsContent.cloneNode(true); },
+				var targetKey = null;
+				var targetBadges = [];
+				var overflowBadge = document.createElement('span');
+				overflowBadge.className = 'badge quality-target quality-target-overflow';
+				overflowBadge.hidden = true;
+				var layoutFrame = 0;
+				var flagIconBase = 'https://cdn.jsdelivr.net/npm/flag-icons@7.3.2/flags/4x3/';
+				function fitsTargets() {
+					var bounds = targetsEl.getBoundingClientRect();
+					if (!bounds.width || !bounds.height) return false;
+					return Array.from(targetsEl.children).every(function (child) {
+						if (child.hidden) return true;
+						var rect = child.getBoundingClientRect();
+						return rect.left >= bounds.left - 1 && rect.right <= bounds.right + 1 &&
+							rect.top >= bounds.top - 1 && rect.bottom <= bounds.bottom + 1;
 					});
 				}
+				function fitTargets() {
+					layoutFrame = 0;
+					var total = targetBadges.length;
+					if (!total) return;
+					for (var count = total; count >= 0; count--) {
+						targetBadges.forEach(function (badge, index) { badge.hidden = index >= count; });
+						overflowBadge.hidden = count === total;
+						if (!overflowBadge.hidden) overflowBadge.textContent = '+' + (total - count);
+						if (fitsTargets()) break;
+					}
+					// Not even the "+N" counter fits (tile at its minimum size): show nothing instead of a clipped badge.
+					if (!fitsTargets()) overflowBadge.hidden = true;
+					var hidden = targetBadges.filter(function (badge) { return badge.hidden; }).length;
+					targetsEl.setAttribute('aria-label', total + ' quality targets, ' + hidden + ' hidden');
+				}
+				function scheduleTargetFit() {
+					if (!layoutFrame) layoutFrame = window.requestAnimationFrame(fitTargets);
+				}
+				function renderTargets(data) {
+					if (!data || !Array.isArray(data.targets)) return;
+					var details = Array.isArray(data.target_details) ? data.target_details : [];
+					var items = data.targets.filter(function (target) { return typeof target === 'string' && target.length; })
+						.map(function (target, index) {
+							var detail = details[index];
+							return { target: target, country: detail && detail.target === target &&
+								/^[A-Z]{2}$/.test(detail.country_code) ? detail.country_code : null };
+						});
+					var key = JSON.stringify(items);
+					if (key === targetKey) return;
+					targetKey = key;
+					targetBadges = items.map(function (item) {
+						var badge = document.createElement('span');
+						badge.className = 'badge quality-target';
+						var flag = document.createElement('span');
+						flag.className = 'quality-target-flag';
+						flag.setAttribute('aria-hidden', 'true');
+						if (item.country) {
+							var image = document.createElement('img');
+							image.src = flagIconBase + item.country.toLowerCase() + '.svg';
+							image.alt = '';
+							image.width = 16;
+							image.height = 12;
+							image.decoding = 'async';
+							image.addEventListener('error', function () { image.hidden = true; }, { once: true });
+							flag.appendChild(image);
+						} else {
+							flag.classList.add('quality-target-flag--unknown');
+						}
+						var address = item.target.replace(/^https?:\/\//i, '');
+						var text = window.QualityState.describeTarget(address, item.country);
+						badge.setAttribute('aria-label', text.label);
+						if (text.title) badge.title = text.title;
+						badge.appendChild(flag);
+						if (item.country) badge.appendChild(document.createTextNode(item.country + ' '));
+						badge.appendChild(document.createTextNode(address));
+						return badge;
+					});
+					if (targetBadges.length) targetsEl.replaceChildren(...targetBadges, overflowBadge);
+					else {
+						targetsEl.textContent = 'No quality targets configured';
+						targetsEl.setAttribute('aria-label', 'No quality targets configured');
+					}
+					scheduleTargetFit();
+				}
+				var targetsObserver = null;
+				if (window.ResizeObserver && card) {
+					targetsObserver = new ResizeObserver(scheduleTargetFit);
+					targetsObserver.observe(card);
+				}
+				window.addEventListener('resize', scheduleTargetFit);
+				document.addEventListener('dashboard:layout-applied', scheduleTargetFit);
 
 				async function loadQuality() {
 					if (typeof window.apiFetch !== 'function' || !window.QualityState || loadingQuality) return;
@@ -467,12 +496,9 @@
 						badgeEl.className = 'badge ' + view.badgeClass;
 						badgeEl.textContent = view.badgeText;
 						labelEl.textContent = view.label;
-						var measuredAt = data && data.updated_at ? new Date(data.updated_at) : null;
-						updatedEl.textContent = measuredAt && !isNaN(measuredAt.getTime())
-							? 'Last measurement: ' + measuredAt.toLocaleString()
-							: 'No successful measurement yet';
 						consecutiveFailures = 0;
-						renderTargets(data && data.targets);
+						renderTargets(data);
+						scheduleTargetFit();
 					} catch (e) {
 						consecutiveFailures++;
 						if (consecutiveFailures >= failureLimit) showQualityUnavailable();
@@ -490,7 +516,7 @@
 					badgeEl.className = 'badge ' + view.badgeClass;
 					badgeEl.textContent = view.badgeText;
 					labelEl.textContent = 'Data unavailable';
-					renderTargets([]);
+					scheduleTargetFit();
 				}
 
 				loadQuality();
@@ -502,6 +528,10 @@
 							document.removeEventListener('visibilitychange', refreshIfShown);
 							document.removeEventListener('dashboard:widget-shown', refreshIfShown);
 							document.body.removeEventListener('dashboard-refresh', refreshIfShown);
+							document.removeEventListener('dashboard:layout-applied', scheduleTargetFit);
+							window.removeEventListener('resize', scheduleTargetFit);
+							if (targetsObserver) targetsObserver.disconnect();
+							if (layoutFrame) window.cancelAnimationFrame(layoutFrame);
 							return;
 						}
 						if (document.hidden || card.closest('.d-none')) return;
@@ -614,7 +644,11 @@
 					}
 					attempts++;
 					window.apiFetch('/targets/' + targetId + '/notification-status/' + taskId).then(function (resp) {
-						if (!resp.ok) return null;
+						if (!resp.ok) {
+							var error = new Error('HTTP ' + resp.status);
+							error.status = resp.status;
+							throw error;
+						}
 						return resp.json();
 					}).then(function (status) {
 						if (!status) return;
@@ -640,6 +674,14 @@
 						}
 					}).catch(function (e) {
 						console.warn('Failed to poll notification status:', e);
+						if (e.status === 401 || e.status === 403) return;
+						if (attempts < maxAttempts) {
+							setTimeout(poll, 1000);
+						} else if (window.justUpToast) {
+							window.justUpToast.warning(
+								'Notification status check timed out. Notifications may still be processing.'
+							);
+						}
 					});
 				}
 
@@ -663,7 +705,6 @@
 (function () {
 	'use strict';
 
-	var openers = new WeakMap();
 	// Central policy: a click or tap outside the dialog never dismisses a modal.
 	// Escape and explicit close/cancel controls still do (keyboard stays true).
 	if (window.bootstrap && window.bootstrap.Modal) {
@@ -671,30 +712,13 @@
 		window.bootstrap.Modal.Default.keyboard = true;
 	}
 
-	// Remember the opener, also for modals opened via bootstrap.Modal#show().
+	// Focus lifecycle (initial focus, focus return) lives in utils/modal-focus.js.
 	document.addEventListener('show.bs.modal', function (event) {
 		var modal = event.target;
-		var opener = event.relatedTarget || document.activeElement;
-		if (opener && opener !== document.body) openers.set(modal, opener);
 		// Bootstrap sets role/aria-modal itself; make sure the name is present.
 		if (!modal.hasAttribute('aria-label') && !modal.hasAttribute('aria-labelledby')) {
 			var title = modal.querySelector('.modal-title');
 			if (title && title.id) modal.setAttribute('aria-labelledby', title.id);
-		}
-	});
-
-	// Prefer an explicit [autofocus] control; otherwise Bootstrap focuses the dialog.
-	document.addEventListener('shown.bs.modal', function (event) {
-		var target = event.target.querySelector('[autofocus]');
-		if (target) target.focus();
-	});
-
-	document.addEventListener('hidden.bs.modal', function (event) {
-		var opener = openers.get(event.target);
-		openers.delete(event.target);
-		if (opener && opener.isConnected && typeof opener.focus === 'function' &&
-			!document.querySelector('.modal.show')) {
-			opener.focus({ preventScroll: true });
 		}
 	});
 })();

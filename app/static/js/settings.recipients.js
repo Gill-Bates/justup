@@ -41,12 +41,16 @@ async function extractApiError(response, fallbackMessage) {
 	return msg;
 }
 
-function validateRecipientInput({ name, signalEnabled, emailEnabled, phone, email }) {
-	if (!name) return 'Please enter a name';
-	if (!signalEnabled && !emailEnabled) return 'Please enable at least one notification channel';
-	if (signalEnabled && !phone) return 'Please enter a Signal phone number';
-	if (emailEnabled && !email) return 'Please enter an email address';
-	return null;
+// Field errors for the add (prefix 'recipient-') and edit (prefix 'edit-recipient-') dialogs.
+function validateRecipientInput({ name, signalEnabled, emailEnabled, phone, email }, prefix) {
+	const errors = [];
+	if (!name) errors.push({ id: `${prefix}name`, message: 'Please enter a name' });
+	if (!signalEnabled && !emailEnabled) {
+		errors.push({ id: `${prefix}signal-enabled`, message: 'Please enable at least one notification channel' });
+	}
+	if (signalEnabled && !phone) errors.push({ id: `${prefix}phone`, message: 'Please enter a Signal phone number' });
+	if (emailEnabled && !email) errors.push({ id: `${prefix}email`, message: 'Please enter an email address' });
+	return errors;
 }
 
 function _getCachedSignalRegistration(phone) {
@@ -130,7 +134,10 @@ function applyCachedSignalStatus(recipients) {
 }
 
 // Load Recipients List
+let recipientsGeneration = 0;
+
 async function loadRecipients() {
+	const generation = ++recipientsGeneration;
 	const container = document.getElementById('recipients-list');
 	
 	// Guard: container might not exist on page (e.g., before HTMX loads fragment)
@@ -146,6 +153,7 @@ async function loadRecipients() {
 		if (!response.ok) throw new Error('HTTP ' + response.status);
 		
 		const recipients = await response.json();
+		if (generation !== recipientsGeneration) return;
 		
 		if (recipients.length === 0) {
 			container.innerHTML = `
@@ -173,8 +181,8 @@ async function loadRecipients() {
 		
 			for (const r of recipients) {
 				const statusBadge = r.is_enabled 
-					? '<span class="badge bg-success">Enabled</span>'
-					: '<span class="badge bg-secondary">Disabled</span>';
+					? '<span class="badge ju-status-badge--success">Enabled</span>'
+					: '<span class="badge ju-status-badge--neutral">Disabled</span>';
 				
 				// Signal column - with placeholder for verification status
 				const cachedSignal = _getCachedSignalRegistration(r.phone);
@@ -264,9 +272,10 @@ async function loadRecipients() {
 		
 			// Apply cached Signal statuses (if any) and verify in background
 			applyCachedSignalStatus(recipients);
-			verifySignalNumbersInBackground(recipients);
+			verifySignalNumbersInBackground(recipients, generation);
 		
 	} catch (error) {
+		if (generation !== recipientsGeneration) return;
 		console.error('Load recipients error:', error);
 		container.innerHTML = `
 			<div class="text-center text-danger py-4">
@@ -301,7 +310,7 @@ async function handleRecipientListClick(e) {
 }
 
 // Verify Signal numbers in background and update UI
-async function verifySignalNumbersInBackground(recipients) {
+async function verifySignalNumbersInBackground(recipients, generation) {
 	const phonesToCheck = recipients
 		.filter(r => r.phone)
 		.map(r => r.phone)
@@ -320,7 +329,7 @@ async function verifySignalNumbersInBackground(recipients) {
 		if (!response.ok) {
 			// Endpoint might not exist - fall back to showing neutral icons
 			console.warn('Signal verification endpoint not available');
-			showAllSignalStatusAsUnavailable(recipients);
+			if (generation === recipientsGeneration) showAllSignalStatusAsUnavailable(recipients);
 			return;
 		}
 		
@@ -335,10 +344,10 @@ async function verifySignalNumbersInBackground(recipients) {
 		}
 
 		// Update UI via the shared renderer (single source of truth)
-		applyCachedSignalStatus(recipients);
+		if (generation === recipientsGeneration) applyCachedSignalStatus(recipients);
 	} catch (error) {
 		console.warn('Failed to verify Signal numbers:', error);
-		showAllSignalStatusAsUnavailable(recipients);
+		if (generation === recipientsGeneration) showAllSignalStatusAsUnavailable(recipients);
 	}
 }
 
@@ -346,6 +355,7 @@ async function verifySignalNumbersInBackground(recipients) {
 function showAllSignalStatusAsUnavailable(recipients) {
 	for (const r of recipients) {
 		if (!r.phone) continue;
+		if (_getCachedSignalRegistration(r.phone) !== undefined) continue;
 		// Use 'unknown' icon for API failure (different from 'unavailable' = no Signal account)
 		_setSignalIcon(r.id, SIGNAL_ICONS.unknown, 'text-body-secondary', 'Verification failed');
 	}
@@ -366,12 +376,11 @@ async function addRecipient() {
 	const phone = document.getElementById('recipient-phone').value.trim();
 	const email = document.getElementById('recipient-email').value.trim();
 	const isEnabled = document.getElementById('recipient-enabled').checked;
+	const enableForAllTargets = document.getElementById('recipient-all-targets')?.checked ?? false;
 	
 	// Validation
-	const validationError = validateRecipientInput({ name, signalEnabled, emailEnabled, phone, email });
-	if (validationError) {
-		errorDiv.textContent = validationError;
-		errorDiv.classList.remove('d-none');
+	errorDiv.classList.add('d-none');
+	if (window.JuFieldErrors.show(form, validateRecipientInput({ name, signalEnabled, emailEnabled, phone, email }, 'recipient-'))) {
 		return;
 	}
 	
@@ -382,6 +391,7 @@ async function addRecipient() {
 		const payload = { 
 			name, 
 			is_enabled: isEnabled,
+			enable_for_all_targets: enableForAllTargets,
 			phone: signalEnabled ? phone : null,
 			email: emailEnabled ? email : null
 		};
@@ -425,6 +435,25 @@ async function addRecipient() {
 	}
 }
 
+// A channel's fields exist only while its switch is on (DESIGN.md "Optional field groups"): the group is hidden,
+// its input disabled and its field error removed. Entered values stay in the DOM while the dialog is open.
+function syncChannelFields(scope) {
+	if (!scope) return;
+	window.JuOptionalGroups.syncSwitches(scope);
+	const toggles = [...scope.querySelectorAll('.ju-channel input[role="switch"]')];
+	const anyOn = toggles.some((toggle) => toggle.checked);
+	for (const row of scope.querySelectorAll('.ju-channel')) {
+		const on = Boolean(row.querySelector('input[role="switch"]')?.checked);
+		for (const field of row.querySelectorAll('.ju-channel-body input')) {
+			field.disabled = !on;
+			if (!on) window.JuFieldErrors.clear(field);
+		}
+	}
+	// The "at least one channel" error is moot once any channel is on; the saved-values hint and test result need a test button.
+	if (anyOn) toggles.forEach((toggle) => window.JuFieldErrors.clear(toggle));
+	const hint = scope.querySelector('[data-channel-hint]');
+	if (hint) hint.hidden = !anyOn;
+}
 // Edit Recipient - open modal
 async function editRecipient(recipientId) {
 	try {
@@ -445,14 +474,21 @@ async function editRecipient(recipientId) {
 		if (idInput) idInput.value = r.id;
 		if (nameInput) nameInput.value = r.name;
 		if (enabledInput) enabledInput.checked = r.is_enabled;
+		const allTargetsInput = document.getElementById('edit-recipient-all-targets');
+		if (allTargetsInput) allTargetsInput.checked = Boolean(r.enable_for_all_targets);
 		if (errorDiv) errorDiv.classList.add('d-none');
 		
 		if (phoneInput) phoneInput.value = r.phone || '';
 		if (emailInput) emailInput.value = r.email || '';
 		if (signalCheckbox) signalCheckbox.checked = !!r.phone;
 		if (emailCheckbox) emailCheckbox.checked = !!r.email;
-		// Test messages use the saved values; remember them to detect unsaved edits
-		_editSaved = { phone: r.phone || '', email: r.email || '' };
+		// Saved state gates test messages and confirms bulk assignment removal.
+		_editSaved = {
+			phone: r.phone || '',
+			email: r.email || '',
+			allTargets: Boolean(r.enable_for_all_targets),
+			targetCount: r.targets?.length ?? 0,
+		};
 		_clearTestResult();
 		updateEditTestButtons();
 		
@@ -557,10 +593,9 @@ function renderTestResult(lines) {
 	for (const line of lines) {
 		const view = TEST_STATE_VIEW[line.state] || TEST_STATE_VIEW.failed;
 		const row = document.createElement('div');
-		row.className = `d-flex align-items-start gap-1 ${view.cls}`;
+		row.className = `ju-test-result-line ${view.cls}`;
 		const icon = document.createElement('span');
-		icon.className = 'material-icons';
-		icon.style.fontSize = '16px';
+		icon.className = 'material-icons ju-icon-inline';
 		icon.setAttribute('aria-hidden', 'true');
 		icon.textContent = view.icon;
 		const text = document.createElement('span');
@@ -618,6 +653,7 @@ async function sendTestFromList(btn) {
 }
 
 // Save Recipient edits
+let _saveInFlight = false;
 async function saveRecipient() {
 	const btn = document.getElementById('edit-recipient-btn');
 	const errorDiv = document.getElementById('edit-recipient-error');
@@ -627,6 +663,7 @@ async function saveRecipient() {
 		console.error('saveRecipient: required DOM elements not found');
 		return;
 	}
+	if (btn.disabled) return;
 
 	const originalBtnText = btn.innerHTML;
 	
@@ -637,28 +674,41 @@ async function saveRecipient() {
 	const phone = document.getElementById('edit-recipient-phone')?.value?.trim() ?? '';
 	const email = document.getElementById('edit-recipient-email')?.value?.trim() ?? '';
 	const isEnabled = document.getElementById('edit-recipient-enabled')?.checked ?? true;
+	const enableForAllTargets = document.getElementById('edit-recipient-all-targets')?.checked ?? false;
 
-	if (!recipientId || !name) {
-		errorDiv.textContent = 'Missing required fields';
+	errorDiv.classList.add('d-none');
+	if (!recipientId) {
+		errorDiv.textContent = 'Missing recipient. Close the dialog and try again.';
 		errorDiv.classList.remove('d-none');
 		return;
 	}
 	
 	// Validation
-	const validationError = validateRecipientInput({ name, signalEnabled, emailEnabled, phone, email });
-	if (validationError) {
-		errorDiv.textContent = validationError;
-		errorDiv.classList.remove('d-none');
+	const editModal = document.getElementById('editRecipientModal');
+	if (window.JuFieldErrors.show(editModal, validateRecipientInput({ name, signalEnabled, emailEnabled, phone, email }, 'edit-recipient-'))) {
 		return;
 	}
 	
-	btn.disabled = true;
+	if (_saveInFlight) return;
+	_saveInFlight = true; // also covers the confirmation phase, where Save must stay enabled for the focus return
 	errorDiv.classList.add('d-none');
 	
 	try {
+		if (_editSaved.allTargets && !enableForAllTargets && _editSaved.targetCount > 0) {
+			const count = _editSaved.targetCount;
+			const confirmed = await window.confirmAction({
+				title: 'Remove recipient from all targets?',
+				message: `Saving with "Enable for all Targets" off removes this recipient from ${count} ${count === 1 ? 'target' : 'targets'}, including manually assigned targets.`,
+				confirmLabel: 'Remove from all targets',
+			});
+			if (!confirmed) return;
+		}
+		btn.disabled = true;
+
 		const payload = {
 			name,
 			is_enabled: isEnabled,
+			enable_for_all_targets: enableForAllTargets,
 			phone: signalEnabled ? phone : null,
 			email: emailEnabled ? email : null
 		};
@@ -691,6 +741,7 @@ async function saveRecipient() {
 		errorDiv.textContent = 'Network error: ' + error.message;
 		errorDiv.classList.remove('d-none');
 	} finally {
+		_saveInFlight = false;
 		btn.disabled = false;
 		btn.innerHTML = originalBtnText;
 	}
@@ -827,6 +878,14 @@ document.addEventListener('DOMContentLoaded', () => {
 		editRecipientBtn.addEventListener('click', saveRecipient);
 	}
 	
+	for (const id of ['addRecipientModal', 'editRecipientModal']) {
+		const dialog = document.getElementById(id);
+		if (!dialog) continue;
+		dialog.addEventListener('show.bs.modal', () => syncChannelFields(dialog));
+		dialog.addEventListener('change', (e) => {
+			if (e.target.matches('.ju-channel input[role="switch"]')) syncChannelFields(dialog);
+		});
+	}
 	// Test message buttons and unsaved-change detection in the edit dialog
 	for (const btn of document.querySelectorAll('[data-test-channel]')) {
 		btn.addEventListener('click', () => sendTestFromDialog(btn.dataset.testChannel));

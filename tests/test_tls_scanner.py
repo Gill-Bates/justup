@@ -28,6 +28,7 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from cryptography.x509.oid import NameOID
+from sslyze import ServerScanStatusEnum
 from sslyze.plugins.robot.implementation import RobotScanResultEnum
 
 from app.utils import tls_scanner, tls_target
@@ -99,8 +100,10 @@ def _attempt(status, result=None, reason=None):
 
 
 def _ciphers(*names):
+    suites = [SimpleNamespace(cipher_suite=SimpleNamespace(name=n), ephemeral_key=None) for n in names]
     return SimpleNamespace(
-        accepted_cipher_suites=[SimpleNamespace(cipher_suite=SimpleNamespace(name=n)) for n in names]
+        accepted_cipher_suites=suites,
+        is_tls_version_supported=bool(suites),
     )
 
 
@@ -151,8 +154,37 @@ def _server_result(**overrides):
         ssl_3_0_cipher_suites=_attempt(ok, _ciphers()),
         tls_1_0_cipher_suites=_attempt(ok, _ciphers()),
         tls_1_1_cipher_suites=_attempt(ok, _ciphers()),
-        tls_1_2_cipher_suites=_attempt(ok, _ciphers("ECDHE-RSA-AES128-GCM-SHA256", "ECDHE-RSA-AES256-GCM-SHA384")),
+        tls_1_2_cipher_suites=_attempt(
+            ok,
+            _ciphers("TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256", "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384"),
+        ),
         tls_1_3_cipher_suites=_attempt(ok, _ciphers("TLS_AES_256_GCM_SHA384")),
+        session_resumption=_attempt(
+            ok,
+            SimpleNamespace(
+                session_id_resumption_result=SimpleNamespace(value="FULLY_SUPPORTED"),
+                session_id_successful_resumptions_count=5,
+                session_id_attempted_resumptions_count=5,
+                tls_ticket_successful_resumptions_count=4,
+                tls_ticket_attempted_resumptions_count=5,
+            ),
+        ),
+        tls_1_3_early_data=_attempt(ok, SimpleNamespace(supports_early_data=False)),
+        tls_fallback_scsv=_attempt(ok, SimpleNamespace(supports_fallback_scsv=True)),
+        http_headers=_attempt(
+            ok,
+            SimpleNamespace(
+                http_error_trace=None,
+                strict_transport_security_header=SimpleNamespace(
+                    max_age=31536000, include_subdomains=True, preload=False
+                ),
+            ),
+        ),
+        elliptic_curves=_attempt(
+            ok,
+            SimpleNamespace(supports_ecdh_key_exchange=True, supported_curves=[SimpleNamespace(name="secp256r1")]),
+        ),
+        tls_extended_master_secret=_attempt(ok, SimpleNamespace(supports_ems_extension=True)),
         heartbleed=_attempt(ok, SimpleNamespace(is_vulnerable_to_heartbleed=False)),
         openssl_ccs_injection=_attempt(ok, SimpleNamespace(is_vulnerable_to_ccs_injection=False)),
         robot=_attempt(ok, SimpleNamespace(robot_result=RobotScanResultEnum.NOT_VULNERABLE_NO_ORACLE)),
@@ -161,7 +193,7 @@ def _server_result(**overrides):
     )
     for k, v in overrides.items():
         setattr(scan, k, v)
-    return SimpleNamespace(scan_status=SimpleNamespace(value="COMPLETED"), scan_result=scan)
+    return SimpleNamespace(scan_status=ServerScanStatusEnum.COMPLETED, scan_result=scan)
 
 
 def _normalize(result):
@@ -173,8 +205,176 @@ def test_clean_scan_is_secure_everywhere():
     assert r.status is ScanStatus.COMPLETED and not r.command_errors
     assert {k: c.verdict for k, c in r.checks.items()} == dict.fromkeys(r.checks, Verdict.SECURE)
     assert [p.supported for p in r.protocols] == [False, False, False, False, True, True]
-    assert r.preferred_cipher == "TLS_AES_256_GCM_SHA384"
-    assert r.protocol("TLS 1.2").cipher_suites == ("ECDHE-RSA-AES128-GCM-SHA256", "ECDHE-RSA-AES256-GCM-SHA384")
+    assert r.cipher_suite_example == "TLS_AES_256_GCM_SHA384"
+    assert r.protocol("TLS 1.2").cipher_suites == (
+        "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+        "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
+    )
+    assert r.mozilla_tls_profile.verdict is Verdict.SECURE
+    assert r.fallback_scsv.verdict is Verdict.SECURE
+    assert r.extended_master_secret.verdict is Verdict.SECURE
+    assert r.session_resumption == "Session IDs: 5/5; TLS tickets: 4/5"
+    assert r.elliptic_curves == "secp256r1"
+
+
+def test_all_certificate_deployments_are_normalized():
+    first, _ = _make_cert(cn="example.org", san=("example.org",))
+    second, _ = _make_cert(cn="alt.example.org", san=("alt.example.org",))
+    attempt = _attempt(
+        Status.COMPLETED,
+        SimpleNamespace(
+            certificate_deployments=[
+                SimpleNamespace(
+                    received_certificate_chain=[cert],
+                    verified_certificate_chain=[cert],
+                    received_chain_has_valid_order=True,
+                )
+                for cert in (first, second)
+            ]
+        ),
+    )
+    result = _normalize(_server_result(certificate_info=attempt))
+    assert [cert.subject for cert in result.certificate_deployments] == [
+        "CN=example.org",
+        "CN=alt.example.org",
+    ]
+    assert result.certificate is result.certificate_deployments[0]
+
+
+def _deployment(cert, *, verified=True, order_ok=True):
+    return SimpleNamespace(
+        received_certificate_chain=[cert],
+        verified_certificate_chain=[cert] if verified else None,
+        received_chain_has_valid_order=order_ok,
+    )
+
+
+def _multi(*deployments):
+    return _attempt(Status.COMPLETED, SimpleNamespace(certificate_deployments=list(deployments)))
+
+
+def _broken_deployment():
+    """Real certificate whose issuer cannot be read, so the normalizer cannot evaluate it."""
+
+    class _Unreadable:
+        def __init__(self, cert):
+            self._cert = cert
+
+        @property
+        def issuer(self):
+            raise ValueError("unreadable")
+
+        def __getattr__(self, name):
+            return getattr(self._cert, name)
+
+    cert, _ = _make_cert()
+    leaf = _Unreadable(cert)
+    return _deployment(leaf)
+
+
+def test_insecure_second_deployment_decides_the_aggregate():
+    good, _ = _make_cert()
+    expired, _ = _make_cert(days_valid=-5)
+    result = _normalize(_server_result(certificate_info=_multi(_deployment(good), _deployment(expired))))
+    assert result.certificate is result.certificate_deployments[0]
+    assert result.certificate.expiry.verdict is Verdict.SECURE  # detail view stays on the first certificate
+    assert result.checks["Certificate expiry"].verdict is Verdict.INSECURE
+    assert result.checks["Certificate expiry"].detail.startswith("Deployment 2:")
+    assert result.checks["Certificate trust"].verdict is Verdict.SECURE
+
+
+def test_two_secure_deployments_stay_secure_with_plain_detail():
+    first, _ = _make_cert()
+    second, _ = _make_cert()
+    result = _normalize(_server_result(certificate_info=_multi(_deployment(first), _deployment(second))))
+    cert_labels = ("Certificate trust", "Certificate expiry", "Signature algorithm", "Key strength")
+    assert all(result.checks[label].verdict is Verdict.SECURE for label in cert_labels)
+    assert not result.checks["Certificate expiry"].detail.startswith("Deployment")
+    assert result.unparsed_certificates == 0 and result.certificate_check.verdict is Verdict.SECURE
+
+
+def test_unevaluable_deployment_makes_the_aggregate_unknown_not_secure():
+    good, _ = _make_cert()
+    result = _normalize(_server_result(certificate_info=_multi(_deployment(good), _broken_deployment())))
+    assert len(result.certificate_deployments) == 1 and result.unparsed_certificates == 1
+    assert result.certificate_check.verdict is Verdict.UNKNOWN
+    for label in ("Certificate trust", "Certificate expiry", "Hostname match", "Chain order"):
+        assert result.checks[label].verdict is Verdict.UNKNOWN, label
+        assert "could not be evaluated" in result.checks[label].detail
+
+
+def test_deployment_without_chain_is_counted_as_unevaluable():
+    good, _ = _make_cert()
+    empty = SimpleNamespace(received_certificate_chain=[])
+    result = _normalize(_server_result(certificate_info=_multi(_deployment(good), empty)))
+    assert result.unparsed_certificates == 1
+    assert result.checks["Certificate expiry"].verdict is Verdict.UNKNOWN
+
+
+def test_insecure_beats_unknown_and_unknown_beats_secure():
+    good, _ = _make_cert()
+    expired, _ = _make_cert(days_valid=-5)
+    result = _normalize(
+        _server_result(
+            certificate_info=_multi(_deployment(good, order_ok=None), _deployment(expired), _broken_deployment())
+        )
+    )
+    assert result.checks["Certificate expiry"].verdict is Verdict.INSECURE
+    assert result.checks["Chain order"].verdict is Verdict.UNKNOWN  # deployment 1 unknown, 2 secure, 3 unevaluable
+    assert result.checks["Certificate trust"].verdict is Verdict.UNKNOWN  # unevaluable deployment, rest secure
+
+
+def test_different_certificate_errors_are_reported_per_check():
+    untrusted, _ = _make_cert()
+    expired, _ = _make_cert(days_valid=-5)
+    result = _normalize(
+        _server_result(certificate_info=_multi(_deployment(untrusted, verified=False), _deployment(expired)))
+    )
+    assert result.checks["Certificate trust"].verdict is Verdict.INSECURE
+    assert result.checks["Certificate trust"].detail.startswith("Deployment 1:")
+    assert result.checks["Certificate expiry"].verdict is Verdict.INSECURE
+    assert result.checks["Certificate expiry"].detail.startswith("Deployment 2:")
+
+
+def test_scan_protocol_commands_are_derived_from_one_table():
+    from sslyze import ScanCommand
+
+    protocol_commands = {command for _label, command, _legacy in tls_scanner._PROTOCOLS}
+    assert protocol_commands == {
+        ScanCommand.SSL_2_0_CIPHER_SUITES,
+        ScanCommand.SSL_3_0_CIPHER_SUITES,
+        ScanCommand.TLS_1_0_CIPHER_SUITES,
+        ScanCommand.TLS_1_1_CIPHER_SUITES,
+        ScanCommand.TLS_1_2_CIPHER_SUITES,
+        ScanCommand.TLS_1_3_CIPHER_SUITES,
+    }
+    assert protocol_commands <= tls_scanner._SCAN_COMMANDS
+    assert len(tls_scanner._SCAN_COMMANDS) == 18
+    legacy = {label: is_legacy for label, _command, is_legacy in tls_scanner._PROTOCOLS}
+    assert [label for label, flag in legacy.items() if flag] == ["SSL 2.0", "SSL 3.0", "TLS 1.0", "TLS 1.1"]
+
+
+def test_failed_protocol_command_is_untested_and_reported():
+    result = _normalize(_server_result(tls_1_0_cipher_suites=_attempt(Status.ERROR, None)))
+    assert result.protocol("TLS 1.0").supported is None
+    assert "tls_1_0_cipher_suites" in result.command_errors
+    assert result.status is ScanStatus.PARTIAL
+
+
+def test_mozilla_profile_rejects_an_unapproved_cipher_suite():
+    result = _normalize(_server_result(tls_1_2_cipher_suites=_attempt(Status.COMPLETED, _ciphers("BAD_SUITE"))))
+    assert result.mozilla_tls_profile.verdict is Verdict.INSECURE
+    assert "ciphers" in result.mozilla_tls_profile.detail
+
+
+def test_mozilla_profile_is_unknown_for_empty_certificate_deployment():
+    attempt = _attempt(
+        Status.COMPLETED,
+        SimpleNamespace(certificate_deployments=[SimpleNamespace(received_certificate_chain=[])]),
+    )
+    result = _normalize(_server_result(certificate_info=attempt))
+    assert result.status is ScanStatus.COMPLETED
+    assert result.certificate is None and result.mozilla_tls_profile.verdict is Verdict.UNKNOWN
 
 
 def test_certificate_fields_are_extracted():
@@ -268,7 +468,7 @@ def test_no_modern_protocol_is_insecure():
             tls_1_3_cipher_suites=_attempt(Status.COMPLETED, _ciphers()),
         )
     )
-    assert r.modern_protocol.verdict is Verdict.INSECURE and r.preferred_cipher is None
+    assert r.modern_protocol.verdict is Verdict.INSECURE and r.cipher_suite_example is None
 
 
 def test_vulnerabilities_are_insecure():
@@ -302,12 +502,18 @@ def test_failed_or_unscheduled_commands_are_unknown_never_secure(status):
         "tls_1_1_cipher_suites",
         "tls_1_2_cipher_suites",
         "tls_1_3_cipher_suites",
+        "session_resumption",
+        "tls_1_3_early_data",
+        "tls_fallback_scsv",
+        "http_headers",
+        "elliptic_curves",
+        "tls_extended_master_secret",
     ]
     r = _normalize(_server_result(**{n: _attempt(status) for n in names}))
     assert r.status is ScanStatus.PARTIAL and len(r.command_errors) == len(names)
     assert r.certificate is None
     assert all(c.verdict is Verdict.UNKNOWN for c in r.checks.values())
-    assert r.preferred_cipher is None
+    assert r.cipher_suite_example is None
 
 
 def test_one_failed_command_does_not_hide_the_others():
@@ -448,23 +654,38 @@ def test_deadline_yields_failed_result_and_pool_recovers():
 
 def test_concurrency_is_bounded():
     running, peak, lock = 0, 0, threading.Lock()
+    results = []
+    errors = []
 
     def work(*_a, **_k):
         nonlocal running, peak
         with lock:
             running += 1
             peak = max(peak, running)
-        threading.Event().wait(0.1)
-        with lock:
-            running -= 1
-        return tls_scanner._failed_result("h", 1, "x")
+        try:
+            threading.Event().wait(0.1)
+            return tls_scanner._failed_result("h", 1, "x")
+        finally:
+            with lock:
+                running -= 1
+
+    def scan():
+        try:
+            results.append(tls_scanner.scan_tls("https://127.0.0.1:9"))
+        except BaseException as exc:  # noqa: BLE001 - surfaced by the assertion below
+            errors.append(exc)
 
     with mock.patch.object(tls_scanner, "_run_sslyze", side_effect=work):
-        threads = [threading.Thread(target=tls_scanner.scan_tls, args=("https://127.0.0.1:9",)) for _ in range(6)]
+        threads = [threading.Thread(target=scan, daemon=True) for _ in range(6)]
         for t in threads:
             t.start()
         for t in threads:
-            t.join()
+            t.join(timeout=5)
+    alive = [thread.name for thread in threads if thread.is_alive()]
+    assert not alive, f"TLS scan workers did not finish: {alive}"
+    assert not errors
+    assert len(results) == 6
+    assert peak >= 1, "at least one scan must reach the execution worker"
     assert peak <= tls_scanner.MAX_CONCURRENT_SCANS
 
 
@@ -568,7 +789,10 @@ class _TlsServer:
                     conn.close()  # handshake failure: drop the connection
                     continue
                 conn.settimeout(3)
-                self.ctx.wrap_socket(conn, server_side=True).close()
+                with self.ctx.wrap_socket(conn, server_side=True) as tls_conn:
+                    request = tls_conn.recv(8192)
+                    if request:
+                        tls_conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
             except (OSError, ssl.SSLError):
                 conn.close()
 
@@ -613,7 +837,7 @@ def test_self_signed_server_scan(tls_server):
     assert r.protocol("SSL 2.0").supported is False and r.protocol("SSL 3.0").supported is False
     assert r.heartbleed.verdict is Verdict.SECURE and r.ccs_injection.verdict is Verdict.SECURE
     assert r.compression.verdict is Verdict.SECURE
-    assert r.preferred_cipher
+    assert r.cipher_suite_example
 
 
 def test_expired_certificate_server(tls_server):

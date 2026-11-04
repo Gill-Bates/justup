@@ -49,7 +49,16 @@
     auto_close_alert: fields.autoClose,
     ignore_cert_errors: fields.ignoreCert
   };
+  // Overrides that belong to a field group are only sent while the check that owns the group is active.
+  const overrideGroups = {
+    http_url: 'http',
+    http_prefer_head: 'http',
+    http_success_codes: 'http',
+    ignore_cert_errors: 'tls'
+  };
+  const groupLabels = { http: 'HTTP settings', tls: 'TLS certificate option', tcp: 'TCP port field' };
   const dirty = new Set();
+  let shownGroups = {};
   let step = 0;
   let reviewedValues = null;
   let conflicts = [];
@@ -127,8 +136,20 @@
     fields.address.autocomplete = ['website', 'api'].includes(kind) ? 'url' : 'off';
   }
 
-  function updateTcpPortField() {
-    document.getElementById('wizard-extra-ports-wrap').hidden = !fields.tcp.checked;
+  function activeChecks() {
+    return { http: fields.http.checked, ping: fields.ping.checked, tcp: fields.tcp.checked, cert: fields.cert.checked };
+  }
+
+  // Shows the field groups of the active checks; a user toggle is announced through the status region.
+  function updateCheckGroups({ announce = false } = {}) {
+    const visible = window.JuCheckGroups.apply(form, activeChecks());
+    if (announce) {
+      const changes = Object.keys(groupLabels)
+        .filter(group => visible[group] !== Boolean(shownGroups[group]))
+        .map(group => `${groupLabels[group]} ${visible[group] ? 'shown' : 'hidden'}`);
+      document.getElementById('wizard-checks-status').textContent = changes.join('. ');
+    }
+    shownGroups = visible;
   }
 
   function suggestName() {
@@ -151,8 +172,11 @@
 
   function requestBody() {
     const overrides = {};
+    const visible = window.JuCheckGroups.visibleGroups(activeChecks());
     for (const [key, field] of Object.entries(overrideFields)) {
-      if (dirty.has(key)) overrides[key] = readOverride(key, field);
+      if (!dirty.has(key)) continue;
+      if (key in overrideGroups && !visible[overrideGroups[key]]) continue;
+      overrides[key] = readOverride(key, field);
     }
     return {
       profile: profile(),
@@ -173,6 +197,7 @@
       else field.value = value ?? '';
     }
     if (values.name && !fields.name.value.trim()) fields.name.value = values.name;
+    updateCheckGroups();
   }
 
   async function preview() {
@@ -240,14 +265,15 @@
     list.className = 'mb-0';
     addSummaryRow(list, 'Name / group', `${values.name} / ${values.group || 'Ungrouped'}`);
     addSummaryRow(list, 'Host', values.host);
-    addSummaryRow(list, 'Full URL', values.enable_http_check ? values.http_url : null);
-    addSummaryRow(list, 'TCP ports', values.enable_tcp_connect ? values.tcp_ports : null);
+    // Rows of an inactive check are left out instead of showing a placeholder.
+    if (values.enable_http_check) addSummaryRow(list, 'Full URL', values.http_url);
+    if (values.enable_tcp_connect) addSummaryRow(list, 'TCP ports', values.tcp_ports);
     const checks = [values.enable_http_check && 'HTTP', values.enable_ping && 'ICMP ping', values.enable_tcp_connect && 'TCP', values.enable_cert_expiration && 'Certificate expiry'].filter(Boolean);
     addSummaryRow(list, 'Checks', checks.join(', ') || 'None');
     addSummaryRow(list, 'Interval / retries / retention', `${values.interval_seconds} s / ${values.max_retries} / ${values.retention_days} days`);
-    addSummaryRow(list, 'HTTP method / success codes', values.enable_http_check ? `${values.http_prefer_head ? 'HEAD' : 'GET'} / ${values.http_success_codes}` : null);
+    if (values.enable_http_check) addSummaryRow(list, 'HTTP method / success codes', `${values.http_prefer_head ? 'HEAD' : 'GET'} / ${values.http_success_codes}`);
     addSummaryRow(list, 'Certificate monitoring', values.enable_cert_expiration ? 'On' : 'Off');
-    addSummaryRow(list, 'Ignore certificate errors', values.ignore_cert_errors ? 'Yes' : 'No');
+    if (values.enable_http_check || values.enable_cert_expiration) addSummaryRow(list, 'Ignore certificate errors', values.ignore_cert_errors ? 'Yes' : 'No');
     addSummaryRow(list, 'Auto-close alerts', values.auto_close_alert ? 'On' : 'Off');
     addSummaryRow(list, 'Status', values.is_enabled ? 'Active' : 'Inactive');
     const selected = [...document.querySelectorAll('#wizard-recipients input:checked')].map(input => input.dataset.name);
@@ -353,7 +379,9 @@
   for (const [key, field] of Object.entries(overrideFields)) {
     field.addEventListener(field.type === 'checkbox' || field.tagName === 'SELECT' ? 'change' : 'input', () => dirty.add(key));
   }
-  fields.tcp.addEventListener('change', updateTcpPortField);
+  for (const toggle of [fields.http, fields.ping, fields.tcp, fields.cert]) {
+    toggle.addEventListener('change', () => updateCheckGroups({ announce: true }));
+  }
   fields.ports.addEventListener('input', () => { fields.extraPorts.value = fields.ports.value; });
   fields.extraPorts.addEventListener('input', () => { fields.ports.value = fields.extraPorts.value; });
   fields.name.addEventListener('input', () => { fields.name.dataset.userEdited = 'true'; });
@@ -397,6 +425,6 @@
     }
   });
   updateKindFields();
-  updateTcpPortField();
+  updateCheckGroups();
   setStep(0, { scroll: false });
 })();

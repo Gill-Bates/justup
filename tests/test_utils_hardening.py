@@ -20,6 +20,7 @@ from fastapi.testclient import TestClient
 from app.db import sqlite as sqlite_db
 from app.services.notifications.email_template import render_template
 from app.utils import crypto, settings_cache
+from app.utils.constants import SettingKeys
 from app.utils.request_id import RequestIDMiddleware
 from tests import _support  # noqa: F401 - imported for its sys.path side effect
 
@@ -118,6 +119,71 @@ class TestSettingsCache:
         for t in threads:
             t.join()
         assert not errors
+
+
+class TestSettingsCacheConvenienceHelpers:
+    """The helpers read the stored database keys (written here with literal names) and keep their caching rules."""
+
+    @pytest.fixture
+    def conn(self, tmp_path: Path):
+        connection = sqlite_db.connect(tmp_path / "a.db")
+        sqlite_db.init_schema(connection)
+        settings_cache.invalidate_settings_cache()
+        yield connection
+        sqlite_db.close_connection(connection)
+
+    def test_stored_key_names_are_unchanged(self):
+        assert (
+            SettingKeys.AUTH_DISABLED,
+            SettingKeys.PURGE_ENABLED,
+            SettingKeys.USE_UTC_DASHBOARD,
+            SettingKeys.PDF_PAGE_SIZE,
+        ) == ("auth_disabled", "purge_enabled", "use_utc_dashboard", "pdf_page_size")
+
+    def test_missing_settings_give_the_defaults(self, conn):
+        assert settings_cache.is_auth_disabled(conn) is False
+        assert settings_cache.is_purge_enabled(conn) is True
+        assert settings_cache.use_utc_dashboard(conn) is False
+        assert settings_cache.get_pdf_page_size(conn) == "a4"
+
+    def test_stored_values_win_including_explicit_false(self, conn):
+        sqlite_db.set_setting(conn, "auth_disabled", True)
+        sqlite_db.set_setting(conn, "purge_enabled", False)
+        sqlite_db.set_setting(conn, "use_utc_dashboard", True)
+        sqlite_db.set_setting(conn, "pdf_page_size", "LETTER")
+        assert settings_cache.is_auth_disabled(conn) is True
+        assert settings_cache.is_purge_enabled(conn) is False  # an explicit False is not replaced by the default
+        assert settings_cache.use_utc_dashboard(conn) is True
+        assert settings_cache.get_pdf_page_size(conn) == "letter"
+
+    def test_empty_page_size_falls_back_to_the_default(self, conn):
+        sqlite_db.set_setting(conn, "pdf_page_size", "")
+        assert settings_cache.get_pdf_page_size(conn) == "a4"
+
+    @pytest.mark.parametrize(
+        ("key", "helper", "first", "second"),
+        [
+            ("purge_enabled", settings_cache.is_purge_enabled, False, True),
+            ("use_utc_dashboard", settings_cache.use_utc_dashboard, True, False),
+            ("pdf_page_size", settings_cache.get_pdf_page_size, "letter", "a4"),
+        ],
+    )
+    def test_cached_helpers_serve_the_cache_until_invalidated(self, conn, monkeypatch, key, helper, first, second):
+        sqlite_db.set_setting(conn, key, first)
+        assert helper(conn) == first
+        real_invalidate = settings_cache.invalidate_settings_cache
+        monkeypatch.setattr(settings_cache, "invalidate_settings_cache", lambda *_a, **_k: None)
+        sqlite_db.set_setting(conn, key, second)  # a write whose invalidation is lost
+        monkeypatch.setattr(settings_cache, "invalidate_settings_cache", real_invalidate)
+        assert helper(conn) == first  # still cached
+        real_invalidate(key)
+        assert helper(conn) == second
+
+    def test_auth_disabled_is_never_cached(self, conn):
+        sqlite_db.set_setting(conn, "auth_disabled", True)
+        assert settings_cache.is_auth_disabled(conn) is True
+        sqlite_db.set_setting(conn, "auth_disabled", False)
+        assert settings_cache.is_auth_disabled(conn) is False  # no invalidation needed
 
 
 class TestPlainTextRendering:

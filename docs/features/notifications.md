@@ -8,6 +8,17 @@ persistent delivery queue with retry and backoff.
 A recipient has a name, an email address and/or a Signal number, an active flag,
 and the targets it is assigned to. Only admins manage recipients.
 
+**Enable for all Targets:** this switch (create and edit dialog) assigns the recipient to every
+existing target when saved on, and removes it from every target when saved off after it was on.
+New targets automatically get all recipients with the switch on. It only drives these bulk
+actions: single targets can still be changed manually, and bulk assignments send no welcome message.
+When switching it off for a recipient with assigned targets, saving asks for confirmation because
+all assignments, including manual ones, will be removed. Cancel keeps the edits open without saving.
+
+**Channels in the dialog:** Signal and Email each have a switch. A switched-off channel shows only its
+switch; phone number, hint and Send test appear when it is on. Values you typed stay while the dialog
+is open. On save, a switched-off channel is cleared (the recipient keeps only the channels that are on),
+and at least one channel must be on.
 **Test messages:** the paper-plane button in the recipients list tests all saved
 channels; the Edit Recipient dialog tests Signal and email separately. Tests use the
 saved values, work for disabled recipients, and are not retried on failure.

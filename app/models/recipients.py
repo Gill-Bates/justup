@@ -23,6 +23,10 @@ class RecipientBase(BaseModel):
     )
     email: EmailStr | None = Field(default=None, description="Email address")
     is_enabled: bool = Field(default=True, description="Whether alerts are sent to this recipient")
+    enable_for_all_targets: bool = Field(
+        default=False,
+        description="Assigned to every existing target and automatically to every future target",
+    )
 
     @model_validator(mode="after")
     def at_least_one_channel(self):
@@ -47,6 +51,7 @@ class RecipientUpdate(BaseModel):
     phone: str | None = Field(default=None, max_length=32, pattern=r"^\+[1-9]\d{7,14}$")
     email: EmailStr | None = Field(default=None)
     is_enabled: bool | None = None
+    enable_for_all_targets: bool | None = None
 
 
 class TargetBrief(BaseModel):

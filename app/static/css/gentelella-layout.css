@@ -1,11 +1,9 @@
 /*
  * app/static/css/gentelella-layout.css
  *
- * Gentelella look and feel (https://github.com/ColorlibHQ/gentelella, v4.2.0, MIT, see
- * app/static/vendor/gentelella/LICENSE): dark left sidebar with brand and profile area,
- * top navbar, "x_panel" cards, teal accent. Re-implemented on Bootstrap 5.3 variables;
- * no Gentelella JavaScript or demo library is shipped. Colors are adjusted so text
- * reaches 4.5:1 and UI components 3:1 in both themes (WCAG 2.2 AA).
+ * Shared application shell and theme tokens: theme-aware navigation, top bar, flat panels,
+ * and the established teal accent, on Bootstrap 5.3 variables. Colors reach 4.5:1
+ * for text and 3:1 for UI components in both themes (WCAG 2.2 AA).
  */
 
 @font-face {
@@ -13,7 +11,7 @@
 	src: url("/static/fonts/IBM-Plex-Sans-Variable.woff2") format("woff2");
 	font-weight: 100 700;
 	font-style: normal;
-	font-display: swap;
+	font-display: optional;
 }
 
 @font-face {
@@ -21,7 +19,7 @@
 	src: url("/static/fonts/IBM-Plex-Sans-Variable-Italic.woff2") format("woff2");
 	font-weight: 100 700;
 	font-style: italic;
-	font-display: swap;
+	font-display: optional;
 }
 
 :root {
@@ -35,22 +33,27 @@
 	--bs-body-bg-rgb: 247, 247, 247;
 	--bs-secondary-color: #5f6f80;
 	--bs-border-color: #d9dee4;
-	--bs-border-radius: 0.65rem;
-	--bs-border-radius-lg: 0.9rem;
-	--ju-radius-tile: 0.75rem;
+	--bs-border-radius: 0.3rem;
+	--bs-border-radius-lg: 0.4rem;
+	--ju-radius-tile: 0.4rem;
 	--ju-page-title-size: clamp(1.75rem, 2.2vw, 2.25rem);
-
-	/* Teal accent: #0e7a65 is 5.3:1 on white, white on it 5.3:1. */
 	--bs-primary: #0e7a65;
 	--bs-primary-rgb: 14, 122, 101;
 	--bs-link-color: #0e7a65;
 	--bs-link-color-rgb: 14, 122, 101;
 	--bs-link-hover-color: #0a5c4d;
 	--bs-link-hover-color-rgb: 10, 92, 77;
-	--bs-focus-ring-color: rgb(14 122 101 / 25%);
+	--bs-focus-ring-color: var(--ju-focus-ring);
+	--ju-focus-ring: var(--bs-body-color);
+	--ju-focus-field-border: var(--bs-secondary-color);
+	--ju-focus-outline-width: 2px;
+	--ju-focus-outline-offset: 2px;
+	--ju-control-edge: #7b8896;
+	--ju-switch-thumb-off: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='-4 -4 8 8'%3e%3ccircle r='3' fill='%237b8896'/%3e%3c/svg%3e");
 	--ju-primary-contrast: #fff;
 	--ju-panel-bg: #fff;
 	--ju-panel-line: #e6e9ed;
+	--ju-panel-hover: #eef2f5;
 	--ju-title: #2a3f54;
 	--ju-topbar-bg: #ededed;
 	--ju-topbar-fg: #3d4f61;
@@ -63,6 +66,9 @@
 	--ju-sidebar-ring: #fff;
 	--ju-sidebar-w: 15rem;
 	--ju-sidebar-w-rail: 4.5rem;
+
+	/* Inset that centres a 1.3rem icon on the rail axis inside a link with the 0.5rem side margin. */
+	--ju-nav-icon-inset: 1.1rem;
 	--ju-topbar-h: 3.75rem;
 	--ju-shadow: 0 1px 2px rgb(42 63 84 / 12%);
 	--bs-code-color: #a82a68;
@@ -71,6 +77,16 @@
 	--ju-st-online: #16815c;
 	--ju-st-offline: #c43427;
 	--ju-st-disabled: #926e06;
+
+	/* Data-visualization series palette (no status hues); at least 3:1 on --ju-panel-bg. */
+	--ju-dv-1: #0072b2;
+	--ju-dv-2: #7c3aed;
+	--ju-dv-3: #0f766e;
+	--ju-dv-4: #a21caf;
+	--ju-dv-5: #52607a;
+	--ju-dv-6: #8a5a2b;
+	--ju-dv-7: #3730a3;
+	--ju-dv-8: #be185d;
 }
 
 [data-bs-theme="dark"] {
@@ -88,10 +104,15 @@
 	--bs-link-color-rgb: 47, 208, 176;
 	--bs-link-hover-color: #6be3cc;
 	--bs-link-hover-color-rgb: 107, 227, 204;
-	--bs-focus-ring-color: rgb(47 208 176 / 30%);
+	--bs-focus-ring-color: var(--ju-focus-ring);
+	--ju-focus-ring: var(--bs-body-color);
+	--ju-focus-field-border: var(--bs-secondary-color);
+	--ju-control-edge: #6f8099;
+	--ju-switch-thumb-off: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='-4 -4 8 8'%3e%3ccircle r='3' fill='%236f8099'/%3e%3c/svg%3e");
 	--ju-primary-contrast: #04201a;
 	--ju-panel-bg: #182231;
 	--ju-panel-line: #2b384b;
+	--ju-panel-hover: #223049;
 	--ju-title: #e6ebf2;
 	--ju-topbar-bg: #141d2b;
 	--ju-topbar-fg: #c5d0dc;
@@ -106,6 +127,16 @@
 	--ju-st-online: #3ddc97;
 	--ju-st-offline: #ff8a7a;
 	--ju-st-disabled: #f6c23e;
+
+	/* Data-visualization series palette, dark values. */
+	--ju-dv-1: #56b4e9;
+	--ju-dv-2: #a78bfa;
+	--ju-dv-3: #2dd4bf;
+	--ju-dv-4: #e879f9;
+	--ju-dv-5: #94a3b8;
+	--ju-dv-6: #d2a679;
+	--ju-dv-7: #4f6bed;
+	--ju-dv-8: #f472b6;
 }
 
 body {
@@ -217,11 +248,6 @@ h6,
 	border-radius: var(--bs-border-radius);
 }
 
-.form-control:focus,
-.form-select:focus {
-	border-color: var(--bs-primary);
-	box-shadow: 0 0 0 0.2rem var(--bs-focus-ring-color);
-}
 
 .form-check-input:checked {
 	background-color: var(--bs-primary);
@@ -289,29 +315,11 @@ h6,
 }
 
 /* ===== Skeleton of the page: sidebar | (topbar, main, footer) =====
-   Layout contract (see docs/development.md, "Layout contract"):
-   - flow (default): the document scrolls; the footer follows the content.
-   - fit: the shell is exactly one dynamic viewport high. Topbar and footer keep their size, main
-     takes the rest and scrolls inside when its content is taller, so nothing is pushed under or
-     past the footer. A fit mode is a pair of tokens on .ju-shell: --ju-fit-height and
-     --ju-fit-overflow. Pages opt in via the shell_class block in base.html. */
+   The shell fills the visible viewport; main owns vertical document content scrolling. */
 .ju-shell {
 	display: flex;
-	height: var(--ju-fit-height, auto);
-	min-height: 100vh;
-	min-height: 100dvh;
-}
-
-.ju-shell--fit {
-	--ju-fit-height: 100dvh;
-	--ju-fit-overflow: auto;
-}
-
-@media (width >=992px) {
-	.ju-shell--fit-lg {
-		--ju-fit-height: 100dvh;
-		--ju-fit-overflow: auto;
-	}
+	height: 100vh;
+	height: 100dvh;
 }
 
 /* Keyboard focus and in-page jumps must not land under the sticky topbar. */
@@ -329,6 +337,7 @@ html {
 	padding-left: env(safe-area-inset-left, 0);
 	background: var(--ju-sidebar-bg);
 	color: var(--ju-sidebar-fg);
+	border-right: 1px solid var(--ju-panel-line);
 	overflow: hidden;
 	transition: width 0.2s ease, transform 0.2s ease, visibility 0.2s;
 }
@@ -338,13 +347,14 @@ html {
 	outline-offset: -2px;
 }
 
-/* Three regions: brand header, scrollable navigation, account footer. */
+/* Three regions: brand header, scrollable navigation, account footer. The header and the topbar
+   share --ju-topbar-h so their bottom borders meet on one line. */
 .ju-sidebar-header {
 	display: flex;
 	flex: 0 0 auto;
 	align-items: center;
-	min-height: var(--ju-topbar-h);
-	border-bottom: 1px solid rgb(255 255 255 / 10%);
+	height: var(--ju-topbar-h);
+	border-bottom: 1px solid var(--ju-panel-line);
 }
 
 .ju-sidebar-brand {
@@ -355,7 +365,7 @@ html {
 	align-self: stretch;
 	min-width: 0;
 	padding: 0.5rem 1.4rem;
-	color: #fff;
+	color: var(--ju-sidebar-fg);
 	text-decoration: none;
 }
 
@@ -381,21 +391,27 @@ html {
 }
 
 .ju-sidebar-brand .ju-logo {
+	display: none;
+	width: 6rem;
 	max-width: 100%;
-	filter: invert(1);
+	height: auto;
 }
 
 .ju-brand-mark {
-	display: none;
+	display: flex;
 	align-items: center;
 	justify-content: center;
 	width: 2.25rem;
 	height: 2.25rem;
 	border-radius: var(--bs-border-radius);
 	background: var(--ju-sidebar-accent);
-	color: #04201a;
-	font-size: 1.1rem;
-	font-weight: 700;
+}
+
+.ju-brand-icon {
+	display: block;
+	width: 1.5rem;
+	height: 1.75rem;
+	object-fit: contain;
 }
 
 .ju-profile {
@@ -403,15 +419,15 @@ html {
 	flex: 0 0 auto;
 	align-items: center;
 	gap: 0.75rem;
-	padding: 0.75rem 1.4rem calc(0.75rem + env(safe-area-inset-bottom, 0));
-	border-top: 1px solid rgb(255 255 255 / 10%);
+	padding: 0.75rem 1.4rem calc(0.75rem + env(safe-area-inset-bottom, 0)) calc(var(--ju-sidebar-w-rail) / 2 - 1.25rem);
+	border-top: 1px solid var(--ju-panel-line);
 }
 
 .ju-profile-avatar {
 	width: 2.5rem;
 	height: 2.5rem;
 	flex: 0 0 auto;
-	border: 2px solid rgb(255 255 255 / 25%);
+	border: 2px solid var(--ju-panel-line);
 	border-radius: 50%;
 	object-fit: cover;
 }
@@ -425,12 +441,13 @@ html {
 	display: block;
 	color: var(--ju-sidebar-muted);
 	font-size: 0.75rem;
+	white-space: nowrap;
 }
 
 .ju-profile-name {
 	display: block;
 	overflow: hidden;
-	color: #fff;
+	color: var(--ju-sidebar-fg);
 	font-size: 0.95rem;
 	font-weight: 500;
 	text-overflow: ellipsis;
@@ -459,7 +476,9 @@ html {
 	width: calc(100% - 1rem);
 	min-height: 2.75rem;
 	margin-inline: 0.5rem;
-	padding: 0.5rem 0.9rem;
+
+	/* The icon centre sits on the rail axis in both states, so it stays put while the width animates. */
+	padding: 0.5rem var(--ju-nav-icon-inset);
 	border: 0;
 	border-radius: var(--bs-border-radius);
 	background: transparent;
@@ -481,6 +500,7 @@ html {
 	background: var(--ju-sidebar-active);
 	color: #fff;
 	font-weight: 650;
+	box-shadow: inset 3px 0 var(--ju-sidebar-accent);
 }
 
 .ju-nav-link.active .material-icons {
@@ -497,6 +517,9 @@ html {
 .ju-nav-text {
 	flex: 1 1 auto;
 	min-width: 0;
+
+	/* No wrapping while the width animates, so rows keep their height between states. */
+	white-space: nowrap;
 }
 
 .ju-nav-chevron {
@@ -539,13 +562,43 @@ html {
 	top: 0;
 	z-index: 1030;
 	display: flex;
+	flex: 0 0 auto;
 	align-items: center;
 	gap: 0.75rem;
-	min-height: var(--ju-topbar-h);
-	padding: 0.5rem calc(var(--page-gutter, 1.5rem) + env(safe-area-inset-right, 0)) 0.5rem calc(var(--page-gutter, 1.5rem) + env(safe-area-inset-left, 0));
+	height: var(--ju-topbar-h);
+	padding: 0 calc(var(--page-gutter, 1.5rem) + env(safe-area-inset-right, 0)) 0 calc(var(--page-gutter, 1.5rem) + env(safe-area-inset-left, 0));
 	border-bottom: 1px solid var(--ju-panel-line);
+	box-shadow: inset 0 2px var(--bs-primary);
 	background: var(--ju-topbar-bg);
 	color: var(--ju-topbar-fg);
+}
+
+.ju-topbar-brand {
+	display: inline-flex;
+	align-items: center;
+	flex: 0 1 auto;
+	min-width: 0;
+	color: var(--ju-topbar-fg);
+}
+
+.ju-logo {
+	filter: drop-shadow(var(--ju-shadow));
+}
+
+.ju-topbar-brand .ju-logo {
+	display: block;
+	width: 6rem;
+	max-width: 100%;
+	height: auto;
+}
+
+[data-bs-theme="dark"] .ju-logo:not(.ju-logo--white) {
+	filter: invert(1) drop-shadow(var(--ju-shadow));
+}
+
+.ju-topbar-brand:focus-visible {
+	outline: 2px solid var(--ju-focus-ring);
+	outline-offset: 3px;
 }
 
 .ju-topbar .btn,
@@ -598,13 +651,15 @@ html {
 	min-width: 0;
 	min-height: 0;
 	padding-bottom: 0;
-	overflow-y: var(--ju-fit-overflow, visible);
+	overflow-y: auto;
+
+	/* Reserve the scrollbar so content does not jump sideways when the page grows past the viewport. */
+	scrollbar-gutter: stable;
+	overscroll-behavior-y: contain;
 }
 
 /* ===== Layout guard (global) =====
-   The footer is a normal-flow row that margin-top:auto pushes to the bottom of the column. It
-   must not be sticky/fixed: a sticky footer paints over the last viewport rows at every scroll
-   position except the very end and cuts off cards. */
+   The footer owns a non-shrinking flex row, leaving the rest of the viewport to main. */
 .ju-content .ju-footer {
 	flex: 0 0 auto;
 	margin-top: auto;
@@ -675,7 +730,6 @@ html {
 
 .dashboard-hero .small {
 	order: -1;
-	font-size: 0.75rem !important;
 	font-weight: 600;
 	letter-spacing: 0.04em;
 }
@@ -713,8 +767,22 @@ html {
 	border-top: 3px solid var(--bs-primary);
 }
 
-/* ===== Desktop rail mode (sidebar collapsed to icons) ===== */
+/* ===== Desktop sidebar: collapse control and rail mode =====
+   The rail is its own layout, not the expanded one squeezed: every icon cell is centered on the
+   rail axis (--ju-sidebar-w-rail / 2) and nothing keeps an expanded-state inset. The collapse
+   control sits in a fixed bottom region (controls + profile), outside the scrolling nav, so it
+   stays reachable at any viewport height. The topbar toggle only serves the mobile drawer. */
+.ju-sidebar-controls {
+	flex: 0 0 auto;
+	border-top: 1px solid rgb(255 255 255 / 10%);
+	padding-block: 0.5rem;
+}
+
 @media (width >=992px) {
+	.ju-topbar-toggle {
+		display: none;
+	}
+
 	.ju-nav-sm .ju-sidebar {
 		width: var(--ju-sidebar-w-rail);
 	}
@@ -723,23 +791,16 @@ html {
 		margin-left: var(--ju-sidebar-w-rail);
 	}
 
-	.ju-nav-sm .ju-sidebar-brand .ju-logo,
 	.ju-nav-sm .ju-nav-chevron {
 		display: none;
 	}
 
 	.ju-nav-sm .ju-sidebar-brand {
-		justify-content: flex-start;
-		padding-inline: 1.4rem;
-	}
-
-	.ju-nav-sm .ju-brand-mark {
-		display: flex;
+		padding-inline: calc(var(--ju-sidebar-w-rail) / 2 - 1.125rem) 0;
 	}
 
 	.ju-nav-sm .ju-profile {
-		justify-content: flex-start;
-		padding-inline: 1.4rem;
+		padding-right: 0;
 	}
 
 	/* Account name stays available to assistive technology. */
@@ -751,13 +812,14 @@ html {
 		clip-path: inset(50%);
 	}
 
+	/* Nested links drop the sub-list indent: the indent belongs to the expanded menu. */
 	.ju-nav-sm .ju-nav-link {
-		justify-content: flex-start;
-		padding-inline: 0.9rem;
+		position: relative;
+		gap: 0;
 	}
 
 	.ju-nav-sm .ju-nav-sub .ju-nav-link {
-		padding-left: 2.75rem;
+		padding-left: var(--ju-nav-icon-inset);
 	}
 
 	/* Text stays in the accessibility tree and is only hidden visually. */
@@ -787,6 +849,10 @@ html {
 
 	.ju-sidebar-close {
 		display: inline-flex;
+	}
+
+	.ju-sidebar-controls {
+		display: none;
 	}
 
 	.ju-sidebar {
@@ -830,6 +896,10 @@ html {
 }
 
 @media (width <=576px) {
+	.ju-topbar-brand .ju-logo {
+		width: 4.25rem;
+	}
+
 	.ju-topbar-divider {
 		display: none;
 	}
@@ -860,6 +930,7 @@ html {
 	}
 
 	.ju-sidebar-header,
+	.ju-sidebar-controls,
 	.ju-profile {
 		border-color: CanvasText;
 	}

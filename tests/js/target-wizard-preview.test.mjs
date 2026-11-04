@@ -8,6 +8,8 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
 const source = readFileSync(new URL('../../app/static/js/target-wizard.js', import.meta.url), 'utf8');
+const optionalGroupsSource = readFileSync(new URL('../../app/static/js/utils/optional-groups.js', import.meta.url), 'utf8');
+const groupsSource = readFileSync(new URL('../../app/static/js/utils/check-groups.js', import.meta.url), 'utf8');
 function el(extra = {}) {
   const listeners = {};
   return {
@@ -46,6 +48,9 @@ function setup() {
     },
     console, URL, JSON, Number, Boolean, Array, Object, Set,
   };
+  sandbox.window.window = sandbox.window;
+  vm.runInNewContext(optionalGroupsSource, sandbox.window);
+  vm.runInNewContext(groupsSource, sandbox.window);
   vm.runInNewContext(source, sandbox);
   const answer = (index, values) => pending[index]({
     ok: true, status: 200,

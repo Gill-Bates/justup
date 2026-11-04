@@ -24,7 +24,67 @@ The scheduler runs SQLite cleanup about hourly:
 | Resolved monitoring alerts | 730 days (open alerts stay) |
 | Delivery queue | sent/failed 7 days (pending stay) |
 | POP import runs | 90 days (at least the latest 20) |
+| Unreviewed PoP candidates and observations | 365 days, deleted together |
+| Reviewed PoP candidates and review audit | retained; no automatic deletion |
 | Inbox notifications | 180 days, read or unread |
+
+### PoP candidate review
+
+PeeringDB facilities are grouped by known city **and country**. A group whose
+coordinates disagree by more than 50 km, or disagree with a curated city anchor,
+is skipped. A curated seed/manual position wins; otherwise the deterministic
+facility centroid is stored in `pop_city_evidence` with its source and facility
+count. This table is not read by hostname lookups. The importer neither creates
+nor refreshes productive router aliases, and it does not retire existing aliases.
+Seed, manual and historical learned rows are not overwritten. Repeated identical
+snapshots leave city evidence unchanged.
+Import status counts accepted facilities as `processed` and city-evidence rows
+as `inserted` or `updated`; productive alias counts are unchanged.
+
+Traceroute candidates are stored separately in `pop_alias_candidates` and
+`pop_candidate_observations`. Route fingerprints deduplicate repeats; an IPv4
+`/24` or IPv6 `/48` identifies an independent network context. Provider/parser
+context is recorded separately and cannot make the same network independent. At most
+5,000 candidates and 20 observations per candidate are retained. Quality score
+is 0 without a local GeoLite2 proposal, 40 with one, and 70 only with at least
+two independent, non-conflicting contexts. A country conflict or positions more
+than 250 km apart blocks approval. These scores do not change production lookup
+confidence. A matching city/country may suggest a curated canonical code, marked
+`geolite2-city+curated-code`; the suggestion never confirms the alias. There is
+**no automatic promotion**.
+
+Inspect candidates and historical `source='learned'` rows read-only:
+
+```bash
+python tools/pop_candidate_review.py /path/to/justup.db inspect
+```
+
+After reviewing independent route evidence and confirming a city-level position,
+an operator may explicitly approve or reject a code. Approval requires two
+independent contexts, no recorded conflict, and a reviewed country agreeing with
+the GeoLite2 proposal. A reviewed alias has source `learned`, confidence 70 and
+priority 10; it never replaces an existing active alias. `--canonical` may
+attach the alias to the inspected suggestion only when a nearby curated
+seed/manual anchor exists; without it, the candidate code is its own canonical.
+The actor, evidence,
+action and UTC time are retained in `pop_candidate_reviews`.
+
+```bash
+python tools/pop_candidate_review.py /path/to/justup.db approve abc \
+  --actor operator --evidence 'ticket and independent route review' \
+  --canonical fra --city Frankfurt --country DE --lat 50.1 --lon 8.6
+python tools/pop_candidate_review.py /path/to/justup.db reject abc \
+  --actor operator --evidence 'country conflict'
+python tools/pop_candidate_review.py /path/to/justup.db revoke abc \
+  --actor operator --evidence 'new contradictory evidence'
+```
+
+Approval and revocation write to the specified database; take a verified backup
+and review the `inspect` output before using them on an installation. Revocation
+retires only the row linked to that approval, without deleting it. Historical
+learned rows without a matching review remain in their previous active/retired
+state and are shown with no review status; cleanup or migration of those rows
+requires a separate authorised operation.
 
 Inbox notifications are removed automatically after 180 days, unread ones included;
 their read and hidden marks go with them.
@@ -38,24 +98,115 @@ take and verify a backup, stop writers, and run `VACUUM` once.
 
 ### Schema baseline and versioning
 
-The schema of v1.0.0 is the baseline: `PRAGMA user_version` is `1`, and `init_schema()`
-creates all tables, foreign keys, CHECK constraints and indexes in one step on a new
-database. There are no migrations before the first release. A future release bumps
-`SCHEMA_VERSION` and registers an ordered step in `MIGRATIONS` (`app/db/sqlite.py`).
+The schema of v1.0.0 is the baseline (`PRAGMA user_version` 1). The current schema version is
+**6**. The SQLite layer is the package `app/db/sqlite/` (`from app.db import sqlite` still exposes
+every function). `SCHEMA_VERSION` and `_create_baseline_schema()` live in `schema.py`
+(notification DDL in `schema_notifications.py`), the ordered `MIGRATIONS` registry,
+`check_schema_compatibility()` and `init_schema()` in `migrations.py`, and the layout comparison
+behind the compatibility check in `layout.py`:
+
+| Version | Step | Change |
+| --- | --- | --- |
+| 1 | baseline (v1.0.0) | all tables, foreign keys, CHECK constraints and indexes |
+| 2 | `1 -> 2` | `notification_queue.limited_attempts`, `notification_channel_state` |
+| 3 | `2 -> 3` | `alerts.active_incident`, `alert_dispatch_outbox` |
+| 4 | `3 -> 4` | `dashboard_layouts.height_mode` |
+| 5 | `4 -> 5` | `recipients.enable_for_all_targets` (existing recipients: off) |
+| 6 | `5 -> 6` | PoP candidate observations, city evidence, and explicit review metadata |
+
+A new database is created directly at the current version. A database at an older version is
+upgraded forward, step by step, on the next start. Migrations are forward-only: there is no
+downgrade, and a database written by a newer release is refused. Releases that change the
+schema bump `SCHEMA_VERSION` and append one `Migration` that upgrades from the previous version;
+`_create_baseline_schema()` must create the same end state for new databases.
+
+#### Startup behaviour
 
 At start the application opens an existing database only if it is compatible:
 
 | State of the file | Result |
 | --- | --- |
-| No tables, `user_version` 0 (new or empty file) | initialised as baseline |
-| `user_version` equals the baseline and tables, columns and indexes match it | opened |
-| Tables but `user_version` 0 (unversioned pre-release database) | refused |
-| `user_version` differs from the baseline (and no migration path) | refused |
-| Baseline `user_version` but a table, column or index differs | refused |
+| No tables, `user_version` 0 (new or empty file) | created at the current version |
+| `user_version` 1–4 with a migration path | upgraded in one transaction, then opened |
+| Current `user_version` and matching layout | opened |
+| Tables but `user_version` 0 (unversioned pre-release database) | refused (`unversioned_database`) |
+| `user_version` above the supported version | refused (`future_schema`) |
+| `user_version` without a complete migration path | refused (`missing_migration_path`) |
+| Current `user_version` but a table, column, type, constraint or index differs | refused (`schema_drift`) |
+| Not a readable SQLite file | refused (`corrupt_database`) |
+| A migration or the check of its result fails | rolled back (`migration_failed` / `schema_drift`) |
 
-A refused database is never modified or deleted; the application exits with a message
-naming the file. To start over with a pre-release database:
+All migration steps and the validation of the resulting layout run in one `BEGIN IMMEDIATE`
+transaction. If any step fails, schema changes and `user_version` roll back together, and the
+file stays at the old version with all rows intact. Each applied migration is logged once
+(`Schema migration 2 -> 3 (...): ok`); a failure is logged with the same prefix. Repeating the
+start is idempotent. The compatibility check itself is read-only.
 
+A refused database is never modified or deleted; the application exits with a message naming
+the file, the stored and supported schema versions and the differing tables, columns or
+indexes (names and definitions only, never row contents).
+
+#### Compatibility validation
+
+The check compares, per table of the current schema: column names, declared types, `NOT NULL`,
+defaults and primary-key membership, foreign keys (target, columns, `ON DELETE`/`ON UPDATE`),
+`UNIQUE` constraints, normalised `CHECK` expressions, and the required indexes (table, columns,
+uniqueness, partial). It reads `PRAGMA table_info`, `foreign_key_list`, `index_list`,
+`index_xinfo` and the stored `CREATE TABLE` text. Tables and indexes unknown to the schema are ignored.
+
+**Column order is not compared.** `ALTER TABLE ... ADD COLUMN` always appends the new column,
+so a correctly migrated database orders columns differently from a new one (for example
+`alerts.active_incident` sits last after the 2 -> 3 migration, but between `status` and
+`started_at` in a new database). Comparing positions would reject valid upgraded databases on
+their next restart. Nothing in the application depends on column positions.
+
+Two explicit, known variants are accepted although they differ from a new database:
+
+- `alerts.active_incident` may carry `DEFAULT 0` (upgraded) or `DEFAULT 1` (new). SQLite cannot
+  change a default without rebuilding the table, and no code path relies on it: every writer sets
+  the column explicitly (new alert `1`; resolved, acknowledged or deactivated alert `0`). Any
+  other default is reported as drift.
+- `idx_recipients_phone` may still be the old non-unique index while duplicate phone numbers exist
+  (see below); only its table and columns are compared.
+
+#### Backup and recovery
+
+Take a backup before every upgrade: stop the app (or use Settings > Backup, which uses the
+SQLite Backup API for a consistent live snapshot) and keep `data/sqlite/` and `data/tsdb/` together.
+Never copy `justup.db` alone while the app runs: committed data may still sit in `justup.db-wal`. A backup is
+validated before a restore replaces anything: signature, archive paths, the backup manifest
+(`data/backup-manifest.json`: release, `PRAGMA user_version`, schema fingerprint), version compatibility,
+integrity check, and the same schema compatibility check as at start.
+
+A backup with an older schema is migrated during the restore, in the staging directory under
+`data/.restore_staging_*`, with the same `MIGRATIONS` and `init_schema()` as at start. The staged
+database must then pass `integrity_check`, `foreign_key_check`, and the layout check; its WAL is
+checkpointed and the connection closed, and no side file may remain, before `apply_restore()` swaps it
+in. The live database is never migrated in place. A newer release or schema, a missing migration path,
+a missing or contradicting manifest, triggers or views, or a failed migration reject the backup and
+leave existing data unchanged. See [Backup & Restore](../features/backup.md) for the compatibility
+table.
+
+A new `Migration` also defines which old backups stay restorable: keep the chain from the oldest
+supported schema version contiguous. The manifest fingerprint hashes the definitions of the archived
+file and is only compared with that same file, so a migrated database (whose `ALTER TABLE` text and
+column order differ from a new one) is never rejected because of it.
+
+If a start fails, nothing was changed. Read `PRAGMA user_version;` and `PRAGMA table_info(alerts);`
+of the file (read-only), compare with the message, and restore the pre-upgrade backup or start
+the release that matches the file. Do not edit `user_version` by hand and do not delete the
+database or TSDB files.
+
+The 3 → 4 layout rebuild has no down migration. To return to an older release after a successful
+upgrade, stop the app, recover the complete pre-upgrade SQLite and TSDB data offline, verify its
+integrity and schema version, then run the matching older release. Do not use the newer release's
+restore endpoint for a downgrade: it migrates older backups forward. A post-migration backup
+cannot recover the original version-3 layout semantics.
+
+#### Unsupported pre-release databases
+
+A database with tables but no schema version (before v1.0.0) is not migrated. To start over
+with such a file:
 1. Back up: stop the app, then copy `data/sqlite/justup.db` (with `-wal`/`-shm` if present)
    and the whole `data/tsdb/` directory to a safe place. Note the stored settings, for example
    `SELECT key, value FROM settings;` (`online_geo_fallback_enabled`, or the former
@@ -63,7 +214,7 @@ naming the file. To start over with a pre-release database:
 2. Move the old file aside: `mv data/sqlite/justup.db data/sqlite/justup.db.old`
    (and the `-wal`/`-shm` files). Move `data/tsdb/` aside as well
    (`mv data/tsdb data/tsdb.old`).
-3. Start the app. It creates a new baseline database and prints the new admin password.
+3. Start the app. It creates a new database and prints the new admin password.
 4. Set the settings again (Settings > Network for the online geo fallback; fresh
    installs default to on). History in `data/tsdb.old/` is not
    reused: the TSDB stores series by numeric target ID (`target_1`, ...), and a new

@@ -39,6 +39,14 @@ from sslyze import (
     ServerNetworkLocation,
     ServerScanRequest,
 )
+from sslyze.mozilla_tls_profile.tls_config_checker import (
+    SCAN_COMMANDS_NEEDED_BY_MOZILLA_CHECKER,
+    MozillaTlsConfiguration,
+    ServerNotCompliantWithTlsConfiguration,
+    ServerScanResultIncomplete,
+    TlsConfigurationEnum,
+    check_server_against_tls_configuration,
+)
 from sslyze.plugins.robot.implementation import RobotScanResultEnum
 from sslyze.scanner.scan_command_attempt import ScanCommandAttemptStatusEnum
 
@@ -60,30 +68,32 @@ _log = logging.getLogger(__name__)
 # A process-wide filter: catch_warnings() is not thread-safe and the warning fires in SSLyze threads.
 warnings.filterwarnings("ignore", message=r"Parsed a .*serial number")
 
-# (label, SSLyze attribute, legacy). SSL 2.0/3.0 and TLS 1.0/1.1 are deprecated (RFC 8996).
+# (label, SSLyze command, legacy). SSL 2.0/3.0 and TLS 1.0/1.1 are deprecated (RFC 8996).
+# The result attribute of a command is its ``value``.
 _PROTOCOLS = (
-    (LEGACY_PROTOCOL_NAMES[0], "ssl_2_0_cipher_suites", True),
-    (LEGACY_PROTOCOL_NAMES[1], "ssl_3_0_cipher_suites", True),
-    (LEGACY_PROTOCOL_NAMES[2], "tls_1_0_cipher_suites", True),
-    (LEGACY_PROTOCOL_NAMES[3], "tls_1_1_cipher_suites", True),
-    ("TLS 1.2", "tls_1_2_cipher_suites", False),
-    ("TLS 1.3", "tls_1_3_cipher_suites", False),
+    (LEGACY_PROTOCOL_NAMES[0], ScanCommand.SSL_2_0_CIPHER_SUITES, True),
+    (LEGACY_PROTOCOL_NAMES[1], ScanCommand.SSL_3_0_CIPHER_SUITES, True),
+    (LEGACY_PROTOCOL_NAMES[2], ScanCommand.TLS_1_0_CIPHER_SUITES, True),
+    (LEGACY_PROTOCOL_NAMES[3], ScanCommand.TLS_1_1_CIPHER_SUITES, True),
+    ("TLS 1.2", ScanCommand.TLS_1_2_CIPHER_SUITES, False),
+    ("TLS 1.3", ScanCommand.TLS_1_3_CIPHER_SUITES, False),
 )
 _SCAN_COMMANDS = frozenset(
     {
         ScanCommand.CERTIFICATE_INFO,
-        ScanCommand.SSL_2_0_CIPHER_SUITES,
-        ScanCommand.SSL_3_0_CIPHER_SUITES,
-        ScanCommand.TLS_1_0_CIPHER_SUITES,
-        ScanCommand.TLS_1_1_CIPHER_SUITES,
-        ScanCommand.TLS_1_2_CIPHER_SUITES,
-        ScanCommand.TLS_1_3_CIPHER_SUITES,
+        ScanCommand.SESSION_RESUMPTION,
+        ScanCommand.TLS_1_3_EARLY_DATA,
+        ScanCommand.TLS_FALLBACK_SCSV,
+        ScanCommand.HTTP_HEADERS,
+        ScanCommand.ELLIPTIC_CURVES,
+        ScanCommand.TLS_EXTENDED_MASTER_SECRET,
         ScanCommand.HEARTBLEED,
         ScanCommand.OPENSSL_CCS_INJECTION,
         ScanCommand.ROBOT,
         ScanCommand.SESSION_RENEGOTIATION,
         ScanCommand.TLS_COMPRESSION,
     }
+    | {command for _label, command, _legacy in _PROTOCOLS}
 )
 _WEAK_HASHES = frozenset({"sha1", "md5", "md2", "md4"})
 _MIN_RSA_BITS = 2048
@@ -180,56 +190,74 @@ def _hostname_matches(cert: x509.Certificate, host: str) -> bool:
     return False
 
 
-def _normalize_certificate(attempt: Any, host: str, now: datetime) -> tuple[CertificateInfo | None, Check]:
-    """Return (certificate info, outcome of the certificate command)."""
+def _normalize_certificate(attempt: Any, host: str, now: datetime) -> tuple[tuple[CertificateInfo, ...], Check, int]:
+    """Return (certificate info, outcome of the certificate command, count of unevaluable deployments)."""
     res = _completed_result(attempt)
     if res is None:
-        return None, Check.unknown("certificate scan failed or did not run")
+        return (), Check.unknown("certificate scan failed or did not run"), 0
     deployments = getattr(res, "certificate_deployments", None)
-    if not deployments or not deployments[0].received_certificate_chain:
-        return None, Check.unknown("server presented no certificate")
-    deployment = deployments[0]
-    chain = deployment.received_certificate_chain
-    leaf = chain[0]
-    try:
-        valid_from, valid_until = leaf.not_valid_before_utc, leaf.not_valid_after_utc
-        hash_alg = leaf.signature_hash_algorithm
-        sig_name = hash_alg.name if hash_alg is not None else leaf.signature_algorithm_oid.dotted_string
-        key_type, key_size, key_check = _key_info(leaf.public_key())
-        subject, issuer = leaf.subject.rfc4514_string(), leaf.issuer.rfc4514_string()
-    except (ValueError, TypeError, AttributeError) as exc:
-        _log.warning("Certificate could not be parsed: %s", type(exc).__name__)
-        return None, Check.unknown("certificate could not be parsed")
+    if not deployments:
+        return (), Check.unknown("server presented no certificate"), 0
 
-    days = (valid_until - now).days
-    verified = getattr(deployment, "verified_certificate_chain", None)
-    trust = (
-        Check(Verdict.SECURE, "chain validates against a trust store")
-        if verified
-        else Check(Verdict.INSECURE, "chain does not validate against any trust store")
-    )
-    expiry = Check.from_flag(valid_until <= now or valid_from > now, f"{days} days remaining")
-    signature = Check.from_flag(sig_name.lower() in _WEAK_HASHES, sig_name)
-    order_ok = getattr(deployment, "received_chain_has_valid_order", None)
-    info = CertificateInfo(
-        subject=subject,
-        issuer=issuer,
-        valid_from=valid_from,
-        valid_until=valid_until,
-        days_remaining=days,
-        signature_algorithm=sig_name,
-        key_type=key_type,
-        key_size=key_size,
-        san=_san_entries(leaf),
-        chain_length=len(chain),
-        trust=trust,
-        expiry=expiry,
-        signature=signature,
-        key_strength=key_check,
-        hostname_match=Check.from_flag(not _hostname_matches(leaf, host)),
-        chain_order=Check.unknown() if order_ok is None else Check.from_flag(not order_ok),
-    )
-    return info, Check(Verdict.SECURE)
+    certificates = []
+    unparsed = 0
+    for deployment in deployments:
+        chain = getattr(deployment, "received_certificate_chain", None)
+        if not chain:
+            unparsed += 1
+            continue
+        leaf = chain[0]
+        try:
+            valid_from, valid_until = leaf.not_valid_before_utc, leaf.not_valid_after_utc
+            hash_alg = leaf.signature_hash_algorithm
+            sig_name = hash_alg.name if hash_alg is not None else leaf.signature_algorithm_oid.dotted_string
+            key_type, key_size, key_check = _key_info(leaf.public_key())
+            subject, issuer = leaf.subject.rfc4514_string(), leaf.issuer.rfc4514_string()
+        except (ValueError, TypeError, AttributeError) as exc:
+            _log.warning("Certificate could not be parsed: %s", type(exc).__name__)
+            unparsed += 1
+            continue
+
+        days = (valid_until - now).days
+        verified = getattr(deployment, "verified_certificate_chain", None)
+        trust = (
+            Check(Verdict.SECURE, "chain validates against a trust store")
+            if verified
+            else Check(Verdict.INSECURE, "chain does not validate against any trust store")
+        )
+        expiry = Check.from_flag(valid_until <= now or valid_from > now, f"{days} days remaining")
+        signature = Check.from_flag(sig_name.lower() in _WEAK_HASHES, sig_name)
+        order_ok = getattr(deployment, "received_chain_has_valid_order", None)
+        certificates.append(
+            CertificateInfo(
+                subject=subject,
+                issuer=issuer,
+                valid_from=valid_from,
+                valid_until=valid_until,
+                days_remaining=days,
+                signature_algorithm=sig_name,
+                key_type=key_type,
+                key_size=key_size,
+                san=_san_entries(leaf),
+                chain_length=len(chain),
+                trust=trust,
+                expiry=expiry,
+                signature=signature,
+                key_strength=key_check,
+                hostname_match=Check.from_flag(not _hostname_matches(leaf, host)),
+                chain_order=Check.unknown() if order_ok is None else Check.from_flag(not order_ok),
+            )
+        )
+
+    if not certificates:
+        return (), Check.unknown("certificate deployments could not be parsed"), unparsed
+    if unparsed:
+        return (
+            tuple(certificates),
+            Check.unknown(f"{unparsed} certificate deployment(s) could not be evaluated"),
+            unparsed,
+        )
+    return tuple(certificates), Check(Verdict.SECURE), 0
 
 
 def _normalize_protocol(label: str, legacy: bool, attempt: Any) -> ProtocolResult:
@@ -258,14 +286,84 @@ def _robot_check(attempt: Any) -> Check:
     return Check.unknown("ROBOT result inconclusive" if value is not None else "scan command failed or did not run")
 
 
+def _mozilla_profile_check(server_result: Any) -> Check:
+    scan = getattr(server_result, "scan_result", None)
+    if scan is None:
+        return Check.unknown("scan result missing")
+    for command in sorted(SCAN_COMMANDS_NEEDED_BY_MOZILLA_CHECKER, key=lambda item: item.value):
+        if _completed_result(getattr(scan, command.value, None)) is None:
+            return Check.unknown(f"{command.value} result unavailable")
+    certificate_result = _completed_result(getattr(scan, ScanCommand.CERTIFICATE_INFO.value, None))
+    deployments = getattr(certificate_result, "certificate_deployments", None)
+    if not deployments or any(
+        not getattr(deployment, "received_certificate_chain", None) for deployment in deployments
+    ):
+        return Check.unknown("certificate deployment chain unavailable")
+    try:
+        profile = MozillaTlsConfiguration.get(TlsConfigurationEnum.MOZILLA_INTERMEDIATE)
+        check_server_against_tls_configuration(server_result, profile)
+    except ServerNotCompliantWithTlsConfiguration as exc:
+        detail = "; ".join(f"{key}: {value}" for key, value in sorted(exc.issues.items()))
+        return Check(Verdict.INSECURE, detail or "not compliant")
+    except ServerScanResultIncomplete as exc:
+        return Check.unknown(str(exc))
+    return Check(Verdict.SECURE, "compliant with Mozilla Intermediate")
+
+
+def _optional_bool(attempt: Any, attr: str) -> bool | None:
+    res = _completed_result(attempt)
+    return None if res is None else getattr(res, attr, None)
+
+
+def _session_resumption_summary(attempt: Any) -> str | None:
+    res = _completed_result(attempt)
+    if res is None:
+        return None
+    if getattr(res.session_id_resumption_result, "value", None) == "SERVER_IS_TLS_1_3_ONLY":
+        return "TLS 1.3 only; session ID and ticket resumption not applicable"
+    return (
+        f"Session IDs: {res.session_id_successful_resumptions_count}/"
+        f"{res.session_id_attempted_resumptions_count}; TLS tickets: "
+        f"{res.tls_ticket_successful_resumptions_count}/{res.tls_ticket_attempted_resumptions_count}"
+    )
+
+
+def _elliptic_curves_summary(attempt: Any) -> str | None:
+    res = _completed_result(attempt)
+    if res is None:
+        return None
+    if not res.supports_ecdh_key_exchange:
+        return "ECDH key exchange not supported"
+    return ", ".join(curve.name for curve in (res.supported_curves or ())) or "No supported curves returned"
+
+
+def _http_headers_summary(attempt: Any) -> str | None:
+    res = _completed_result(attempt)
+    if res is None:
+        return None
+    if res.http_error_trace:
+        return "No valid HTTP response"
+    header = res.strict_transport_security_header
+    if header is None:
+        return "HSTS header not present"
+    directives = [f"max-age={header.max_age}" if header.max_age is not None else "max-age missing"]
+    if header.include_subdomains:
+        directives.append("includeSubDomains")
+    if header.preload:
+        directives.append("preload")
+    return "; ".join(directives)
+
+
 def normalize_scan_result(server_result: Any, host: str, port: int, ip: str | None, now: datetime) -> TlsScanResult:
     """Convert an SSLyze ServerScanResult into the justUp model (the only place that reads SSLyze objects)."""
     scan = getattr(server_result, "scan_result", None)
     if scan is None:
         return _failed_result(host, port, "server could not be reached", ip)
 
-    cert, cert_check = _normalize_certificate(getattr(scan, "certificate_info", None), host, now)
-    protocols = tuple(_normalize_protocol(lbl, legacy, getattr(scan, attr, None)) for lbl, attr, legacy in _PROTOCOLS)
+    certificates, cert_check, unparsed = _normalize_certificate(getattr(scan, "certificate_info", None), host, now)
+    protocols = tuple(
+        _normalize_protocol(lbl, legacy, getattr(scan, command.value, None)) for lbl, command, legacy in _PROTOCOLS
+    )
     errors: dict[str, str] = {}
     for command in _SCAN_COMMANDS:
         attempt = getattr(scan, command.value, None)
@@ -277,9 +375,22 @@ def normalize_scan_result(server_result: Any, host: str, port: int, ip: str | No
         port=port,
         status=ScanStatus.PARTIAL if errors else ScanStatus.COMPLETED,
         ip_address=ip,
-        certificate=cert,
+        certificate=certificates[0] if certificates else None,
+        certificate_deployments=certificates,
         certificate_check=cert_check,
+        unparsed_certificates=unparsed,
         protocols=protocols,
+        mozilla_tls_profile=_mozilla_profile_check(server_result),
+        fallback_scsv=_flag_check(
+            getattr(scan, "tls_fallback_scsv", None), "supports_fallback_scsv", insecure_when=False
+        ),
+        extended_master_secret=_flag_check(
+            getattr(scan, "tls_extended_master_secret", None), "supports_ems_extension", insecure_when=False
+        ),
+        tls_1_3_early_data=_optional_bool(getattr(scan, "tls_1_3_early_data", None), "supports_early_data"),
+        session_resumption=_session_resumption_summary(getattr(scan, "session_resumption", None)),
+        elliptic_curves=_elliptic_curves_summary(getattr(scan, "elliptic_curves", None)),
+        http_headers=_http_headers_summary(getattr(scan, "http_headers", None)),
         heartbleed=_flag_check(getattr(scan, "heartbleed", None), "is_vulnerable_to_heartbleed", insecure_when=True),
         ccs_injection=_flag_check(
             getattr(scan, "openssl_ccs_injection", None), "is_vulnerable_to_ccs_injection", insecure_when=True

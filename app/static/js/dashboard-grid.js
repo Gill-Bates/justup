@@ -15,9 +15,10 @@
 
 	const $ = (id) => document.getElementById(id);
 	const ENDPOINT = '/me/dashboard-layout';
-	const CELL_HEIGHT = 72;
-	// Half the tile gutter (--ju-dash-gap in dashboard.css): GridStack insets every tile by it.
-	const GRID_MARGIN = 8;
+	const DEFAULT_CELL_HEIGHT = 72;
+	// Initialization-failure fallbacks only; they equal the token defaults in dashboard.css (1.25rem gap / 2).
+	const DEFAULT_GRID_MARGIN = 10;
+	const DEFAULT_HANDLE_HEIGHT = 24;
 	// Mirrors DASHBOARD_MAX_Y on the server; no widget may cross this row bound (y + h <= MAX_Y).
 	const MAX_Y = 1000;
 	const REVEAL_TIMEOUT_MS = 2500; // below the CSS failsafe (4s)
@@ -26,25 +27,34 @@
 	const MOBILE_QUERY = '(max-width: 991.98px)';
 	const REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)';
 	const PARK_ROWS = 10000;
+	const NO_ROW_LIMIT = PARK_ROWS + MAX_Y;
+	// Rows below the settled layout a drag or resize may use (DESIGN.md). Without a bound GridStack grows
+	// the container to wherever the pointer is, and the page scroll height follows the cursor.
+	const EDIT_RESERVE_ROWS = 4;
 
 	const registry = window.JuDashboardRegistry.forRole(root.dataset.isAdmin === 'true');
 	const DEFAULT_LAYOUT = registry.map((def) => ({
 		id: def.id, x: def.defaultX, y: def.defaultY,
 		w: def.defaultSize.w, h: def.defaultSize.h,
-		visible: def.defaultVisible, label: def.label,
+		visible: def.defaultVisible, height_mode: 'auto', label: def.label,
 	}));
 	const MIN_SIZE = new Map(registry.map((def) => [def.id, { w: def.minW, h: def.minH }]));
-	const defaultEntry = (def) => ({ id: def.id, x: def.x, y: def.y, w: def.w, h: def.h, visible: def.visible });
+	// Registry minimum as GridStack node limits; the template carries no gs-min-* of its own.
+	const minLimits = (id) => ({ minW: MIN_SIZE.get(id).w, minH: MIN_SIZE.get(id).h });
+	const defaultEntry = (def) => ({ id: def.id, x: def.x, y: def.y, w: def.w, h: def.h, visible: def.visible, height_mode: 'auto' });
 
 	let grid = null;
 	const widgetState = new Map(); // id -> { id, x, y, w, h, visible }
 	let savedLayout = null;
 	let fitFrame = 0;
-	const fitRows = new Map(); // id -> rows the last fit set; such a height is content-driven, not stored
 	let fitting = false;
 	let applyingLayout = false;
 	let editingNow = false;
 	let slotLayer = null;
+	let cellHeight = DEFAULT_CELL_HEIGHT;
+	let gridMargin = DEFAULT_GRID_MARGIN;
+	let handleHeight = DEFAULT_HANDLE_HEIGHT;
+	const resizeStartHeights = new Map();
 
 	const widgetElement = (id) => document.querySelector(`.grid-stack-item[data-widget-id="${id}"]`);
 	const messageFrom = (error) => (error && error.message) ? String(error.message) : 'Something went wrong.';
@@ -57,6 +67,15 @@
 	function announce(message) {
 		const live = $('dashboard-grid-status');
 		if (live) live.textContent = message;
+	}
+
+	function cssPixels(property, fallback) {
+		const measure = document.createElement('span');
+		measure.style.cssText = `position:absolute;visibility:hidden;pointer-events:none;width:var(${property});height:0`;
+		root.append(measure);
+		const pixels = measure.getBoundingClientRect().width;
+		measure.remove();
+		return pixels || fallback;
 	}
 
 	async function request(method, body, signal) {
@@ -79,7 +98,7 @@
 	// falls back to the known-good default instead of raising.
 	function mergeWithDefault(stored) {
 		const byId = new Map();
-		const hasStoredLayout = stored && stored.version === 1 && Array.isArray(stored.widgets);
+		const hasStoredLayout = stored && stored.version === 2 && Array.isArray(stored.widgets);
 		if (hasStoredLayout) {
 			for (const widget of stored.widgets) {
 				if (widget && typeof widget.id === 'string') byId.set(widget.id, widget);
@@ -92,9 +111,17 @@
 			const valid = inRange(saved.x, 11) && inRange(saved.y, MAX_Y) &&
 				Number.isInteger(saved.w) && saved.w >= 1 && saved.w <= 12 &&
 				Number.isInteger(saved.h) && saved.h >= 1 && saved.h <= 100 &&
-				saved.x + saved.w <= 12 && saved.y + saved.h <= MAX_Y;
+				saved.x + saved.w <= 12 && saved.y + saved.h <= MAX_Y &&
+				(saved.height_mode === 'auto' || saved.height_mode === 'manual');
 			if (!valid) return defaultEntry(def);
-			return { id: def.id, x: saved.x, y: saved.y, w: saved.w, h: saved.h, visible: saved.visible !== false };
+			// Stored sizes below the current registry minimum (also of hidden widgets) are raised to it, so
+			// the layout the client sends back is always one the server accepts. Overlaps are resolved below.
+			const min = MIN_SIZE.get(def.id);
+			const w = Math.max(saved.w, min.w);
+			const h = Math.max(saved.h, min.h);
+			if (saved.y + h > MAX_Y) return defaultEntry(def);
+			return { id: def.id, x: Math.min(saved.x, 12 - w), y: saved.y, w, h,
+				visible: saved.visible !== false, height_mode: saved.height_mode };
 		});
 		return separateOverlaps(merged) || separateOverlaps(DEFAULT_LAYOUT.map(defaultEntry)) || DEFAULT_LAYOUT.map(defaultEntry);
 	}
@@ -119,8 +146,16 @@
 
 	// Two passes: park every widget far down first, then move it to its row, so a widget does not
 	// collide with neighbours still at the template position and shove them around.
+	// GridStack's own row bound: settled layout plus the reserve while editing, the layout bound otherwise.
+	// Never 0: GridStack compacts the whole layout when its rows exceed the new bound; the open bound
+	// also has to cover the parking rows of applyLayout.
+	function limitRows(editing) {
+		grid.updateOptions({ maxRow: editing ? grid.getRow() + EDIT_RESERVE_ROWS : NO_ROW_LIMIT });
+	}
+
 	function applyLayout(layout) {
 		applyingLayout = true;
+		limitRows(false); // parking rows and stored positions must not be clamped by the edit bound
 		grid.batchUpdate();
 		try {
 			const shown = [];
@@ -131,7 +166,7 @@
 				if (entry.visible) {
 					el.classList.remove('d-none');
 					if (!el.gridstackNode) grid.makeWidget(el);
-					grid.update(el, { x: entry.x, y: entry.y + PARK_ROWS, w: entry.w, h: entry.h });
+					grid.update(el, { x: entry.x, y: entry.y + PARK_ROWS, w: entry.w, h: entry.h, ...minLimits(entry.id) });
 					shown.push([el, entry]);
 				} else {
 					if (el.gridstackNode) grid.removeWidget(el, false);
@@ -142,37 +177,52 @@
 		} finally {
 			grid.batchUpdate(false);
 			applyingLayout = false;
+			limitRows(editingNow);
 		}
 		document.dispatchEvent(new CustomEvent('dashboard:layout-applied'));
 	}
 
-	// Content height without the tile's stretch (cards use h-100), so the measure can shrink again.
+	// Content height independent of the tile: the card is measured out of flow at its current width,
+	// so neither the tile's stretch (flex-grow, h-100) nor a running CSS transition (.card-status
+	// animates `all`) can feed the tile height back into the measure and make the tile grow forever.
 	function naturalHeight(inner) {
-		const { height, alignSelf } = inner.style;
+		const saved = ['position', 'width', 'height', 'flex', 'transition'].map((name) => [
+			name, inner.style.getPropertyValue(name), inner.style.getPropertyPriority(name),
+		]);
+		const width = inner.getBoundingClientRect().width;
+		inner.style.setProperty('transition', 'none', 'important');
+		inner.style.setProperty('position', 'absolute', 'important');
+		inner.style.setProperty('width', `${width}px`, 'important');
 		inner.style.setProperty('height', 'auto', 'important'); // Bootstrap's h-100 is !important
-		inner.style.alignSelf = 'flex-start';
-		const natural = inner.offsetHeight + 1; // +1 covers the rounding of offsetHeight
-		inner.style.height = height;
-		inner.style.alignSelf = alignSelf;
+		inner.style.setProperty('flex', '0 0 auto', 'important');
+		const natural = Math.ceil(inner.getBoundingClientRect().height) + 1; // +1 covers sub-pixel rounding
+		for (const [name, value, priority] of saved) {
+			if (value) inner.style.setProperty(name, value, priority);
+			else inner.style.removeProperty(name);
+		}
 		return natural;
 	}
 
 	function neededRows(el) {
 		const content = el.querySelector('.grid-stack-item-content');
-		const inner = content && content.querySelector(':scope > :not(.dashboard-widget-header)');
+		const inner = content && content.querySelector(':scope > :not(.dashboard-widget-handle)');
 		if (!inner) return 1;
 		const frame = el.offsetHeight - content.offsetHeight;
-		return Math.ceil((naturalHeight(inner) + frame) / CELL_HEIGHT);
+		// The handle band is part of the card in edit mode; outside it the fit still reserves it, so
+		// entering or leaving edit mode never changes a tile's row count.
+		const band = editingNow ? 0 : handleHeight;
+		return Math.ceil((naturalHeight(inner) + frame + band) / cellHeight);
 	}
 
-	// The stored height is a floor: the fit only grows a tile past it, never below.
+	// Automatic heights follow content in either direction; manual heights are user-owned.
 	function fitWidget(el, needed) {
 		const node = el.gridstackNode;
 		if (!node) return;
 		const id = el.dataset.widgetId;
-		const stored = (widgetState.get(id) || {}).h || 1;
-		const rows = Math.max(stored, needed, 1);
-		fitRows.set(id, rows);
+		const state = widgetState.get(id);
+		if (!state || state.height_mode === 'manual') return;
+		const min = MIN_SIZE.get(id) || { h: 1 };
+		const rows = Math.max(min.h, needed, 1);
 		if (node.h !== rows) grid.update(el, { h: rows });
 	}
 
@@ -184,6 +234,7 @@
 		if (document.querySelector('.ui-draggable-dragging, .ui-resizable-resizing')) return;
 		fitting = true;
 		try {
+			limitRows(false); // content growth must not be clamped by the edit bound
 			grid.batchUpdate();
 			const items = [...document.querySelectorAll('.grid-stack-item[data-widget-id]')]
 				.filter((el) => el.gridstackNode && !el.classList.contains('d-none'));
@@ -192,6 +243,7 @@
 		} finally {
 			grid.batchUpdate(false);
 			fitting = false;
+			limitRows(editingNow);
 		}
 	}
 
@@ -202,7 +254,14 @@
 	// Anything that changes a tile's content size re-runs the fit: window width, htmx swaps, text
 	// changes and the icon font arriving late.
 	function observeContent() {
-		window.addEventListener('resize', scheduleFit);
+		window.addEventListener('resize', () => {
+			const margin = cssPixels('--ju-dash-gutter', DEFAULT_GRID_MARGIN);
+			if (grid && margin !== gridMargin) {
+				gridMargin = margin;
+				grid.margin(gridMargin);
+			}
+			scheduleFit();
+		});
 		if (document.fonts) document.fonts.ready.then(scheduleFit);
 		new MutationObserver(scheduleFit).observe(root, {
 			// Content swaps/text need a new fit. GridStack and edit-mode class toggles do not, and
@@ -212,7 +271,7 @@
 		if (!('ResizeObserver' in window)) return;
 		const observer = new ResizeObserver(scheduleFit);
 		observer.observe(root);
-		root.querySelectorAll('.grid-stack-item-content > :not(.dashboard-widget-header)').forEach((inner) => observer.observe(inner));
+		root.querySelectorAll('.grid-stack-item-content > :not(.dashboard-widget-handle)').forEach((inner) => observer.observe(inner));
 	}
 
 	// Read the saved layout from the settled grid, not from change-event deltas, which can miss
@@ -223,8 +282,7 @@
 			const node = el && el.gridstackNode;
 			const prev = widgetState.get(def.id);
 			if (!node || !prev || prev.visible === false) continue;
-			const h = fitRows.get(def.id) === node.h ? prev.h : node.h;
-			widgetState.set(def.id, { id: def.id, x: node.x, y: node.y, w: node.w, h, visible: true });
+			widgetState.set(def.id, { ...prev, id: def.id, x: node.x, y: node.y, w: node.w, h: node.h, visible: true });
 		}
 	}
 
@@ -233,10 +291,10 @@
 		syncStateFromGrid();
 		const widgets = DEFAULT_LAYOUT.map((def) => {
 			const state = widgetState.get(def.id);
-			return { id: def.id, x: state.x, y: state.y, w: state.w, h: state.h, visible: state.visible };
+			return { id: def.id, x: state.x, y: state.y, w: state.w, h: state.h, visible: state.visible, height_mode: state.height_mode };
 		});
 		try {
-			await request('PUT', { version: 1, widgets });
+			await request('PUT', { version: 2, widgets });
 			savedLayout = widgets.map((widget) => ({ ...widget }));
 			notify('Dashboard layout saved.', true);
 		} catch (error) {
@@ -256,8 +314,8 @@
 			const id = item.el && item.el.dataset && item.el.dataset.widgetId;
 			if (!id) continue;
 			const prev = widgetState.get(id);
-			const h = prev && fitRows.get(id) === item.h ? prev.h : item.h;
-			widgetState.set(id, { id, x: item.x, y: item.y, w: item.w, h, visible: true });
+			widgetState.set(id, { id, x: item.x, y: item.y, w: item.w, h: item.h, visible: true,
+				height_mode: (prev && prev.height_mode) || 'auto' });
 		}
 	}
 
@@ -265,7 +323,7 @@
 	// current grid height.
 	function syncSlots() {
 		if (!editingNow || !slotLayer) return;
-		const wanted = Math.max(0, Math.round(root.clientHeight / CELL_HEIGHT)) * grid.getColumn();
+		const wanted = grid.getRow() * grid.getColumn(); // GridStack's own row count, not a re-derived height
 		while (slotLayer.childElementCount > wanted) slotLayer.lastElementChild.remove();
 		const missing = wanted - slotLayer.childElementCount;
 		if (missing <= 0) return;
@@ -297,14 +355,16 @@
 		// the user requested reduced motion.
 		grid.setAnimation(!editing && !window.matchMedia(REDUCED_MOTION_QUERY).matches);
 		root.classList.toggle('dashboard-grid--editing', editing);
+		limitRows(editing);
 		setSlots(editing);
-		root.querySelectorAll('.dashboard-widget-header').forEach((header) => { header.hidden = !editing; });
+		root.querySelectorAll('.dashboard-widget-handle').forEach((handle) => { handle.hidden = !editing; });
 		$('dashboard-edit-toggle').hidden = editing;
 		$('dashboard-edit-widgets').hidden = !editing;
 		$('dashboard-reset-layout').hidden = !editing;
 		$('dashboard-edit-done').hidden = !editing;
 		grid.enableMove(editing);
 		grid.enableResize(editing);
+		scheduleFit();
 		// The focused button just got hidden; hand focus to its counterpart (not after a viewport change).
 		const next = $(editing ? 'dashboard-edit-done' : 'dashboard-edit-toggle');
 		if (next.offsetParent) next.focus();
@@ -314,21 +374,23 @@
 		const state = widgetState.get(id) || DEFAULT_LAYOUT.find((def) => def.id === id);
 		const el = widgetElement(id);
 		if (!el) return;
+		limitRows(false);
 		grid.batchUpdate();
 		try {
 			if (visible) {
 				el.classList.remove('d-none');
 				grid.makeWidget(el);
-				grid.update(el, { x: state.x, y: state.y, w: state.w, h: state.h });
+				grid.update(el, { x: state.x, y: state.y, w: state.w, h: state.h, ...minLimits(id) });
 			} else if (el.gridstackNode) {
 				grid.removeWidget(el, false);
 				el.classList.add('d-none');
 			}
 		} finally {
 			grid.batchUpdate(false);
+			limitRows(editingNow);
 		}
 		widgetState.set(id, { ...state, visible });
-		el.querySelectorAll('.dashboard-widget-header').forEach((header) => { header.hidden = !editingNow; });
+		el.querySelectorAll('.dashboard-widget-handle').forEach((handle) => { handle.hidden = !editingNow; });
 		if (visible) document.dispatchEvent(new CustomEvent('dashboard:widget-shown'));
 		document.dispatchEvent(new CustomEvent('dashboard:layout-applied'));
 		scheduleFit();
@@ -381,6 +443,7 @@
 		event.preventDefault();
 		const min = MIN_SIZE.get(el.dataset.widgetId) || { w: 1, h: 1 };
 		const next = { x: node.x, y: node.y, w: node.w, h: node.h };
+		const previousHeight = node.h;
 		if (event.shiftKey) {
 			next.w = Math.min(12 - node.x, Math.max(min.w, node.w + delta[0]));
 			next.h = Math.min(MAX_Y - node.y, Math.max(min.h, node.h + delta[1]));
@@ -389,8 +452,12 @@
 			next.y = Math.min(MAX_Y - node.h, Math.max(0, node.y + delta[1]));
 		}
 		grid.update(el, next);
+		limitRows(true); // slide the reserve with the keyboard move, one row per key press
 		const after = el.gridstackNode;
-		widgetState.set(el.dataset.widgetId, { id: el.dataset.widgetId, x: after.x, y: after.y, w: after.w, h: after.h, visible: true });
+		const previous = widgetState.get(el.dataset.widgetId);
+		const heightChanged = event.shiftKey && delta[1] !== 0 && after.h !== previousHeight;
+		widgetState.set(el.dataset.widgetId, { id: el.dataset.widgetId, x: after.x, y: after.y, w: after.w, h: after.h,
+			visible: true, height_mode: heightChanged ? 'manual' : (previous && previous.height_mode) || 'auto' });
 		const def = DEFAULT_LAYOUT.find((d) => d.id === el.dataset.widgetId);
 		announce(`${def ? def.label : 'Widget'}: column ${after.x + 1}, row ${after.y + 1}, ${after.w} wide, ${after.h} high.`);
 	}
@@ -413,38 +480,42 @@
 	}
 
 	function buildLayout() {
-		const targets = $('quality-targets');
-		if (targets && !targets.closest('details')) {
-			const details = document.createElement('details');
-			const summary = document.createElement('summary');
-			summary.title = 'Probe targets';
-			summary.setAttribute('aria-label', 'Probe targets');
-			const icon = document.createElement('span');
-			icon.className = 'material-icons';
-			icon.setAttribute('aria-hidden', 'true');
-			icon.textContent = 'network_check';
-			summary.append(icon);
-			details.append(summary);
-			targets.parentElement.append(details);
-			details.append(targets);
-			details.addEventListener('toggle', scheduleFit);
-		}
+		cellHeight = cssPixels('--ju-dash-cell-height', DEFAULT_CELL_HEIGHT);
+		gridMargin = cssPixels('--ju-dash-gutter', DEFAULT_GRID_MARGIN);
+		handleHeight = cssPixels('--ju-dash-handle-height', DEFAULT_HANDLE_HEIGHT);
 		grid = window.GridStack.init({
 			column: 12,
-			cellHeight: CELL_HEIGHT,
-			margin: GRID_MARGIN,
-			float: true, // no gravity: a tile stays in the free cell it is dropped on
+			cellHeight,
+			margin: gridMargin,
+			mode: 'float', // no gravity: a tile stays in the free cell it is dropped on
 			animate: false,
 			disableDrag: true,
 			disableResize: true,
 			alwaysShowResizeHandle: true,
-			handle: '.dashboard-widget-header',
+			handle: '.dashboard-widget-handle',
 		}, '#dashboard-grid');
 
 		grid.on('change', onGridChange);
-		grid.on('dragstop', scheduleFit);
-		grid.on('resizestop', scheduleFit);
-		root.querySelectorAll('.dashboard-widget-header').forEach((header) => header.addEventListener('keydown', onHandleKeydown));
+		grid.on('dragstart resizestart', () => limitRows(true));
+		grid.on('dragstop', () => { limitRows(editingNow); scheduleFit(); });
+		grid.on('resizestart', (_event, el) => {
+			if (el && el.dataset.widgetId && el.gridstackNode) resizeStartHeights.set(el.dataset.widgetId, el.gridstackNode.h);
+		});
+		grid.on('resizestop', (_event, el) => {
+			if (el && el.dataset.widgetId && el.gridstackNode) {
+				const id = el.dataset.widgetId;
+				const startHeight = resizeStartHeights.get(id);
+				resizeStartHeights.delete(id);
+				if (startHeight !== undefined && startHeight !== el.gridstackNode.h) {
+					const node = el.gridstackNode;
+					const state = widgetState.get(id) || {};
+					widgetState.set(id, { ...state, id, x: node.x, y: node.y, w: node.w, h: node.h, visible: true, height_mode: 'manual' });
+				}
+			}
+			limitRows(editingNow);
+			scheduleFit();
+		});
+		root.querySelectorAll('.dashboard-widget-handle').forEach((handle) => handle.addEventListener('keydown', onHandleKeydown));
 
 		// Edit stays disabled until the layout is applied, so Escape/Done never see empty state.
 		$('dashboard-edit-toggle').addEventListener('click', () => setEditing(true));

@@ -1170,6 +1170,10 @@ def test_ready_pdf_notification_turns_into_expired_state_with_the_report(client)
     assert item["action"] == {"type": "unavailable", "label": "Report expired"}
     page = c.get("/ui/notifications?category=reports", headers=_h(tokens, "alice")).text
     assert "/download" not in page and "Report expired" in page
+    # The status is plain text on its own line after the description: no link, shared body container.
+    status = re.search(r'<span class="ju-notif-unavailable">.*?</span>\s*</div>', page, re.DOTALL)
+    assert status and "Report expired" in status.group(0) and "<a " not in status.group(0)
+    assert page.index('class="ju-notif-context"') < page.index('class="ju-notif-unavailable"')
 
 
 def test_failed_report_notification_is_short_private_and_links_to_the_target(db):

@@ -15,7 +15,7 @@ Reduces SQLite reads for frequently accessed settings like:
 Usage:
     from app.utils.settings_cache import get_setting_cached, invalidate_settings_cache
 
-    value = get_setting_cached(conn, "use_utc_dashboard", False)
+    value = get_setting_cached(conn, SettingKeys.USE_UTC_DASHBOARD, False)
 
 Important Usage Contract:
     - This cache is per-process and NOT automatically invalidated on DB writes.
@@ -35,7 +35,7 @@ import time
 from typing import Any
 
 from ..db import sqlite as sqlite_db
-from .constants import DEFAULT_PDF_PAGE_SIZE, DEFAULT_PURGE_ENABLED
+from .constants import DEFAULT_PDF_PAGE_SIZE, DEFAULT_PURGE_ENABLED, SettingKeys
 
 CACHE_TTL_SECONDS = 30
 CACHE_MAX_SIZE = 64
@@ -43,6 +43,7 @@ CACHE_MAX_SIZE = 64
 # Entries are keyed by (db_path, setting_key, ttl, repr(default)) and hold (value, expires_at, inserted_at).
 _cache: dict[tuple[str, str, int, str], tuple[Any, float, float]] = {}
 _cache_lock = threading.Lock()
+_uncacheable: set[tuple[str, str]] = set()
 # Bumped on every invalidation so a read that raced with a write never republishes its stale value
 _generation = 0
 
@@ -85,23 +86,40 @@ def get_setting_cached(
     cache_key = (identity, key, ttl, repr(default))
 
     with _cache_lock:
-        if cache_key in _cache:
+        uncacheable = (identity, key) in _uncacheable
+        if not uncacheable and cache_key in _cache:
             value, expires_at, _ = _cache[cache_key]
             if now < expires_at:
                 return value
         generation = _generation
+
+    if uncacheable:
+        return sqlite_db.get_setting(conn, key, default)
 
     # Cache miss or expired - fetch from DB (outside the lock)
     value = sqlite_db.get_setting(conn, key, default)
 
     with _cache_lock:
         # An invalidation since the read started means the value may be stale: return it, do not publish it
-        if generation == _generation:
+        if generation == _generation and (identity, key) not in _uncacheable:
             if len(_cache) >= CACHE_MAX_SIZE:
                 _evict_oldest()
             _cache[cache_key] = (value, now + ttl, now)
 
     return value
+
+
+def mark_setting_uncacheable(conn: sqlite3.Connection, key: str) -> None:
+    """Bypass the cache when a caller owns an unobservable commit for this database/key."""
+    global _generation
+    identity = _db_identity(conn)
+    if identity is None:
+        return
+    with _cache_lock:
+        _uncacheable.add((identity, key))
+        _generation += 1
+        for cache_key in [entry for entry in _cache if entry[0] == identity and entry[1] == key]:
+            _cache.pop(cache_key, None)
 
 
 def invalidate_settings_cache(key: str | None = None) -> None:
@@ -150,19 +168,21 @@ def _evict_oldest() -> None:
 # Convenience functions for common settings
 def is_auth_disabled(conn: sqlite3.Connection) -> bool:
     """Check if authentication is disabled; always reads the DB (workers do not share the cache)."""
-    return bool(sqlite_db.get_setting(conn, "auth_disabled", False))
+    return bool(sqlite_db.get_setting(conn, SettingKeys.AUTH_DISABLED, False))
 
 
 def is_purge_enabled(conn: sqlite3.Connection) -> bool:
     """Check if TSDB purge is enabled."""
-    return bool(get_setting_cached(conn, "purge_enabled", DEFAULT_PURGE_ENABLED))
+    return bool(get_setting_cached(conn, SettingKeys.PURGE_ENABLED, DEFAULT_PURGE_ENABLED))
 
 
 def use_utc_dashboard(conn: sqlite3.Connection) -> bool:
     """Check if dashboard should use UTC times."""
-    return bool(get_setting_cached(conn, "use_utc_dashboard", False))
+    return bool(get_setting_cached(conn, SettingKeys.USE_UTC_DASHBOARD, False))
 
 
 def get_pdf_page_size(conn: sqlite3.Connection) -> str:
     """Get PDF page size setting."""
-    return str(get_setting_cached(conn, "pdf_page_size", DEFAULT_PDF_PAGE_SIZE) or DEFAULT_PDF_PAGE_SIZE).lower()
+    return str(
+        get_setting_cached(conn, SettingKeys.PDF_PAGE_SIZE, DEFAULT_PDF_PAGE_SIZE) or DEFAULT_PDF_PAGE_SIZE
+    ).lower()

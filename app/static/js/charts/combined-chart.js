@@ -11,12 +11,12 @@
  * @module charts/combined-chart
  */
 
-/** Series colors with >= 3:1 contrast on the card background in each theme. */
+/**
+ * Status, downtime and SLA colors with >= 3:1 contrast on the card background in each theme.
+ * Metric series colors are not here: they come from the --ju-dv-N tokens (see _combinedPalette).
+ */
 var COMBINED_PALETTES = {
   light: {
-    http: "#0f766e",
-    ping: "#7c3aed",
-    tcp: "#b45309",
     "2xx": "#15803d",
     info: "#0369a1",
     "3xx": "#15803d",
@@ -28,9 +28,6 @@ var COMBINED_PALETTES = {
     slaText: "#ffffff",
   },
   dark: {
-    http: "#2dd4bf",
-    ping: "#a78bfa",
-    tcp: "#fbbf24",
     "2xx": "#4ade80",
     info: "#7dd3fc",
     "3xx": "#4ade80",
@@ -43,8 +40,20 @@ var COMBINED_PALETTES = {
   },
 };
 
+/** Status palette plus the categorical series colors, read from the active theme's tokens. */
 function _combinedPalette(theme) {
-  return COMBINED_PALETTES[theme && theme.mode === "dark" ? "dark" : "light"];
+  var series = [];
+  for (var i = 1; i <= CombinedChartData.SERIES_SLOT_COUNT; i++)
+    series.push(getCssVar("--ju-dv-" + i, theme.text));
+  return Object.assign(
+    { series: series },
+    COMBINED_PALETTES[theme && theme.mode === "dark" ? "dark" : "light"],
+  );
+}
+
+/** Color of a metric dataset: its stable palette slot, independent of visibility or order. */
+function _seriesColor(palette, dataset) {
+  return palette.series[dataset._slot];
 }
 
 function _prefersReducedMotion() {
@@ -113,12 +122,13 @@ function _el(tag, className, text) {
   return node;
 }
 
-/** Draw a small CSS swatch whose shape mirrors the chart marker (not color-only). */
-function _swatch(shape, color, isLine) {
+/** Draw a small CSS swatch whose shape or dash pattern mirrors the chart line (not color-only). */
+function _swatch(shape, color, isLine, dash) {
   var s = _el(
     "span",
     "combined-swatch combined-swatch--" + (isLine ? "line" : shape),
   );
+  if (isLine && dash) s.classList.add("combined-swatch--dash-" + dash);
   s.style.setProperty("--swatch-color", color);
   s.setAttribute("aria-hidden", "true");
   return s;
@@ -210,14 +220,24 @@ function _presentStatusClasses(buckets) {
 
 var COMBINED_DASHES = [[], [6, 3], [2, 3], [8, 3, 2, 3]];
 
+/** Dash pattern index of a source: its own pattern shifted by the palette lap. */
+function _dashIndex(src, lap) {
+  return ((src.dash || 0) + lap) % COMBINED_DASHES.length;
+}
+
 /** Re-apply theme colors to datasets, bands and legend swatches (called from applyChartTheme). */
 function _themeCombined(chart, theme) {
   var palette = _combinedPalette(theme);
   chart._palette = palette;
   chart.data.datasets.forEach(function (ds) {
     if (ds._srcId) {
-      ds.borderColor = palette[ds._srcId];
-      ds.backgroundColor = createAreaGradient(palette[ds._srcId], 0.18);
+      var color = _seriesColor(palette, ds);
+      ds.borderColor = color;
+      ds.backgroundColor = createAreaGradient(color, 0.18);
+      if (ds._kind === "peak") {
+        ds.pointBackgroundColor = color;
+        ds.pointBorderColor = color;
+      }
     }
   });
   _styleAnnotations(
@@ -276,6 +296,35 @@ function _statusTooltip(item) {
     : base;
 }
 
+/**
+ * Apply the shared "Show peaks" state: every peak line follows its series' legend state and the
+ * right axis is shown only while a peak line is visible. Zoom range and data are untouched.
+ */
+function _syncPeaks(chart) {
+  var datasets = chart.data.datasets;
+  var peakIndexes = [];
+  var series = [];
+  datasets.forEach(function (d, i) {
+    if (d._kind !== "peak") return;
+    var msIndex = datasets.findIndex(function (m) {
+      return m._kind === "ms" && m._srcKey === d._srcKey;
+    });
+    peakIndexes.push(i);
+    series.push({
+      msVisible: msIndex >= 0 && chart.isDatasetVisible(msIndex),
+      hasPeakData: d.data.some(function (point) {
+        return point.y !== null;
+      }),
+    });
+  });
+  var state = CombinedChartData.peakVisibility(series, chart._showPeaks);
+  peakIndexes.forEach(function (datasetIndex, n) {
+    chart.setDatasetVisibility(datasetIndex, state.visible[n]);
+  });
+  var peakScale = chart.options.scales && chart.options.scales.yPeak;
+  if (peakScale) peakScale.display = state.axisVisible;
+}
+
 // Re-rendering replaces the buttons; keep keyboard focus on the button at the same position.
 function _rerenderCombinedLegend(chart, legendEl, keyEl, activeBtn) {
   var index = Array.prototype.indexOf.call(legendEl.children, activeBtn);
@@ -296,7 +345,6 @@ function _combinedLegendLabel(dataset) {
           : dataset.label;
   if (dataset._srcKey && dataset._srcKey.indexOf("tcp:") === 0)
     label += " " + dataset._srcKey.slice(4);
-  if (dataset._kind === "peak") label += " peak";
   return label;
 }
 
@@ -308,13 +356,7 @@ function _renderCombinedLegend(chart, legendEl, keyEl) {
   var palette = chart._palette;
   legendEl.textContent = "";
   chart.data.datasets.forEach(function (ds, i) {
-    if (
-      ds._kind === "peak" &&
-      !ds.data.some(function (point) {
-        return point.y !== null;
-      })
-    )
-      return;
+    if (ds._kind === "peak") return;
     var btn = _el("button", "btn btn-sm combined-legend-btn");
     var label = _combinedLegendLabel(ds);
     btn.type = "button";
@@ -324,17 +366,19 @@ function _renderCombinedLegend(chart, legendEl, keyEl) {
       "aria-pressed",
       chart.isDatasetVisible(i) ? "true" : "false",
     );
-    var color = ds._srcId ? palette[ds._srcId] : palette["2xx"];
+    var color = ds._srcId ? _seriesColor(palette, ds) : palette["2xx"];
     btn.appendChild(
       _swatch(
         ds._kind === "status" ? "circle" : "line",
         color,
         ds._kind !== "status",
+        ds._dash,
       ),
     );
     btn.appendChild(_el("span", "", label));
     btn.addEventListener("click", function () {
       chart.setDatasetVisibility(i, !chart.isDatasetVisible(i));
+      _syncPeaks(chart);
       chart.update("none");
       if (chart._renderText) chart._renderText();
       _rerenderCombinedLegend(chart, legendEl, keyEl, btn);
@@ -429,6 +473,14 @@ function _renderCombinedText(canvas, input, view, chart) {
     text += "; HTTP status layer hidden";
   if (chart && chart._bandCount > 0 && !chart._bandsVisible)
     text += "; downtime bands hidden";
+  if (
+    chart &&
+    chart._showPeaks === false &&
+    chart.data.datasets.some(function (d) {
+      return d._kind === "peak";
+    })
+  )
+    text += "; peak lines hidden";
   var rollupNote =
     input.range.from.getTime() < Date.now() - 30 * 86400000
       ? " Data older than 30 days uses stored rollups; raw latency extremes and individual status codes are unavailable there."
@@ -450,6 +502,27 @@ function _syncDownVisibility(annotations, visible) {
   Object.keys(annotations).forEach(function (key) {
     if (key.indexOf("down") === 0) annotations[key].display = visible;
   });
+}
+
+/** Wire the single "Show peaks" switch; it is hidden when no series has peak data. */
+function _bindPeaksSwitch(chart, datasets, peaksEl) {
+  var input = peaksEl && peaksEl.querySelector("input");
+  if (!input) return;
+  peaksEl.hidden = !datasets.some(function (d) {
+    return (
+      d._kind === "peak" &&
+      d.data.some(function (point) {
+        return point.y !== null;
+      })
+    );
+  });
+  input.checked = chart._showPeaks;
+  input.onchange = function () {
+    chart._showPeaks = input.checked;
+    _syncPeaks(chart);
+    chart.update("none");
+    chart._renderText();
+  };
 }
 
 function _beginCombinedChartBuild(canvasId) {
@@ -526,16 +599,7 @@ function _createCombinedZoomLoader(
       );
       chart._bandCount = originalBandCount;
       chart._presentClasses = originalPresentClasses;
-      if (chart.config.options.scales.yPeak) {
-        chart.config.options.scales.yPeak.display = original.some(function (data, i) {
-          return (
-            datasets[i]._kind === "peak" &&
-            data.some(function (point) {
-              return point.y !== null;
-            })
-          );
-        });
-      }
+      _syncPeaks(chart);
       chart.update("none");
       chart._renderLegend();
       _setCombinedZoomNote(chart, "");
@@ -665,18 +729,7 @@ function _createCombinedZoomLoader(
         );
         chart._bandCount = bands.length;
         view.bands = bands;
-        if (chart.options.scales.yPeak) {
-          chart.options.scales.yPeak.display = chart.data.datasets.some(
-            function (d) {
-              return (
-                d._kind === "peak" &&
-                d.data.some(function (point) {
-                  return point.y !== null;
-                })
-              );
-            },
-          );
-        }
+        _syncPeaks(chart);
         chart.update("none");
         chart._renderLegend();
         _setCombinedZoomNote(chart, "");
@@ -734,6 +787,7 @@ function buildCombinedChart(canvasId, input) {
   var palette = _combinedPalette(theme);
   var emptyEl = document.getElementById("combined-empty");
   var plotEl = document.getElementById("combined-plot");
+  var peaksEl = document.getElementById("combined-peaks");
   var legendEl = document.getElementById("combined-legend");
   var keyEl = document.getElementById("combined-status-key");
   var summaryEl = document.getElementById("combined-summary");
@@ -759,6 +813,16 @@ function buildCombinedChart(canvasId, input) {
   var fullSeries = {};
   var firstWithData = true;
   var slaLines = [];
+  // Only plotted series take a slot, so ports without data never cause color collisions.
+  var slots = D.seriesSlots(
+    input.sources
+      .filter(function (src) {
+        return src.points && src.points.length;
+      })
+      .map(function (src) {
+        return src.key;
+      }),
+  );
   input.sources.forEach(function (src) {
     var minGapMs = src.bucketSeconds ? src.bucketSeconds * 3000 : undefined;
     var series = D.toGappedSeries(src.points, minGapMs);
@@ -766,16 +830,21 @@ function buildCombinedChart(canvasId, input) {
     fullSeries[src.key] = series;
     if (!series.length) return;
     if (src.sla) slaLines.push({ index: datasets.length, sla: src.sla });
+    var slot = slots[src.key];
+    var seriesInfo = { _slot: slot.slot, _dash: _dashIndex(src, slot.lap) };
+    var color = _seriesColor(palette, seriesInfo);
     datasets.push({
       label: src.label,
       data: series,
       _kind: "ms",
       _srcId: src.id,
       _srcKey: src.key,
+      _slot: seriesInfo._slot,
+      _dash: seriesInfo._dash,
       yAxisID: "y",
-      borderDash: COMBINED_DASHES[(src.dash || 0) % 4],
-      borderColor: palette[src.id],
-      backgroundColor: createAreaGradient(palette[src.id], 0.18),
+      borderDash: COMBINED_DASHES[seriesInfo._dash],
+      borderColor: color,
+      backgroundColor: createAreaGradient(color, 0.18),
       fill: true,
       spanGaps: false,
       tension: 0,
@@ -791,22 +860,25 @@ function buildCombinedChart(canvasId, input) {
       _kind: "peak",
       _srcId: src.id,
       _srcKey: src.key,
+      _slot: seriesInfo._slot,
       yAxisID: "yPeak",
       type: "line",
       showLine: true,
       spanGaps: false,
       tension: 0,
-      borderColor: palette[src.id],
-      borderDash: [4, 3],
+      borderColor: color,
+      borderDash: [1, 4],
+      borderCapStyle: "round",
       borderWidth: 1.5,
       fill: false,
+      pointStyle: "triangle",
       pointRadius: function (context) {
         return context.raw && context.raw.outlier ? 4 : 0;
       },
       pointHoverRadius: 6,
       pointHitRadius: 4,
-      pointBackgroundColor: palette[src.id],
-      pointBorderColor: palette[src.id],
+      pointBackgroundColor: color,
+      pointBorderColor: color,
       hidden: !firstWithData,
     });
     firstWithData = false;
@@ -853,6 +925,7 @@ function buildCombinedChart(canvasId, input) {
     _destroyExisting(canvasId);
     if (plotEl) plotEl.hidden = true;
     if (legendEl) legendEl.textContent = "";
+    if (peaksEl) peaksEl.hidden = true;
     if (keyEl) keyEl.textContent = "";
     if (emptyEl) {
       emptyEl.hidden = false;
@@ -952,7 +1025,11 @@ function buildCombinedChart(canvasId, input) {
     if (item.dataset._kind === "status") return _statusTooltip(item);
     if (item.dataset._kind === "peak") {
       var peakLabel =
-        " Peak response time: " + Math.round(item.parsed.y) + " ms";
+        " " +
+        item.dataset.label +
+        ": " +
+        Math.round(item.parsed.y) +
+        " ms";
       if (item.raw.median !== null)
         peakLabel += " (median " + Math.round(item.raw.median) + " ms)";
       return (
@@ -1019,6 +1096,11 @@ function buildCombinedChart(canvasId, input) {
     buildGeneration,
   );
   _registerChart(canvasId, chart, canvas, true);
+  // An updated chart keeps the user's choice across rebuilds; a new one starts with peaks shown.
+  chart._showPeaks = chart._showPeaks !== false;
+  _syncPeaks(chart);
+  chart.update("none");
+  _bindPeaksSwitch(chart, datasets, peaksEl);
   chart._renderLegend();
 
   chart._renderText();

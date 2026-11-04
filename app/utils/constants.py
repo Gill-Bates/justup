@@ -109,6 +109,8 @@ class AlertStatus(StrEnum):
 # --- UI Pagination & Display Defaults ---
 UI_PAGE_SIZE_ALERTS = 50
 UI_PAGE_SIZE_TARGETS = 50
+# Search mode renders every target at once so the client-side filter sees all rows.
+UI_PAGE_SIZE_TARGETS_ALL = 10_000
 UI_PAGE_SIZE_DEFAULT = 20
 
 # Uptime percentage thresholds for color coding
@@ -197,6 +199,8 @@ RATE_LIMIT_AUTH_DEFAULT = "10/minute"
 QUALITY_MIN_SCORE_DEFAULT = 70
 QUALITY_RTT_THRESHOLD_MS_DEFAULT = 500
 QUALITY_MIN_TARGETS = 3
+# Bounds one probe run: 20 targets at 5 in parallel finish well inside the 30 s probe cycle.
+QUALITY_MAX_TARGETS = 20
 PROVIDER_LOOKUP_CACHE_TTL_DEFAULT = 1800
 PROVIDER_LOOKUP_CACHE_TTL_MIN = 60
 PROVIDER_LOOKUP_CACHE_TTL_MAX = 86400

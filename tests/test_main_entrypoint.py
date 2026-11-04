@@ -30,3 +30,16 @@ def test_main_swallows_keyboard_interrupt_from_server_run(monkeypatch):
     monkeypatch.setattr(entry, "make_server_class", lambda: _Server)
 
     assert entry.main() is None
+
+
+def test_main_exits_with_a_clear_message_for_an_out_of_range_port(monkeypatch, tmp_path, capsys):
+    import pytest
+
+    monkeypatch.setitem(sys.modules, "uvicorn", types.SimpleNamespace())
+    monkeypatch.setattr("app.main.create_app", object)
+    monkeypatch.setenv("JUSTUP_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("JUSTUP_PORT", "70000")
+    with pytest.raises(SystemExit) as raised:
+        entry.main()
+    assert raised.value.code == 1
+    assert "JUSTUP_PORT must be between 1 and 65535" in capsys.readouterr().err

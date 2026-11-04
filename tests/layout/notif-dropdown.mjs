@@ -3,41 +3,15 @@
 // Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 //
 
-// Browser layout check for the topbar notification dropdown. It renders the real popover markup
-// with the real stylesheets and the real notifications.js, then measures actual geometry (not DOM
-// presence): the relative time stays visible and un-truncated beside long titles/descriptions,
-// the dropdown never overflows horizontally, and the full date is available as a tooltip. It also
-// writes before/after screenshots (before = the old single ellipsized detail line).
-//
-//   node tests/layout/notif-dropdown.mjs [--shots DIR] [--browsers chromium,webkit] [--json FILE]
-//
-// Playwright is resolved from the working directory, then $PLAYWRIGHT_DIR (dev-only tool, never
-// installed by the repo). Exit codes: 0 clean, 1 findings, 77 skipped (Playwright/browser absent).
+// Shared fixtures and geometry audit for the notification dropdown browser tests.
 
 import assert from "node:assert/strict";
-import { createRequire } from "node:module";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(here, "../..");
-const SKIP = 77;
-
-const args = Object.fromEntries(process.argv.slice(2).reduce((acc, a, i, all) => {
-	if (a.startsWith("--")) acc.push([a.slice(2), all[i + 1] && !all[i + 1].startsWith("--") ? all[i + 1] : "1"]);
-	return acc;
-}, []));
-
-function loadPlaywright() {
-	for (const base of [process.cwd(), process.env.PLAYWRIGHT_DIR].filter(Boolean)) {
-		try { return createRequire(path.join(path.resolve(base), "/"))("playwright"); } catch { /* next */ }
-	}
-	return null;
-}
-const pw = loadPlaywright();
-if (!pw) { console.log("SKIP: Playwright is not installed (set PLAYWRIGHT_DIR)"); process.exit(SKIP); }
-
 const css = (name) => readFileSync(path.join(repo, "app/static/css", name), "utf8");
 const notifJs = readFileSync(path.join(repo, "app/static/js/notifications.js"), "utf8");
 
@@ -146,84 +120,4 @@ const AUDIT = (items) => {
 	return out;
 };
 
-async function run() {
-	const browsers = (args.browsers || "chromium").split(",");
-	const findings = [];
-	let audits = 0;
-	const launched = [];
-	const missing = [];
-	if (args.shots) mkdirSync(args.shots, { recursive: true });
-
-	for (const name of browsers) {
-		let browser;
-		try { browser = await pw[name].launch(); }
-		catch (e) { console.log(`SKIP ${name}: ${String(e.message).split("\n")[0]}`); missing.push(name); continue; }
-		launched.push(name);
-		try {
-			for (const vp of VIEWPORTS) {
-				for (const theme of THEMES) {
-					const ctx = await browser.newContext({ viewport: { width: vp.w, height: vp.h }, deviceScaleFactor: 1 });
-					const page = await ctx.newPage();
-					await page.setContent(PAGE(STYLES), { waitUntil: "load" });
-					await page.evaluate(() => document.fonts && document.fonts.ready);
-					await page.evaluate((t) => document.documentElement.setAttribute("data-bs-theme", t), theme);
-					// Render the real preview, then open and measure.
-					await page.evaluate((items) => {
-						const N = window.JustUpNotifications;
-						N.renderPreview(document.getElementById("notif-pop-list"), { items }, document, document.getElementById("notif-bell"));
-					}, FIXTURES);
-					await page.waitForTimeout(80);
-					const res = await page.evaluate(`(${AUDIT.toString()})(${JSON.stringify(FIXTURES)})`);
-					audits++;
-					for (const issue of res.issues) findings.push({ browser: name, vp: vp.name, theme, ...issue });
-
-					if (args.shots && name === "chromium") {
-						await page.screenshot({ path: path.join(args.shots, `after-${vp.name}-${theme}.png`) });
-						// "Before": the old behaviour - a single detail line with the time appended and
-						// white-space:nowrap;overflow:hidden;text-overflow:ellipsis on the whole line.
-						await page.evaluate(() => {
-							document.querySelectorAll("#notif-pop-list .ju-notif-pop-item").forEach((li) => {
-								const detail = li.querySelector(".ju-notif-pop-detail");
-								const ctxEl = li.querySelector(".ju-notif-pop-context");
-								const timeEl = li.querySelector(".ju-notif-pop-time");
-								if (!detail) return;
-								const text = [ctxEl ? ctxEl.textContent : "", timeEl ? timeEl.textContent : ""].filter(Boolean).join(" \u00b7 ");
-								detail.style.display = "block";
-								detail.style.whiteSpace = "nowrap";
-								detail.style.overflow = "hidden";
-								detail.style.textOverflow = "ellipsis";
-								detail.textContent = text;
-							});
-						});
-						await page.waitForTimeout(40);
-						await page.screenshot({ path: path.join(args.shots, `before-${vp.name}-${theme}.png`) });
-					}
-					await ctx.close();
-				}
-			}
-		} finally {
-			await browser.close();
-		}
-	}
-
-	if (args.json) writeFileSync(args.json, JSON.stringify(findings, null, 1));
-	const byKey = new Map();
-	for (const f of findings) {
-		const k = `${f.type} | row ${f.i ?? "-"}`;
-		const e = byKey.get(k) || { n: 0, vps: new Set(), themes: new Set(), browsers: new Set() };
-		e.n++; e.vps.add(f.vp); e.themes.add(f.theme); e.browsers.add(f.browser);
-		byKey.set(k, e);
-	}
-	console.log(`${audits} audits, ${findings.length} findings, ${byKey.size} distinct`);
-	for (const [k, e] of [...byKey].sort()) console.log(`  ${k}  [${[...e.browsers].join(",")}; ${[...e.themes].join("/")}; ${[...e.vps].join(" ")}]`);
-	if (missing.length) console.log(`MISSING COVERAGE: ${missing.join(", ")} not started`);
-
-	// Self-check: every audit must have seen the time elements (guards against a silent no-op).
-	assert.ok(audits >= VIEWPORTS.length * THEMES.length, "expected one audit per viewport/theme");
-
-	if (findings.length) process.exit(1);
-	if (!launched.length || (args.browsers && missing.length)) process.exit(SKIP);
-	process.exit(0);
-}
-
-run().catch((e) => { console.error(e); process.exit(2); });
+export { AUDIT, FIXTURES, PAGE, STYLES, THEMES, VIEWPORTS };

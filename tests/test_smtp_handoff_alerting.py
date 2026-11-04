@@ -29,7 +29,7 @@ from app.services.notifications import smtp_transport
 from app.services.notifications.smtp_transport import SMTPConnection
 from tests import _support  # noqa: F401 - imported for its sys.path side effect
 from tests import test_spooler_resilience as _base
-from tests.test_spooler_resilience import Clock, Recorder, _mail, _query, _row, _spooler, _tick  # noqa: F401
+from tests.test_spooler_resilience import Clock, Recorder, _mail, _query, _row, _sig, _spooler, _tick  # noqa: F401
 
 # Shared fixtures of the spooler tests (controlled clock, temporary queue database).
 clock = _base.clock
@@ -523,3 +523,37 @@ def test_failure_inside_send_is_phased_by_the_data_exchange(relay, monkeypatch, 
     with pytest.raises(expected):
         r.email("r@example.com", "s", "t", "<p>t</p>")
     assert r.accepted == 0
+
+
+def test_email_outage_incident_is_opened_failed_and_recovered_through_the_spooler(db_path, clock):
+    rec = Recorder(clock, fail=ConnectionRefusedError("down"))
+    sp = _spooler(db_path)
+    qid = _mail(sp)
+    _run(db_path, clock, rec, 20)
+    assert [r[1] for r in _inbox(db_path, INCIDENT)] == ["warning"]
+    sp.mark_failed_permanent(qid, "[PERMANENT] rejected")  # final failure rewrites the open incident in place
+    (incident,) = _inbox(db_path, INCIDENT)
+    assert (incident[1], incident[2]) == ("error", "Email handoff failed")
+    (failed,) = _inbox(db_path, "delivery.email.failed")
+    assert failed[2] == "Email SMTP handoff failed"
+    rec.fail = None
+    more = _mail(_spooler(db_path), subject="later")
+    _tick(db_path, clock, email=rec.email)  # mark_sent
+    assert _row(db_path, more)[0] == "sent"
+    (recovered,) = _inbox(db_path, f"{INCIDENT}.recovered")
+    assert (recovered[1], recovered[2]) == ("success", "Email handoff recovered")
+
+
+@pytest.mark.usefixtures("clock")
+def test_signal_failure_is_reported_per_message_without_an_aggregated_incident(db_path):
+    # Only email has an outage detector (check_handoff_outage); Signal is visible through its message events.
+    sp = _spooler(db_path)
+    qid = _sig(sp)
+    sp.mark_failed_permanent(qid, "[PERMANENT] not registered")
+    (failed,) = _inbox(db_path, "delivery.signal.failed")
+    assert (failed[1], failed[2]) == ("error", "Signal delivery failed")
+    assert "SMTP" not in f"{failed[2]} {failed[3]}"
+    ok = _sig(sp)
+    sp.mark_sent(ok)
+    assert len(_inbox(db_path, "delivery.signal.sent")) == 1
+    assert _inbox(db_path, "incident.%") == []

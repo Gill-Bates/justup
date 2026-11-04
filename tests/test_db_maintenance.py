@@ -143,6 +143,78 @@ def test_retention_prunes_in_batches_idempotently_and_keeps_live_rows(conn, monk
     assert retention.run_retention(conn).total_deleted == 0
 
 
+def test_pop_candidate_retention_preserves_reviews_and_deletes_unreviewed_atomically(conn) -> None:
+    old = (utcnow() - timedelta(days=retention.POP_CANDIDATE_UNREVIEWED_RETENTION_DAYS + 2)).isoformat()
+    pending = conn.execute(
+        "INSERT INTO pop_alias_candidates (alias_code, last_seen, created_at) VALUES ('old', ?, ?)", (old, old)
+    ).lastrowid
+    reviewed = conn.execute(
+        "INSERT INTO pop_alias_candidates (alias_code, last_seen, created_at, reviewed, status) "
+        "VALUES ('kept', ?, ?, 1, 'rejected')",
+        (old, old),
+    ).lastrowid
+    learned = conn.execute(
+        "INSERT INTO pop_locations (canonical_code, alias_code, city, country, lat, lon, source, "
+        "confidence, priority, created_at, updated_at) "
+        "VALUES ('apv','apv','Reviewed','DE',50,8,'learned',70,10,?,?)",
+        (old, old),
+    ).lastrowid
+    approved = conn.execute(
+        "INSERT INTO pop_alias_candidates "
+        "(alias_code, last_seen, created_at, reviewed, status, approved_location_id) "
+        "VALUES ('apv', ?, ?, 1, 'approved', ?)",
+        (old, old, learned),
+    ).lastrowid
+    for candidate_id, measurement in ((pending, "a"), (reviewed, "b"), (approved, "c")):
+        conn.execute(
+            "INSERT INTO pop_candidate_observations "
+            "(candidate_id, measurement_key, context_key, observed_at) VALUES (?, ?, ?, ?)",
+            (candidate_id, measurement * 64, measurement * 64, old),
+        )
+    conn.execute(
+        "INSERT INTO pop_candidate_reviews (candidate_id, action, actor, evidence, reviewed_at) "
+        "VALUES (?, 'reject', 'reviewer', 'historical conflict', ?)",
+        (reviewed, old),
+    )
+    conn.execute(
+        "INSERT INTO pop_candidate_reviews (candidate_id, action, actor, evidence, reviewed_at, location_id) "
+        "VALUES (?, 'approve', 'reviewer', 'independent evidence', ?, ?)",
+        (approved, old, learned),
+    )
+    conn.commit()
+    conn.execute(
+        "CREATE TRIGGER fail_pending_delete BEFORE DELETE ON pop_alias_candidates "
+        "WHEN old.alias_code = 'old' BEGIN SELECT RAISE(ABORT, 'test rollback'); END"
+    )
+    failed = retention.run_retention(conn)
+    assert failed.failed == ["pop_alias_candidates"]
+    assert (
+        conn.execute("SELECT COUNT(*) FROM pop_candidate_observations WHERE candidate_id = ?", (pending,)).fetchone()[0]
+        == 1
+    )
+    conn.execute("DROP TRIGGER fail_pending_delete")
+
+    completed = retention.run_retention(conn)
+    assert completed.deleted["pop_alias_candidates"] == 1
+    assert conn.execute("SELECT COUNT(*) FROM pop_alias_candidates WHERE id = ?", (pending,)).fetchone()[0] == 0
+    assert (
+        conn.execute("SELECT COUNT(*) FROM pop_candidate_observations WHERE candidate_id = ?", (pending,)).fetchone()[0]
+        == 0
+    )
+    assert conn.execute("SELECT status FROM pop_alias_candidates WHERE id = ?", (reviewed,)).fetchone()[0] == "rejected"
+    assert (
+        conn.execute("SELECT COUNT(*) FROM pop_candidate_reviews WHERE candidate_id = ?", (reviewed,)).fetchone()[0]
+        == 1
+    )
+    assert conn.execute("SELECT status FROM pop_alias_candidates WHERE id = ?", (approved,)).fetchone()[0] == "approved"
+    assert (
+        conn.execute("SELECT COUNT(*) FROM pop_candidate_reviews WHERE candidate_id = ?", (approved,)).fetchone()[0]
+        == 1
+    )
+    assert conn.execute("SELECT retired FROM pop_locations WHERE id = ?", (learned,)).fetchone()[0] == 0
+    assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
 def test_retention_keeps_open_and_recent_alerts_and_drops_old_resolved(conn):
     conn.execute(
         "INSERT INTO targets (name, interval_seconds, retention_days, enable_ping, enable_http_check,"

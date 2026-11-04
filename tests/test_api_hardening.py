@@ -28,7 +28,7 @@ from app.db import sqlite as sqlite_db
 from app.models.targets import TargetCreate, TargetPublic, target_row_to_dict
 from app.models.users import hash_token, new_token
 from app.services.notifications.signal_errors import SignalTimeout
-from app.utils import crypto
+from app.utils import auth_helpers, crypto
 from app.utils.auth_helpers import get_user_by_token
 from app.utils.client_ip import audit_client_ip, request_is_https, resolve_trusted_client_ip
 from app.utils.constants import VALID_PDF_PAGE_SIZES
@@ -303,6 +303,23 @@ class TestRecipients:
         assert env["admin"].call("PATCH", f"/recipients/{rid}", {"phone": "abc"}).status_code == 422
         assert env["admin"].call("POST", "/recipients", {"name": "B", "phone": "abc"}).status_code == 422
 
+    def test_at_least_one_channel_is_required_and_a_switched_off_channel_is_cleared(self, env):
+        no_channel = env["admin"].call("POST", "/recipients", {"name": "B"})
+        assert no_channel.status_code == 422
+        both = env["admin"].call(
+            "POST", "/recipients", {"name": "C", "email": "c@example.com", "phone": "+4915112345678"}
+        )
+        assert both.status_code == 201, both.text
+        rid = both.json()["recipient"]["id"]
+        # The dialog sends null for a switched-off channel: the stored value is cleared, the other stays.
+        only_email = env["admin"].call("PATCH", f"/recipients/{rid}", {"phone": None, "email": "c@example.com"})
+        assert only_email.status_code == 200, only_email.text
+        assert only_email.json()["recipient"]["phone"] is None
+        assert only_email.json()["recipient"]["email"] == "c@example.com"
+        none_left = env["admin"].call("PATCH", f"/recipients/{rid}", {"phone": None, "email": None})
+        assert none_left.status_code == 400
+        assert env["admin"].call("GET", f"/recipients/{rid}").json()["email"] == "c@example.com"
+
     def test_normalize_failure_maps_to_400(self):
         from fastapi import HTTPException
 
@@ -438,6 +455,21 @@ class TestTargetWizardContracts:
         assert values["enable_ping"] is False
         assert values["enable_http_check"] is False
         assert values["tcp_ports"] == "22,443"
+
+    def test_tcp_only_target_saves_without_http_fields_and_runs_no_http_check(self, env):
+        host = "tcp-only.example.com"
+        payload = {"name": "SSH", "host": host, "tcp_host": host, "enable_tcp_connect": True, "tcp_ports": "22"}
+        created = env["admin"].call("POST", "/targets", payload)
+        assert created.status_code == 201, created.text
+        body = created.json()
+        assert (body["enable_http_check"], body["enable_cert_expiration"], body["enable_ping"]) == (False, False, False)
+        assert body["http_url"] is None
+        # The stored HTTP defaults are inert: only the enabled TCP check is scheduled and reported.
+        with closing(_db(env)) as conn:
+            row = sqlite_db.get_target(conn, body["id"])
+            assert not row["enable_http_check"] and not row["enable_cert_expiration"]
+        conflicts = _preview_target(env, "tcp", "tcp-only.example.com", tcp_ports="22")["conflicts"]
+        assert [item["check_type"] for item in conflicts] == ["tcp"]
 
     def test_enabled_target_requires_at_least_one_check(self, env):
         values = TargetCreate(name="Empty", host="example.com").model_dump(mode="json")
@@ -582,6 +614,24 @@ class TestTargetWizardContracts:
             row = sqlite_db.get_target(conn, target_id)
             assert row["http_password"] == stored_password
             assert row["http_url"].startswith("https://")
+
+    def test_patch_validates_basic_auth_against_the_merged_state(self, env):
+        values = _preview_target(env, "website", "https://example.com/")["values"]
+        created = env["admin"].call("POST", "/targets", values)
+        assert created.status_code == 201, created.text
+        path = f"/targets/{created.json()['id']}"
+        assert env["admin"].call("PATCH", path, {"http_basic_auth_enabled": True}).status_code == 422
+        assert (
+            env["admin"].call("PATCH", path, {"http_basic_auth_enabled": True, "http_username": "viewer"}).status_code
+            == 422
+        )
+        complete = {"http_basic_auth_enabled": True, "http_username": "viewer", "http_password": "fixture-password"}
+        assert env["admin"].call("PATCH", path, complete).status_code == 200
+        # Stored credentials complete a later partial patch; clearing them disables auth consistently.
+        assert env["admin"].call("PATCH", path, {"http_username": "other"}).status_code == 200
+        cleared = env["admin"].call("PATCH", path, {"clear_http_password": True})
+        assert cleared.status_code == 200, cleared.text
+        assert cleared.json()["http_basic_auth_enabled"] is False
 
     def test_explicit_cert_choice_on_create_is_preserved(self, env):
         values = _preview_target(env, "website", "https://example.com/")["values"]
@@ -803,3 +853,53 @@ def test_patch_making_two_tcp_targets_identical_is_rejected(env):
         ids.append(created.json()["id"])
     conflict = env["admin"].call("PATCH", f"/targets/{ids[1]}", {"tcp_ports": "22"})
     assert conflict.status_code == 409, conflict.text
+
+
+_safe_redirect_target = auth_helpers._safe_redirect_target  # noqa: SLF001 - the unit under test
+
+
+@pytest.mark.parametrize(
+    ("target", "expected"),
+    [
+        ("/ui/targets", "/ui/targets"),
+        ("/ui/targets?name=a%20b&page=2", "/ui/targets?name=a%20b&page=2"),
+        ("/", "/"),
+        ("", "/ui/login"),
+        ("https://evil.example/", "/ui/login"),
+        ("http://evil.example", "/ui/login"),
+        ("javascript:alert(1)", "/ui/login"),
+        ("evil.example/path", "/ui/login"),
+        ("//evil.example", "/ui/login"),
+        ("/\\evil.example", "/ui/login"),
+        ("/ui/\\evil", "/ui/login"),
+        ("/%5Cevil.example", "/ui/login"),
+        ("/%5cevil.example", "/ui/login"),
+        ("/%255Cevil.example", "/ui/login"),
+        ("/%2F%2Fevil.example", "/ui/login"),
+        ("/%2f/evil.example", "/ui/login"),
+        ("/\tevil.example", "/ui/login"),
+        ("/\nevil.example", "/ui/login"),
+        ("/\revil.example", "/ui/login"),
+        ("/%09/evil.example", "/ui/login"),
+        ("/%0a/evil.example", "/ui/login"),
+        ("/%0d/evil.example", "/ui/login"),
+        ("/ui/%00x", "/ui/login"),
+        ("/\x7fx", "/ui/login"),
+    ],
+)
+def test_safe_redirect_target_rejects_open_redirect_forms(target, expected):
+    assert _safe_redirect_target(target) == expected
+
+
+def test_safe_redirect_target_uses_the_given_default():
+    assert _safe_redirect_target("/\\evil.example", "/ui/change-password") == "/ui/change-password"
+
+
+def test_redirect_helpers_fall_back_for_an_unsafe_target(monkeypatch):
+    monkeypatch.setattr(auth_helpers, "resolve_user_optional", lambda *_a, **_k: None)
+    request = SimpleNamespace(url=SimpleNamespace(path="/ui/x"))
+    assert (
+        auth_helpers.resolve_user_or_htmx_redirect(request, None, "/\\evil.example").headers["HX-Redirect"]
+        == "/ui/login"
+    )
+    assert auth_helpers.resolve_user_or_redirect(request, None, "/\\evil.example").headers["location"] == "/ui/login"

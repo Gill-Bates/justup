@@ -45,9 +45,10 @@
 			}
 		}
 
-		/* Teal top edge of the Gentelella login panel */
+		/* The shared accent ties the sign-in panel to the application shell. */
 		.login-card {
 			border-top: 3px solid var(--bs-primary);
+			box-shadow: var(--bs-box-shadow-sm);
 		}
 
 		main {
@@ -62,41 +63,14 @@
 			margin: 0 1rem;
 		}
 
-		/* Heartbeat animation */
-		@keyframes heartbeat-dash {
-			0% {
-				stroke-dashoffset: 600;
-			}
-
-			100% {
-				stroke-dashoffset: 0;
-			}
-		}
-
 		/* Fixed SVG aspect ratio instead of a negative-margin hack */
 		.heartbeat-line {
 			color: var(--bs-primary);
 			margin-bottom: 0.5rem;
 		}
 
-		.heartbeat-path {
-			stroke-dasharray: 600;
-			animation: heartbeat-dash 2s linear infinite;
-		}
-
-		@media (prefers-reduced-motion: reduce) {
-			.heartbeat-path {
-				animation: none;
-			}
-		}
-
-		/* The logo SVG is black; invert it in dark theme. */
 		.ju-logo {
 			height: auto;
-		}
-
-		[data-bs-theme="dark"] .ju-logo {
-			filter: invert(1);
 		}
 
 		/* Honeypot: off-screen, never focusable or announced; bots fill it. */
@@ -112,7 +86,7 @@
 
 <body>
 	<main id="main-content">
-	<div class="card login-card shadow-lg">
+	<div class="card login-card">
 		<div class="card-body p-4 p-sm-5">
 			<div class="text-center mb-4">
 				{# Height matches the viewBox so the heartbeat does not stretch #}
@@ -123,7 +97,7 @@
 						stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"
 						fill="none"></path>
 				</svg>
-				<img src="/static/img/justup_1c.svg" class="ju-logo img-fluid mb-3" alt="justUp!" width="220" height="82">
+				<img src="/static/img/justup_1c.svg" class="ju-logo img-fluid mb-3" alt="justUp!" width="220" height="95">
 				<h1 class="visually-hidden">Sign in to justUp!</h1>
 				<p class="text-body-secondary small">Uptime Monitor - done right!</p>
 			</div>

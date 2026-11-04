@@ -79,14 +79,12 @@ async function testSmtp() {
 
 	const recipient = recipientInput?.value?.trim();
 	if (!recipient) {
-		window.justUpToast?.warning?.('Please enter a test recipient email address');
-		recipientInput?.classList.add('is-invalid');
-		recipientInput?.setAttribute('aria-invalid', 'true');
-		recipientInput?.focus();
+		window.JuFieldErrors.show(recipientInput.closest('form') || document.body, [
+			{ id: 'smtp_test_recipient', message: 'Please enter a test recipient email address' },
+		]);
 		return;
 	}
-	recipientInput?.classList.remove('is-invalid');
-	recipientInput?.removeAttribute('aria-invalid');
+	window.JuFieldErrors.clear(recipientInput);
 
 	btn.disabled = true;
 	const originalText = btn.innerHTML;
@@ -206,8 +204,8 @@ async function loadUsers() {
 
 			const isActive = user.is_active !== false;
 			const statusBadge = isActive
-				? '<span class="badge bg-success">Enabled</span>'
-				: '<span class="badge bg-secondary">Disabled</span>';
+				? '<span class="badge ju-status-badge--success">Enabled</span>'
+				: '<span class="badge ju-status-badge--neutral">Disabled</span>';
 
 			const disableToggle = !!user.is_admin;
 			const disableDelete = !!user.is_admin;
@@ -377,24 +375,18 @@ async function saveEditedUser() {
 	const newPassword = document.getElementById('edit-user-password')?.value;
 	const confirmPassword = document.getElementById('edit-user-password-confirm')?.value;
 
-	if (!userId || !username) return;
-
+	if (!userId) return;
+	if (errorDiv) errorDiv.classList.add('d-none');
+	const fieldErrors = [];
+	if (!username) fieldErrors.push({ id: 'edit-user-username', message: 'Please enter a username' });
 	if (newPassword || confirmPassword) {
 		if ((newPassword || '').length < 8) {
-			if (errorDiv) {
-				errorDiv.textContent = ERROR_MESSAGES.PASSWORD_TOO_SHORT;
-				errorDiv.classList.remove('d-none');
-			}
-			return;
-		}
-		if (newPassword !== confirmPassword) {
-			if (errorDiv) {
-				errorDiv.textContent = ERROR_MESSAGES.PASSWORDS_DONT_MATCH;
-				errorDiv.classList.remove('d-none');
-			}
-			return;
+			fieldErrors.push({ id: 'edit-user-password', message: ERROR_MESSAGES.PASSWORD_TOO_SHORT });
+		} else if (newPassword !== confirmPassword) {
+			fieldErrors.push({ id: 'edit-user-password-confirm', message: ERROR_MESSAGES.PASSWORDS_DONT_MATCH });
 		}
 	}
+	if (window.JuFieldErrors.show(document.getElementById('editUserModal'), fieldErrors)) return;
 
 	if (btn) btn.disabled = true;
 	if (errorDiv) errorDiv.classList.add('d-none');
@@ -494,18 +486,12 @@ async function createUser() {
 	const isAdmin = document.getElementById('new-user-is-admin').checked;
 	const canCloseAlerts = document.getElementById('new-user-can-close-alerts')?.checked || false;
 
-	if (!username || !password) {
-		errorDiv.textContent = ERROR_MESSAGES.REQUIRED_FIELDS;
-		errorDiv.classList.remove('d-none');
-		return;
-	}
-
-	// Frontend password strength check
-	if (password.length < 8) {
-		errorDiv.textContent = ERROR_MESSAGES.PASSWORD_TOO_SHORT;
-		errorDiv.classList.remove('d-none');
-		return;
-	}
+	errorDiv.classList.add('d-none');
+	const fieldErrors = [];
+	if (!username) fieldErrors.push({ id: 'new-user-username', message: 'Please enter a username' });
+	if (!password) fieldErrors.push({ id: 'new-user-password', message: 'Please enter a password' });
+	else if (password.length < 8) fieldErrors.push({ id: 'new-user-password', message: ERROR_MESSAGES.PASSWORD_TOO_SHORT });
+	if (window.JuFieldErrors.show(form, fieldErrors)) return;
 
 	btn.disabled = true;
 	errorDiv.classList.add('d-none');

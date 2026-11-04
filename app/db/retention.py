@@ -42,7 +42,6 @@ QUALITY_RETENTION_DAYS = 30
 SCHEDULER_RUN_STALE_SECONDS = 300
 POP_IMPORT_RUN_RETENTION_DAYS = 90
 POP_IMPORT_RUNS_KEEP_LATEST = 20
-POP_CANDIDATE_REVIEWED_RETENTION_DAYS = 90
 POP_CANDIDATE_UNREVIEWED_RETENTION_DAYS = 365
 WAL_TRUNCATE_THRESHOLD_BYTES = 64 * 1024 * 1024  # TRUNCATE checkpoint only above this WAL size
 INCREMENTAL_VACUUM_MIN_FREE_PAGES = 256  # skip the vacuum below this many free pages ...
@@ -64,7 +63,6 @@ _ALLOWED_TABLES = frozenset(
         "scheduler_runs",
         "target_locks",
         "pop_import_runs",
-        "pop_alias_candidates",
     }
 )
 
@@ -199,21 +197,34 @@ def run_retention(
 def _prune_pop_candidates(
     conn: sqlite3.Connection, ts: Callable[[timedelta], datetime], deadline: float
 ) -> tuple[int, bool]:
-    reviewed, done_a = delete_in_batches(
-        conn,
-        "pop_alias_candidates",
-        "reviewed = 1 AND last_seen < ?",
-        (ts(timedelta(days=POP_CANDIDATE_REVIEWED_RETENTION_DAYS)),),
-        deadline=deadline,
+    cutoff = ts(timedelta(days=POP_CANDIDATE_UNREVIEWED_RETENTION_DAYS)).isoformat()
+    eligible = (
+        "SELECT id FROM pop_alias_candidates c WHERE reviewed = 0 "
+        "AND status IN ('pending', 'conflict') AND approved_location_id IS NULL "
+        "AND last_seen < ? AND NOT EXISTS "
+        "(SELECT 1 FROM pop_candidate_reviews r WHERE r.candidate_id = c.id) "
+        "ORDER BY id LIMIT ?"
     )
-    unreviewed, done_b = delete_in_batches(
-        conn,
-        "pop_alias_candidates",
-        "reviewed = 0 AND last_seen < ?",
-        (ts(timedelta(days=POP_CANDIDATE_UNREVIEWED_RETENTION_DAYS)),),
-        deadline=deadline,
-    )
-    return reviewed + unreviewed, done_a and done_b
+    total = 0
+    while True:
+        if time.monotonic() >= deadline:
+            return total, False
+        with sqlite_db.transaction(conn, immediate=True):
+            ids = [row[0] for row in conn.execute(eligible, (cutoff, BATCH_SIZE))]
+            if ids:
+                placeholders = ",".join("?" * len(ids))
+                conn.execute(
+                    f"DELETE FROM pop_candidate_observations WHERE candidate_id IN ({placeholders})",  # noqa: S608 - only placeholders
+                    ids,
+                )
+                conn.execute(
+                    f"DELETE FROM pop_alias_candidates WHERE id IN ({placeholders})",  # noqa: S608 - only placeholders
+                    ids,
+                )
+        total += len(ids)
+        if len(ids) < BATCH_SIZE:
+            return total, True
+        time.sleep(BATCH_PAUSE_SECONDS)
 
 
 def _db_file(conn: sqlite3.Connection) -> Path | None:

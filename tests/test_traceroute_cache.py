@@ -281,13 +281,15 @@ def test_fragment_counts_collapsed_hops_and_renders_panels(tmp_path: Path, monke
     assert "Traceroute hops <span" in text and "(7)" in text
     assert "No reply" in text and "ICMP blocked" not in text and "tr-hop-row--blocked" in text
     # Hops 2-5 are ICMP-blocked and consecutive without map location: one expandable group of 4.
-    assert 'data-measurement="interpolated"' in text
+    assert 'data-measurement="timeout"' in text and 'data-measurement="interpolated"' not in text
+    assert "Estimated" not in text and "estimated" not in text
+    assert "4 hops without reply" in text  # row subtitle and timeline group title, counted from hop numbers
     assert text.count("data-tr-group") == 1 and 'aria-expanded="false"' in text
     assert 'aria-controls="tr-group-2-5"' in text and 'id="tr-group-2-5"' in text
     assert text.count("data-tr-hop") == 7  # every hop stays reachable, grouped ones inside the group
     # Visible text names each step; an aria-label would trip axe's label-content-name-mismatch.
     assert not re.search(r"<button[^>]*tr-step-btn[^>]*aria-label", text)
-    assert text.count(">Location unknown · Estimated (interpolated)<") == 4
+    assert text.count(">No reply<") >= 4 and text.count("ju-status-badge--warning") >= 1
     assert "15.7 ms" in text and "0%" in text and "Frankfurt am Main, DE" in text
     assert "Geolocated route for 2 of 7 hops" in text
     for header in ("IP address", "Hostname", "Location", "Latency", "Loss", "Status"):
@@ -532,7 +534,9 @@ def test_timeline_state_mapping_keeps_measurement_and_location_separate() -> Non
     assert by_hop[1]["kind"] == "first" and by_hop[1]["title"] == "First hop"
     assert (by_hop[1]["measurement"], by_hop[1]["location"]) == ("measured", "mapped")
     assert (by_hop[2]["measurement"], by_hop[2]["location"]) == ("timeout", "unlocated")
-    assert by_hop[3]["measurement"] == "interpolated"
+    # An interpolated latency inside the interpreter never makes a silent hop "estimated" for the user.
+    assert (by_hop[3]["measurement"], by_hop[3]["measurement_label"]) == ("timeout", "No reply")
+    assert by_hop[3]["state_label"] == "No reply"
     assert by_hop[4]["measurement_label"] == "Measured, some probes lost"
     # A synthetic destination is never a successful measurement.
     assert by_hop[5]["kind"] == "destination" and by_hop[5]["measurement"] == "unreached"
@@ -593,3 +597,27 @@ def test_fragment_renders_single_timeline(tmp_path: Path, monkeypatch) -> None:
     assert 'class="tr-route-legend"' in text and "No map location" in text
     assert "Hop 1–7" in text and "7 hops" in text
     assert 'title="2001:db8:0:0:0:0:0:99"' in text  # full IPv6 stays available
+
+
+def test_timeline_groups_no_reply_runs_and_keeps_single_timeouts_separate() -> None:
+    silent = {"ip": "*", "status": "timeout"}
+    hops = [
+        _seq_hop(1),
+        *[{**_seq_hop(n), **silent} for n in (2, 3, 4)],
+        _seq_hop(5),
+        {**_seq_hop(6), **silent},
+        _seq_hop(7, ip="203.0.113.9"),
+    ]
+    timeline = _timeline(hops, {1, 5, 7})
+    nodes = timeline["nodes"]
+    assert [(n["kind"], n["label"]) for n in nodes] == [
+        ("first", "1"),
+        ("group", "2–4"),
+        ("hop", "5"),
+        ("hop", "6"),
+        ("destination", "7"),
+    ]
+    group = nodes[1]
+    assert (group["title"], group["subtitle"], group["measurement"]) == ("3 hops without reply", "No reply", "timeout")
+    assert nodes[3]["state_label"] == "No reply" and "estimated" not in nodes[3]["detail"].lower()
+    assert [item["label"] for item in timeline["legend"]] == ["Measured", "No reply"]

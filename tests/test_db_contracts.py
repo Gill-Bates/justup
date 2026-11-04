@@ -203,6 +203,73 @@ def test_delete_setting_invalidates_the_cache(db_path: Path):
 # ─── PRAGMAs / WAL ────────────────────────────────────────────────────────────
 
 
+def test_file_backed_memory_journal_is_replaced_by_wal(tmp_path: Path):
+    conn = sqlite3.connect(tmp_path / "memory-journal.db")
+    try:
+        assert conn.execute("PRAGMA journal_mode=MEMORY").fetchone()[0] == "memory"
+        sqlite_db.ensure_wal_mode(conn)
+        assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+    finally:
+        conn.close()
+
+
+def test_in_memory_database_keeps_its_memory_journal():
+    conn = sqlite3.connect(":memory:")
+    try:
+        assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "memory"
+        sqlite_db.ensure_wal_mode(conn)
+        assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "memory"
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("operation", ["alert", "report"])
+def test_read_then_write_operations_claim_wal_writer_before_read(db_path: Path, operation: str):
+    owner = sqlite_db.connect(db_path)
+    contender = sqlite_db.connect(db_path)
+    try:
+        target_id = sqlite_db.create_target(owner, _target_values())
+        now = utcnow()
+        if operation == "alert":
+            owner.execute(
+                "INSERT INTO alerts(id, target_id, target_name, failed_service, started_at, created_at, updated_at) "
+                "VALUES ('race', ?, 'target', 'PING', ?, ?, ?)",
+                (target_id, now, now, now),
+            )
+            read_sql = "SELECT started_at, target_id, target_name, failed_service FROM alerts"
+            contender_sql = "UPDATE alerts SET target_name = 'contender' WHERE id = 'race'"
+        else:
+            sqlite_db.create_report_job(owner, "race", target_id)
+            read_sql = "SELECT job_id FROM report_jobs"
+            contender_sql = "UPDATE report_jobs SET progress = 1 WHERE job_id = 'race'"
+        owner.commit()
+        contender.execute("PRAGMA busy_timeout = 0")
+        errors: list[int] = []
+
+        def try_competing_write(statement: str) -> None:
+            if read_sql not in statement or errors:
+                return
+            try:
+                contender.execute(contender_sql)
+                contender.commit()
+                errors.append(0)
+            except sqlite3.OperationalError as exc:
+                errors.append(exc.sqlite_errorcode)
+                contender.rollback()
+
+        owner.set_trace_callback(try_competing_write)
+        if operation == "alert":
+            sqlite_db.resolve_alert(owner, "race", now + timedelta(seconds=2))
+        else:
+            assert sqlite_db.mark_stale_report_jobs_failed(owner) == 1
+        owner.set_trace_callback(None)
+        assert errors == [sqlite3.SQLITE_BUSY]
+    finally:
+        owner.set_trace_callback(None)
+        sqlite_db.close_connection(contender)
+        sqlite_db.close_connection(owner)
+
+
 def test_pragmas_on_fresh_database(db_path: Path):
     conn = sqlite_db.connect(db_path)
     assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"  # persisted by init_schema
@@ -321,6 +388,22 @@ def test_target_identity_constraint_rejects_exact_checks_but_allows_other_servic
     sqlite_db.update_target(conn, target_id=other_id, patch={"http_url": "https://other.example.org/"})
     assert conn.execute("SELECT identity_signature FROM targets WHERE id = ?", (other_id,)).fetchone()[0] != signature
     sqlite_db.close_connection(conn)
+
+
+def test_target_duplicate_check_includes_legacy_rows_without_signature(db_path: Path):
+    conn = sqlite_db.connect(db_path)
+    try:
+        cursor = conn.execute(
+            "INSERT INTO targets(name, interval_seconds, retention_days, enable_ping, enable_http_check, "
+            "enable_cert_expiration, host, created_at, updated_at) VALUES (?, 60, 30, 1, 0, 0, ?, ?, ?)",
+            ("legacy", "example.org", utcnow(), utcnow()),
+        )
+        conn.commit()
+        with pytest.raises(sqlite_db.DuplicateTargetError) as exc:
+            sqlite_db.create_target(conn, {**_target_values(), "enable_ping": True})
+        assert exc.value.conflicts[0]["id"] == cursor.lastrowid
+    finally:
+        sqlite_db.close_connection(conn)
 
 
 def test_future_migrations_apply_once_in_order_and_are_idempotent(db_path: Path, monkeypatch: pytest.MonkeyPatch):

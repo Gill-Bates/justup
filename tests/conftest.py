@@ -8,9 +8,15 @@
 
 from __future__ import annotations
 
+import sqlite3
+
 import pytest
 
 from app.utils.rate_limit import reset_all
+
+
+def pytest_report_header() -> str:
+    return f"SQLite runtime: {sqlite3.sqlite_version}"
 
 
 @pytest.fixture(autouse=True)

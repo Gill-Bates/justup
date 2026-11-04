@@ -55,6 +55,7 @@ def test_canvas_has_image_role_accessible_name_and_text_alternatives() -> None:
     assert "combined-data-details" not in html
     assert "combined-table-body" not in html
     assert 'role="group"' in html and 'id="combined-legend"' in html
+    assert html.count('id="combined-peaks-toggle"') == 1 and 'role="switch"' in html
 
 
 def test_empty_states_are_rendered_for_targets_without_checks() -> None:

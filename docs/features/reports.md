@@ -18,6 +18,25 @@ files are removed after they expire; the Compose file keeps them in a volatile `
 
 ## Content
 
+## PDF typography contract
+
+ReportLab PDF text uses the embedded IBM Plex Sans Regular, Bold, Italic, and Bold Italic
+fonts. HarfBuzz shaping is mandatory for paragraphs, tables, and direct canvas text; PDF
+generation fails with a clear error if the selected font cannot be shaped. Text-width and
+wrapping calculations use the same shaped glyph advances as canvas rendering, including
+centering and right alignment. Do not use `pdfmetrics.stringWidth()` for report layout.
+
+`uharfbuzz` is pinned in `pyproject.toml` and the hash-checked, wheel-only
+`docker/requirements.lock`; production installs do not download fonts or shaping data at
+runtime. IBM Plex Sans is checked for missing glyphs before shaping. Material Icons are a
+deliberate exception: they are symbol glyphs rather than prose and remain unshaped.
+
+Charts are rasterized separately by Matplotlib's Agg/FreeType text renderer. The PDF's
+ReportLab shaping settings do not apply to chart images; the chart configuration selects
+the same local IBM Plex Sans family. Changes to PDF typography must keep shaping contract
+tests and full-report rendering checks passing, including searchable/extractable text,
+font embedding, and layout at the supported paper sizes.
+
 | No. | Chapter | Content |
 | --- | --- | --- |
 | 1 | Cover | Target, period with time zone, status, availability, average and maximum response, estimated downtime, SLA attainment |

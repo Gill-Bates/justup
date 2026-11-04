@@ -101,8 +101,17 @@ class TlsScanResult:
     error: str | None = None  # human-readable reason when status is FAILED
     ip_address: str | None = None  # the address that was actually scanned
     certificate: CertificateInfo | None = None
+    certificate_deployments: tuple[CertificateInfo, ...] = ()
     certificate_check: Check = field(default_factory=Check.unknown)  # certificate_info command outcome
+    unparsed_certificates: int = 0  # deployments presented but not evaluable; they make the verdicts UNKNOWN
     protocols: tuple[ProtocolResult, ...] = ()
+    mozilla_tls_profile: Check = field(default_factory=Check.unknown)
+    fallback_scsv: Check = field(default_factory=Check.unknown)
+    extended_master_secret: Check = field(default_factory=Check.unknown)
+    tls_1_3_early_data: bool | None = None
+    session_resumption: str | None = None
+    elliptic_curves: str | None = None
+    http_headers: str | None = None
     heartbleed: Check = field(default_factory=Check.unknown)
     ccs_injection: Check = field(default_factory=Check.unknown)
     robot: Check = field(default_factory=Check.unknown)
@@ -137,28 +146,44 @@ class TlsScanResult:
         return Check.unknown()
 
     @property
-    def preferred_cipher(self) -> str | None:
-        """First accepted suite of the newest protocol that has any."""
+    def cipher_suite_example(self) -> str | None:
+        """Return one accepted suite without implying that it is the server's preference."""
         for name in ("TLS 1.3", "TLS 1.2"):
             proto = self.protocol(name)
             if proto and proto.cipher_suites:
                 return proto.cipher_suites[0]
         return None
 
+    def _certificate_verdict(self, attr: str) -> Check:
+        """Aggregate one certificate check over all deployments: INSECURE before UNKNOWN before SECURE."""
+        certs = self.certificate_deployments or ((self.certificate,) if self.certificate else ())
+        multiple = len(certs) + self.unparsed_certificates > 1
+        found = [(i, getattr(cert, attr)) for i, cert in enumerate(certs, start=1)]
+        if self.unparsed_certificates:
+            note = f"{self.unparsed_certificates} certificate deployment(s) could not be evaluated"
+            found.append((0, Check.unknown(note)))
+        for wanted in (Verdict.INSECURE, Verdict.UNKNOWN):
+            hit = next(((i, c) for i, c in found if c.verdict is wanted), None)
+            if hit is not None:
+                index, check = hit
+                if not multiple or index == 0:
+                    return check
+                return Check(wanted, f"Deployment {index}: {check.detail}".rstrip(": "))
+        return found[0][1]
+
     @property
     def checks(self) -> dict[str, Check]:
         """All security verdicts by label, in report order."""
         out: dict[str, Check] = {}
         if self.certificate:
-            cert = self.certificate
             out.update(
                 {
-                    "Certificate trust": cert.trust,
-                    "Certificate expiry": cert.expiry,
-                    "Signature algorithm": cert.signature,
-                    "Key strength": cert.key_strength,
-                    "Hostname match": cert.hostname_match,
-                    "Chain order": cert.chain_order,
+                    "Certificate trust": self._certificate_verdict("trust"),
+                    "Certificate expiry": self._certificate_verdict("expiry"),
+                    "Signature algorithm": self._certificate_verdict("signature"),
+                    "Key strength": self._certificate_verdict("key_strength"),
+                    "Hostname match": self._certificate_verdict("hostname_match"),
+                    "Chain order": self._certificate_verdict("chain_order"),
                 }
             )
         else:
@@ -167,6 +192,9 @@ class TlsScanResult:
             {
                 "Weak protocols": self.weak_protocols,
                 "Modern protocol": self.modern_protocol,
+                "Mozilla TLS profile (intermediate)": self.mozilla_tls_profile,
+                "TLS_FALLBACK_SCSV": self.fallback_scsv,
+                "Extended Master Secret": self.extended_master_secret,
                 "Heartbleed": self.heartbleed,
                 "OpenSSL CCS injection": self.ccs_injection,
                 "ROBOT": self.robot,

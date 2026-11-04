@@ -68,3 +68,12 @@ class AlertListResponse(BaseModel):
     page: int
     page_size: int
     total_pages: int
+
+
+class AlertSummary(BaseModel):
+    """Dashboard alert counters; the ``*_24h`` fields cover the last 24 hours (UTC)."""
+
+    open: int
+    acknowledged_24h: int
+    started_24h: int
+    resolved_24h: int

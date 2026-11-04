@@ -22,6 +22,7 @@ A four-step wizard suggests checks by profile and shows a summary before saving.
 Defaults: 60 s interval, two retries, 365 days retention, auto-close. You can
 change them before creation. A domain without scheme suggests HTTPS; an explicit
 `http://` stays HTTP. The summary does not contact the target.
+In the checks step, settings appear only for active checks: the TCP port field with TCP, URL, method and success codes with HTTP, and the TLS option "Ignore TLS certificate errors" with HTTP or certificate expiry. Interval, retries, retention and auto-close are always shown. The summary lists only active checks.
 
 Exact duplicates are blocked. Different services on the same host are allowed;
 partially overlapping checks show a warning. **Edit** opens the full editor.
@@ -40,7 +41,9 @@ partially overlapping checks show a warning. **Edit** opens the full editor.
     Several ports per target; status and latency per port.
 
 === "Certificate"
-    Remaining days of the TLS certificate. Host and port can come from the HTTP URL.
+    Remaining days of the TLS certificate. A configured certificate host and port always win.
+    Without them the host comes from the HTTP URL (then the target host) and the port from
+    the HTTP URL, then the HTTP port override, then 443 (80 for an `http` URL).
 
 ## Host rules
 
@@ -55,11 +58,20 @@ Checks run aligned to the interval with a small per-target jitter. Failed checks
 are retried with backoff. A slow check does not delay other targets. Changes
 apply without a restart.
 
+## Searching targets
+
+The search field on the Targets page filters while you type. It matches a part of the
+name, host, HTTP URL, TCP port or group name, ignoring case and accents. Groups without
+a hit disappear, groups with hits open while you search, and the badge shows hits
+against the total (`2 / 5`). Clearing the field (the clear button or `Esc`) restores the
+groups as they were. Without a match the page says `No targets match "..."`.
+
 ## Status and SLA
 
 Each target has a status per service and an overall status (`up`, `down`,
-`degraded`, `unknown`), plus uptime for 24 h and 30 days. Admins can reset a
-target's measurements and send a test alert.
+`degraded`, `unknown`), plus uptime for 24 h and 30 days. Uptime follows the overall
+status: a check cycle counts as up only if every enabled check (HTTP, ping, TCP)
+is up. Admins can reset a target's measurements and send a test alert.
 
 SLA targets (availability %, HTTP response time, ping latency) are set per target.
 They affect charts and reports only and never raise alerts. Without an

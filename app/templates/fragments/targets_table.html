@@ -2,7 +2,8 @@
 {# Out-of-band update of the page carrier in targets.html (hx-include of polling/refresh); rendered in every state #}
 <input type="hidden" id="targets-page-state" name="page" value="{{ page }}" hx-swap-oob="true">
 {% if grouped_targets %}
-	<div class="accordion targets-group" id="targets-accordion">
+	<div class="accordion targets-group" id="targets-accordion" data-total-pages="{{ total_pages }}"
+		data-scope="{{ 'all' if show_all else 'page' }}">
 		{% for group_name, group_targets in grouped_targets.items() %}
 		{% set is_ungrouped = (group_name == 'Ungrouped') %}
 		{# Slug + name hash: distinct group names must never share a collapse id #}
@@ -19,7 +20,7 @@
 				<span class="group-icon"><span class="material-icons" aria-hidden="true">folder</span></span>
 				<strong>{{ group_name }}</strong>
 				{% endif %}
-				<span class="badge bg-secondary">{{ group_targets | length }}</span>
+				<span class="badge bg-secondary targets-group-count" data-total="{{ group_targets | length }}">{{ group_targets | length }}</span>
 				</button>
 			</h2>
 			<div id="group-{{ group_id }}" class="accordion-collapse collapse show"
@@ -39,7 +40,8 @@
 						</thead>
 						<tbody>
 							{% for t in group_targets %}
-							<tr>
+							{# data-search lists the fields the targets search matches: name, host, URL, TCP ports, group #}
+							<tr data-search="{{ [t.name, t.host, t.http_url, (t.tcp_ports if t.enable_tcp_connect), group_name] | select | join(' ') }}">
 								<td data-label="Status" class="text-center ju-cell-icon">
 									<span hx-get="/ui/fragments/target-status/{{ t.id }}" hx-trigger="load, justup-target-{{ t.id }} from:body throttle:1s"
 										hx-swap="innerHTML">
@@ -52,15 +54,15 @@
 									</a>
 								</td>
 								<td data-label="Checks">
-									<div class="check-badges">
+									<div class="ju-badges check-badges">
 									{% if t.enable_ping %}
-									<span class="badge {% if t.ping_status == 'up' %}bg-success{% elif t.ping_status == 'down' %}bg-danger{% else %}bg-secondary{% endif %}">Ping</span>
+									<span class="badge {% if t.ping_status == 'up' %}ju-status-badge--success{% elif t.ping_status == 'down' %}ju-status-badge--danger{% else %}ju-status-badge--neutral{% endif %}">Ping</span>
 									{% endif %}
 									{% if t.enable_http_check %}
-									<span class="badge {% if t.http_status == 'up' %}bg-success{% elif t.http_status == 'down' %}bg-danger{% else %}bg-secondary{% endif %}">HTTP</span>
+									<span class="badge {% if t.http_status == 'up' %}ju-status-badge--success{% elif t.http_status == 'down' %}ju-status-badge--danger{% else %}ju-status-badge--neutral{% endif %}">HTTP</span>
 									{% endif %}
 									{% if t.enable_cert_expiration %}
-									<span class="badge {% if t.cert_status == 'ok' %}bg-success{% elif t.cert_status == 'warning' %}bg-warning text-dark{% elif t.cert_status in ('critical', 'expired') %}bg-danger{% else %}bg-secondary{% endif %}">Cert</span>
+									<span class="badge {% if t.cert_status == 'ok' %}ju-status-badge--success{% elif t.cert_status == 'warning' %}ju-status-badge--warning{% elif t.cert_status in ('critical', 'expired') %}ju-status-badge--danger{% else %}ju-status-badge--neutral{% endif %}">Cert</span>
 									{% endif %}
 									{% if t.enable_tcp_connect %}
 									{% set port_status = t.tcp_port_status or {} %}
@@ -69,12 +71,12 @@
 									{% set total_count = ports | length %}
 									{% set has_data = port_status | length > 0 %}
 									{% if total_count == 1 %}
-									<span class="badge {% if t.tcp_status == 'up' %}bg-success{% elif t.tcp_status == 'down' %}bg-danger{% else %}bg-secondary{% endif %}" title="TCP Port {{ ports[0] }}">TCP:{{ ports[0] }}</span>
+									<span class="badge {% if t.tcp_status == 'up' %}ju-status-badge--success{% elif t.tcp_status == 'down' %}ju-status-badge--danger{% else %}ju-status-badge--neutral{% endif %}" title="TCP Port {{ ports[0] }}">TCP:{{ ports[0] }}</span>
 									{% else %}
 									{# Multiple ports: show individual port badges #}
 									{% for port in ports %}
 									{% set ps = port_status.get(port | trim, 'unknown') %}
-									<span class="badge {% if ps == 'up' %}bg-success{% elif ps == 'down' %}bg-danger{% else %}bg-secondary{% endif %}" title="TCP Port {{ port | trim }}">TCP:{{ port | trim }}</span>
+									<span class="badge {% if ps == 'up' %}ju-status-badge--success{% elif ps == 'down' %}ju-status-badge--danger{% else %}ju-status-badge--neutral{% endif %}" title="TCP Port {{ port | trim }}">TCP:{{ port | trim }}</span>
 									{% endfor %}
 									{% endif %}
 									{% endif %}

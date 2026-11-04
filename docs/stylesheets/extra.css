@@ -42,6 +42,12 @@ pre,
     font-family: var(--md-code-font-family);
 }
 
+/* The monochrome wordmark follows Material's active application theme. */
+[data-md-color-scheme="slate"] .md-header .md-logo img,
+[data-md-color-scheme="slate"] .justup-docs-logo {
+    filter: invert(1);
+}
+
 /* Grid cards on the home page */
 .grid.cards {
     display: grid;

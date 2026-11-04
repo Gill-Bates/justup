@@ -16,6 +16,10 @@
     letter-spacing: normal;
     text-transform: none;
     display: inline-block;
+    /* Box is independent of the font: the ligature name never widens the layout while the font loads. */
+    width: 1em;
+    height: 1em;
+    overflow: hidden;
     white-space: nowrap;
     word-wrap: normal;
     direction: ltr;

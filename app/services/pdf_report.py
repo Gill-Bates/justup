@@ -28,14 +28,16 @@ import matplotlib as mpl
 mpl.use("Agg")  # Non-interactive backend for server
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
+from matplotlib.lines import Line2D
 from matplotlib.patches import Patch, Rectangle
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4, LETTER
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
-from reportlab.lib.utils import ImageReader, simpleSplit
+from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.pdfbase.ttfonts import ShapedStr, TTFont, shapeStr
 
 # ReportLab embeds the IBM Plex Sans and Material Icons fonts in each PDF.
 from reportlab.platypus import (
@@ -56,7 +58,14 @@ from reportlab.rl_config import defaultPageSize  # noqa: F401 - ensure config is
 from app.services import geo_resolver as gr
 from app.services.flag_images import load_flags, normalize_country_code
 from app.services.mtr_run import analyze_route, resolve_target_ip, run_mtr
-from app.services.pdf_route_map import NO_MAP_NOTE, RouteMap, build_route_map_model
+from app.services.pdf_logo import LogoFlowable, draw_logo, logo_aspect
+from app.services.pdf_route_map import (
+    DESTINATION_COLOR,
+    NO_MAP_NOTE,
+    RouteMap,
+    build_route_map_model,
+    draw_destination_diamond,
+)
 from app.services.provider_lookup import lookup_provider_info
 from app.services.route_interpolator import (
     collapse_interpolated_hops,
@@ -67,13 +76,16 @@ from app.services.route_timeline import (
     build_route_timeline,
     expand_sequence_hops,
     group_timeline_nodes,
+    mapped_hop_numbers,
     timeline_measurement,
 )
 from app.services.traceroute_geo import (
     geolocate_with_hostname_hint,
+    location_view,
     mtr_hops_to_geo_points,
 )
 from app.utils.ssrf import redact_url
+from app.utils.status_palette import STATUS_PALETTE
 from app.utils.tls_model import Check, ScanStatus, TlsScanResult, Verdict
 from app.utils.tls_scanner import scan_tls
 from app.utils.uptime_metric import uptime_level
@@ -123,30 +135,34 @@ _PDF_LOCK = threading.Lock()
 
 FONT_DIR = Path(__file__).parent.parent / "static" / "fonts"
 STATIC_DIR = Path(__file__).parent.parent / "static"
+_PDF_TLS_SCAN_DEADLINE_SECONDS = 60.0
 
 # Colors matching the justUp theme
 COLORS = {
-    "primary": colors.HexColor("#198754"),
+    "primary": colors.HexColor(STATUS_PALETTE["success"].background),
     "dark": colors.HexColor("#212529"),
-    "muted": colors.HexColor("#6c757d"),
+    "muted": colors.HexColor(STATUS_PALETTE["neutral"].background),
+    "neutral": colors.HexColor(STATUS_PALETTE["neutral"].background),
+    "neutral_text": colors.HexColor(STATUS_PALETTE["neutral"].text),
     "light": colors.HexColor("#f8f9fa"),
     "white": colors.white,
     "divider": colors.HexColor("#e9ecef"),
-    "danger": colors.HexColor("#dc3545"),
-    "warning": colors.HexColor("#ffc107"),
-    "success": colors.HexColor("#198754"),
-    "info": colors.HexColor("#0dcaf0"),
+    "danger": colors.HexColor(STATUS_PALETTE["danger"].background),
+    "warning": colors.HexColor(STATUS_PALETTE["warning"].background),
+    "success": colors.HexColor(STATUS_PALETTE["success"].background),
+    "info": colors.HexColor(STATUS_PALETTE["info"].background),
+    "info_text": colors.HexColor(STATUS_PALETTE["info"].text),
     # Print palette: dark blue structure, green/yellow/red for state
     "navy": colors.HexColor("#12294a"),
     "navy_mid": colors.HexColor("#2b4a7a"),
     "navy_soft": colors.HexColor("#e8eef7"),
     "surface": colors.HexColor("#f4f6fa"),
     "success_soft": colors.HexColor("#e6f4ec"),
-    "success_text": colors.HexColor("#146c43"),
+    "success_text": colors.HexColor(STATUS_PALETTE["success"].text),
     "warning_soft": colors.HexColor("#fff4d6"),
-    "warning_text": colors.HexColor("#8a5a00"),
+    "warning_text": colors.HexColor(STATUS_PALETTE["warning"].text),
     "danger_soft": colors.HexColor("#fdeaec"),
-    "danger_text": colors.HexColor("#b02a37"),
+    "danger_text": colors.HexColor(STATUS_PALETTE["danger"].text),
     "unknown_soft": colors.HexColor("#e3e7ec"),
 }
 
@@ -262,25 +278,37 @@ def _run_mtr_with_interpolation(
         destination_geo=destination_geo,
     )
 
-    # Merge geo data back into hops for display (city, country)
-    # Similar to frontend enrichment in frontend.py
     geo_by_ip: dict[str, dict] = {}
     for p in geo_points:
         geo_by_ip.setdefault(p.get("ip"), p)
+    mapped_hops = mapped_hop_numbers(geo_points)
+    view_by_ip: dict[str, dict] = {}
 
     enriched_hops = []
     for h in interpolated_hops:
         hop_data = dict(h)
         ip = h.get("ip")
-        geo = geo_by_ip.get(ip) if ip else None
-
-        # If not in geo_points (deduplicated), resolve directly
-        if not geo and ip and ip not in ("*", "-", "???", "—"):
-            geo = geolocate_with_hostname_hint(ip, h.get("hostname"))
-
-        if geo:
-            hop_data["city"] = geo.get("city")
-            hop_data["country"] = geo.get("country")
+        if (
+            ip
+            and ip not in ("*", "-", "???", "—")
+            and h.get("status") not in ("timeout", "interpolated")
+            and not h.get("_interpolated")
+        ):
+            if ip not in view_by_ip:
+                geo = destination_geo if target_ip and ip == target_ip else geo_by_ip.get(ip)
+                if not geo:
+                    geo = geolocate_with_hostname_hint(ip, h.get("hostname"))
+                view_by_ip[ip] = location_view(geo)
+            view = view_by_ip[ip]
+            hop_data["city"] = view["city"]
+            hop_data["country"] = view["country"]
+            hop_data["loc_precision"] = view["precision"]
+        try:
+            hop_data["on_map"] = int(h.get("hop")) in mapped_hops
+        except (TypeError, ValueError):
+            hop_data["on_map"] = False
+        if target_ip and ip == target_ip:
+            hop_data["_destination"] = True
 
         enriched_hops.append(hop_data)
 
@@ -361,6 +389,85 @@ _fonts_registered = False
 _fonts_lock = threading.Lock()
 
 
+def _require_shaping(font_name: str) -> None:
+    """Fail before PDF generation if the required font cannot be shaped."""
+    font = pdfmetrics.getFont(font_name)
+    if not font.shapable:
+        msg = f"PDF font shaping is unavailable for {font_name}; install uharfbuzz and check the font file"
+        raise RuntimeError(msg)
+
+
+def _shaped_text(text: str, font_name: str, font_size: float) -> ShapedStr:
+    _require_shaping(font_name)
+    glyphs = pdfmetrics.getFont(font_name).face.charToGlyph
+    missing = sorted({char for char in text if ord(char) not in glyphs})
+    if missing:
+        msg = f"PDF font {font_name} lacks glyphs for: {', '.join(f'U+{ord(char):04X}' for char in missing)}"
+        raise ValueError(msg)
+    shaped = shapeStr(text, font_name, font_size, force=True)
+    if not isinstance(shaped, ShapedStr):
+        msg = f"PDF font shaping failed for {font_name}"
+        raise RuntimeError(msg)
+    return shaped
+
+
+def _text_width(text: str, font_name: str, font_size: float) -> float:
+    if not text:
+        return 0.0
+    shaped = _shaped_text(text, font_name, font_size)
+    return sum(glyph.x_advance for glyph in shaped.__shapeData__) * font_size / 1000
+
+
+def _draw_text(canvas, x: float, y: float, text: str, *, align: str = "left") -> None:
+    if not text:
+        return
+    font_name = canvas._fontname  # noqa: SLF001
+    font_size = canvas._fontsize  # noqa: SLF001
+    shaped = _shaped_text(text, font_name, font_size)
+    width = sum(glyph.x_advance for glyph in shaped.__shapeData__) * font_size / 1000
+    if align == "center":
+        x -= width / 2
+    elif align == "right":
+        x -= width
+    canvas.drawString(x, y, shaped)
+
+
+def _paragraph_style(
+    name: str, *, font_name: str | None = None, parent: ParagraphStyle | None = None, **kwargs
+) -> ParagraphStyle:
+    font_name = font_name or (parent.fontName if parent else None)
+    if font_name is None:
+        msg = f"PDF paragraph style {name} has no font"
+        raise RuntimeError(msg)
+    _require_shaping(font_name)
+    return ParagraphStyle(name, parent=parent, fontName=font_name, shaping=1, **kwargs)
+
+
+def _table_style(commands: list[tuple]) -> TableStyle:
+    return TableStyle([("SHAPING", (0, 0), (-1, -1), 1), *commands])
+
+
+def _split_text(text: str, font_name: str, font_size: float, max_width: float) -> list[str]:
+    lines: list[str] = []
+    current = ""
+    for word in text.split():
+        candidate = f"{current} {word}" if current else word
+        if _text_width(candidate, font_name, font_size) <= max_width:
+            current = candidate
+            continue
+        if current:
+            lines.append(current)
+            current = ""
+        for char in word:
+            if current and _text_width(current + char, font_name, font_size) > max_width:
+                lines.append(current)
+                current = ""
+            current += char
+    if current:
+        lines.append(current)
+    return lines
+
+
 def _register_fonts() -> None:
     """Register IBM Plex Sans fonts with ReportLab (thread-safe)."""
     global _fonts_registered
@@ -385,6 +492,8 @@ def _register_fonts() -> None:
                 raise FileNotFoundError(f"Required PDF font is missing: {path}")
             font = TTFont(name, str(path))
             pdfmetrics.registerFont(font)
+            if name != "MaterialIcons":
+                _require_shaping(name)
 
         pdfmetrics.registerFontFamily(
             "IBMPlexSans",
@@ -571,11 +680,15 @@ def _break_gaps(ts: list[datetime], vals: list[float]) -> tuple[list[datetime], 
     return out_t, out_v
 
 
-def _plot_series(ax, ts: list[datetime], vals: list[float], color: str) -> Any:
-    """Plot a measured series: gaps stay open, isolated samples get a marker."""
+def _plot_series(
+    ax, ts: list[datetime], vals: list[float], color: str, *, ymax: float | None = None, label: str = "Measured"
+) -> Any:
+    """Plot a measured series: gaps stay open, isolated samples get a marker, values above ymax sit on the edge."""
     bt, bv = _break_gaps(ts, vals)
+    if ymax is not None:
+        bv = [min(v, ymax) for v in bv]
     ax.fill_between(bt, bv, alpha=0.14, color=color, linewidth=0)
-    (line,) = ax.plot(bt, bv, color=color, linewidth=1.1, label="Measured")
+    (line,) = ax.plot(bt, bv, color=color, linewidth=1.1, label=label)
     iso_t = [
         bt[i]
         for i in range(len(bt))
@@ -595,7 +708,238 @@ def _style_axes(ax, *, from_date: datetime, to_date: datetime) -> None:
     _format_time_axis(ax, from_date=from_date, to_date=to_date)
 
 
+# ---------------------------------------------------------------------------
+# Latency scale and peaks
+# ---------------------------------------------------------------------------
+
+PEAK_COLOR = "#b02a5b"  # solid interval bars; the SLA line stays orange and dashed
+_MAX_PEAK_MARKS = 6
+_PEAK_LABEL = "Peak within interval (bucket maximum)"
+_ABOVE_LABEL = "Above scale (value labelled)"
+# An SLA line widens the Y axis only when it is within this factor of the plotted data; a distant
+# threshold is marked at the top edge instead of compressing the normal latencies.
+_SLA_SCALE_FACTOR = 2.5
+
+
+@dataclass(frozen=True)
+class _Peak:
+    """Highest check inside one display interval; the exact moment inside it is unknown."""
+
+    start: datetime
+    end: datetime
+    value: float
+    median: float
+
+
+@dataclass
+class _LatencyView:
+    ts: list[datetime]
+    vals: list[float]
+    peaks: list[_Peak]  # notable peaks, highest first
+    highest_max: float | None  # highest interval maximum, notable or not
+    intervals: int
+    no_max_intervals: int  # intervals without a maximum (rolled-up history, plain samples)
+    has_intervals: bool
+    cap: float  # values above this never stretch the Y axis
+
+
+def _percentile(sorted_values: list[float], q: float) -> float:
+    return sorted_values[int((len(sorted_values) - 1) * q)]
+
+
+def _build_view(data: list[dict], tz: tzinfo) -> _LatencyView:
+    """Parse display points; select peaks by prominence instead of a fixed ratio to the median."""
+    ts, vals = _parse_series(data, tz)
+    valid = sorted(v for v in vals if not math.isnan(v))
+    typical = _percentile(valid, 0.95) if valid else 1.0
+    cap = max(typical * 3, 1.0)
+
+    candidates: list[_Peak] = []
+    maxes: list[float] = []
+    no_max = 0
+    for p in data:
+        peak, median = _num(p.get("max")), _num(p.get("value"))
+        end_raw = p.get("bucket_end")
+        if peak is None or median is None or not end_raw:
+            no_max += 1
+            continue
+        maxes.append(peak)
+        if peak > median:
+            start = _to_tz(datetime.fromisoformat(p["ts"]), tz)
+            candidates.append(_Peak(start, _to_tz(datetime.fromisoformat(end_raw), tz), peak, median))
+
+    notable: list[_Peak] = []
+    if candidates:
+        ordered = sorted(maxes)
+        q1, q3 = _percentile(ordered, 0.25), _percentile(ordered, 0.75)
+        fence = max(q3 + 1.5 * (q3 - q1), 1.5 * _percentile(valid, 0.5))
+        notable = sorted(
+            (c for c in candidates if c.value > fence and c.value >= c.median * 1.5 and c.value - c.median >= 1.0),
+            key=lambda c: c.value,
+            reverse=True,
+        )
+    return _LatencyView(
+        ts=ts,
+        vals=vals,
+        peaks=notable,
+        highest_max=max(maxes) if maxes else None,
+        intervals=len(data),
+        no_max_intervals=no_max,
+        has_intervals=bool(maxes),
+        cap=cap,
+    )
+
+
+def _nice_ticks(top: float, target: int = 5) -> list[float]:
+    """Ticks 0..top on a 1/2/5 (or 2.5 above 10) step, so labels stay short integers where possible."""
+    top = max(top, 1.0)
+    raw = top / target
+    mag = 10 ** math.floor(math.log10(raw))
+    steps = [m * mag for m in (1, 2, 2.5, 5, 10) if m != 2.5 or mag >= 10]
+    step = next(s for s in steps if s >= raw)
+    count = math.ceil(top / step - 1e-9)
+    return [round(i * step, 6) for i in range(count + 1)]
+
+
+def _axis_scale(views: list[_LatencyView], sla_ms: float | None = None, target: int = 5) -> tuple[float, list[float]]:
+    """Linear Y range for the normal latencies; extreme values are handled as overflow, not by a log scale."""
+    visible = [
+        v
+        for view in views
+        for v in (*(x for x in view.vals if not math.isnan(x)), *(p.value for p in view.peaks))
+        if v <= view.cap
+    ]
+    top = max(visible, default=1.0)
+    if sla_ms and sla_ms <= top * _SLA_SCALE_FACTOR:
+        top = max(top, float(sla_ms))
+    ticks = _nice_ticks(top * 1.08, target)
+    return ticks[-1], ticks
+
+
+def _fmt_tick(step: float):
+    return (lambda v, _pos: f"{v:,.0f}") if step >= 1 else (lambda v, _pos: f"{v:g}")
+
+
+def _ports_share_scale(views: list[_LatencyView]) -> bool:
+    """One common Y range when the ports are comparable; otherwise a flat port would be unreadable."""
+    tops = [_axis_scale([v])[0] for v in views]
+    return max(tops) <= 8 * min(tops)
+
+
+def _fmt_ms_value(value: float) -> str:
+    return f"{value:,.0f} ms" if value >= 10 else f"{value:,.1f} ms"
+
+
+def _fmt_interval(start: datetime, end: datetime) -> str:
+    same_day = start.date() == end.date()
+    return f"{start:%m-%d %H:%M}–{end:%H:%M}" if same_day else f"{start:%m-%d %H:%M}–{end:%m-%d %H:%M}"
+
+
+def _peak_text(peak: _Peak, tz: tzinfo) -> str:
+    return f"{_fmt_ms_value(peak.value)} ({_fmt_interval(peak.start.astimezone(tz), peak.end.astimezone(tz))})"
+
+
+def _overflow_values(view: _LatencyView, top: float) -> list[float]:
+    medians = [v for v in view.vals if not math.isnan(v) and v > top]
+    return medians + [p.value for p in view.peaks if p.value > top]
+
+
+def _draw_latency(
+    ax,
+    view: _LatencyView,
+    color: str,
+    *,
+    top: float,
+    from_date: datetime,
+    to_date: datetime,
+    max_labels: int = 3,
+) -> list[Any]:
+    """Draw median line, peak bars and above-scale markers on a prepared linear axis; returns legend handles."""
+    span = to_date - from_date
+    label = "Median per interval" if view.has_intervals else "Measured"
+    handles = [_plot_series(ax, view.ts, view.vals, color, ymax=top, label=label)]
+    marks: list[tuple[datetime, float, float]] = []  # x, drawn y, real value
+    for p in view.peaks[:_MAX_PEAK_MARKS]:
+        centre = p.start + (p.end - p.start) / 2
+        y = min(p.value, top)
+        # The bar spans only the real interval; a thin stem and a point marker keep it visible without
+        # implying a longer event than the aggregation interval.
+        ax.hlines(y, p.start, p.end, color=PEAK_COLOR, linewidth=1.6, zorder=4)
+        ax.vlines(centre, min(p.median, y), y, color=PEAK_COLOR, linewidth=0.9, zorder=4)
+        ax.plot([centre], [y], linestyle="none", marker="o", markersize=2.8, color=PEAK_COLOR, zorder=4)
+        marks.append((centre, y, p.value))
+    if view.peaks:
+        handles.append(Line2D([], [], color=PEAK_COLOR, linewidth=0.9, marker="o", markersize=2.8, label=_PEAK_LABEL))
+    median_over = [(t, top, v) for t, v in zip(view.ts, view.vals, strict=True) if not math.isnan(v) and v > top]
+    over_marks = median_over + [m for m in marks if m[2] > top]
+    if over_marks:
+        ax.plot(
+            [m[0] for m in over_marks],
+            [top] * len(over_marks),
+            linestyle="none",
+            marker="^",
+            markersize=4,
+            color="#343a40",
+            zorder=5,
+            clip_on=False,
+        )
+        handles.append(Line2D([], [], linestyle="none", marker="^", markersize=4, color="#343a40", label=_ABOVE_LABEL))
+    # Label the highest marks first and skip any that would sit on an already labelled one.
+    labelled: list[datetime] = []
+    for x, y, real in sorted([*marks, *median_over], key=lambda m: -m[2]):
+        if len(labelled) >= max_labels or any(abs(x - other) < span * 0.12 for other in labelled):
+            continue
+        labelled.append(x)
+        frac = (x - from_date) / span if span else 0.5
+        high = y >= top * 0.88
+        ax.annotate(
+            _fmt_ms_value(real),
+            (x, y),
+            xytext=(-4 if frac > 0.5 else 4, -4 if high else 4),
+            textcoords="offset points",
+            ha="right" if frac > 0.5 else "left",  # beside the peak stem, never across it
+            va="top" if high else "bottom",
+            fontsize=7,
+            color=PEAK_COLOR if real > view.cap else "#343a40",
+            annotation_clip=False,
+        )
+    return handles
+
+
+def _y_axis(ax, ticks: list[float], top: float, *, label: str | None = None) -> None:
+    ax.set_ylim(0, top)
+    ax.set_yticks(ticks)
+    step = ticks[1] - ticks[0] if len(ticks) > 1 else 1.0
+    ax.yaxis.set_major_formatter(mticker.FuncFormatter(_fmt_tick(step)))
+    if label:
+        ax.set_ylabel(label, fontsize=8, color="#495057")
+
+
+def _left_margin(ticks: list[float], width: float, has_label: bool = True) -> float:
+    """Figure fraction for the Y tick labels and optional side title, derived from the widest tick label."""
+    step = ticks[1] - ticks[0] if len(ticks) > 1 else 1.0
+    chars = max(len(_fmt_tick(step)(t, 0)) for t in ticks)
+    return min(0.25, (0.14 + 0.075 * chars + (0.22 if has_label else 0)) / width)
+
+
+def _keep_tick_labels_inside(fig) -> None:
+    """Axes run edge to edge; a tick label at the border is aligned inward instead of being clipped."""
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    width = fig.bbox.width
+    for ax in fig.axes:
+        for label in ax.get_xticklabels():
+            if not label.get_visible() or not label.get_text():
+                continue
+            box = label.get_window_extent(renderer)
+            if box.x0 < 0:
+                label.set_ha("left")
+            elif box.x1 > width:
+                label.set_ha("right")
+
+
 def _fig_png(fig) -> bytes:
+    _keep_tick_labels_inside(fig)
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=PDF_DPI, facecolor="white", edgecolor="none", bbox_inches=None, pad_inches=0)
     return buf.getvalue()
@@ -612,68 +956,87 @@ def _create_line_chart(
     height: float,
     sla_threshold_ms: int | None = None,
     threshold_label: str | None = None,
+    legend_below: bool = False,
 ) -> bytes | None:
     """Create a latency time-series chart; measurements and the SLA threshold are drawn distinctly."""
     if not data:
         return None
     tz = _report_tz(from_date)
-    ts, vals = _parse_series(data, tz)
+    vals = _parse_series(data, tz)[1]
     valid = [v for v in vals if not math.isnan(v)]
     if not valid:
         return None
 
     _setup_matplotlib_style()
+    view = _build_view(data, tz)
+    top, ticks = _axis_scale([view], sla_threshold_ms)
     with _safe_figure(figsize=(width, height)) as (fig, ax):
-        handles = [_plot_series(ax, ts, vals, color)]
-        peaks = [
-            (_to_tz(datetime.fromisoformat(p["ts"]), tz), float(p["max"]))
-            for p in data
-            if p.get("max") is not None
-            and _num(p.get("max")) is not None
-            and _num(p.get("value")) is not None
-            and float(p["max"]) > float(p["value"]) * 2
-        ]
-        if peaks:
-            handles.append(
-                ax.scatter(
-                    [t for t, _ in peaks],
-                    [v for _, v in peaks],
-                    color=CHART_COLORS["sla"],
-                    marker="^",
-                    s=14,
-                    label="Raw peak",
-                )
-            )
-        full_max = max(valid + [v for _, v in peaks])
-        linear_limit = max(1.0, sorted(valid)[int((len(valid) - 1) * 0.9)] * 1.5)
-        if full_max > linear_limit * 2:
-            ax.set_yscale("symlog", linthresh=linear_limit)
-            ylabel += f" (linear to {linear_limit:.0f}, log above)"
-        y_max = full_max * 1.12 or 1.0
+        handles = _draw_latency(ax, view, color, top=top, from_date=from_date, to_date=to_date)
         if sla_threshold_ms:
-            y_max = max(y_max, sla_threshold_ms * 1.12)
-            handles.append(
-                ax.axhline(
-                    sla_threshold_ms,
-                    linestyle=(0, (5, 3)),
-                    linewidth=1.1,
-                    color=CHART_COLORS["sla"],
-                    label=threshold_label or f"SLA threshold ({sla_threshold_ms} ms)",
+            sla_label = threshold_label or f"SLA threshold ({sla_threshold_ms} ms)"
+            if sla_threshold_ms <= top:
+                handles.append(
+                    ax.axhline(
+                        sla_threshold_ms,
+                        linestyle=(0, (5, 3)),
+                        linewidth=1.1,
+                        color=CHART_COLORS["sla"],
+                        label=sla_label,
+                    )
                 )
-            )
-        ax.set_ylim(0, y_max)
-        ax.set_ylabel(ylabel, fontsize=8, color="#495057")
+            else:  # far above the data: keep the scale readable, mark the edge and say so in the legend
+                handles.append(
+                    Line2D([], [], linestyle=(0, (5, 3)), color=CHART_COLORS["sla"], label=f"{sla_label} – above scale")
+                )
+                ax.plot(
+                    [1.0],
+                    [1.0],
+                    transform=ax.transAxes,
+                    linestyle="none",
+                    marker="^",
+                    markersize=4,
+                    color=CHART_COLORS["sla"],
+                    clip_on=False,
+                    zorder=5,
+                )
+                ax.annotate(
+                    f"SLA {sla_threshold_ms:,} ms (above scale)",
+                    xy=(1.0, 1.0),
+                    xycoords="axes fraction",
+                    xytext=(-7, -2),
+                    textcoords="offset points",
+                    ha="right",
+                    va="top",
+                    fontsize=7,
+                    color="#8a5200",
+                    annotation_clip=False,
+                )
+        _y_axis(ax, ticks, top, label=ylabel)
+        ax.yaxis.label.set_rotation(0)
+        ax.yaxis.label.set_horizontalalignment("left")
+        ax.yaxis.label.set_verticalalignment("bottom")
         _style_axes(ax, from_date=from_date, to_date=to_date)
+        legend_position = (
+            {"loc": "upper center", "bbox_to_anchor": (0.5, -0.26)}
+            if legend_below
+            else {
+                "loc": "lower right",
+                "bbox_to_anchor": (1.0, 1.0),
+            }
+        )
         ax.legend(
             handles=handles,
-            loc="lower right",
-            bbox_to_anchor=(1.0, 1.0),
-            ncol=len(handles),
+            **legend_position,
+            ncol=len(handles) if len(handles) <= 3 else 2,
             frameon=False,
             fontsize=8,
             borderaxespad=0.2,
         )
-        fig.subplots_adjust(left=0.085, right=0.96, top=0.88, bottom=0.31)
+        top_edge = 0.98 if legend_below else 0.88 if len(handles) <= 3 else 0.82
+        left = _left_margin(ticks, width, has_label=False)
+        fig.subplots_adjust(left=left, right=1.0, top=top_edge, bottom=0.31)
+        # Put the unit above the plot so the axis needs space only for its tick labels.
+        ax.yaxis.set_label_coords(0.0, 1.02)
         return _fig_png(fig)
 
 
@@ -697,6 +1060,7 @@ def _create_response_time_chart(
         height=height,
         sla_threshold_ms=sla_threshold_ms,
         threshold_label=threshold_label,
+        legend_below=True,
     )
 
 
@@ -790,7 +1154,7 @@ def _create_uptime_chart(
             fontsize=8,
             borderaxespad=0.2,
         )
-        fig.subplots_adjust(left=0.03, right=0.96, top=0.80, bottom=0.42)
+        fig.subplots_adjust(left=0.0, right=1.0, top=0.80, bottom=0.42)
         return _fig_png(fig)
 
 
@@ -858,7 +1222,7 @@ def _create_coverage_bar(
             fontsize=8,
             borderaxespad=0.2,
         )
-        fig.subplots_adjust(left=0.03, right=0.96, top=0.62, bottom=0.42)
+        fig.subplots_adjust(left=0.0, right=1.0, top=0.62, bottom=0.42)
         return _fig_png(fig)
 
 
@@ -888,35 +1252,22 @@ def _create_multi_port_tcp_chart(
     if height is None:
         height = min(7.5, max(1.9, num_ports * 1.0 + 0.6))
 
+    views = {port: _build_view(port_data[port], tz) for port in sorted_ports}
+    shared = _ports_share_scale(list(views.values()))
+    scales = {port: _axis_scale(list(views.values()) if shared else [views[port]], target=3) for port in sorted_ports}
+    widest = max(
+        (s[1] for s in scales.values()), key=lambda t: len(_fmt_tick(1 if len(t) < 2 else t[1] - t[0])(t[-1], 0))
+    )
+
     with _safe_figure(nrows=num_ports, ncols=1, figsize=(width, height), sharex=True, squeeze=False) as (fig, axes):
         flat_axes = axes.flatten()
-        valid_values = [v for _, vals in series.values() for v in vals if not math.isnan(v)]
-        raw_peaks = [
-            float(p["max"])
-            for data in port_data.values()
-            for p in data
-            if p.get("max") is not None and _num(p.get("max")) is not None
-        ]
-        peak = max(valid_values + raw_peaks)
-        y_max = max(10, int(peak * 1.15) + 1)
-        linear_limit = max(1.0, sorted(valid_values)[int((len(valid_values) - 1) * 0.9)] * 1.5)
-
+        handles: dict[str, Any] = {}
         for idx, port in enumerate(sorted_ports):
             ax = flat_axes[idx]
-            ts, vals = series[port]
             color = TCP_PORT_COLORS[idx % len(TCP_PORT_COLORS)]
-            _plot_series(ax, ts, vals, color)
-            markers = [
-                (_to_tz(datetime.fromisoformat(p["ts"]), tz), float(p["max"]))
-                for p in port_data[port]
-                if p.get("max") is not None
-                and _num(p.get("value")) is not None
-                and float(p["max"]) > float(p["value"]) * 2
-            ]
-            if markers:
-                ax.scatter(
-                    [t for t, _ in markers], [v for _, v in markers], color=CHART_COLORS["sla"], marker="^", s=10
-                )
+            top, ticks = scales[port]
+            for h in _draw_latency(ax, views[port], color, top=top, from_date=from_date, to_date=to_date, max_labels=1):
+                handles.setdefault(h.get_label(), h)
             ax.text(
                 0.0,
                 1.04,
@@ -927,20 +1278,28 @@ def _create_multi_port_tcp_chart(
                 color=color,
                 va="bottom",
             )
-            ax.set_ylim(0, y_max)
-            if peak > linear_limit * 2:
-                ax.set_yscale("symlog", linthresh=linear_limit)
-            ax.set_yticks([0, y_max // 2, y_max])
+            _y_axis(ax, ticks, top)
             ax.spines["top"].set_visible(False)
             ax.spines["right"].set_visible(False)
             ax.grid(True, axis="y", alpha=0.6)
             ax.tick_params(axis="both", length=2.5, width=0.5, labelsize=8, colors="#495057")
-            if idx == num_ports // 2:
-                label = f"ms (linear ≤{linear_limit:.0f})" if peak > linear_limit * 2 else "ms"
-                ax.set_ylabel(label, fontsize=8, color="#495057")
 
+        # Median entries differ in colour per port; the legend only explains peaks and overflow markers.
+        legend_handles = [h for k, h in handles.items() if k in (_PEAK_LABEL, _ABOVE_LABEL)]
+        if legend_handles:
+            flat_axes[0].legend(
+                handles=legend_handles,
+                loc="lower right",
+                bbox_to_anchor=(1.0, 1.0),
+                ncol=len(legend_handles),
+                frameon=False,
+                fontsize=8,
+                borderaxespad=0.2,
+            )
         _format_time_axis(flat_axes[-1], from_date=from_date, to_date=to_date)
-        fig.subplots_adjust(left=0.085, right=0.96, top=0.95, bottom=min(0.34, 0.65 / height), hspace=0.6)
+        left = _left_margin(widest, width, has_label=False)
+        fig.text(0.0, 0.99, "TCP latency (ms)", ha="left", va="top", fontsize=8, color="#495057")
+        fig.subplots_adjust(left=left, right=1.0, top=1 - 0.3 / height, bottom=min(0.34, 0.65 / height), hspace=0.6)
         return _fig_png(fig)
 
 
@@ -956,7 +1315,7 @@ def _http_class_label(code: int) -> str:
     return labels[code // 100]
 
 
-_STATUS_CLASS_COLORS = {0: "#7f1d1d", 1: "#6c757d", 2: "#198754", 3: "#e0a800", 4: "#e8590c", 5: "#dc3545"}
+_STATUS_CLASS_COLORS = {0: "#7f1d1d", 1: "#0369a1", 2: "#15803d", 3: "#15803d", 4: "#c2410c", 5: "#b91c1c"}
 
 
 def _status_counts(data: list[dict]) -> dict[int, int]:
@@ -1221,20 +1580,20 @@ class RoundedKPICard(Flowable):
 
         canvas.setFont(self.font_bold, self.label_size)
         canvas.setFillColor(COLORS["muted"])
-        canvas.drawCentredString(w / 2, h - 7.5 * mm, self.label)
+        _draw_text(canvas, w / 2, h - 7.5 * mm, self.label, align="center")
 
         size = self.value_size
         max_width = w - 8 * mm
-        while size > 8 and pdfmetrics.stringWidth(self.value, self.font_bold, size) > max_width:
+        while size > 8 and _text_width(self.value, self.font_bold, size) > max_width:
             size -= 1
         canvas.setFont(self.font_bold, size)
         canvas.setFillColor(self.value_color)
-        canvas.drawCentredString(w / 2, h / 2 - size * 0.18 - (1.5 * mm if self.hint else 0), self.value)
+        _draw_text(canvas, w / 2, h / 2 - size * 0.18 - (1.5 * mm if self.hint else 0), self.value, align="center")
 
         if self.hint:
             canvas.setFont(self.font, 8)
             canvas.setFillColor(COLORS["muted"])
-            canvas.drawCentredString(w / 2, 3.5 * mm, self.hint)
+            _draw_text(canvas, w / 2, 3.5 * mm, self.hint, align="center")
 
         canvas.restoreState()
 
@@ -1269,7 +1628,7 @@ class Badge(Flowable):
         self.corner_radius = corner_radius
 
         # Calculate dimensions based on text width (use bold font for measurement)
-        text_width = pdfmetrics.stringWidth(self.text, self.font, font_size)
+        text_width = _text_width(self.text, self.font, font_size)
         self.badge_width = text_width + 2 * padding_x
         self.badge_height = font_size + 2 * padding_y
 
@@ -1293,7 +1652,7 @@ class Badge(Flowable):
         # Font descender is typically ~20% of font size
         descender = self.font_size * 0.2
         text_y = (self.badge_height - self.font_size) / 2 + descender
-        canvas.drawCentredString(self.badge_width / 2, text_y, self.text)
+        _draw_text(canvas, self.badge_width / 2, text_y, self.text, align="center")
 
         canvas.restoreState()
 
@@ -1437,8 +1796,26 @@ _KIND_COLORS = {
     "success": ("success", "success_soft", "success_text"),
     "warning": ("warning", "warning_soft", "warning_text"),
     "danger": ("danger", "danger_soft", "danger_text"),
-    "unknown": ("muted", "unknown_soft", "muted"),
+    "unknown": ("neutral", "unknown_soft", "neutral_text"),
 }
+
+_PDF_STATUS_VARIANTS = {
+    "pass": "success",
+    "ok": "success",
+    "resolved": "success",
+    "fail": "danger",
+    "down": "danger",
+    "warn": "warning",
+    "partial": "warning",
+    "info": "info",
+}
+
+
+def _pdf_status_badge_colors(kind: str):
+    """Return the shared background and foreground for a PDF status badge."""
+    palette = STATUS_PALETTE[_PDF_STATUS_VARIANTS.get(kind, "neutral")]
+    return colors.HexColor(palette.background), colors.HexColor(palette.foreground)
+
 
 # Highest hop count requested from MTR; a route reaching it may be cut off.
 _MTR_MAX_HOPS = 20
@@ -1492,7 +1869,7 @@ def _pdf_group_key(node: dict[str, Any]) -> str | None:
         return None
     if node["location"] == "unlocated":
         return "unlocated"
-    return f"loc:{node['city']}|{node['country']}" if node["city"] else None
+    return f"loc:{node['city']}|{node['country']}" if node["city"] or node["country"] else None
 
 
 def _build_route_entries(
@@ -1505,8 +1882,13 @@ def _build_route_entries(
     """
     seq = expand_sequence_hops(display_hops)
     by_hop = {n: hop for hop in seq if (n := _hop_number(hop)) is not None}
-    # The PDF shows no derived positions, so only measured hops with a city count as located.
-    located = {n for n, hop in by_hop.items() if hop.get("city") and timeline_measurement(hop) == "measured"}
+    # Country-only entries still have a known location. The PDF does not draw its derived center,
+    # but must preserve the country in the timeline instead of labelling it "Location unknown".
+    located = {
+        n
+        for n, hop in by_hop.items()
+        if (hop.get("city") or hop.get("country")) and timeline_measurement(hop) == "measured"
+    }
     model = build_route_timeline(seq, located, target_ip, None)
     flat = model["flat_nodes"]
     known_destination = bool(target_ip) or any(
@@ -1602,8 +1984,8 @@ class RouteDiagram(Flowable):
     """Directed vertical route: one continuous line with arrows, collapsed runs and clear states.
 
     State is carried by marker shape and line style as well as color, so the diagram survives
-    greyscale printing: filled dot = measured, dashed hollow dot = no reply, double ring =
-    destination reached, crossed ring = destination not reached, capsule = collapsed run.
+    greyscale printing: filled dot = measured, dashed hollow dot = no reply, diamond "D" =
+    destination reached (as on the route map), diamond "×" = destination not reached.
     """
 
     _X_HOP = 11 * mm  # right edge of the hop-number column
@@ -1644,7 +2026,7 @@ class RouteDiagram(Flowable):
             for n, detail in enumerate(entry["detail"]):
                 if detail_flag and detail_flag[0] == n:
                     flag_line = len(lines)
-                lines.extend(simpleSplit(detail, font, _ROUTE_FONT_BODY, text_w) or [""])
+                lines.extend(_split_text(detail, font, _ROUTE_FONT_BODY, text_w) or [""])
             self._lines.append(lines)
             self._flag_lines.append(flag_line)
         self._heights = [self._PAD + self._LEAD * (1 + len(lines)) for lines in self._lines]
@@ -1701,19 +2083,10 @@ class RouteDiagram(Flowable):
             canvas.setFillColor(colors.white)
             canvas.setDash([1.6, 1.4])
             canvas.circle(cx, cy, 1.9 * mm, fill=1, stroke=1)
-        elif state == "destination":
-            canvas.setStrokeColor(COLORS["success"])
-            canvas.setFillColor(colors.white)
-            canvas.circle(cx, cy, 2.5 * mm, fill=1, stroke=1)
-            canvas.setFillColor(COLORS["success"])
-            canvas.circle(cx, cy, 1.2 * mm, fill=1, stroke=0)
+        elif state == "destination":  # same diamond "D" as on the route map
+            draw_destination_diamond(canvas, cx, cy, 2.9 * mm, DESTINATION_COLOR, self.font_bold, 7.5)
         elif state == "unreached":
-            canvas.setStrokeColor(COLORS["danger"])
-            canvas.setFillColor(colors.white)
-            canvas.circle(cx, cy, 2.5 * mm, fill=1, stroke=1)
-            r = 1.2 * mm
-            canvas.line(cx - r, cy - r, cx + r, cy + r)
-            canvas.line(cx - r, cy + r, cx + r, cy - r)
+            draw_destination_diamond(canvas, cx, cy, 2.9 * mm, COLORS["danger"], self.font_bold, 7.5, glyph="×")
         else:
             canvas.setStrokeColor(navy)
             canvas.setFillColor(navy)
@@ -1754,7 +2127,7 @@ class RouteDiagram(Flowable):
             if self.continued
             else self.header
         )
-        canvas.drawString(0, y - 5 * mm, title)
+        _draw_text(canvas, 0, y - 5 * mm, title)
         y -= self._head_h
         if self.continued:
             self._arrow(canvas, self._X_LINE, y + 1.5 * mm, y - self._PAD / 2 - self._LEAD * 0.55 + 2.6 * mm, False)
@@ -1771,16 +2144,16 @@ class RouteDiagram(Flowable):
             self._marker(canvas, entry["state"], self._X_LINE, cy)
             canvas.setFillColor(COLORS["muted"] if muted else COLORS["navy"])
             canvas.setFont(self.font_bold, _ROUTE_FONT_BODY)
-            canvas.drawRightString(self._X_HOP, cy - 1 * mm, entry["span"])
+            _draw_text(canvas, self._X_HOP, cy - 1 * mm, entry["span"], align="right")
             canvas.setFont(self.font_bold, _ROUTE_FONT_TITLE)
             title_color = COLORS["danger_text"] if entry["state"] == "unreached" else COLORS["navy"]
             canvas.setFillColor(COLORS["muted"] if muted else title_color)
             title_x = self._X_TEXT + self._flag(canvas, entry.get("flag"), self._X_TEXT, cy - 1 * mm)
-            canvas.drawString(title_x, cy - 1 * mm, entry["title"])
+            _draw_text(canvas, title_x, cy - 1 * mm, entry["title"])
             if entry["right"]:
                 canvas.setFont(self.font, _ROUTE_FONT_BODY)
                 canvas.setFillColor(COLORS["dark"])
-                canvas.drawRightString(self.width, cy - 1 * mm, entry["right"])
+                _draw_text(canvas, self.width, cy - 1 * mm, entry["right"], align="right")
             canvas.setFont(self.font, _ROUTE_FONT_BODY)
             canvas.setFillColor(COLORS["muted"] if muted else COLORS["dark"])
             detail_flag = entry.get("detail_flag")
@@ -1789,12 +2162,12 @@ class RouteDiagram(Flowable):
                 x_line = self._X_TEXT
                 if detail_flag and n - 1 == flag_line:
                     x_line += self._flag(canvas, detail_flag[1], self._X_TEXT, y_line)
-                canvas.drawString(x_line, y_line, line)
+                _draw_text(canvas, x_line, y_line, line)
         if self.continues:
             self._arrow(canvas, self._X_LINE, centers[-1] - 2.8 * mm, 3 * mm - 1 * mm, False)
             canvas.setFont(self.font_bold, _ROUTE_FONT_BODY)
             canvas.setFillColor(COLORS["navy"])
-            canvas.drawString(self._X_TEXT, 3 * mm, f"Route continues on the next page at hop {self.continues}")
+            _draw_text(canvas, self._X_TEXT, 3 * mm, f"Route continues on the next page at hop {self.continues}")
             canvas.restoreState()
             return
         # Legend: the same marker shapes, named
@@ -1808,8 +2181,8 @@ class RouteDiagram(Flowable):
             self._marker(canvas, shown, x + 2.6 * mm, ly + 1 * mm)
             canvas.setFillColor(COLORS["dark"])
             text = "Destination not reached" if shown == "unreached" else label
-            canvas.drawString(x + 6.5 * mm, ly, text)
-            x += 8 * mm + pdfmetrics.stringWidth(text, self.font, _ROUTE_FONT_BODY) + 6 * mm
+            _draw_text(canvas, x + 6.5 * mm, ly, text)
+            x += 8 * mm + _text_width(text, self.font, _ROUTE_FONT_BODY) + 6 * mm
         canvas.restoreState()
 
 
@@ -1922,7 +2295,7 @@ class PDFReportBuilder:
 
         def ps(name: str, *, bold: bool = False, **kw) -> ParagraphStyle:
             kw.setdefault("textColor", COLORS["dark"])
-            return ParagraphStyle(name, fontName=self.font_bold if bold else self.font, **kw)
+            return _paragraph_style(name, font_name=self.font_bold if bold else self.font, **kw)
 
         return {
             "chapter_title": ps("ChapterTitle", bold=True, fontSize=22, leading=26, textColor=COLORS["navy"]),
@@ -2068,53 +2441,25 @@ class PDFReportBuilder:
             domain = target.get("ping_host") or target.get("host") or target.get("name", "")
 
         # Footer layout (matching website):
-        # Line 1: heartbeat + justUp! v<VERSION> | © <YEAR> Gill-Bates | Lightweight Uptime Monitor
+        # Line 1: wordmark + v<VERSION> | © <YEAR> Gill-Bates | Lightweight Uptime Monitor
         # Line 2: Domain | Report generated at timestamp
 
-        # Draw simple heartbeat line (stylized)
-        canvas.setStrokeColor(COLORS["muted"])
-        canvas.setLineWidth(0.75)
-        hb_x = self.margin
-        hb_y = 12 * mm
-        # Simple heartbeat pattern: _/\_/\_
-        canvas.line(hb_x, hb_y, hb_x + 4 * mm, hb_y)
-        canvas.line(hb_x + 4 * mm, hb_y, hb_x + 5 * mm, hb_y + 2 * mm)
-        canvas.line(hb_x + 5 * mm, hb_y + 2 * mm, hb_x + 6 * mm, hb_y - 2 * mm)
-        canvas.line(hb_x + 6 * mm, hb_y - 2 * mm, hb_x + 7 * mm, hb_y + 1 * mm)
-        canvas.line(hb_x + 7 * mm, hb_y + 1 * mm, hb_x + 8 * mm, hb_y)
-        canvas.line(hb_x + 8 * mm, hb_y, hb_x + 12 * mm, hb_y)
-
-        # justUp! Logo (40% transparency)
-        logo_path = STATIC_DIR / "justup_1c.png"
-        logo_height = 4 * mm
-        logo_width = logo_height * 3.5  # Approximate aspect ratio
-        logo_x = hb_x + 13 * mm
-        if logo_path.exists():
-            canvas.saveState()
-            canvas.setFillAlpha(0.6)  # 40% transparency = 60% opacity
-            canvas.drawImage(
-                str(logo_path),
-                logo_x,
-                10.0 * mm,
-                width=logo_width,
-                height=logo_height,
-                preserveAspectRatio=True,
-                anchor="sw",
-                mask="auto",
-            )
-            canvas.restoreState()
-
+        # justUp! wordmark (40% transparency), shared with the web app
+        logo_x = self.margin
+        logo_height = 4.5 * mm
+        logo_width = logo_height / logo_aspect()
+        draw_logo(canvas, logo_x, 10.0 * mm, logo_width, alpha=0.6)
         canvas.setFont(self.font, 8)
         canvas.setFillColor(COLORS["muted"])
         now = datetime.now(tz=UTC)
         build_suffix = f" ({BUILD_INFO[:7]})" if BUILD_INFO and BUILD_INFO != "dev" else ""
         footer_text = f"v{VERSION}{build_suffix} | © {now.year} Gill-Bates | Lightweight Uptime Monitor | "
-        footer_text_x = logo_x + logo_width - 2 * mm
-        canvas.drawString(footer_text_x, 11 * mm, footer_text)
+        footer_text_x = logo_x + logo_width + 2 * mm
+        _draw_text(canvas, footer_text_x, 11 * mm, footer_text)
 
         # GitHub link (after footer text)
         github_url = "https://github.com/Gill-Bates/justUp"
-        footer_text_width = canvas.stringWidth(footer_text, self.font, 8)
+        footer_text_width = _text_width(footer_text, self.font, 8)
         github_x = footer_text_x + footer_text_width
 
         # GitHub icon with 40% transparency (alpha=0.6)
@@ -2139,24 +2484,24 @@ class PDFReportBuilder:
         canvas.setFont(self.font, 8)
         canvas.setFillColor(COLORS["muted"])
         github_label = "GitHub"
-        canvas.drawString(github_x + icon_width, 11 * mm, github_label)
+        _draw_text(canvas, github_x + icon_width, 11 * mm, github_label)
 
         # Make it clickable (both icon and text)
-        github_label_width = canvas.stringWidth(github_label, self.font, 8)
+        github_label_width = _text_width(github_label, self.font, 8)
         canvas.linkURL(github_url, (github_x, 9 * mm, github_x + icon_width + github_label_width, 14 * mm), relative=0)
 
         # Right side: page number
-        canvas.drawRightString(self.width - self.margin, 11 * mm, f"Page {doc.page}")
+        _draw_text(canvas, self.width - self.margin, 11 * mm, f"Page {doc.page}", align="right")
 
         # Second line: Domain and timestamp
         timestamp = now.strftime("%Y-%m-%d %H:%M UTC")
         canvas.setFont(self.font, 8)
         right_text = f"Report generated at {timestamp}"
-        room = self.content_width - canvas.stringWidth(right_text, self.font, 8) - 4 * mm
-        while len(domain) > 4 and canvas.stringWidth(domain, self.font, 8) > room:
+        room = self.content_width - _text_width(right_text, self.font, 8) - 4 * mm
+        while len(domain) > 4 and _text_width(domain, self.font, 8) > room:
             domain = domain[:-4] + "…"
-        canvas.drawString(self.margin, 6 * mm, domain)
-        canvas.drawRightString(self.width - self.margin, 6 * mm, right_text)
+        _draw_text(canvas, self.margin, 6 * mm, domain)
+        _draw_text(canvas, self.width - self.margin, 6 * mm, right_text, align="right")
 
         canvas.restoreState()
 
@@ -2175,16 +2520,10 @@ class PDFReportBuilder:
 
     def _state_badge(self, kind: str, text: str | None = None) -> Badge:
         """Small result badge. Unknown (not tested) is deliberately neutral, never green."""
-        presets = {
-            "pass": ("PASS", COLORS["success"], colors.white),
-            "fail": ("FAIL", COLORS["danger"], colors.white),
-            "warn": ("WARNING", COLORS["warning"], COLORS["dark"]),
-            "unknown": ("NOT TESTED", COLORS["unknown_soft"], COLORS["dark"]),
-            "info": ("INFO", COLORS["navy_soft"], COLORS["navy"]),
-        }
-        label, bg, fg = presets[kind]
+        labels = {"pass": "PASS", "fail": "FAIL", "warn": "WARNING", "unknown": "NOT TESTED", "info": "INFO"}
+        bg, fg = _pdf_status_badge_colors(kind)
         return Badge(
-            text=text or label,
+            text=text or labels.get(kind, "UNKNOWN"),
             font=self.font,
             font_size=8,
             padding_x=2.2 * mm,
@@ -2209,7 +2548,7 @@ class PDFReportBuilder:
             data.append([label_cell, value_cell, state_cell])
         table = Table(data, colWidths=[label_w, self.content_width - label_w - state_w, state_w], splitByRow=1)
         table.setStyle(
-            TableStyle(
+            _table_style(
                 [
                     ("VALIGN", (0, 0), (-1, -1), "TOP"),
                     ("LEFTPADDING", (0, 0), (-1, -1), 4),
@@ -2300,24 +2639,16 @@ class PDFReportBuilder:
         """Build the stand-alone cover: target, period, status and headline KPIs only."""
         from_date, to_date = self.report_data.from_date, self.report_data.to_date
 
-        logo_path = STATIC_DIR / "justup_1c.png"
-        if logo_path.exists():
-            logo = Image(str(logo_path))
-            # Read the intrinsic size first: accessing it after setting drawWidth resets it
-            aspect = logo.imageHeight / logo.imageWidth
-            logo.drawWidth = 34 * mm
-            logo.drawHeight = 34 * mm * aspect
-            logo.hAlign = "LEFT"
-            self.elements.append(logo)
+        self.elements.append(LogoFlowable(34 * mm))
         self.elements.append(Spacer(1, 8 * mm))
 
         name, host = self._cover_name()
         size = 32
-        while size > 16 and pdfmetrics.stringWidth(name, self.font_bold, size) > self.content_width:
+        while size > 16 and _text_width(name, self.font_bold, size) > self.content_width:
             size -= 1
-        title_style = ParagraphStyle(
+        title_style = _paragraph_style(
             "CoverTitle",
-            fontName=self.font_bold,
+            font_name=self.font_bold,
             fontSize=size,
             leading=size + 6,
             textColor=COLORS["navy"],
@@ -2334,9 +2665,9 @@ class PDFReportBuilder:
             self.elements.append(
                 Paragraph(
                     _esc(site_title),
-                    ParagraphStyle(
+                    _paragraph_style(
                         "CoverSiteTitle",
-                        fontName=self.font,
+                        font_name=self.font,
                         fontSize=12,
                         leading=16,
                         textColor=COLORS["muted"],
@@ -2350,15 +2681,17 @@ class PDFReportBuilder:
             self.elements.append(
                 Paragraph(
                     _esc(host),
-                    ParagraphStyle("CoverHost", fontName=self.font, fontSize=11, leading=15, textColor=COLORS["muted"]),
+                    _paragraph_style(
+                        "CoverHost", font_name=self.font, fontSize=11, leading=15, textColor=COLORS["muted"]
+                    ),
                 )
             )
         self.elements.append(Spacer(1, 3 * mm))
         self.elements.append(
             Paragraph(
                 "Uptime &amp; Performance Report",
-                ParagraphStyle(
-                    "CoverSub", fontName=self.font_bold, fontSize=15, leading=20, textColor=COLORS["navy_mid"]
+                _paragraph_style(
+                    "CoverSub", font_name=self.font_bold, fontSize=15, leading=20, textColor=COLORS["navy_mid"]
                 ),
             )
         )
@@ -2368,11 +2701,11 @@ class PDFReportBuilder:
         )
         self.elements.append(Spacer(1, 5 * mm))
 
-        period_style = ParagraphStyle(
-            "CoverPeriod", fontName=self.font, fontSize=10.5, leading=15, textColor=COLORS["dark"]
+        period_style = _paragraph_style(
+            "CoverPeriod", font_name=self.font, fontSize=10.5, leading=15, textColor=COLORS["dark"]
         )
-        period_label = ParagraphStyle(
-            "CoverPeriodLabel", fontName=self.font_bold, fontSize=8, leading=11, textColor=COLORS["muted"]
+        period_label = _paragraph_style(
+            "CoverPeriodLabel", font_name=self.font_bold, fontSize=8, leading=11, textColor=COLORS["muted"]
         )
         self.elements.append(Paragraph("REPORTING PERIOD", period_label))
         self.elements.append(
@@ -2391,7 +2724,6 @@ class PDFReportBuilder:
         self._add_hero_kpi()
         self.elements.append(Spacer(1, 4 * mm))
         self._add_supporting_kpis()
-        self._add_summary_sentence()
 
         if self.report_data.target.get("sla_enabled"):
             self.elements.append(Spacer(1, 4 * mm))
@@ -2406,15 +2738,15 @@ class PDFReportBuilder:
         text_color = COLORS[text_key]
         status_para = Paragraph(
             _esc(label),
-            ParagraphStyle("StatusBanner", fontName=self.font_bold, fontSize=17, leading=21, textColor=text_color),
+            _paragraph_style("StatusBanner", font_name=self.font_bold, fontSize=17, leading=21, textColor=text_color),
         )
         detail_para = Paragraph(
             _esc(detail),
-            ParagraphStyle("StatusDetail", fontName=self.font, fontSize=10, leading=14, textColor=COLORS["dark"]),
+            _paragraph_style("StatusDetail", font_name=self.font, fontSize=10, leading=14, textColor=COLORS["dark"]),
         )
         table = Table([[status_para, detail_para]], colWidths=[54 * mm, self.content_width - 54 * mm])
         table.setStyle(
-            TableStyle(
+            _table_style(
                 [
                     ("BACKGROUND", (0, 0), (-1, -1), COLORS[soft_key]),
                     ("LINEBEFORE", (0, 0), (0, -1), 4, COLORS[accent_key]),
@@ -2462,7 +2794,7 @@ class PDFReportBuilder:
             accent=color,
         )
         table = Table([[hero_card]], colWidths=[width])
-        table.setStyle(TableStyle([("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 0)]))
+        table.setStyle(_table_style([("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 0)]))
         table.hAlign = "CENTER"
         self.elements.append(table)
 
@@ -2512,7 +2844,7 @@ class PDFReportBuilder:
         ]
         table = Table([cards], colWidths=[card_width + gap, card_width + gap, card_width])
         table.setStyle(
-            TableStyle(
+            _table_style(
                 [
                     ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
                     ("LEFTPADDING", (0, 0), (-1, -1), 0),
@@ -2524,36 +2856,6 @@ class PDFReportBuilder:
         )
         table.hAlign = "LEFT"
         self.elements.append(table)
-
-    def _add_summary_sentence(self):
-        """One data-backed sentence under the KPI cards; omitted when nothing was measured."""
-        kpis = self.kpis
-        if not kpis.total_checks:
-            return
-        kind = "recorded" if self._is_low_coverage() else "availability"
-        parts = [f"{kpis.up_count:,} of {kpis.total_checks:,} {kind} checks succeeded"]
-        events = len(self.downtime_events)
-        if events:
-            failed = f"{kpis.down_count:,} failed check{'s' if kpis.down_count != 1 else ''}"
-            verb = "forms" if kpis.down_count == 1 else "form"
-            parts.append(f"{failed} {verb} {events} downtime event{'s' if events != 1 else ''}")
-            parts.append(f"estimated downtime is about {kpis.downtime_minutes:,} min")
-        else:
-            parts.append("no downtime was recorded")
-        sentence = "; ".join(parts) + "."
-        if self._is_low_coverage():
-            sentence += f" Checks cover only {kpis.coverage_pct:g}% of the period, so these figures are indicative."
-        if kpis.avg_ping_ms is not None:
-            sentence += f" Average ping latency was {kpis.avg_ping_ms:g} ms."
-        self.elements.append(Spacer(1, 5 * mm))
-        self.elements.append(
-            Paragraph(
-                _esc(sentence),
-                ParagraphStyle(
-                    "CoverSummary", fontName=self.font, fontSize=10, leading=14, textColor=COLORS["muted"], alignment=1
-                ),
-            )
-        )
 
     def _add_sla_compliance(self):
         """Add the SLA compliance table; metrics without measurements are not evaluated."""
@@ -2621,7 +2923,7 @@ class PDFReportBuilder:
         w = self.content_width
         table = Table(rows, colWidths=[w * 0.22, w * 0.18, w * 0.18, w * 0.24, w * 0.18], repeatRows=1)
         table.setStyle(
-            TableStyle(
+            _table_style(
                 [
                     ("BACKGROUND", (0, 0), (-1, 0), COLORS["navy"]),
                     ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
@@ -2670,10 +2972,10 @@ class PDFReportBuilder:
         """Show which checks are enabled."""
         target = self.report_data.target
         checks = [
-            ("HTTP", target.get("enable_http_check"), COLORS["success"]),
-            ("PING", target.get("enable_ping"), COLORS["success"]),
-            ("Cert", target.get("enable_cert_expiration"), COLORS["success"]),
-            ("TCP", target.get("enable_tcp_connect"), COLORS["navy_mid"]),
+            ("HTTP", target.get("enable_http_check"), COLORS["neutral"]),
+            ("PING", target.get("enable_ping"), COLORS["neutral"]),
+            ("Cert", target.get("enable_cert_expiration"), COLORS["neutral"]),
+            ("TCP", target.get("enable_tcp_connect"), COLORS["neutral"]),
         ]
         enabled = [
             Badge(text=name, font=self.font, bg_color=color, padding_y=1 * mm, shadow=False)
@@ -2683,7 +2985,7 @@ class PDFReportBuilder:
         if enabled:
             inner = Table([enabled], colWidths=[b.badge_width + 3 * mm for b in enabled])
             inner.setStyle(
-                TableStyle(
+                _table_style(
                     [(a, (0, 0), (-1, -1), 0) for a in ("LEFTPADDING", "RIGHTPADDING", "TOPPADDING", "BOTTOMPADDING")]
                 )
             )
@@ -2807,7 +3109,7 @@ class PDFReportBuilder:
         _log.debug("Running TLS scan for %s", redact_url(ssl_target))
         try:
             self._ssl_scanned_at = datetime.now(UTC)
-            self._ssl_cache = scan_tls(ssl_target, timeout=15)
+            self._ssl_cache = scan_tls(ssl_target, timeout=15, deadline=_PDF_TLS_SCAN_DEADLINE_SECONDS)
         except Exception as e:  # noqa: BLE001 - report generation resilience: a PDF render never aborts on an optional step
             _log.warning("TLS scan failed: %s", type(e).__name__)
             self._ssl_cache = TlsScanResult(
@@ -2860,8 +3162,8 @@ class PDFReportBuilder:
     def _add_certificate_group(self, ssl: TlsScanResult) -> None:
         token = self.styles["token"]
         self._group_title("Certificate")
-        cert = ssl.certificate
-        if cert is None:
+        certificates = ssl.certificate_deployments or ((ssl.certificate,) if ssl.certificate else ())
+        if not certificates:
             state = "fail" if ssl.certificate_check.verdict is Verdict.INSECURE else "unknown"
             self.elements.append(
                 self._kv_table([("Certificate", Paragraph("Certificate details unavailable", token), state)])
@@ -2872,44 +3174,51 @@ class PDFReportBuilder:
             text, state = self._verdict(check, ok, bad)
             return label, Paragraph(_esc(text), token), state
 
-        if cert.expiry.verdict is Verdict.INSECURE:
-            days = ("Expired or not yet valid", "fail")
-        elif cert.expiry.verdict is Verdict.UNKNOWN:
-            days = ("No result", "unknown")
-        else:
-            days = (f"{cert.days_remaining} days", "pass" if cert.days_remaining > 30 else "warn")
-        validity_state = {Verdict.SECURE: "pass", Verdict.INSECURE: "fail"}.get(cert.expiry.verdict, "unknown")
-        key_text = f"{cert.key_type} {cert.key_size}-bit" if cert.key_size else cert.key_type
-        sans = "<br/>".join(_esc(s) for s in cert.san) if cert.san else "none"
+        for index, cert in enumerate(certificates, start=1):
+            if len(certificates) > 1:
+                self.elements.append(Paragraph(f"<b>Deployment {index}</b>", token))
+            if cert.expiry.verdict is Verdict.INSECURE:
+                days = ("Expired or not yet valid", "fail")
+            elif cert.expiry.verdict is Verdict.UNKNOWN:
+                days = ("No result", "unknown")
+            else:
+                days = (f"{cert.days_remaining} days", "pass" if cert.days_remaining > 30 else "warn")
+            validity_state = {Verdict.SECURE: "pass", Verdict.INSECURE: "fail"}.get(cert.expiry.verdict, "unknown")
+            key_text = f"{cert.key_type} {cert.key_size}-bit" if cert.key_size else cert.key_type
+            sans = "<br/>".join(_esc(s) for s in cert.san) if cert.san else "none"
 
-        rows: list[tuple[str, Any, str | None]] = [
-            ("Subject", Paragraph(_esc(cert.subject), token), None),
-            ("Issuer", Paragraph(_esc(cert.issuer), token), None),
-            (
-                "Validity",
-                Paragraph(
-                    f"{cert.valid_from:%Y-%m-%d} – {cert.valid_until:%Y-%m-%d} ({cert.valid_from.tzname() or 'UTC'})",
-                    token,
+            rows: list[tuple[str, Any, str | None]] = [
+                ("Subject", Paragraph(_esc(cert.subject), token), None),
+                ("Issuer", Paragraph(_esc(cert.issuer), token), None),
+                (
+                    "Validity",
+                    Paragraph(
+                        f"{cert.valid_from:%Y-%m-%d} – {cert.valid_until:%Y-%m-%d} "
+                        f"({cert.valid_from.tzname() or 'UTC'})",
+                        token,
+                    ),
+                    validity_state,
                 ),
-                validity_state,
-            ),
-            ("Days Remaining", Paragraph(_esc(days[0]), token), days[1]),
-            verdict_row("Trusted", cert.trust, "Yes, chain validates", "No, chain does not validate"),
-            verdict_row("Hostname Match", cert.hostname_match, "Matches", "Does not match"),
-            verdict_row(
-                "Signature", cert.signature, cert.signature_algorithm, f"{cert.signature_algorithm} (weak hash)"
-            ),
-            verdict_row("Key", cert.key_strength, key_text, f"{key_text} (weak)"),
-            (
-                "SANs",
-                Paragraph(
-                    f"{len(cert.san)} name{'s' if len(cert.san) != 1 else ''}<br/>{sans}" if cert.san else "none", token
+                ("Days Remaining", Paragraph(_esc(days[0]), token), days[1]),
+                verdict_row("Trusted", cert.trust, "Yes, chain validates", "No, chain does not validate"),
+                verdict_row("Hostname Match", cert.hostname_match, "Matches", "Does not match"),
+                verdict_row(
+                    "Signature", cert.signature, cert.signature_algorithm, f"{cert.signature_algorithm} (weak hash)"
                 ),
-                None,
-            ),
-            verdict_row("Chain", cert.chain_order, f"{cert.chain_length} certificates, valid order", "Invalid order"),
-        ]
-        self.elements.append(self._kv_table(rows))
+                verdict_row("Key", cert.key_strength, key_text, f"{key_text} (weak)"),
+                (
+                    "SANs",
+                    Paragraph(
+                        f"{len(cert.san)} name{'s' if len(cert.san) != 1 else ''}<br/>{sans}" if cert.san else "none",
+                        token,
+                    ),
+                    None,
+                ),
+                verdict_row(
+                    "Chain", cert.chain_order, f"{cert.chain_length} certificates, valid order", "Invalid order"
+                ),
+            ]
+            self.elements.append(self._kv_table(rows))
 
     def _add_tls_group(self, ssl: TlsScanResult) -> None:
         """TLS result first (versions, findings, preferred cipher); the full cipher lists follow as detail."""
@@ -2926,9 +3235,17 @@ class PDFReportBuilder:
                     ("warn", "INCOMPLETE"),
                 )
             )
+        elif any(check.verdict is Verdict.UNKNOWN for check in ssl.checks.values()):
+            rows.append(
+                (
+                    "Scan Status",
+                    Paragraph("Completed with inconclusive checks", token),
+                    ("warn", "INCONCLUSIVE"),
+                )
+            )
         else:
             rows.append(
-                ("Scan Status", Paragraph("Completed, all checks returned a result", token), ("pass", "COMPLETE"))
+                ("Scan Status", Paragraph("All configured checks returned a result", token), ("info", "COMPLETE"))
             )
         scanned = getattr(self, "_ssl_scanned_at", None)
         when = (
@@ -2964,9 +3281,61 @@ class PDFReportBuilder:
         check_row("Heartbleed", ssl.heartbleed, "Not vulnerable", "Vulnerable")
         check_row("CCS Injection", ssl.ccs_injection, "Not vulnerable", "Vulnerable")
         check_row("ROBOT", ssl.robot, "Not vulnerable", "Vulnerable")
+        check_row("TLS_FALLBACK_SCSV", ssl.fallback_scsv, "Supported", "Not supported")
+        check_row("Extended Master Secret", ssl.extended_master_secret, "Supported", "Not supported")
         check_row("Secure Renegotiation", ssl.secure_renegotiation, "Supported", "Not supported")
         check_row("CRIME (compression)", ssl.compression, "Compression off", "Compression enabled")
-        rows.append(("Preferred Cipher", Paragraph(_esc(ssl.preferred_cipher or "—"), token), None))
+        profile_text, profile_state = self._verdict(
+            ssl.mozilla_tls_profile,
+            "Compliant",
+            ssl.mozilla_tls_profile.detail or "Not compliant",
+        )
+        if ssl.mozilla_tls_profile.verdict is Verdict.UNKNOWN and ssl.mozilla_tls_profile.detail:
+            profile_text = f"No result: {ssl.mozilla_tls_profile.detail}"
+        rows.append(
+            (
+                "Mozilla TLS Profile (Intermediate)",
+                Paragraph(_esc(profile_text), token),
+                profile_state,
+            )
+        )
+        if ssl.tls_1_3_early_data is None:
+            early_data = ("No result", "unknown")
+        elif ssl.tls_1_3_early_data:
+            early_data = ("Accepted; replay risk depends on application", "warn")
+        else:
+            early_data = ("Not accepted", "info")
+        rows.append(("TLS 1.3 Early Data", Paragraph(_esc(early_data[0]), token), early_data[1]))
+        rows.append(
+            (
+                "Session Resumption",
+                Paragraph(_esc(ssl.session_resumption or "No result"), token),
+                "info" if ssl.session_resumption else "unknown",
+            )
+        )
+        rows.append(
+            (
+                "Supported Elliptic Curves",
+                Paragraph(_esc(ssl.elliptic_curves or "No result"), token),
+                "info" if ssl.elliptic_curves else "unknown",
+            )
+        )
+        if ssl.http_headers is None:
+            headers_state = "unknown"
+        elif ssl.http_headers == "HSTS header not present" or "max-age missing" in ssl.http_headers:
+            headers_state = "warn"
+        elif ssl.http_headers == "No valid HTTP response":
+            headers_state = "unknown"
+        else:
+            headers_state = "info"
+        rows.append(
+            (
+                "HTTP Strict-Transport-Security",
+                Paragraph(_esc(ssl.http_headers or "No result"), token),
+                headers_state,
+            )
+        )
+        rows.append(("Cipher Suite Example", Paragraph(_esc(ssl.cipher_suite_example or "—"), token), None))
         self.elements.append(self._kv_table(rows))
 
         detail: list[tuple[str, Any, str | None]] = []
@@ -3021,7 +3390,7 @@ class PDFReportBuilder:
 
     def _build_network_path_page(self):
         """Build the Network Path chapter with the hop table."""
-        display_hops, geo_points, has_interpolation = self._get_mtr_data(max_hops=_MTR_MAX_HOPS)
+        display_hops, geo_points, _has_interpolation = self._get_mtr_data(max_hops=_MTR_MAX_HOPS)
         host = self._get_traceroute_host()
         if not display_hops:
             self._chapter_header("Network Path", "No traceroute data is available for this report.")
@@ -3042,7 +3411,7 @@ class PDFReportBuilder:
         if reply and latency:
             parts.append(f"latency at last responding hop {latency:.1f} ms")
         self._chapter_header("Network Path", " · ".join(parts))
-        self._add_route_map(display_hops, geo_points, has_interpolation)
+        self._add_route_map(display_hops, geo_points)
         self._add_route_schematic(display_hops)
         self._add_traceroute(display_hops, info)
 
@@ -3071,11 +3440,9 @@ class PDFReportBuilder:
         target_ip = ip if ip and ip != "-" else None
         return _build_route_entries(display_hops, target_ip, self._destination_place())
 
-    def _add_route_map(
-        self, display_hops: list[dict[str, Any]], geo_points: list[dict[str, Any]], has_interpolation: bool
-    ):
+    def _add_route_map(self, display_hops: list[dict[str, Any]], geo_points: list[dict[str, Any]]):
         """Geographic route map above the diagram; it plots the same points as the web map."""
-        model = build_route_map_model(geo_points, display_hops, has_interpolation=has_interpolation)
+        model = build_route_map_model(geo_points, display_hops)
         if model is None:
             self.elements.extend([Paragraph(NO_MAP_NOTE, self.styles["note"]), Spacer(1, 2 * mm)])
             return
@@ -3093,10 +3460,7 @@ class PDFReportBuilder:
         self.elements.extend([diagram, Spacer(1, 3 * mm)])
 
     def _status_badge(self, text: str, kind: str) -> Badge:
-        bg, fg = {
-            "ok": (COLORS["success"], colors.white),
-            "partial": (COLORS["warning"], COLORS["dark"]),
-        }.get(kind, (COLORS["unknown_soft"], COLORS["dark"]))
+        bg, fg = _pdf_status_badge_colors(kind)
         return Badge(
             text=text,
             font=self.font,
@@ -3235,7 +3599,7 @@ class PDFReportBuilder:
                 ("LEFTPADDING", (0, note_row), (-1, note_row), 0),
                 ("VALIGN", (0, note_row), (-1, note_row), "TOP"),
             ]
-        table.setStyle(TableStyle(style))
+        table.setStyle(_table_style(style))
         self.elements.append(PageBreak())
         self.elements.append(table)
 
@@ -3244,7 +3608,7 @@ class PDFReportBuilder:
                 Paragraph(
                     f"<b>{ROUTE_INCOMPLETE}.</b> The destination was not reached within {_MTR_MAX_HOPS} hops; "
                     "the route may continue beyond this limit and is not shown completely.",
-                    ParagraphStyle(
+                    _paragraph_style(
                         "RouteIncomplete",
                         parent=st["note"],
                         textColor=COLORS["warning_text"],
@@ -3377,7 +3741,11 @@ class PDFReportBuilder:
             threshold_label=response_label,
         )
         if response_chart:
-            self._add_chart_section("Response Time" + zoom, response_chart, self._latency_note(data.http_data))
+            self._add_chart_section(
+                "Response Time" + zoom,
+                response_chart,
+                self._latency_note(data.http_data, display.get("http_ms"), self.tz, sla_response_ms),
+            )
             added += 1
 
         if data.status_code_data and self._add_status_codes(width):
@@ -3393,7 +3761,11 @@ class PDFReportBuilder:
                 threshold_label=ping_label,
             )
             if ping_chart:
-                self._add_chart_section("Ping Latency" + zoom, ping_chart, self._latency_note(data.ping_data))
+                self._add_chart_section(
+                    "Ping Latency" + zoom,
+                    ping_chart,
+                    self._latency_note(data.ping_data, display.get("ping_ms"), self.tz, sla_ping_ms),
+                )
                 added += 1
 
         if target.get("enable_tcp_connect"):
@@ -3404,12 +3776,12 @@ class PDFReportBuilder:
                     port: display.get(f"tcp_ms_{port}", points) for port, points in data.tcp_port_data.items()
                 }
                 tcp_chart = _create_multi_port_tcp_chart(display_ports, from_date=c_from, to_date=c_to, width=width)
-                note = "One panel per port, shared time axis and Y scale."
+                note = self._multi_port_note(display_ports, self.tz)
             if not tcp_chart and data.tcp_data:
                 tcp_chart = _create_tcp_chart(
                     display.get("tcp_ms", data.tcp_data), from_date=c_from, to_date=c_to, width=width
                 )
-                note = self._latency_note(data.tcp_data)
+                note = self._latency_note(data.tcp_data, display.get("tcp_ms"), self.tz)
             if tcp_chart:
                 self._add_chart_section("TCP Latency" + zoom, tcp_chart, note)
                 added += 1
@@ -3476,12 +3848,70 @@ class PDFReportBuilder:
         return True
 
     @staticmethod
-    def _latency_note(points: list[dict]) -> str | None:
+    def _latency_note(
+        points: list[dict],
+        display_points: list[dict] | None = None,
+        tz: tzinfo = UTC,
+        sla_ms: float | None = None,
+    ) -> str | None:
+        """Caption of a latency chart: summary statistics plus what the chart shows beyond them."""
         values = _valid_values(points)
         if not values:
             return None
-        avg = sum(values) / len(values)
-        return f"Average {avg:,.0f} ms · maximum {max(values):,.0f} ms · {len(values):,} measurements"
+        reported_max = max(values)
+        average = sum(values) / len(values)
+        note = f"Average {average:,.0f} ms · maximum {reported_max:,.0f} ms · {len(values):,} measurements"
+        if display_points:
+            view = _build_view(display_points, tz)
+            extra = [_peak_text(p, tz) for p in view.peaks[:3]]
+            if extra:
+                note += ". Highest peaks within an interval (exact time unknown): " + "; ".join(extra)
+                if len(view.peaks) > len(extra):
+                    note += f"; {len(view.peaks) - len(extra)} further not listed"
+            if view.highest_max is not None and view.highest_max > reported_max + 0.5:
+                note += (
+                    f". The interval maxima include all retained checks and reach {_fmt_ms_value(view.highest_max)}, "
+                    "above the maximum of the plotted sample series"
+                )
+            if view.no_max_intervals and view.has_intervals:
+                note += (
+                    f". Peaks are unavailable for {view.no_max_intervals:,} of {view.intervals:,} intervals "
+                    "(rolled-up history)"
+                )
+            elif view.no_max_intervals:
+                note += ". Peaks are unavailable for this period (rolled-up history)"
+            top, _ = _axis_scale([view], sla_ms)
+            over = _overflow_values(view, top)
+            if over:
+                plural = "s" if len(over) != 1 else ""
+                note += (
+                    f". {len(over)} value{plural} above the axis, highest {_fmt_ms_value(max(over))}, "
+                    "marked at the top edge"
+                )
+        return note
+
+    @staticmethod
+    def _multi_port_note(port_data: dict[int, list[dict]], tz: tzinfo) -> str:
+        """Caption of the per-port TCP chart, including the real scale mode and the highest peaks."""
+        views = {port: _build_view(points, tz) for port, points in sorted(port_data.items()) if points}
+        if not views:
+            return "One panel per port."
+        shared = _ports_share_scale(list(views.values()))
+        note = "One panel per port, shared time axis and " + (
+            "Y scale." if shared else "independent Y scales (port latencies differ too much for one scale)."
+        )
+        peaks = sorted(((port, p) for port, v in views.items() for p in v.peaks[:1]), key=lambda i: -i[1].value)[:3]
+        if peaks:
+            note += " Highest peaks within an interval (exact time unknown): " + "; ".join(
+                f"port {port} {_peak_text(p, tz)}" for port, p in peaks
+            )
+            note += "."
+        if any(v.no_max_intervals for v in views.values()):
+            note += " Peaks are unavailable for intervals of rolled-up history."
+        scales = {port: _axis_scale(list(views.values()) if shared else [v], target=3)[0] for port, v in views.items()}
+        if any(_overflow_values(v, scales[port]) for port, v in views.items()):
+            note += " Values above a panel's axis are marked at its top edge."
+        return note
 
     def _add_chart_section(self, title: str, chart_bytes: bytes, note: str | None = None, max_height_mm: float = 175):
         """Add a chart at full content width with its title and a data-backed caption, kept together."""
@@ -3591,7 +4021,7 @@ class PDFReportBuilder:
             splitByRow=1,
         )
         table.setStyle(
-            TableStyle(
+            _table_style(
                 [
                     ("BACKGROUND", (0, 0), (-1, 0), COLORS["navy"]),
                     ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
@@ -3649,16 +4079,16 @@ class PDFReportBuilder:
             icon = Spacer(1, 1)
             title = "No availability data"
             text = "No availability measurements exist for this period, so downtime cannot be assessed."
-            title_style = ParagraphStyle("EmptyTitleNeutral", parent=st["empty_title"], textColor=COLORS["muted"])
+            title_style = _paragraph_style("EmptyTitleNeutral", parent=st["empty_title"], textColor=COLORS["muted"])
         if compact:
-            left = ParagraphStyle("DowntimeTitle", parent=title_style, fontSize=11.5, leading=15, alignment=0)
-            note = ParagraphStyle("DowntimeText", parent=st["empty_text"], fontSize=9, leading=12, alignment=0)
+            left = _paragraph_style("DowntimeTitle", parent=title_style, fontSize=11.5, leading=15, alignment=0)
+            note = _paragraph_style("DowntimeText", parent=st["empty_text"], fontSize=9, leading=12, alignment=0)
             table = Table(
                 [[icon, [Paragraph(_esc(title), left), Paragraph(_esc(text), note)]]],
                 colWidths=[14 * mm, self.content_width - 14 * mm],
             )
             table.setStyle(
-                TableStyle(
+                _table_style(
                     [
                         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
                         ("BACKGROUND", (0, 0), (-1, -1), COLORS["surface"]),
@@ -3680,7 +4110,7 @@ class PDFReportBuilder:
             ],
             colWidths=[self.content_width],
         )
-        table.setStyle(TableStyle([("ALIGN", (0, 0), (-1, -1), "CENTER"), ("VALIGN", (0, 0), (-1, -1), "MIDDLE")]))
+        table.setStyle(_table_style([("ALIGN", (0, 0), (-1, -1), "CENTER"), ("VALIGN", (0, 0), (-1, -1), "MIDDLE")]))
         self.elements.append(Spacer(1, 45 * mm))
         self.elements.append(table)
 

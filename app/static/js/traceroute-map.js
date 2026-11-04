@@ -153,6 +153,24 @@
 		return point._hop_range ? point._hop_range.replace('-', '–') : String(point.hop || '?');
 	}
 
+	/**
+	 * Roles are decided by the server (map_role); the client only reads them. An estimate is an
+	 * approximate position: a hollow chain node whose links are dashed.
+	 */
+	function isEstimate(point) {
+		return Boolean(point) && point.map_role === 'estimate';
+	}
+
+	/** True when the route line leaving this point is not an established geographic path. */
+	function isDashedSegment(from) {
+		return from.segment_to_next === 'dashed';
+	}
+
+	/** The nodes of the route chain, in hop order: every located point, estimates and destination included. */
+	function routePointsOf(points) {
+		return points.slice();
+	}
+
 	function pointContainsHop(point, hop) {
 		if (!Number.isFinite(hop)) return false;
 		if (!point._hop_range) return Number(point.hop) === hop;
@@ -166,7 +184,7 @@
 	 * @param {Object} group - Group from groupNearbyHopPoints
 	 * @param {number} startHop - Number of the route's first hop (NaN when unknown)
 	 * @param {boolean} startIsMapped - True when the first hop is on the map
-	 * @returns {Object} {kind, visibleLabel, labels, isStart, isDestination, startMember, destinationMember}
+	 * @returns {Object} {kind, visibleLabel, labels, isStart, isDestination, isApproximate, startMember, destinationMember}
 	 */
 	function describeMarkerGroup(group, startHop, startIsMapped) {
 		var startMember = startIsMapped
@@ -175,6 +193,10 @@
 		var destinationMember = group.members.find(function (member) { return Boolean(member.point._destination); });
 		var isStart = Boolean(startMember);
 		var isDestination = Boolean(destinationMember);
+		var isApproximate = group.members.some(function (member) {
+			var point = member.point;
+			return Boolean(point._approximate || point.accuracy_class === 'approximate' || point.loc_precision === 'approximate');
+		});
 		var isBothEndpoints = isStart && isDestination;
 		var labels = group.members.map(function (member) { return pointLabel(member.point); });
 		labels = labels.filter(function (label, index) { return labels.indexOf(label) === index; });
@@ -184,14 +206,17 @@
 			if (isDestination && pointContainsHop(destinationMember.point, first)) return false;
 			return true;
 		});
-		var kind = isBothEndpoints ? 'both' : (isStart ? 'start' : (isDestination ? 'destination' : (group.members[0].index === 0 ? 'first-mapped' : 'hop')));
+		var isEstimateGroup = group.members.some(function (member) { return isEstimate(member.point); });
+		var kind = isBothEndpoints ? 'both' : (isStart ? 'start' : (isDestination ? 'destination' : (isEstimateGroup ? 'estimate' : (group.members[0].index === 0 ? 'first-mapped' : 'hop'))));
 		var visibleLabel;
 		if (isBothEndpoints) visibleLabel = 'S/D';
 		else if (isStart) visibleLabel = ['S'].concat(otherLabels).join('·');
 		else if (isDestination) visibleLabel = otherLabels.concat(['D']).join('·');
+		else if (isEstimateGroup) visibleLabel = '~' + labels.join('·');  // "~" keeps the estimate legible without color
 		else visibleLabel = labels.join('·');
 		return {
 			kind: kind, visibleLabel: visibleLabel, labels: labels, isStart: isStart, isDestination: isDestination,
+			isApproximate: isApproximate, isEstimate: isEstimateGroup,
 			startMember: startMember, destinationMember: destinationMember
 		};
 	}
@@ -203,11 +228,13 @@
 			var projected = project(point, index);
 			if (!projected || !isFinite(projected.x) || !isFinite(projected.y)) return;
 			// Only collapse consecutive visits. A later return to the same city must
-			// remain a separate route node so the map does not imply a shortcut.
+			// remain a separate route node so the map does not imply a shortcut. An estimate
+			// never shares a marker with a route hop, so its uncertainty stays visible.
 			var group = groups[groups.length - 1];
-			if (group && !group.members.every(function (member) {
-				return Math.hypot(member.projected.x - projected.x, member.projected.y - projected.y) <= radius;
-			})) group = null;
+			if (group && (isEstimate(point) || group.members.some(function (member) { return isEstimate(member.point); })
+				|| !group.members.every(function (member) {
+					return Math.hypot(member.projected.x - projected.x, member.projected.y - projected.y) <= radius;
+				}))) group = null;
 			if (!group) {
 				group = { members: [], center: { x: projected.x, y: projected.y }, displayCenter: null };
 				groups.push(group);
@@ -284,9 +311,10 @@
 		var routeCities = [];
 		var seen = {};
 		routePoints.forEach(function (p) {
-			if (!p.city || p._interpolated || seen[p.city]) return;
-			seen[p.city] = true;
-			routeCities.push([p.city, p.lat, p.lon, 0, 0, true]);
+			var name = p.city || (p._country_center ? p.country + ' (country center)' : '');
+			if (!name || p._interpolated || seen[name]) return;
+			seen[name] = true;
+			routeCities.push([name, p.lat, p.lon, 0, 0, true]);
 		});
 
 		function add(item, kind, z, placed, size) {
@@ -459,6 +487,9 @@
 			return;
 		}
 
+		// The route line joins the server-assigned route points in hop order; estimates only get markers.
+		var routePoints = routePointsOf(validPoints);
+
 		// Create map using container element directly (prevents duplicate ID issues)
 		var map = window.L.map(mapContainer, {
 			scrollWheelZoom: true,
@@ -489,7 +520,7 @@
 			});
 
 		// Country and city names (local data); route cities are labeled even if loading fails
-		var labelLayer = createLabelLayer(map, validPoints);
+		var labelLayer = createLabelLayer(map, routePoints);
 		loadLabels()
 			.then(function (labels) {
 				if (mapContainer._leaflet_map !== map) return;  // map destroyed meanwhile
@@ -501,25 +532,19 @@
 
 		var latlngs = validPoints.map(function (p) { return [p.lat, p.lon]; });
 
-		function isSegmentInterpolated(p1, p2) {
-			return p1.segment_to_next === 'dashed' ||
-				p2._interpolated ||
-				p2.segment_type === 'dashed';
-		}
-
-		// One polyline per segment (segment i connects validPoints[i] -> [i+1]), each
+		// One polyline per segment (segment i connects routePoints[i] -> [i+1]), each
 		// tagged with its index so a single segment can be selected and the others
-		// dimmed. A dashed segment marks an unknown/interpolated gap and is never a
-		// claim of a precise geographic link. Route length is bounded (<=20 hops),
-		// so per-segment lines carry no meaningful performance cost.
+		// dimmed. A dashed segment marks an unknown geographic path (silent, interpolated
+		// or estimated hops in between) and is never a claim of a physical link. Route
+		// length is bounded (<=20 hops), so per-segment lines carry no meaningful cost.
 		var polylines = [];
 		var colors = getRouteColors();
 		var routeSelection = null;  // segment index, or null for the whole route
 
-		for (var i = 0; i < validPoints.length - 1; i++) {
-			var dashedSeg = isSegmentInterpolated(validPoints[i], validPoints[i + 1]);
+		for (var i = 0; i < routePoints.length - 1; i++) {
+			var dashedSeg = isDashedSegment(routePoints[i]);
 			var pl = window.L.polyline(
-				[[validPoints[i].lat, validPoints[i].lon], [validPoints[i + 1].lat, validPoints[i + 1].lon]],
+				[[routePoints[i].lat, routePoints[i].lon], [routePoints[i + 1].lat, routePoints[i + 1].lon]],
 				dashedSeg
 					? { color: colors.dashed, weight: 2.5, opacity: 0.9, dashArray: '7, 8', lineCap: 'round', lineJoin: 'round' }
 					: { color: colors.solid, weight: 3, opacity: 0.95, lineCap: 'round', lineJoin: 'round' }
@@ -547,9 +572,11 @@
 		var destinationHost = mapContainer.dataset.routeDestinationHost || '';
 		var destinationIp = mapContainer.dataset.routeDestinationIp || '';
 
-		function markerIcon(label, kind, isCluster) {
+		function markerIcon(label, kind, isCluster, isApproximate) {
 			var el = document.createElement('span');
-			el.className = 'traceroute-hop-marker traceroute-hop-marker--' + kind + (isCluster ? ' traceroute-hop-marker--cluster' : '');
+			el.className = 'traceroute-hop-marker traceroute-hop-marker--' + kind
+				+ (isCluster || kind === 'estimate' ? ' traceroute-hop-marker--cluster' : '')
+				+ (isApproximate ? ' traceroute-hop-marker--approximate' : '');
 			el.textContent = label;
 			var width = Math.max(32, label.length * 8 + 16);
 			return window.L.divIcon({
@@ -638,10 +665,10 @@
 			arrowLayer.clearLayers();
 			var zoom = map.getZoom();
 			if (typeof zoom !== 'number' || !isFinite(zoom)) return;
-			var dashedAt = function (index) { return isSegmentInterpolated(validPoints[index], validPoints[index + 1]); };
-			computeArrowSegments(validPoints.length, dashedAt, routeSelection).forEach(function (midIndex) {
-				var from = validPoints[midIndex];
-				var to = validPoints[midIndex + 1];
+			var dashedAt = function (index) { return isDashedSegment(routePoints[index]); };
+			computeArrowSegments(routePoints.length, dashedAt, routeSelection).forEach(function (midIndex) {
+				var from = routePoints[midIndex];
+				var to = routePoints[midIndex + 1];
 				// A zero-length segment (hops at one place) has no direction to show and would cover the marker.
 				if (from.lat === to.lat && from.lon === to.lon) return;
 				arrowLayer.addLayer(addDirectionMarker(from, to, dashedAt(midIndex) ? 'dashed' : 'solid'));
@@ -652,13 +679,13 @@
 		// endpoint hop rows, and redraws arrows for the selection. No hover auto-
 		// animate or jump: selection is an explicit click or keyboard activation.
 		function selectSegment(index) {
-			if (!isFinite(index) || index < 0 || index >= validPoints.length - 1) return;
+			if (!isFinite(index) || index < 0 || index >= routePoints.length - 1) return;
 			routeSelection = index;
 			applySegmentStyles();
 			drawDirectionArrows();
 			var span = [
-				Math.min(Number(validPoints[index].hop) || 0, Number(validPoints[index + 1].hop) || 0),
-				Math.max(Number(validPoints[index].hop) || 0, Number(validPoints[index + 1].hop) || 0)
+				Math.min(Number(routePoints[index].hop) || 0, Number(routePoints[index + 1].hop) || 0),
+				Math.max(Number(routePoints[index].hop) || 0, Number(routePoints[index + 1].hop) || 0)
 			];
 			setLinkedRows([span], true);
 			setLinkedMarkers(span[0], span[1], true);
@@ -691,6 +718,25 @@
 				el.setAttribute('aria-hidden', visible ? 'false' : 'true');
 			});
 		}
+		// Accuracy radius of an approximate position (map_radius_km).
+		function addAccuracyCircle(point) {
+			var radiusKm = point.map_radius_km;  // the server decides whether a radius is drawable
+			if (!(radiusKm > 0)) return;
+			// Web Mercator: a circle that fills most of the frame explains nothing and hides the route.
+			var metersPerPixel = 156543.03392 * Math.cos(point.lat * Math.PI / 180) / Math.pow(2, map.getZoom());
+			var size = map.getSize();
+			if (radiusKm * 1000 / metersPerPixel > Math.min(size.x, size.y) * 0.3) return;
+			window.L.circle([point.lat, point.lon], {
+				radius: radiusKm * 1000,
+				color: colors.dashed,
+				weight: 1,
+				opacity: 0.8,
+				dashArray: '3, 4',
+				fillColor: colors.dashed,
+				fillOpacity: 0.05,
+				interactive: false
+			}).addTo(markerLayer);
+		}
 		function drawHopMarkers() {
 			markerLayer.clearLayers();
 			markerRecords = [];
@@ -716,10 +762,14 @@
 			var point = primary.point;
 			var location = [point.city, point.country].filter(Boolean).join(', ') || 'Location unknown';
 			var hopDescription = labels.join(', ');
-			var endpointLabel = isBothEndpoints ? 'Start and destination' : (isStart ? 'Start' : (isDestination ? 'Destination' : 'Hops ' + hopDescription));
+			var endpointLabel = isBothEndpoints ? 'Start and destination' : (isStart ? 'Start' : (isDestination ? 'Destination' : (info.isEstimate ? 'Estimated position' : 'Hops ' + hopDescription)));
+			// The server names the source and radius of an approximate position (loc_note).
+			var approximateNote = 'Approximate location' + (point.loc_note ? ' (' + point.loc_note + ')' : '');
 			var markerLabel = endpointLabel + ' · ' + hopDescription + ' · ' + location;
+			if (info.isApproximate) markerLabel += ' · ' + approximateNote;
 			if (isDestination && destinationHost) markerLabel += ' · ' + destinationHost;
 			var popup = '<strong>' + escapeHtml(endpointLabel) + '</strong><br>' + escapeHtml('Hops ' + hopDescription) + '<br>' + escapeHtml(location);
+			if (info.isApproximate) popup += '<br>' + escapeHtml(approximateNote);
 			if (group.members.length > 1) {
 				var details = group.members.map(function (member) {
 					var memberPoint = member.point;
@@ -736,6 +786,7 @@
 
 			var center = map.unproject([group.displayCenter.x, group.displayCenter.y], zoom);
 			group.members.forEach(function (member) {
+				addAccuracyCircle(member.point);
 				var distance = Math.hypot(member.projected.x - group.displayCenter.x, member.projected.y - group.displayCenter.y);
 				if (distance < 3) return;
 				window.L.polyline([[member.point.lat, member.point.lon], center], {
@@ -748,7 +799,7 @@
 			});
 
 			var marker = window.L.marker(center, {
-				icon: markerIcon(visibleLabel, kind, labels.length > 1),
+				icon: markerIcon(visibleLabel, kind, labels.length > 1, info.isApproximate),
 				title: markerLabel,
 				alt: markerLabel,
 				zIndexOffset: isStart || isDestination ? 1000 : 0
@@ -827,8 +878,8 @@
 		// mapped point or is not on the map.
 		function segmentIndexForHop(hop) {
 			if (!Number.isFinite(hop)) return null;
-			for (var i = 0; i < validPoints.length - 1; i++) {
-				if (pointContainsHop(validPoints[i], hop)) return i;
+			for (var i = 0; i < routePoints.length - 1; i++) {
+				if (pointContainsHop(routePoints[i], hop)) return i;
 			}
 			return null;
 		}
@@ -1156,6 +1207,8 @@
 	window.TracerouteMap.computeArrowSegments = computeArrowSegments;
 	window.TracerouteMap.describeMarkerGroup = describeMarkerGroup;
 	window.TracerouteMap.pointLabel = pointLabel;
+	window.TracerouteMap.routePointsOf = routePointsOf;
+	window.TracerouteMap.isDashedSegment = isDashedSegment;
 
 	/**
 	 * Destroy every map below root (call before replacing a traceroute fragment)

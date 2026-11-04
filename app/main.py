@@ -457,7 +457,13 @@ def create_app() -> FastAPI:
         # Raise SystemExit (catchable by tests) instead of sys.exit()
         raise SystemExit(1) from e
 
-    cfg = load_config()
+    try:
+        cfg = load_config()
+    except ConfigValidationError as e:
+        _log.critical(str(e))
+        logging.shutdown()
+        print(f"\n❌ FATAL: {e}\n", file=sys.stderr)  # noqa: T201 - fatal message after logging.shutdown()
+        raise SystemExit(1) from e
     _setup_logging(cfg.log_level)
 
     # Validate runtime configuration (non-blocking warnings)

@@ -20,13 +20,13 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from ipaddress import IPv4Address, IPv6Address
-from urllib.parse import urlparse
+from urllib.parse import ParseResult, urlparse
 from weakref import WeakKeyDictionary
 
 from cryptography import x509
 
 from app.utils.http_status import DEFAULT_HTTP_SUCCESS_CODES, is_status_code_allowed
-from app.utils.ssrf import is_blocked_ip, redact_url
+from app.utils.ssrf import is_blocked_ip, redact_url, resolve_validated
 
 _log = logging.getLogger(__name__)
 
@@ -382,7 +382,8 @@ _ping_time_re = re.compile(r"time[=<]([0-9.]+)\s*ms", re.IGNORECASE)
 async def _resolve_probe_target(host: str, *, skip_ssrf_check: bool) -> tuple[str | None, bool]:
     """Return ``(connect_host, is_hostname)``; ``connect_host`` is ``None`` when the host is blocked.
 
-    Hostnames are resolved via public DNS and the answer is SSRF-checked before connecting to the IP.
+    Hostnames are resolved via public DNS, falling back to the system resolver; the chosen address is
+    SSRF-checked and returned, so the connection never re-resolves the name (skipped only with ``skip_ssrf_check``).
     """
     if not skip_ssrf_check and await _is_host_blocked_async(host):
         return None, False
@@ -396,6 +397,12 @@ async def _resolve_probe_target(host: str, *, skip_ssrf_check: bool) -> tuple[st
                     return None, True
             except ValueError:
                 resolved_ip = None
+        if not resolved_ip and not skip_ssrf_check:
+            # Never hand the bare name to the connector: it would resolve it again after the check.
+            pinned = await asyncio.to_thread(resolve_validated, host, allow_private=True)
+            if pinned is None:
+                return None, True
+            resolved_ip = str(pinned[0])
         return (resolved_ip or host), True
     return host, False
 
@@ -468,6 +475,37 @@ async def ping(host: str, timeout_seconds: int = 4, *, skip_ssrf_check: bool = F
         return await loop.run_in_executor(_EXECUTOR, _run)
 
 
+def _host_header(hostname: str | None, port: int | None, scheme: str) -> str:
+    """Build the Host header value: IPv6 literals bracketed (zone id dropped), default port omitted."""
+    name = hostname or ""
+    if ":" in name:
+        name = f"[{name.split('%', 1)[0]}]"
+    default_port = 443 if scheme == "https" else 80
+    return name if port is None or port == default_port else f"{name}:{port}"
+
+
+def _pinned_request(
+    parsed: ParseResult,
+    ip: str,
+    host_header: str,
+    ssl_extensions: dict[str, object] | None,
+    base_headers: dict[str, str],
+) -> tuple[str, dict[str, object] | None, dict[str, str]]:
+    """Build a request that connects to ``ip`` while Host header and TLS SNI keep the original name."""
+    if _is_ip_blocked_for_ssrf(ipaddress.ip_address(ip)):
+        raise ValueError("blocked address")
+    ip_for_netloc = f"[{ip}]" if ":" in ip else ip
+    hostport = ip_for_netloc if not parsed.port else f"{ip_for_netloc}:{parsed.port}"
+    userinfo = ""
+    if parsed.username:
+        userinfo = parsed.username
+        if parsed.password:
+            userinfo += f":{parsed.password}"
+        userinfo += "@"
+    url = parsed._replace(netloc=f"{userinfo}{hostport}").geturl()
+    return url, ssl_extensions, {**base_headers, "Host": host_header}
+
+
 async def http_head(
     url: str,
     timeout_seconds: float = 5.0,
@@ -514,49 +552,29 @@ async def http_head(
     port = parsed.port
     scheme = parsed.scheme
 
-    resolved_ip: str | None = None
-    resolved_url: str | None = None
-    host_header: str | None = None
-    request_extensions: dict[str, object] | None = None
+    host_header = _host_header(hostname, port, scheme)
+    ssl_extensions: dict[str, object] | None = {"sni_hostname": hostname} if scheme == "https" else None
 
-    # Prefer our own parallel DNS lookup (Quad9 + Cloudflare). This avoids
-    # depending on the container/host resolver in environments where it flakes.
+    # Every candidate is a literal IP that passed the SSRF check; the name is never re-resolved by the client.
+    candidate_ips: list[str] = []
     if hostname:
-        resolved_ip = await _resolve_host_via_public_dns_first_answer(hostname)
-        if resolved_ip and not skip_ssrf_check:
-            # If our resolution points into blocked networks, stop here.
+        # Prefer our own parallel DNS lookup (Quad9 + Cloudflare): independent of the container resolver.
+        public_ip = await _resolve_host_via_public_dns_first_answer(hostname)
+        if public_ip:
             try:
-                ip = ipaddress.ip_address(resolved_ip)
-                if _is_ip_blocked_for_ssrf(ip):
+                if not skip_ssrf_check and _is_ip_blocked_for_ssrf(ipaddress.ip_address(public_ip)):
                     return CheckResult(ok=False, detail="blocked host")
+                candidate_ips.append(public_ip)
             except ValueError:
-                resolved_ip = None
-
-        if resolved_ip:
-            # Construct an URL that connects to the resolved IP but keeps
-            # the original hostname for Host header / TLS SNI.
-            default_port = 443 if scheme == "https" else 80
-            ip_for_netloc = f"[{resolved_ip}]" if ":" in resolved_ip else resolved_ip
-            hostport = ip_for_netloc if not port else f"{ip_for_netloc}:{port}"
-            userinfo = ""
-            if parsed.username:
-                userinfo = parsed.username
-                if parsed.password:
-                    userinfo += f":{parsed.password}"
-                userinfo += "@"
-            resolved_url = parsed._replace(netloc=f"{userinfo}{hostport}").geturl()
-
-            # Host header should include port if non-default.
-            host_header = hostname if (port is None or port == default_port) else f"{hostname}:{port}"
-            if scheme == "https":
-                # httpx/httpcore support SNI override via request extensions.
-                request_extensions = {"sni_hostname": hostname}
+                pass
+        if not skip_ssrf_check:
+            system_ips = await asyncio.to_thread(resolve_validated, hostname, allow_private=True)
+            if system_ips is None:
+                return CheckResult(ok=False, detail="blocked host")
+            candidate_ips.extend(str(ip) for ip in system_ips if str(ip) not in candidate_ips)
 
     auth = httpx.BasicAuth(*basic_auth) if basic_auth else None
     base_headers = {"User-Agent": _deterministic_user_agent(target_id)}
-    initial_headers = base_headers.copy()
-    if host_header:
-        initial_headers["Host"] = host_header
 
     # Maximum redirects to follow (SSRF protection)
 
@@ -568,16 +586,21 @@ async def http_head(
             auth=auth,
             verify=not bool(ignore_cert_errors),
         ) as client:
-            # 1) Try resolved IP first (fast + independent of system DNS).
-            # 2) Fallback to original URL if that fails.
+            # Pinned IPs first; the original URL is a fallback only when the SSRF check is skipped.
             try_urls: list[tuple[str, dict[str, object] | None, dict[str, str]]] = []
-            if resolved_url:
-                try_urls.append((resolved_url, request_extensions, initial_headers))
-            try_urls.append((url, None, base_headers))
+            for candidate in candidate_ips:
+                try:
+                    try_urls.append(_pinned_request(parsed, candidate, host_header, ssl_extensions, base_headers))
+                except ValueError:
+                    _log.warning("HTTP check: dropped blocked address for %s", redact_url(url))
+            if skip_ssrf_check:
+                try_urls.append((url, None, base_headers))
+            if not try_urls:
+                return CheckResult(ok=False, detail="blocked host")
 
             last_exc: Exception | None = None
             resp = None
-            for try_url, ext, hdrs in try_urls:
+            for attempt, (try_url, ext, hdrs) in enumerate(try_urls):
                 try:
                     current_url = try_url
                     current_ext = ext
@@ -620,9 +643,8 @@ async def http_head(
                             break  # stop at first redirect
 
                         break  # Not a redirect, we're done
-                    # If the resolved-IP request returned a failure status, try the original URL too.
-                    # This helps in cases where public-DNS answers route to a different backend.
-                    if resolved_url and try_url == resolved_url and resp.status_code >= 400:
+                    # A failure status on one pinned IP tries the next one, since public DNS may route elsewhere.
+                    if attempt < len(try_urls) - 1 and resp.status_code >= 400:
                         continue
                     break
                 except Exception as e:  # noqa: BLE001 - retry next candidate URL; last error re-raised if all fail
@@ -657,7 +679,7 @@ async def http_head(
     except Exception as e:  # noqa: BLE001 - probe boundary: any failure becomes a failed CheckResult
         elapsed_ms = (time.perf_counter() - start) * 1000.0
         error_detail = _normalize_error_type(e)
-        _log.warning("HTTP check exception: url=%s error=%s (%s)", redact_url(url), error_detail, type(e).__name__)
+        _log.warning("HTTP check failed: url=%s error=%s (%s)", redact_url(url), error_detail, type(e).__name__)
         return CheckResult(ok=False, latency_ms=elapsed_ms, detail=error_detail)
 
 
@@ -681,10 +703,11 @@ async def cert_expiration(
             timeout_seconds: Connection timeout
             skip_ssrf_check: If True, skip SSRF validation
     """
-    connect_host, is_hostname = await _resolve_probe_target(host, skip_ssrf_check=skip_ssrf_check)
+    connect_host, _ = await _resolve_probe_target(host, skip_ssrf_check=skip_ssrf_check)
     if connect_host is None:
         return CheckResult(ok=False, detail="blocked host")
-    server_hostname: str | None = host if is_hostname else None
+    # A DNS target is verified against its name, an IP target against its IP SAN; never against connect_host.
+    server_hostname = host
 
     def _fetch(verify: bool, timeout: float) -> bytes | None:
         ctx = ssl.create_default_context()
@@ -720,7 +743,7 @@ async def cert_expiration(
         except OSError as e:
             return CheckResult(ok=False, detail=_normalize_error_type(e))
         except ValueError:
-            # wrap_socket rejects server_hostname=None while hostname verification is on (IP host).
+            # wrap_socket rejects a server_hostname it cannot use for hostname verification.
             return CheckResult(ok=False, detail="hostname required for certificate verification")
 
         if not der:

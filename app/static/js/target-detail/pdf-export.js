@@ -178,12 +178,22 @@ function initPdfJobListener(targetId) {
     }
   }
 
+  function onJobMonitoringExpired(e) {
+    if (Number(e.detail?.targetId) === Number(targetId)) {
+      if (safetyTimeout) clearTimeout(safetyTimeout);
+      resetPdfButton();
+      _setPdfStatus("PDF status monitoring expired. The report may still be available.");
+    }
+  }
+
   window.addEventListener("pdf-job-completed", onJobCompleted);
+  window.addEventListener("pdf-job-monitoring-expired", onJobMonitoringExpired);
 
   // Return cleanup object with timeout integration
   return {
     cleanup: () => {
       window.removeEventListener("pdf-job-completed", onJobCompleted);
+      window.removeEventListener("pdf-job-monitoring-expired", onJobMonitoringExpired);
       if (safetyTimeout) clearTimeout(safetyTimeout);
     },
     setSafetyTimeout: (t) => {

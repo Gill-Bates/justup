@@ -29,11 +29,13 @@ Scope:
 from __future__ import annotations
 
 import logging
+import re
 import sqlite3
 import time
 from collections.abc import Callable
 from typing import TypedDict
 
+from ..db import pop_candidates
 from ..db import sqlite as sqlite_db
 from ..db.pop_locations import (
     lookup_pop_by_hostname,
@@ -142,6 +144,45 @@ def _get_pop_conn():
     if _pop_get_conn is None:
         raise RuntimeError("POP DB connection factory not set")
     return _pop_get_conn()
+
+
+def observe_unknown_pop(
+    hostname: str, ip: str, measurement_key: str, proposal_factory: Callable[[], dict | None]
+) -> None:
+    """Persist a parser-supported unknown code without making it available to lookups."""
+    if _pop_get_conn is None or not hostname:
+        return
+    from .pop_codes_providers import parse_provider_hostname
+
+    parser = parse_provider_hostname(hostname)
+    codes = [parser.pop_code] if parser else extract_pop_tokens(hostname)
+    code = next((c for c in codes if re.fullmatch(r"[a-z][a-z0-9]{1,4}", c)), None)
+    if not code:
+        return
+    conn = _get_pop_conn()
+    try:
+        conn.execute("PRAGMA busy_timeout = 50")
+        if lookup_pop_code(hostname, conn=conn) is not None:
+            return
+        proposal = proposal_factory()
+        if proposal:
+            from .pop_refresh import city_code_for_country
+
+            proposal = {
+                **proposal,
+                "canonical_guess": city_code_for_country(proposal.get("city"), proposal.get("country")),
+            }
+        pop_candidates.observe(
+            conn,
+            code=code,
+            hostname=hostname,
+            public_ip=ip,
+            provider=parser.provider if parser else "generic",
+            measurement_key=measurement_key,
+            proposal=proposal,
+        )
+    finally:
+        sqlite_db.close_connection(conn)
 
 
 # ---------------------------------------------------------------------------

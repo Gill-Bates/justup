@@ -1,0 +1,336 @@
+# Design
+
+## Source of truth
+
+Status: Active. Updated 2026-11-03. This contract governs the current justUp! UI and future additions: it stabilizes the existing visual and interaction language rather than proposing a redesign. It applies to the shared shell, dashboard, login and password-change screens, targets list/wizard/editor/detail, notifications, groups, settings, About, shared components, and future UI routes. Evidence: the live [WireBuddy documentation homepage](https://gill-bates.github.io/wirebuddy/) viewed at 1440 px in Chromium; `base.html`, `dashboard.html`, `login.html`, `change_password.html`, `targets.html`, `target_wizard.html`, `target_form.html`, `target_detail.html`, `notifications.html`, `groups.html`, `settings.html`, and `about.html` under `app/templates/`; `app/static/css/gentelella-layout.css`, `ui.css`, `dashboard.css`, `target-detail.css`, `target-wizard.css`, `notifications.css`, and `traceroute-map.css`; shared and feature scripts; dashboard layout persistence; and the UI checks in `tests/test_ui_accessibility.py`, `tests/test_ui_layout_contract.py`, and `tests/layout/`. The reference uses Material for MkDocs, with an indigo header, compact two-row navigation, white reading surface, restrained typography, and automatic light/slate theme. No approved justUp! mockup was found.
+
+## Brand
+
+justUp! is a clear, dependable monitoring console. The interface should make health and failures easy to scan. Use WireBuddy's restrained documentation style as a visual reference: simple type, generous white space, and flat outlined surfaces. Keep the justUp! wordmark and monitoring vocabulary. Avoid decorative effects that compete with status information.
+
+## Product goals
+
+Help operators see service health, inspect a target, and act on alerts quickly. Keep navigation and dashboard controls familiar while making the shared UI feel consistent with the reference. Success means the logo, navigation, controls, and cards remain readable in light, dark, and system modes without changing monitoring behavior.
+
+## Personas and jobs
+
+Operators scan the dashboard and investigate targets, often on desktop. Administrators manage targets, recipients, and settings. A phone may be used to check status or dismiss an alert. These are assumptions drawn from the current routes and controls.
+
+## Information architecture
+
+Retain the current navigation hierarchy and labels: Dashboard; Manage containing Targets, Notifications, and Groups; and Settings. Preserve the sidebar's desktop rail and mobile drawer behavior. Do not add a new top-level navigation pattern as a side effect of adding a page. Display the full justUp! wordmark once in the content top bar, immediately to the right of the sidebar; use the compact brand mark in the sidebar. Both brand links go to the dashboard. Keep page titles and actions in the content area. Preserve the existing page families and their established navigation, tabs, and workflows. Dashboard layouts use the V2 JSON contract; historical database schemas are upgraded by the versioned SQLite migrations.
+
+## Design principles
+
+Use one shared token system, visible status labels alongside color, and a compact navigation hierarchy. Keep content width appropriate to the application: monitoring grids need more room than document prose. Adopt the reference's clear hierarchy, compact header, thin borders, and quiet typography without copying its documentation structure or text. justUp!'s established teal palette from `main` remains authoritative.
+
+## Visual language
+
+Keep the established justUp! teal accent (#0e7a65 light, #1fc7a6 dark) for links, primary actions and active states. Use modest radii, thin borders, and one subtle shared shadow. Keep the existing IBM Plex Sans asset as the local sans family rather than adding an external font request. Maintain the current Material Icons set. Motion is limited to existing navigation transitions and follows reduced-motion preferences.
+
+## Components
+
+`gentelella-layout.css` owns the application palette, shell, navigation, and baseline buttons, forms, cards, and tables. `ui.css` owns shared page layout, spacing, page primitives, modal presentation, and component refinements. `dashboard.css` owns dashboard widget presentation; the registry owns widget identities, labels, defaults, and minimum sizes; `dashboard-grid.js` owns layout interaction and persistence. `target-detail.css`, `target-wizard.css`, `notifications.css`, and `traceroute-map.css` own their feature-specific layout and presentation. New feature rules use these owners and the existing shared tokens; they must not reproduce shared palette, type, spacing, control, or surface rules locally. All modal dialogs use the shared modal contract below. The wordmark follows `data-bs-theme`; the standalone login and password-change screens use the same theme and shared visual tokens.
+
+## Application viewport and scrolling contract
+
+Viewport binding is the default for every page extending `base.html`; there is no page-level opt-in and no per-page height or scroll fix. `.ju-shell` is one dynamic viewport high (`100vh` fallback, then `100dvh`), so the browser document never scrolls vertically. The top bar and the application footer are permanently visible, non-shrinking shell rows; the footer stays in flex flow, ends at the visible bottom edge and never overlays content. `<main>` takes the remaining height and is the single vertical scroll region of page content. Content keeps its natural size, reflows at narrow widths and 200% zoom, and stays reachable at the end of `<main>`. A feature area (table, map, wizard step) may keep a documented local scroll region but may not push the shell beyond the viewport. Standalone authentication screens have their own layout.
+
+Editors with long content keep their primary form actions reachable: either at the end of the content in `<main>`, or in a persistent action bar (`position: sticky` inside `<main>`, for example `.sticky-actions`) that stays fully between the top bar and the footer. An action bar is never placed outside `<main>` or under the footer.
+
+The browser layout audit (`tests/layout/audit.js`) enforces this geometry on every shell page at the top and bottom of `<main>`, including the target editor at 1280×720, 390×844, 320×640 and 1280×720 at 200% zoom in Chromium and WebKit. It reports shell overflow, document scrolling, top bar or footer leaving the viewport, the footer ending above the visible bottom edge, an unscrollable main region, footer overlap and unreachable form actions (persistent bars at every position, scrolling actions at the scroll end). The audit self-test proves it fails on a document-flow shell and passes on the shared shell. A failed check fails the UI run.
+
+## Page and extension contract
+
+This contract applies to every page, fragment, and reusable UI component, including surfaces not given a dedicated visual specification below. Extend the nearest existing page or component pattern; do not introduce a parallel design system or restyle a feature just to make it look new.
+
+- Application pages use the existing `base.html` shell and shared `ui-page`, page-heading, card, grid, stack, form, table, and tab patterns where applicable. Login and password change retain their existing standalone authentication layouts while using the shared type, theme, controls, and tokens.
+- Keep domain-specific content and layout in its feature surface. Shared presentation belongs to the shared CSS owner above. A page may arrange its own content, but must not redefine the application palette, common controls, page spacing, or a shared component's appearance.
+- Reuse an existing component or variant before adding one. Add a shared variant only for an intentional, reusable difference; do not create one-off color, spacing, radius, shadow, or typography variants to solve a single page's layout.
+- Preserve each page's existing interaction and data behavior, including target and notification actions, settings flows, keyboard support, IDs and Bootstrap hooks where applicable. A visual extension must not silently change a route, permission boundary, saved preference, API contract, or monitoring behavior.
+- Every new interactive component defines its applicable default, hover, focus, active, disabled, loading, empty, success, and error states. Reuse the established status vocabulary and give status distinctions a text, icon, or shape cue in addition to color.
+- New visual rules belong in the established shared or feature stylesheet, not inline presentation. When an existing component is touched, remove obsolete local overrides if they are no longer needed; this rule does not require unrelated legacy markup to be refactored.
+- An intentional exception must name its affected surface, reason, and verification in this contract. Existing implementation alone does not establish an exception or precedent for future work.
+
+## Modal dialogs
+
+### Scope and authority
+
+All application modals follow one design contract, whether they appear in Settings, Groups, the Dashboard, or another page. It covers the 14 Settings dialogs (`app/templates/settings/modals.html`), the group dialog, the dashboard widget dialog, the shared confirmation dialog (`window.confirmAction`, built in `app/static/js/utils/confirm-dialog.js`), and every future dialog. Individual content is allowed; individual presentation rules per dialog are not. Bootstrap 5.3 supplies the dialog behavior and accessibility primitives; `ui.css` owns the reusable modal presentation, drawing colors, borders, typography, and spacing from the existing shared design tokens in `gentelella-layout.css` and `ui.css`. Page-specific CSS may style domain content, but must not redefine modal framing, header/footer geometry, button hierarchy, or the application palette.
+
+The standard Bootstrap structure is mandatory: `.modal > .modal-dialog > .modal-content` containing `.modal-header`, `.modal-body`, and, for actionable dialogs, `.modal-footer`. Dialogs use stable IDs, an associated visible title via `aria-labelledby`, a native close button where dismissal is allowed, and native forms/controls. Prefer shared semantic classes and Bootstrap primitives over modal-ID selectors, inline styles, or repeated page-specific overrides. Do not introduce a generic JavaScript modal framework or abstraction merely to reduce similar markup.
+
+### Dialog variants and visual hierarchy
+
+Only the following semantic variants are needed by default. Variants share the same shell, title typography, padding, surface, border, radius, shadow, close button, and footer alignment:
+
+| Variant | Intended use | Required action treatment |
+| --- | --- | --- |
+| Form | Add/edit recipient, user, or configuration | Neutral header; Cancel as secondary action and a clearly labeled primary save/create action. |
+| Confirmation | A reversible or routine discrete action | Neutral header, concise explanation, and a clearly labeled confirm action. |
+| Destructive or high-impact confirmation | Delete, purge, unregister, restore, or security-sensitive change | Neutral shared shell; explicit consequence/warning within the body, appropriate warning/danger confirmation action, and any required authentication. Color never replaces the warning text. |
+
+The variant is declared once on the `.modal` root as `ju-modal--form`, `ju-modal--confirm` or `ju-modal--critical`; every modal MUST carry exactly one of them, and no other variant exists. The variant selects the width token and the semantics below, never a separate header design. In the critical variant the confirm button is `btn-danger` when data or access is removed irreversibly (delete, purge, clear, restore, unregister) and `btn-warning` for a reversible but impactful security change (authentication toggle, unlink device, revoke sessions). The consequence is stated in the body with `.ju-modal-consequence` (icon plus text). Exception for selection and information dialogs: a dialog whose changes apply immediately, or that only informs (for example the dashboard widget list), has no commit step. It keeps its variant class (`ju-modal--form` for the widget list) and its footer holds only a single `Close` action; it never gets an artificial Save button. Its header close button and the footer `Close` both dismiss it, and changes made in it are applied and announced as they happen.
+
+Do not create a different header design for every workflow. In particular, full `bg-danger` or `bg-warning` headers must not be the default way of distinguishing modal intent; the body explains consequences and the confirmation button expresses the action's severity. An optional leading title icon uses the shared icon size and alignment. The title remains the strongest text element in the header; secondary explanations belong in the body.
+
+Modal width uses a small set of named, reusable size variants (compact confirmation, standard form, and wide content only where justified). Their maximum widths, padding, and spacing are defined once via shared CSS variables or Bootstrap's supported dialog variables, not individual modal selectors. Height follows content up to the available viewport; long bodies scroll within the dialog without obscuring the header and footer. No modal adds empty space merely to match another modal's height.
+
+### Shared layout and form elements
+
+Use a predictable vertical rhythm: label above control, related help/error text immediately below, consistent spacing between form fields and sections, and one header/body/footer padding contract. Required fields are marked consistently, including the accessible required state. Inputs, selects, switches, icon buttons, and explanatory text follow shared type, height, border, focus, and spacing tokens. Avoid mixing `form-control-sm` inputs with regular-size controls in the same form unless the compact density is a documented dialog-wide variant.
+
+Related settings such as notification channels use one reusable option-row or option-group pattern. A channel's icon, name, toggle, associated value, validation and secondary action align within that pattern. The channel group has a programmatic name (for example `fieldset`/`legend` or an equivalent accessible group). A disabled channel is visibly and semantically inactive; its data must not be silently lost or submitted as enabled. Prefer a flat shared group structure over nesting generic shadowed cards inside the modal. Nested cards are reserved for genuinely separate content surfaces, never used solely to create padding.
+
+The form's primary task must dominate the visual hierarchy. Nonessential information is de-emphasized and concise. Do not distribute competing send/test controls among input adornments, a second action row, and the footer. Channel testing is a secondary action: use clear text labels (an icon alone is insufficient), consistent placement, and explicit disabled/loading/result states. If tests operate on saved values, state this next to the action and disable or explain invalid tests after unsaved edits. Retain the existing API and recipient-testing behavior.
+
+### Action placement and interaction states
+
+The modal footer contains the primary decision: Cancel/Close and one primary Save/Create/Confirm/Delete action, aligned consistently on desktop and stacked consistently on narrow screens. Destructive actions use the existing danger treatment; routine primary actions use justUp!'s teal palette. Do not make an enabled secondary action look disabled. Labels describe the action rather than using vague `OK` or unlabeled icons. Async submission shows a busy state, prevents duplicate commits, preserves user input on failure, and reports success or actionable validation errors in the appropriate location.
+
+Use inline field errors for field-specific problems and a clearly announced form-level error for request-level failures. Loading, disabled, warning, and success states must be distinguishable without relying on color alone. Avoid layout jumps when help, error or test-result text appears. Test-result messages use an accessible live region without stealing keyboard focus. Cancel, backdrop/Escape dismissal where allowed, and close controls do not accidentally submit the form. For operations requiring an explicit confirmation or password, preserve those guards when changing presentation.
+
+Bootstrap's modal focus trapping and focus restoration must continue to work. On open, keyboard users reach the form or first meaningful control; on close, focus returns to the invoking element whenever it remains in the DOM. Visible focus outlines, appropriate touch targets, text zoom, reduced motion, and forced-colors support apply to all variants.
+
+### Responsive and theme behavior
+
+Modal layout is determined by its own available width and height, while the application's shell breakpoints remain unchanged. At 320 px width and at increased text zoom, titles, fields, buttons, help text and close controls remain fully usable without page-level horizontal scrolling. The footer may stack actions on mobile; input actions must not squeeze a field below a usable width. Account for mobile safe areas, the on-screen keyboard, and short viewports. Never allow a fixed-height dialog to make its footer or close control unreachable.
+
+Light, dark, and system modes use the same semantic structure. Colors follow the active `data-bs-theme` tokens immediately; individual dialogs must not hardcode a second background, border, warning or primary-action palette.
+
+### Shared classes and tokens
+All dialog presentation lives in `app/static/css/ui.css`, section "Modal dialogs", and reads only the `--ui-modal-*` tokens (padding, gap, widths, radius, border, shadow, title and icon size) plus `--ui-icon-inline` and `--ui-target-min` defined in the `:root` block of that file. The markup uses these reusable classes: `ju-modal--form|confirm|critical` (root), `ju-modal-title` and `ju-modal-icon` (header title with optional leading icon; the title is an `h2`), `ju-modal-lead`, `ju-modal-note` and `ju-modal-consequence` (body text roles), `ju-modal-form`, `ju-field`, `ju-required`, `ju-fieldset`, `ju-legend`, `ju-switch`, `ju-channel`, `ju-channel-body`, `ju-channel-action`, `ju-test-result`, and `ju-modal-error`.
+- A dialog MUST NOT use inline `style`, hard-coded colors, `!important`, modal-ID selectors, `bg-*`/`text-white` header classes, or `card` markup inside the body. Colors come from Bootstrap theme tokens (`--bs-danger-*`, `--bs-secondary-color`) or `--ju-*` tokens, so light and dark follow `data-bs-theme` without per-dialog branches.
+- Header, body and footer padding, title typography, border, radius and shadow are identical in every variant; only the width token differs. Font sizes, gaps and control heights come from the tokens, not literals.
+- Obsolete modal-specific CSS is removed when a dialog moves onto the shared classes.
+
+### Form fields and switches
+- Every field has a visible `<label for>` (or, for a field whose purpose is given by a neighboring switch label, a `visually-hidden` label with the same words). A placeholder never replaces a label.
+- Required fields carry the native `required` attribute. When a form also contains optional fields, required labels end in `<span class="ju-required" aria-hidden="true">*</span>` and the form starts with the `ju-modal-note` "Fields marked * are required."; single-field confirmation forms mark the field by `required` only.
+- Help text sits directly below its field in `.form-text` and is tied to the control with `aria-describedby`.
+- Display locations for problems (each has exactly one place):
+
+| Kind | Where | Semantics |
+| --- | --- | --- |
+| Required field empty or value invalid (client-side) | Directly below the affected field (`.ju-field-error`, text plus icon) | `aria-invalid="true"` on the field, `aria-describedby` to the error element (kept next to existing help ids); focus moves to the first invalid field; the error clears when the field is edited and when the dialog opens or closes. Created only through `JuFieldErrors` (`app/static/js/utils/field-errors.js`), never by writing into the shared error area. |
+| Request-level or asynchronous failure (API error, network error) | The dialog's `ju-modal-error` element at the end of the body | `role="alert"` (implicit assertive live region), shown and hidden with `d-none`, never takes focus, input is preserved. An API error that names one field may additionally use `JuFieldErrors`. |
+| Result of a test action (for example a test message) | The `ju-test-result` region next to the action | `role="status"` / `aria-live="polite"`, reserved line, icon plus text, never takes focus. |
+| Result of an action outside a dialog | Toast | Existing toast live region. |
+- Switches are real checkboxes with `role="switch"` and a `<label>` inside `.ju-switch`; the label is the large target. Help text on a switch is optional and only for a switch that is not self-explanatory; a self-explanatory switch such as "Recipient Enabled" or "Enable for all Targets" has no description (explicit product decision; do not add one). A switch with a destructive side effect (it deletes or reassigns data when toggled) needs a contractually defined safeguard. Saving an existing recipient with "Enable for all Targets" switched off asks for confirmation when assigned targets would be removed, explicitly including manual assignments. Cancel keeps the edit dialog and its draft open; no request is sent.
+- Use `type`, `inputmode` and `autocomplete` that match the data (`tel`, `email`, `current-password`, `new-password`). Password confirmation forms keep the hidden username field for password managers, hidden with `visually-hidden`.
+- Groups of related controls (notification channels, change password) use `fieldset` with `legend`, not a loose heading and not `role="group"`.
+
+### Channel option row
+Signal and Email use one reusable row, `.ju-channel`, inside the channel `fieldset`: the `ju-switch` (icon and channel name), then `.ju-channel-body` with the value input, its help text and, in the edit dialog only, one `.ju-channel-action` containing the single test trigger. Rows are flat, separated by a rule, and never nested cards. A switched-off channel shows only its switch row (see "Optional field groups"); its value is not submitted as active.
+- There is exactly one test pattern: a secondary `btn-sm btn-outline-secondary` button below the field, visible text `Send test`, accessible name `Send test message to <channel>` (the visible text is part of the name), `aria-describedby` pointing at the shared saved-values hint. There is no icon-only test button, no input-group adornment and no second "test all" button in the dialog.
+- The hint states that tests use the saved values and updates when edits are unsaved. The result of a test is written into one `role="status"` / `aria-live="polite"` region (`.ju-test-result`) that reserves one line, never takes focus, and pairs each result with an icon and text. The add dialog has no test trigger because nothing is saved yet.
+
+### Optional field groups
+Fields that belong to an optional part of a form (notification channels in the recipient dialogs, check settings in the target wizard) follow one rule: the group is shown only while its switch is on, implemented once in `app/static/js/utils/optional-groups.js` (the wizard's `check-groups.js` and the channel dialogs both call it).
+- **Hidden, not just disabled.** An off group carries the `hidden` attribute, so its input, help text, field error and test action leave layout, tab order and accessibility tree. Only the switch row (icon, name, switch) stays. The input may additionally be `disabled`; `disabled` alone is not enough.
+- **Switch semantics.** The switch is a checkbox with `role="switch"` and `aria-controls` naming the group it owns; on/off is announced by the switch itself (no `aria-expanded`, no extra live message in dialogs). Focus stays on the switch when a group appears or disappears; the first field is not focused automatically. If focus sat inside a group that is hidden, it moves to the switch.
+- **No validation while hidden.** A hidden group is not validated, its field errors are removed when it is hidden, and values already typed stay in the field while the dialog is open. The rule "at least one channel" stays mandatory and is reported at the channel switches. Controls shared by all groups (the saved-values hint and test result) are shown only while at least one group is visible.
+- **Stable geometry.** Showing or hiding a group changes only the dialog height; width, header and footer do not move, and the body scrolls only when needed. Group rules and spacing come from the shared `.ju-channel` styles; a hidden group leaves no empty row or double rule.
+- Checks: `tests/js/optional-groups.test.mjs` (all switch combinations, error removal, focus), `tests/test_ui_accessibility.py` (`aria-controls` markup), `tests/layout/recipient-channels.spec.mjs` (`@modal`, Chromium and WebKit, light and dark, 1280x720, 390x844, 320x640 and 200 % zoom: group not visible and not reachable by Tab, focus on the switch, value kept, error handling, geometry).
+
+### Modal accessibility (WCAG 2.2 AA)
+- Semantics: Bootstrap supplies `role="dialog"` and `aria-modal="true"` at runtime; this MUST NOT be overridden. Binding is that the page behind an open dialog cannot be operated (no focus, click or keyboard reach), proven by focus and interaction tests rather than assumed from Bootstrap. Every dialog has `aria-labelledby` pointing at its title and, where a message explains the action, `aria-describedby` pointing at that message. The close button has `aria-label`; decorative icons have `aria-hidden="true"`; every icon-only button has an accessible name.
+- Focus lifecycle: one shared module, `app/static/js/utils/modal-focus.js`, handles every dialog, including the ones created at runtime such as `window.confirmAction`. The HTML `autofocus` attribute is not a focus mechanism (Bootstrap 5.3 modals are not focused by it) and MUST NOT be used in dialogs. After `shown.bs.modal` focus moves to: (1) a control marked `data-ju-initial-focus`, if present; (2) in a critical dialog, the first required field (the user must type before anything is committed) or, without one, the safe Cancel/Close action; (3) in other dialogs, the first enabled, visible, editable field of the body, else the first focusable body control, else Cancel/Close. After `hidden.bs.modal` focus returns to the invoking element while it is still in the DOM and visible; otherwise to `main`. At most one Bootstrap dialog is visible at any time; dialogs are never stacked. A dialog that needs a confirmation (`window.confirmAction`) is handed over centrally: the open dialog is hidden first (its draft and switch states stay in the DOM), the confirmation is shown alone, and the original dialog is shown again after either answer, with focus back on the control that triggered the confirmation (for example the enabled Save button; keep controls enabled during the confirmation and set the busy state only afterwards). Exactly one confirmation is active at a time; a concurrent `confirmAction` call resolves `false` without touching it. Backdrop and body scroll lock stay single and consistent, and nothing is left behind after the last dialog closes. Focus is trapped by Bootstrap; Escape closes (backdrop clicks never do, see the dismissal policy). Focus indicators use `--ju-focus-ring`, at least 3:1, and are not clipped.
+- Perception: text at least 4.5:1 and UI components and focus at least 3:1 in both themes; error, success and warning always carry text or an icon; targets are at least 24×24 CSS px and 44 px on coarse pointers (`--ui-target-min`); `prefers-reduced-motion` and forced colors are respected; content reflows at 320 px and 200 % zoom without horizontal scrolling.
+- Statuses (test sent or failed, request errors) are announced through live regions, never through focus changes.
+- Automated checks prove structure and geometry; they do not replace a screen-reader pass and an expert review.
+
+### Modal acceptance contract
+
+- All currently shipped dialogs, including the Settings form, confirmation, destructive, restore, user, and recipient dialogs, use the common shell and named variants. No recipient-only CSS exceptions are introduced to make the screenshot look correct.
+- Header titles, optional icons, close buttons, form-label typography, paddings, separators, and footer actions follow the same computed styles for a given variant. Intent is communicated by text and button semantics, not by unrelated header designs.
+- The Add/Edit Recipient dialogs display Signal and Email with the same reusable channel-group pattern. Enabled and disabled combinations, long names, long addresses, and validation errors do not cause misalignment, overlap, or excessive nested-card whitespace.
+- Test-message actions are recognizably secondary, have text labels, use the saved-data contract correctly, and expose disabled, pending, success and failure states. Sending never tests an unsaved value inadvertently.
+- Each representative variant is checked at desktop width, at 320–576 px mobile widths, on short viewports, with text scaling, and in light/dark themes. Check accessible names, focus trapping/restoration, Escape/backdrop policy, scrolling and keyboard submission.
+- Where the checks run: static contracts in `tests/test_ui_accessibility.py` (variants, shared shell, no inline style or nested cards, label and ARIA references, fieldset/legend, channel and test pattern, token-only CSS) and `tests/test_modal_dismissal.py`; the browser check `tests/layout/modal.spec.mjs` (Chromium; 320 px and 1280 px; light and dark) asserts role and `aria-modal`, resolving `aria-labelledby`, initial focus, focus return to the opener, focus containment, Escape, target size, overflow, control overlap, body scrolling and footer reachability at 320 px, footer actions and field-error semantics (`aria-invalid` plus resolving `aria-describedby`); `tests/layout/run.mjs` (`modalAudit`) audits the full application pages. Add a rule here and a check there together.
+- Browser checks assert geometry: no control/text overlap, horizontal overflow, clipped footer, obscured close button, or inaccessible validation result. Compare screenshots of representative Add/Edit, confirm, and destructive dialogs; run existing modal, form and recipient workflow tests.
+- Preserve existing dialog IDs, form field IDs, Bootstrap hooks, authorization/confirmation flows, and backend contracts. Refactor shared presentation before altering individual dialogs. Document and test any intentional behavioral change.
+
+This section is the acceptance contract for modal implementation and code review. When existing modal markup or styling contradicts it, the shared system is authoritative; local CSS patches are not an acceptable substitute.
+
+## Badges
+
+Every badge is Bootstrap's `.badge` as refined in `ui.css` (inline-flex, label centred in its box, sizes and radius from the badge tokens). Every row or cluster of badges sits in a badge group: the container carries `ju-badges` (or the attribute `data-ju-badges`) and its children are `.badge` (or `data-ju-badge`). The group owns wrapping, the gap (`--ju-badges-gap`, default `--ui-stat-gap`) and the vertical alignment of its rows. `ju-badges--fill` makes the group take the space left in its parent and centres the rows in it, horizontally and vertically, so the distance to the preceding and following content is equal. Widgets, tables and headers do not add their own centring, `top`, `transform` or pixel offsets for badges; a new badge cluster uses the group, a new badge class extends `.badge`.
+
+Status badges compose `.badge` with exactly one shared variant: `ju-status-badge--success`, `--warning`, `--danger`, `--info`, or `--neutral`. These classes use the matching Bootstrap semantic background token and a legible white or black foreground; status badges do not mix `bg-*` and `text-bg-*` utilities. The Monitor Quality “OK” badge and Delivery queue “Queue clear” badge both use the success variant and must have identical computed foreground and background colors in light and dark themes. Every status remains legible by its text or icon as well as color.
+
+The cross-channel status palette is fixed: success `#198754` / white foreground / `#146c43` text; warning `#ffc107` / black foreground / `#8a5a00` text; danger `#dc3545` / white foreground / `#b02a37` text; info `#0dcaf0` / black foreground / `#055160` text; neutral `#6c757d` / white foreground / `#5b6b7b` text. The web badge variants use the Bootstrap semantic background tokens for these values. PDF status badges and email notification accents/fills use the same background and foreground mapping; text on light email/PDF surfaces uses the mapped text color for contrast. Email status colors come from `app/utils/status_palette.py`; `status.color` remains a text-color alias for saved custom templates, while new template code uses `status.accent_color`, `status.foreground_color`, and `status.text_color` explicitly. Metadata (check type, group, host, port) in emails and PDF is always neutral: check-type badges use the `neutral` palette entry (email: `CHECK_BADGE_COLORS` in `email_template.py`, PDF: `COLORS["neutral"]`) in every mail state, never a status color or a per-type color; status colors appear only for the status of the message (banner, status text, status badge). Pinned by `tests/test_email_template.py` (neutral in every state, banner keeps its state color, contrast ≥ 4.5:1 text / ≥ 3:1 edge).
+
+`tests/layout/audit.js` measures every badge group on every audited page, viewport and widget size (selector convention `.ju-badges, [data-ju-badges]`; new groups are covered automatically): `badge-group-not-centered` (rows are not vertically centred in the space the group offers, tolerance 2 px), `badge-text-not-centered` (label not centred in the badge box), `badge-overlap` and `badge-clipped-by-group` / `badge-text-clipped`. The audit self-test injects each defect and a centred group must report nothing. The quality widget is measured in `tests/layout/run.mjs` at its default height, with three rows, manually enlarged and narrow.
+
+## Notification list
+
+Notification rows keep the title, description or resource status, timestamp, severity and unread state legible without page-level horizontal overflow. Long text may truncate only when its full value remains available through a title; available report downloads and target links remain native links, while missing, expired or removed resources show the plain-text status “Report no longer available” and never offer a dead link.
+
+The row's hover surface uses the shared `--ju-panel-hover` token. Hover and focus must not change the severity badge, unread marker or error treatment. Keyboard focus remains visible, and the delete action can be reached and activated by keyboard. On touch layouts, swipe may reveal the delete action, but it must remain fully reachable and must not cover the notification content.
+
+The notification layout adapts at narrow widths and 200% effective zoom: title, description, resource status and timestamp stay within the row, with the resource status below its description where both are present. Contrast and row geometry are checked in light and dark themes at desktop, phone, 320 px and zoomed sizes. The registered browser acceptance tests are `tests/layout/notifications.spec.mjs` in Chromium and WebKit; they also verify native report links, read-state changes, keyboard deletion and swipe reveal.
+
+## Dashboard widgets
+
+
+### Shared widget structure
+
+Every dashboard tile has a consistent outer card, a reserved header, and a flexible content body. The header aligns the title, status, and edit controls without overlap. The body owns the widget-specific content and its loading, ready, empty, and error states. Widgets may use different internal content layouts, but shared shell behavior, typography roles, spacing, status treatment, borders, and focus styles come from the dashboard component rules and shared tokens.
+
+The move handle occupies a reserved header region while edit mode is active. It must not cover the title, status, values, or resize controls. Dragging and resizing remain keyboard accessible; the focused handle announces movement and size changes. Pointer targets meet the applicable minimum size, and visual states use shape or text as well as color.
+
+### Required
+
+- The Delivery Queue has exactly three primary metrics: Pending (`data.pending`), Processing (`data.processing`), and Failed (24 h) (`data.failed_recent`, falling back to `data.failed` when the recent count is absent or invalid). Each metric has a visible label and an associated value; zero is rendered as `0`.
+- Equivalent metrics use one shared responsive container and equal typography. A derived total must not appear as another primary number unless it has its own visible label and a distinct product purpose.
+- Queue status is separate from the three numeric metrics and appears once, in the shared widget-header status badge. A load failure replaces stale metrics with a clear body error state; color is never the only status cue.
+- The V2 layout remains authoritative. Automatic height follows measured content down to the declared minimum; manual height and larger saved sizes remain user-owned across refresh and reload.
+- A two-row minimum is allowed only if browser measurements show the title, longest status, all three metrics, and edit handle fit without clipping, overlap, or body scrolling at the supported narrow and zoomed sizes, in view and edit modes. If any case fails, retain three rows. Keep template default, registry default/minimum, GridStack limits, and backend validation synchronized.
+
+The previous four-number rendering came from a visible `pending + processing` value inserted before the three metrics; its description existed only in `aria-label` and `title`. The card's three-row default and minimum then prevented automatic sizing from reclaiming space when that redundant row was removed. The queue's initial HTML is a loading shell; its counts and status are rendered by the served dashboard JavaScript, so the browser path must be checked as well as the template.
+
+Browser measurement at 1280 x 720 with the compact metric labels gives a 125 px natural card, 20 px GridStack frame, and 24 px reserved edit-handle band: 169 px total. Two rows provide 144 px at the current 72 px cell height, so the minimum remains three rows. Keep this calculation covered in Chromium and WebKit at desktop, 200% effective zoom, and narrow widths, in both view and edit modes.
+
+#### Recommendations
+
+- Prefer a semantic definition list for each label/value pair, with the label consistently above or below the value.
+- Reuse `.dashboard-monitor-metrics`, `.dashboard-monitor-card`, `.dashboard-widget-header`, the shared status-badge variants, and existing spacing/type tokens. Use container width, not viewport width, to choose compact typography.
+- In a compact empty state, spend as little vertical space as readability permits; do not keep an extra row solely to fill the card.
+
+### Sizing contract
+
+| Layout state | Required behavior |
+| --- | --- |
+| Default layout | Each widget starts at a compact size suited to its content. Widgets do not need identical dimensions. |
+| Automatic height | Height follows measured content in both directions: it grows when required and shrinks when content no longer needs the space. A stale saved height is not a permanent minimum. |
+| Manual height | A user's resize switches that widget to manual height. Later content or polling updates do not change the chosen height. A widget-specific minimum protects essential content. |
+| Manual enlargement or reduction | The chosen dimensions remain stable after refresh and reload, subject only to the declared minimum and available grid bounds. Content reflows or shows its defined compact state inside the tile. |
+| Narrow widget | Content adapts to the widget's own inline size, not just the viewport width. It stays inside the tile and keeps essential information available. |
+| Restored user layout | V2 widget identity, position, width, visibility, and manual/automatic height intent are preserved. |
+| Reset layout | Reset restores the current registry defaults and automatic height behavior. It does not leave a mixture of stale dimensions and new defaults. |
+| Mobile/tablet stack | The dashboard uses natural content height where the grid stacks. Responsive reflow must not overwrite the saved desktop arrangement. |
+
+Minimum sizes belong to the widget registry and are specific to each widget. A small KPI, a quality summary, and a chart need not share one minimum. If a widget cannot show all content at its minimum size, it uses a defined compact or overflow treatment; content must not silently escape the card or overlap another widget.
+
+### Responsive content and shared tokens
+
+Widget content uses container queries for compact, standard, and expanded presentations wherever supported by the current browser baseline. Viewport breakpoints remain appropriate for shell and grid stacking, but they do not determine how wide an individual tile is. Long labels, large values, empty data, and text scaling must remain legible at the widget's minimum width.
+
+The dashboard has one authoritative gap token. CSS layout and GridStack read the same `--ju-dash-gap` source; any per-side GridStack inset is derived from it. Cell height, card padding, and shared type roles likewise have one token source. JavaScript must not maintain a second independently tuned gap or spacing value; a fallback may exist only for initialization failure and must match the documented token default.
+
+Widget minimum sizes have two owners that must agree: the widget registry (`dashboard-widgets.js`, which the client uses for GridStack node limits) and `DASHBOARD_WIDGET_MIN_SIZES` (server validation). The template carries default placement only and no `gs-min-*`. `tests/test_dashboard_layout.py` fails when registry, server table and template defaults diverge. A stored V2 layout written under an older, smaller minimum is not rejected and not migrated in storage: the client raises every stored size, hidden widgets included, to the current minimum while loading, keeps all other positions and pushes only overlapping tiles down, so the next save is always valid. The server stays strict and answers 422 for a too small widget.
+
+### Edit Mode Geometry Contract
+
+1. GridStack is the only authority for widget coordinates and sizes. Nothing else computes a position, a row or a column.
+2. Widget frames (`.grid-stack-item-content`), the empty-cell slots painted in edit mode, the drag placeholder and the resize feedback all occupy the rectangle of the GridStack cell, inset by the gutter. The slot layer takes its cell count from `grid.getRow()` and its cell size from the GridStack CSS variables.
+3. Edit mode changes neither the outer position nor the size of any widget. The card fills the whole frame in both modes; the row count of a tile is the same in both modes.
+4. The drag handle takes space inside the frame: it shares the frame's single grid area and the card reserves the band as top padding (`--ju-dash-handle-height`) while editing. The handle never shifts the card, never overlaps text and no widget has its own handle position.
+5. The dashboard tokens in `dashboard.css` are the single source for gutter (`--ju-dash-gap`, `--ju-dash-gutter`), cell height (`--ju-dash-cell-height`), radius (`--ju-dash-radius`) and handle band (`--ju-dash-handle-height`). `dashboard-grid.js` reads them for GridStack and holds only initialization-failure fallbacks that equal the token defaults. Empty cells use the semantic surface tokens `--bs-tertiary-bg` and `--bs-body-bg` for a subtle gradient with a dashed border, so light and dark mode follow the theme and forced colors keep the border.
+6. Layout changes stay compatible with the V2 persistence contract: stored coordinates and `height_mode` are never altered to compensate for CSS.
+7. Edit gestures never scroll the document and never make the scroll height follow the pointer. `main` is the only scroll container (viewport shell, `overscroll-behavior: contain`). While editing, GridStack's `maxRow` is the settled layout plus `EDIT_RESERVE_ROWS` (4) rows, refreshed after each gesture, each keyboard move and each content fit; outside edit mode the bound is open. GridStack's auto-scroll stays on so far rows stay reachable, but within that bound.
+8. Browser geometry tests are mandatory for any edit mode change. `tests/layout/run.mjs` measures frame, card, slot and placeholder rectangles against the GridStack node coordinates with `GEOMETRY_TOL_PX = 1` (1.0 CSS px absolute per edge, also at 200 % zoom): before edit mode, right after entering it, after keyboard move and resize, during and after a drag, after saving, after reload, after cancelling and after a reset, the document and `main` scroll range while dragging and resizing to the bottom edge, plus a hidden-controls check below 992 px. Command: `JUSTUP_LAYOUT_BROWSERS=chromium,webkit pytest -q tests/test_ui_layout_contract.py::test_dashboard_grid_interactions_in_browser` (equivalent: `node tests/layout/run.mjs --profile quick --browsers chromium,webkit --gridstack`).
+
+### Widget acceptance criteria
+
+- At each widget's minimum, default, and expanded dimensions, header controls and content remain inside the card without collisions or clipped essential information.
+- Across KPI, quality, and data widgets, computed title size, weight, line height, header padding, and title/status alignment follow the same shell rules. Long titles wrap without colliding with status or edit controls at minimum width and increased text size.
+- Automatic widgets grow and shrink after content changes. Manual heights survive polling, save, reload, and responsive reflow.
+- V2 positions, widths, visibility, and height modes restore correctly; reset returns to current defaults.
+- Compact, standard, and expanded content variants follow the widget container width. Test a narrow tile on a wide viewport as well as a wide tile on a narrow viewport.
+- Loading, populated, empty/success, and error states remain distinguishable. Test short and long labels and realistic data-count variation.
+- Move and resize handles do not cover widget headers or body content. Pointer, keyboard, and touch behavior remain available, and focus remains visible.
+- Browser checks measure card/content containment and handle overlap for representative widget sizes, stored-layout round trips, reset, resize, and the mobile/tablet stack in light and dark themes.
+
+This section is the acceptance contract for dashboard implementation and review. When the current DOM, sizing model, or handle placement conflicts with it, change the implementation while preserving the external contracts listed under Implementation constraints. The implementation report identifies how each acceptance criterion was verified and names any remaining gap.
+
+## Charts and data visualization
+
+Applies to the combined response-time chart on the target detail page and any future metric chart (`combined-chart.js`, `target-detail.css`; tokens in `gentelella-layout.css`).
+
+- Metric series take categorical colors from the central palette `--ju-dv-1` … `--ju-dv-8`, defined for light and dark and read at runtime from the active theme; chart scripts hold no hex values for series. Each value has at least 3:1 contrast on `--ju-panel-bg` and the values are pairwise distinguishable.
+- The color of a series is stable: HTTP and Ping have fixed slots, TCP ports follow in ascending port order among the plotted series. It never depends on legend visibility or source order. Two series never share a color; beyond eight series the palette is extended, never the line style.
+- Monitored services differ only by color. All metric series use the same stroke width and the same solid line style: no series is dashed or dotted, and no series is thicker than another. The width comes from one shared token, not from per-series values. Dash patterns are reserved for estimates and outage bands, never for telling services apart.
+- The status palette (success, warning, danger, info, neutral) and its HTTP status classes are reserved for status and outage cues; metric series do not use those hues.
+- Color is never the only signal: each series has its name in the legend, a solid swatch in its color and its name in the tooltip; hovering a legend entry or a point identifies the series by name. The legend swatch is a solid line segment, never a dash pattern. Legend entries are buttons with `aria-pressed`.
+- Peaks are not legend entries. One shared "Show peaks" switch (`role="switch"`, visible label, shared `ju-switch` target size) shows or hides the peak lines of all visible series. Peaks use the series color with a dotted line and triangle markers; a series hidden in the legend shows no peak, and the right axis "Max response time (ms)" appears only while a peak line is visible. Toggling keeps the zoom range. The default is on; the choice is not persisted.
+- Checks: `tests/js/chart-series-colors.test.mjs` (tokens, slots, peak logic) and `tests/layout/combined-legend.spec.mjs` (Chromium and WebKit, light and dark, 1280x720, 390x844, 320x640).
+
+## Traceroute map
+Applies to the route map of the target detail page and the PDF route map (`traceroute-map.js`, `traceroute-map.css`, `pdf_route_map.py`); both read the same server data (`traceroute_geo.py`) and the shared legibility rules in `route_map_rules.py`.
+- The map shows ONE continuous chain from the first mappable hop to the destination, in hop order. Every located hop is a node, approximately located hops (hollow "~" marker) and the destination included. Hops without answer or location get no marker and no invented coordinates; the chain bridges them with a dashed link whose tooltip names the skipped hop numbers.
+- A link between two reliable positions is solid. A link with an estimated or approximate end, or across unmapped hops, is dashed; solid and dashed differ by pattern, not only by color. Real geographic back-jumps stay visible and are not smoothed or reordered.
+- The chain is the primary element: at least 3 px wide, at least 3:1 contrast against land and sea in light and dark (checked in `tests/test_route_map_rules.py`), dashes coarse (stroke and gap at least the line width), drawn above the basemap and below the markers.
+- The basemap recedes: borders and the land/sea tones stay barely visible. Names appear only for countries the chain touches and for chain hop cities plus at most three nearby orientation cities (eight place names in total); distant places are never named. The shared limits and zoom levels live in `route_map_rules.py`.
+- Open (see `.agents/OPEN_TASKS.md`): web rendering of these basemap, label, halo and zoom rules is not yet implemented in `traceroute-map.js`.
+
+## Accessibility
+
+Target WCAG 2.2 AA contrast for text and controls. Preserve native links and buttons, visible focus, skip link, labels, and status text. Do not rely on color alone for status or selection. Forced-colors mode and reduced motion remain supported. Browser checks are useful evidence but do not replace assistive-technology review.
+
+## Responsive behavior
+
+Keep the established 992 px sidebar breakpoint and 576 px compact-header breakpoint. On narrow screens, the sidebar becomes a drawer and the top bar must keep the menu, brand, notifications, theme, and logout controls reachable. Main-page content adapts to the available `ju-page` container width: the shared 40rem and 60rem container-query thresholds in `ui.css` govern the existing content-grid transitions. Feature layouts use container queries when their behavior depends on component width; they do not add competing viewport breakpoints for the same content. Keep page content usable at 320 px and 200% text zoom without page-level horizontal scrolling, except for content whose meaning requires two-dimensional presentation. GridStack uses its existing mobile flow and must not overwrite saved desktop layout intent.
+
+## Interaction states
+
+The active navigation item has text and a visual marker. Buttons show hover and keyboard focus in both themes. Loading, empty, error, offline, and disabled states retain their existing labels and messages. Theme changes update the wordmark and shared surfaces immediately; system mode tracks the operating-system preference.
+
+### Filter-as-you-type search
+
+Applies to every list page that offers a search; the Targets page is the first user (`targets.html`, `targets-search.js`). Presentation is the shared `.ui-search` component in `ui.css`; the pure rules live in `utils/list-filter.js`.
+
+1. The field is `<input type="search">` inside `.ui-search[role="search"]`, placed between the page header and the list, with a visible-to-assistive-technology `<label>` (visually hidden), a placeholder that only repeats it, `autocomplete="off"`, `maxlength="100"` and the shared `.form-control` focus ring. It is full width on narrow containers and bounded to 28rem on wide ones; its height and the clear button use `--ui-target-min`. Icons are local Material Icons; colours come from Bootstrap theme tokens, so light and dark need no branch.
+2. Filtering is client-side on the rendered rows while typing (no Enter, no request per keystroke). Matching is a plain substring test after trim, whitespace collapse, lower-casing and diacritic folding; the query is never a pattern and never inserted as HTML. Searched fields are the name, host, HTTP URL, TCP ports (only with the TCP check on) and group name, carried in the row's `data-search`.
+3. All items must be in the DOM. A paginated list requests its unpaginated fragment once when a search starts (`all=1`) and the paged fragment once when it ends; polling keeps the query and re-evaluates new rows against it.
+4. Groups without a hit are hidden. Groups with hits open for the duration of the search by class change only (no Bootstrap collapse event, so the stored manual state is untouched); clearing the search restores the state from before it, and a manual toggle during the search becomes that state. The group badge shows hits against the total (`2 / 5`) while searching.
+5. No hit: the list is replaced by a `.ui-empty` state `No targets match "…"` (the term set as text) with a `Show all targets` button; no empty frame remains. A visually hidden `role="status"` / `aria-live="polite"` region announces `n targets found` or `No targets found`.
+6. Reset: the clear button (visible only with a value; the browser's own one is hidden) and Escape empty the field and keep focus in it. The query is not persisted. No `/` shortcut exists, so nothing needs to be announced for it.
+7. Checks: `tests/js/list-filter.test.mjs` (normalisation, literal matching, group memory), `tests/test_targets_search.py` (markup, all-targets fragment) and `tests/layout/targets-search.spec.mjs` (Chromium and WebKit, light and dark, 1280x720, 390x844, 320x640, 1280x720 at 200 %).
+
+### Focus indication
+Focus is quiet but always visible. There is no blue or primary-coloured glow ring, no `box-shadow` focus ring and no primary fill. Tokens live in `gentelella-layout.css` (`--ju-focus-ring`, `--ju-focus-field-border`, `--ju-focus-outline-width`, `--ju-focus-outline-offset`, `--ju-control-edge`, each defined for light and dark); one rule group in `ui.css` (section "Accessibility") redirects the Bootstrap focus styles to them. A component never sets its own focus colour and a new form component inherits the group.
+- Text-like fields (`.form-control`, `.form-select`, `.signal-code-box`): the 1 px border changes to `--ju-focus-field-border`; no outline, no shadow, no size change.
+- Buttons, switches, checkboxes, radios, links, tabs, disclosure heads: `:focus-visible` shows a `--ju-focus-outline-width` outline (2 px) at `--ju-focus-outline-offset` in `--ju-focus-ring` (neutral text colour). A pointer click on a checkbox or switch draws nothing.
+- Contrast of the indicator is at least 3:1 against the field and its surface in both themes; `outline: none` is allowed only with an equivalent replacement; `forced-colors: active` keeps a 2 px `Highlight` outline; no focus transition beyond the global reduced-motion rule.
+- Switches have the same track and thumb size in both states; the off state uses `--ju-control-edge` for the track edge and `--ju-switch-thumb-off` for the thumb, at least 3:1 against the surface, and the thumb position carries the state.
+- Cursors: every operable control shows `pointer`: buttons, links with `href`, `summary`, tabs, switch, checkbox and radio and their `.form-check-label`; disabled toggles and their labels show `not-allowed`. Text fields keep the text cursor, selects the native one; `grab`, `grabbing` and resize cursors of drag handles stay.
+- Checks: `tests/layout/focus-style.spec.mjs` (`@focus`, Chromium and WebKit, light and dark: computed ring, contrast, forced colors, switch geometry, cursors on the real pages) and `tests/test_ui_accessibility.py` (tokens in both themes, no primary colour in focus rules).
+### Notification List Visual & Interaction Contract
+
+Applies to every row of the notification list on the Notifications page (`notifications.html`, `notifications.css`). Rows reuse the shared tokens; there is no notification-specific palette and no second component system.
+
+1. Rows sit on the shared neutral panel surface (`--ju-panel-bg`).
+2. Hover and keyboard focus use the shared semantic surface token `--ju-panel-hover` (defined for light and dark in `gentelella-layout.css`), the same as other interactive panel rows. `--bs-tertiary-bg` is not a row-hover colour: in dark mode it is a foreign neutral grey on the navy panel.
+3. Hover is never expressed by a warning or error colour alone. No yellow, orange or brown hover surface exists.
+4. Keyboard focus stays visible without hover (2 px primary outline, inset). The delete button keeps its own focus-visible state and reveals the delete action.
+5. Unread status (ringed dot, bold title, primary left border) and event severity (status badge, error tint and left border) are separate cues and are not changed by hover.
+6. Layout roles: primary line = category icon, title, severity badge; timestamp in its own right-hand column; secondary slot = description (`.ju-notif-context`, clamped, full text in `title`), then the resource status line. Wide rows keep the time in the title line; below 992 px the time sits beside the description and the status line takes its own row across the width. No margin, absolute position or transform corrections per notification type.
+7. A resource that is gone (`Report no longer available`, `Report expired`, `Target no longer exists`, `Alert no longer available`) renders as one muted status line (`.ju-notif-unavailable`: icon `link_off` plus the label from `action.label`, real text, no generated content, no link, no fill) directly under the description. All resource types share this one class.
+8. Resource availability never changes the original event: title, severity badge and description of a successful PDF stay as they were.
+9. Normal, unread, error, hover, focus and delete-reveal states compose: hover changes only the background colour; the error tint, left borders and badges survive it; the revealed delete action narrows the content and never overlaps text.
+10. Layout adapts to the row's width, not only the viewport: long file names and technical identifiers wrap or ellipsize (with `title`), the page never scrolls horizontally down to 320 px and at 200 % zoom. On phones the time may break into date and time when the delete action is open.
+11. Light and dark use the same structure and the same tokens.
+12. Ownership: `gentelella-layout.css` owns colour tokens, `ui.css` shared primitives (badges), `notifications.css` the row layout and presentation only.
+
+Checks: `tests/layout/notifications.mjs` (run via `tests/layout/notifications.spec.mjs`, tag `@notifications`, Chromium and WebKit, light and dark, 1280x720, 390x844, 320x640 and 1280x720 at 200 %) measures computed hover colour against `--ju-panel-hover`, text contrast, warm-hue absence, unchanged badge and indicators, focus outline, status-line alignment below the description, one common secondary slot, one time column, containment, delete overlap, touch swipe reveal, native download links and the keyboard-reachable delete button, with `NOTIF_GEOMETRY_TOL_PX = 1`. `tests/test_notifications.py` covers the rendered status line markup.
+
+## Content voice
+
+Use short, concrete English labels already established in justUp! (for example, Dashboard and Targets). Keep technical status values precise. Do not import WireBuddy product copy.
+
+## Implementation constraints
+
+The application uses server-rendered Jinja templates, Bootstrap 5.3, local CSS/fonts/icons, and a `data-bs-theme` attribute set before paint. Avoid a new dependency or external runtime asset. Preserve widget identities, monitoring behavior, API contracts, user layout intent, keyboard interactions, and existing dialog/form IDs and confirmation safeguards. Internal widget markup, shared components, drag-handle placement, and GridStack sizing may be redesigned to meet the widget contract. Existing markup or sizing code that conflicts with this contract is not a preservation constraint. The only active dashboard layout contract is V2: `version = 2`, with a required `height_mode` (`auto` or `manual`) on every widget. The API, frontend, and current persistence accept only V2 JSON; V1 JSON is rejected and never reinterpreted. Historical SQLite schema migrations may convert stored rows once during upgrade, but must not add runtime V1 support.
+
+When a shared rule or component changes, update this contract and its owning check in the same change. New page-specific behavior belongs in the existing test module or browser audit that owns that contract; do not add a test that merely repeats implementation details. Run the existing style, markup, and browser checks for the affected surface. CI's strict Chromium checks are the baseline gate, not evidence of WebKit parity. For changes to layout, themes, overlays, or responsive behavior, also verify the applicable Chromium and WebKit desktop and phone cases; report any unavailable coverage rather than treating it as passed.
+
+Frames that show user-defined HTML (the SMTP template editor and preview) are sandboxed without `allow-scripts`; the sandbox is a security boundary and is never loosened to silence a console message or a test finding. The browser audit fails on every console error. Its only exception is the engine notice `Blocked script execution in 'about:blank'|'about:srcdoc' because the document's frame is sandboxed ...`, which Playwright's trace snapshots provoke in those frames in Chromium and WebKit. It is matched exactly and applies only to pages that declare `sandboxedFrames` in `tests/layout/harness.mjs`. The audit self-test and `tests/test_ui_accessibility.py` enforce both rules.
+
+## Decisions for 1.0.2
+
+The product decisions for this release are:
+
+- Keep the existing sidebar navigation. Replacing it with horizontal tabs would change the established navigation model and needs a separate design review; it is outside this release.
+- Keep the locally bundled IBM Plex Sans in the application. The docs site's Roboto does not justify adding or switching an application font in this release.
