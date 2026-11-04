@@ -335,11 +335,14 @@ def test_focus_rules_use_the_shared_tokens_not_the_primary_colour() -> None:
     for path in CSS_DIR.glob("*.css"):
         if path.name.endswith(".min.css") or path.name in {"leaflet.css", "gridstack.min.css", "material-icons.css"}:
             continue
-        text = re.sub(r"/\*.*?\*/", "", path.read_text(encoding="utf-8"), flags=re.S)
+        text = re.sub(r"/\*.*?\*/", "", path.read_text(encoding="utf-8"), flags=re.DOTALL)
         for selector, body in re.findall(r"([^{}]+)\{([^{}]*)\}", text):
             if ":focus" not in selector:
                 continue
-            for prop in re.findall(r"(?:^|;)\s*(outline[\w-]*|box-shadow|border-color)\s*:([^;]+)", body):
-                if re.search(r"--bs-primary|#[0-9a-fA-F]{3,8}\b|rgba?\(", prop[1]):
-                    offenders.append(f"{path.name}: {selector.strip()} {prop[0]}: {prop[1].strip()}")
+            props = re.findall(r"(?:^|;)\s*(outline[\w-]*|box-shadow|border-color)\s*:([^;]+)", body)
+            offenders.extend(
+                f"{path.name}: {selector.strip()} {name}: {value.strip()}"
+                for name, value in props
+                if re.search(r"--bs-primary|#[0-9a-fA-F]{3,8}\b|rgba?\(", value)
+            )
     assert not offenders, "focus rules must use the --ju-focus-* tokens:\n" + "\n".join(offenders)
