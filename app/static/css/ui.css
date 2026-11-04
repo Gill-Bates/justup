@@ -1547,6 +1547,13 @@ textarea.smtp-editor-frame {
 	}
 }
 
+/* Port picker: the select checkbox of a result row meets the target-size token (WCAG 2.5.8). */
+.ju-port-results .form-check-input {
+	width: var(--ui-target-min);
+	height: var(--ui-target-min);
+	margin: 0;
+}
+
 /* Compact badges in tables */
 .table .badge {
 	font-size: 0.7rem;

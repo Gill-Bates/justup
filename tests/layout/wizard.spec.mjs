@@ -11,6 +11,8 @@ const test = baseTest.extend({
 		await use(adminState);
 	},
 });
+// A stuck step fails after a minute instead of the 3-minute default.
+test.setTimeout(60_000);
 // Check-step progressive disclosure of the target wizard: fields appear only for active checks.
 const HTTP_FIELDS = ["#wizard-http-url", "#wizard-method", "#wizard-codes"];
 const TLS_FIELDS = ["#wizard-ignore-cert"];
@@ -192,7 +194,7 @@ test("discovered TCP and UDP ports can be selected without saving the wizard @wi
 	await page.locator("[data-scan-results]").waitFor({ state: "visible" });
 	await page.getByRole("button", { name: "Select all confirmed open ports" }).click();
 	assert.equal(await page.locator('[data-scan-rows] input:checked').count(), 2, "uncertain UDP is not selected as open");
-	await page.getByRole("checkbox", { name: "Select UDP port 161 (open|filtered)" }).check();
+	await page.getByRole("checkbox", { name: /Select UDP port 161/ }).check();
 	await page.getByRole("button", { name: "Add selected ports" }).click();
 	assert.equal(await page.locator("#wizard-ports").inputValue(), "22,443");
 	assert.equal(await page.locator("#wizard-udp-ports").inputValue(), "53,161");

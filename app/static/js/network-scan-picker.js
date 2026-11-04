@@ -231,7 +231,10 @@
       const chosen = core.defaultProtocols(toggles.tcp.checked, toggles.udp.checked);
       for (const protocol of core.PROTOCOLS) protocolBoxes[protocol].checked = chosen.includes(protocol);
     }
-    for (const toggle of Object.values(toggles)) toggle.addEventListener('change', syncProtocols);
+    // Switching a check on or off follows with its own protocol only; the other box keeps the user's choice.
+    for (const protocol of core.PROTOCOLS) {
+      toggles[protocol].addEventListener('change', () => { protocolBoxes[protocol].checked = toggles[protocol].checked; });
+    }
 
     // ----- scan state -----
     function stopPolling() {

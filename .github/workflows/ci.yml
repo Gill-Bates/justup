@@ -323,7 +323,7 @@ jobs:
         env:
           JUSTUP_LAYOUT_BROWSERS: chromium
           JUSTUP_LAYOUT_OUTPUT: ${{ runner.temp }}/layout-artifacts
-        run: npx playwright test --config tests/layout/playwright.config.mjs --grep '@combined-zoom-reset|@public-hostname-ui'
+        run: npx playwright test --config tests/layout/playwright.config.mjs --grep '@combined-zoom-reset|@public-hostname-ui|@target-endpoints'
       - name: Run browser authentication flow
         env:
           JUSTUP_LAYOUT_BROWSERS: chromium

@@ -279,7 +279,7 @@ def test_detail_view_lists_the_tcp_endpoint_of_a_target_without_port_rows(tmp_pa
                 "tcp_ports": "25",
             },
         )
-        view = frontend._target_detail_view(conn, sqlite_db.get_target(conn, tid), tid)
+        view = frontend._target_detail_view(conn, sqlite_db.get_target(conn, tid), tid)  # noqa: SLF001
     finally:
         sqlite_db.close_connection(conn)
     html = render("fragments/target_detail/info_cards.html", target=view, user={})
@@ -342,10 +342,19 @@ def test_detail_view_takes_an_unmeasured_tcp_port_state_from_the_series_the_char
     try:
         tid = sqlite_db.create_target(
             conn,
-            {"name": "mail", "host": "mail.example.org", "interval_seconds": 60, "retention_days": 30, "enable_tcp_connect": 1, "tcp_ports": "25,587"},
+            {
+                "name": "mail",
+                "host": "mail.example.org",
+                "interval_seconds": 60,
+                "retention_days": 30,
+                "enable_tcp_connect": 1,
+                "tcp_ports": "25,587",
+            },
         )
-        append_point(tmp_path / "tsdb", target_id=tid, metric="tcp_up_25", value=1, retention_days=30, at=datetime.now(UTC))
-        view = frontend._target_detail_view(conn, sqlite_db.get_target(conn, tid), tid, tsdb_dir=tmp_path / "tsdb")
+        append_point(
+            tmp_path / "tsdb", target_id=tid, metric="tcp_up_25", value=1, retention_days=30, at=datetime.now(UTC)
+        )
+        view = frontend._target_detail_view(conn, sqlite_db.get_target(conn, tid), tid, tsdb_dir=tmp_path / "tsdb")  # noqa: SLF001
     finally:
         sqlite_db.close_connection(conn)
     states = {v["key"]: (v["status"], v["measured"]) for v in view["endpoints"]}

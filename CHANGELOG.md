@@ -4,6 +4,7 @@
 - `Fix` The plain-text part of alert mails shows the URL of a link instead of dropping it.
 
 ## [Unreleased]
+- `Fix` The target page lists the configured TCP and UDP endpoints in "Network endpoints" ("Waiting for first measurement" until the first result) instead of "No port measurements yet", and the empty band between that card and the toolbar is gone.
 
 - `Fix` The Delivery Queue Log shows one card per entry on narrow screens (with the channel name next to its icon) instead of a sideways-scrolling table.
 - `Fix` The dashboard alert counts (resolved and acknowledged in 24 h) no longer read every resolved alert: a schema upgrade (version 9) adds two range indexes; with 100,000 alerts a poll drops from about 300 ms to under 1 ms. The upgrade takes about 0.1 s once.

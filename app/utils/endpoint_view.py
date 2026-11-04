@@ -112,7 +112,9 @@ def _entry(
     }
 
 
-def build_endpoint_views(target: Mapping[str, Any], stored_ports: Iterable[Mapping[str, Any]] | None) -> list[dict[str, Any]]:
+def build_endpoint_views(
+    target: Mapping[str, Any], stored_ports: Iterable[Mapping[str, Any]] | None
+) -> list[dict[str, Any]]:
     """Enabled endpoints of one target: ICMP, then TCP, then UDP ports in ascending order.
 
     Every configured port is listed, also before its first measurement (UNKNOWN, not missing). A port
@@ -139,7 +141,7 @@ def build_endpoint_views(target: Mapping[str, Any], stored_ports: Iterable[Mappi
     if _get(target, "enable_tcp_connect"):
         for port in _ports(_get(target, "tcp_ports"), default=[80]):
             row = stored.get(("tcp", port))
-            # A row that was never written (migration 7 seeds it empty) defers to the status cache the charts agree with.
+            # A row never written (migration 7 seeds it empty) defers to the status cache.
             if row and row.get("checked_at"):
                 raw = row["status"]
             else:
