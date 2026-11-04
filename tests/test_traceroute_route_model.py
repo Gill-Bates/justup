@@ -198,7 +198,7 @@ def test_route_model_coarse_geoip_not_mappable(monkeypatch: pytest.MonkeyPatch) 
 
 
 def test_route_model_destination_reached_without_location(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Destination answered MTR but has no resolvable location.
+    # Destination answered the trace but has no resolvable location.
     _patch_geo(monkeypatch, {"203.0.113.9": None})
     hops = [{"hop": 1, "ip": "203.0.113.9", "status": "ok"}]
     nodes = build_route_model(hops, destination_ip="203.0.113.9")

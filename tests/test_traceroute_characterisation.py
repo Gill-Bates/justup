@@ -7,7 +7,7 @@
 """Characterisation of the web and PDF traceroute pipelines (T8): pins today's behaviour.
 
 Covers the invariants that are shared today and not yet asserted in test_traceroute_pipeline.py:
-IP family choice for MTR, the argument MTR is run with, and the latency of the synthetic destination.
+IP family choice for the trace, the argument it is run with, and the latency of the synthetic destination.
 They guard a later extraction of shared code; a deliberate behaviour change updates them on purpose.
 """
 
@@ -27,7 +27,7 @@ from tests.traceroute_helpers import patch_trace
 
 
 def _record_mtr(monkeypatch: pytest.MonkeyPatch, hops: list[dict], resolved: str | None) -> list[tuple[Any, Any]]:
-    """Patch both pipelines to the same MTR result and record (host argument, force_ipv6) per call."""
+    """Patch both pipelines to the same trace result and record (host argument, force_ipv6) per call."""
     _patch_sources(monkeypatch, hops)
     for module in (traceroute_geo, pdf_report):  # the shared stub geolocates IPv4 only
         monkeypatch.setattr(

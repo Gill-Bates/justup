@@ -9,8 +9,8 @@
 // Key: phone number as returned by backend (E.164 normalized)
 // Value: { registered: true|false|null, cachedAt: timestamp }
 let _signalStatusCache = {};
-// Frontend TTL is shorter (10min) than backend (24h) to allow re-verification
-// after user actions like linking a Signal account
+// Frontend TTL is shorter (10min) than backend (24h). The explicit "Re-check" action
+// bypasses the backend cache once (force_refresh) and replaces this entry.
 const SIGNAL_STATUS_TTL_MS = 10 * 60 * 1000;
 
 const SIGNAL_ICONS = {
@@ -113,6 +113,8 @@ function _setSignalIcon(recipientId, icon, cssClass, title) {
 	iconEl.classList.remove('text-success', 'text-warning', 'text-body-secondary');
 	iconEl.classList.add(cssClass);
 	iconEl.title = title;
+	iconEl.setAttribute('role', 'img');
+	iconEl.setAttribute('aria-label', title);
 }
 
 function applyCachedSignalStatus(recipients) {
@@ -298,6 +300,14 @@ async function loadRecipients() {
 								aria-label="Send test message to ${escapeHtml(r.name)}">
 								<span class="material-icons" aria-hidden="true">send</span>
 							</button>
+							${r.phone ? `<button type="button" class="btn btn-sm btn-icon btn-outline-secondary recheck-signal-btn"
+								data-recipient-id="${r.id}"
+								data-recipient-name="${escapeHtml(r.name)}"
+								data-recipient-phone="${escapeHtml(r.phone)}"
+								title="Re-check Signal"
+								aria-label="Re-check Signal for ${escapeHtml(r.name)}">
+								<span class="material-icons" aria-hidden="true">sync</span>
+							</button>` : ''}
 							<button class="btn btn-sm btn-icon btn-outline-secondary edit-recipient-btn"
 								data-recipient-id="${r.id}"
 								title="Edit recipient">
@@ -346,8 +356,11 @@ async function handleRecipientListClick(e) {
 	const toggleBtn = e.target.closest('.toggle-recipient-btn');
 	
 	const testBtn = e.target.closest('.test-recipient-btn');
+	const recheckBtn = e.target.closest('.recheck-signal-btn');
 	if (testBtn) {
 		await sendTestFromList(testBtn);
+	} else if (recheckBtn) {
+		await recheckSignalFromList(recheckBtn);
 	} else if (toggleBtn) {
 		toggleBtn.disabled = true;
 		try {
@@ -411,6 +424,51 @@ function showAllSignalStatusAsUnavailable(recipients) {
 		if (_getCachedSignalRegistration(r.phone) !== undefined) continue;
 		// Use 'unknown' icon for API failure (different from 'unavailable' = no Signal account)
 		_setSignalIcon(r.id, SIGNAL_ICONS.unknown, 'text-body-secondary', 'Verification failed');
+	}
+}
+
+// Explicit "Re-check": asks the backend to bypass its 24h cache for this one recipient.
+// The number is never sent: the server reads it from the stored recipient.
+// aria-disabled (not disabled) keeps keyboard focus on the button while it works.
+async function recheckSignalFromList(btn) {
+	if (btn.getAttribute('aria-disabled') === 'true') return;
+	const recipientId = Number(btn.dataset.recipientId);
+	const phone = btn.dataset.recipientPhone;
+	const name = btn.dataset.recipientName || 'recipient';
+	const icon = btn.querySelector('.material-icons');
+	btn.setAttribute('aria-disabled', 'true');
+	btn.setAttribute('aria-busy', 'true');
+	btn.classList.add('disabled');
+	if (icon) icon.textContent = SIGNAL_ICONS.pending;
+	_setSignalIcon(recipientId, SIGNAL_ICONS.pending, 'text-body-secondary', 'Checking...');
+	try {
+		const response = await window.apiFetch(`/recipients/${recipientId}/recheck-signal`, { method: 'POST' });
+		if (!response.ok) {
+			const message = await extractApiError(response, 'Signal check failed');
+			_setSignalIcon(recipientId, SIGNAL_ICONS.unknown, 'text-body-secondary', 'Check failed');
+			showToast(`${name} · Signal: ${message}`, 'warning');
+			return;
+		}
+		const data = await response.json();
+		const registered = data?.registered;
+		if (registered !== true && registered !== false && registered !== null) throw new Error('Unexpected response');
+		_setCachedSignalRegistration(phone, registered);
+		const label = registered === true ? 'Registered with Signal'
+			: registered === false ? 'Not registered with Signal' : 'No Signal account linked';
+		_setSignalIcon(recipientId,
+			registered === true ? SIGNAL_ICONS.registered : registered === false ? SIGNAL_ICONS.unregistered : SIGNAL_ICONS.unavailable,
+			registered === true ? 'text-success' : registered === false ? 'text-warning' : 'text-body-secondary',
+			label);
+		showToast(`${name} · Signal: ${label}`, registered === true ? 'success' : 'warning');
+	} catch (error) {
+		console.warn('Signal re-check failed:', error?.name);
+		_setSignalIcon(recipientId, SIGNAL_ICONS.unknown, 'text-body-secondary', 'Check failed');
+		showToast(`${name} · Signal: Check failed`, 'warning');
+	} finally {
+		if (icon) icon.textContent = 'sync';
+		btn.removeAttribute('aria-busy');
+		btn.removeAttribute('aria-disabled');
+		btn.classList.remove('disabled');
 	}
 }
 
@@ -980,4 +1038,5 @@ window.SettingsPage.Recipients = {
 	deleteRecipient,
 	sendRecipientTest,
 	updateEditTestButtons,
+	recheckSignalFromList,
 };

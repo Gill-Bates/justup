@@ -362,6 +362,50 @@ def test_nmap_outage_is_unknown_the_scheduler_keeps_running_and_nothing_goes_dow
     assert _status(db_path, tid) == TargetStatus.UP
 
 
+def _edit_target(db_path: Path, tid: int, patch: dict) -> None:
+    conn = sqlite_db.connect(db_path)
+    try:
+        sqlite_db.update_target(conn, target_id=tid, patch=patch)
+    finally:
+        sqlite_db.close_connection(conn)
+
+
+@pytest.mark.parametrize("cancel_on_change", [True, False], ids=["task-cancelled", "late-guard-only"])
+@pytest.mark.parametrize(
+    "patch",
+    [{"host": "other.example"}, {"enable_udp_scan": False}, {"udp_ports": "53,123"}],
+    ids=["host-changed", "udp-disabled", "ports-changed"],
+)
+def test_udp_scan_finishing_after_a_target_change_is_discarded(db_path, tmp_path, monkeypatch, patch, cancel_on_change):
+    tid = _target(db_path, enable_udp_scan=True, udp_ports="53")
+    sched = _sched(db_path, tmp_path)
+    sched._refresh_targets(utcnow())
+    if not cancel_on_change:
+        # Isolate the completion guard from the cancellation done on refresh
+        monkeypatch.setattr(MonitorScheduler, "_drop_udp_scan", staticmethod(lambda _rt: None))
+
+    async def scenario():
+        gate = asyncio.Event()
+
+        async def slow():
+            await gate.wait()
+            return _scan_result({53: "open"})
+
+        _fake_scan(monkeypatch, slow)
+        await sched._run_target(tid, utcnow())
+        rt = sched._rt[tid]
+        task = rt.udp_task
+        assert task is not None and not task.done()
+        _edit_target(db_path, tid, patch)
+        sched._refresh_targets(utcnow())
+        gate.set()
+        await asyncio.gather(task, return_exceptions=True)
+        assert rt.udp_result == {} and rt.udp_result_at is None  # the old result is never adopted
+        assert _ports(db_path, tid)[("udp", 53)]["status"] != "up"
+
+    asyncio.run(scenario())
+
+
 def test_scanner_timeout_path_ends_the_slot_and_reports_unknown(db_path, tmp_path, monkeypatch):
     tid = _target(db_path, enable_udp_scan=True, udp_ports="53")
     sched = _sched(db_path, tmp_path)

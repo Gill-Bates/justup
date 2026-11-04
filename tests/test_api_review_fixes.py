@@ -1492,6 +1492,132 @@ def test_verify_signal_answers_cached_numbers_without_backend(conn, monkeypatch)
     assert resp.json()["results"] == {phone: True}
 
 
+# --- recipients: explicit Signal re-check (force_refresh) -------------------------------------
+
+_RECHECK_PHONE = "+4915112345678"
+
+
+def _recheck_setup(conn, monkeypatch, *, admin: bool = True):
+    """Admin client, one recipient with a number and a counting fake signal-cli backend."""
+    from app.services.notifications import signal_backend
+
+    calls: list[str] = []
+    release = threading.Event()
+    release.set()
+
+    def lookup(phone, sender=None):
+        calls.append(phone)
+        release.wait(5)
+        return False
+
+    backend = SimpleNamespace(list_accounts=lambda: ["+490000"], check_user_registered=lookup)
+    monkeypatch.setattr(signal_backend, "get_signal_backend", lambda: backend)
+    monkeypatch.setattr(recipients, "_SIGNAL_REGISTRATION_CACHE", {})
+    monkeypatch.setattr(recipients, "_SIGNAL_FLIGHTS", {})
+    monkeypatch.setattr(recipients, "_SIGNAL_FORCE_MIN_INTERVAL", 0.0)
+    reset_all()
+    rid = sqlite_db.create_recipient(conn, name="R", phone=_RECHECK_PHONE)
+    client = _client(conn, recipients.router, user=_mk_user(conn, "u", admin=admin))
+    return client, rid, calls, release
+
+
+def test_recheck_signal_bypasses_cache_and_replaces_entry(conn, monkeypatch):
+    client, rid, calls, _ = _recheck_setup(conn, monkeypatch)
+    recipients._SIGNAL_REGISTRATION_CACHE[_RECHECK_PHONE] = (True, time.monotonic())
+    # Normal path: cache hit, no backend call.
+    assert client.post("/recipients/verify-signal", json=[_RECHECK_PHONE]).json()["results"] == {_RECHECK_PHONE: True}
+    assert calls == []
+    resp = client.post(f"/recipients/{rid}/recheck-signal")
+    assert resp.status_code == 200
+    assert resp.json() == {"registered": False}
+    assert calls == [_RECHECK_PHONE]
+    assert recipients._SIGNAL_REGISTRATION_CACHE[_RECHECK_PHONE][0] is False
+    assert client.post("/recipients/verify-signal", json=[_RECHECK_PHONE]).json()["results"] == {_RECHECK_PHONE: False}
+    assert calls == [_RECHECK_PHONE]
+
+
+def test_recheck_signal_requires_admin_and_known_number(conn, monkeypatch):
+    client, rid, calls, _ = _recheck_setup(conn, monkeypatch, admin=False)
+    assert client.post(f"/recipients/{rid}/recheck-signal").status_code == 403
+    assert calls == []
+    admin = _client(conn, recipients.router, user=_mk_user(conn, "adm", admin=True))
+    assert admin.post("/recipients/9999/recheck-signal").status_code == 404
+    mail_only = sqlite_db.create_recipient(conn, name="M", email="m@example.com")
+    assert admin.post(f"/recipients/{mail_only}/recheck-signal").status_code == 400
+    assert calls == []
+
+
+def test_recheck_signal_has_its_own_rate_limit(conn, monkeypatch):
+    client, rid, calls, _ = _recheck_setup(conn, monkeypatch)
+    codes = [client.post(f"/recipients/{rid}/recheck-signal").status_code for _ in range(7)]
+    assert codes[:5] == [200] * 5
+    assert codes[5:] == [429, 429]
+    assert len(calls) == 5
+
+
+def test_recheck_signal_parallel_calls_share_one_lookup(conn, monkeypatch):
+    client, rid, calls, release = _recheck_setup(conn, monkeypatch)
+    release.clear()
+    results: list[tuple[int, dict]] = []
+
+    def run():
+        r = client.post(f"/recipients/{rid}/recheck-signal")
+        results.append((r.status_code, r.json()))
+
+    threads = [threading.Thread(target=run) for _ in range(3)]
+    threads[0].start()
+    for _ in range(200):
+        if calls:
+            break
+        time.sleep(0.01)
+    for t in threads[1:]:
+        t.start()
+    time.sleep(0.2)
+    release.set()
+    for t in threads:
+        t.join(10)
+    assert results == [(200, {"registered": False})] * 3
+    assert calls == [_RECHECK_PHONE]
+    assert recipients._SIGNAL_FLIGHTS == {}
+
+
+def test_recheck_signal_global_cap_rejects_with_429(conn, monkeypatch):
+    client, rid, calls, _ = _recheck_setup(conn, monkeypatch)
+    monkeypatch.setattr(recipients, "_SIGNAL_FORCE_SLOTS", threading.BoundedSemaphore(1))
+    assert recipients._SIGNAL_FORCE_SLOTS.acquire(blocking=False)
+    resp = client.post(f"/recipients/{rid}/recheck-signal")
+    assert resp.status_code == 429
+    assert resp.headers["Retry-After"] == "5"
+    assert calls == []
+    assert recipients._SIGNAL_FLIGHTS == {}
+
+
+def test_recheck_signal_recent_refresh_is_answered_from_cache(conn, monkeypatch):
+    client, rid, calls, _ = _recheck_setup(conn, monkeypatch)
+    monkeypatch.setattr(recipients, "_SIGNAL_FORCE_MIN_INTERVAL", 60.0)
+    assert client.post(f"/recipients/{rid}/recheck-signal").json() == {"registered": False}
+    assert client.post(f"/recipients/{rid}/recheck-signal").json() == {"registered": False}
+    assert calls == [_RECHECK_PHONE]
+
+
+def test_recheck_signal_errors_are_sanitized(conn, monkeypatch, caplog):
+    from app.services.notifications import signal_backend
+
+    client, rid, _calls, _ = _recheck_setup(conn, monkeypatch)
+
+    def boom():
+        raise RuntimeError(f"lookup failed for {_RECHECK_PHONE}")
+
+    monkeypatch.setattr(signal_backend, "get_signal_backend", boom)
+    with caplog.at_level("DEBUG"):
+        resp = client.post(f"/recipients/{rid}/recheck-signal")
+    assert resp.status_code == 200
+    assert resp.json() == {"registered": None}
+    assert _RECHECK_PHONE not in resp.text
+    assert _RECHECK_PHONE not in caplog.text
+    assert recipients._SIGNAL_FLIGHTS == {}
+
+
 # --- recipients: the unique phone index is the authority --------------------------------------
 
 

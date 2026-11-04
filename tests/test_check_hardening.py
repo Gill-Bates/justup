@@ -218,3 +218,57 @@ def test_http_head_blocks_loopback_and_metadata_notations_without_connecting(url
     result, seen = _run_http_head(url, _answers("127.0.0.1"))
     assert not result.ok
     assert seen == []
+
+
+# --- Overall per-check deadline ---------------------------------------------------------------------------------
+
+
+def _block_until(release):
+    def _blocked(*_args, **_kwargs):
+        release.wait(10)
+        return True
+
+    return _blocked
+
+
+@pytest.mark.parametrize("name", ["ping", "http_head", "cert_expiration", "tcp_connect"])
+def test_blocking_resolver_returns_timeout_result_and_next_call_recovers(name, monkeypatch):
+    import threading
+    import time
+
+    release = threading.Event()
+    monkeypatch.setattr(checks, "CHECK_DEADLINE_FACTOR", 0.0)
+    monkeypatch.setattr(checks, "CHECK_DEADLINE_MARGIN_SECONDS", 0.3)
+    monkeypatch.setattr(checks, "_is_host_blocked", _block_until(release))
+    args = {
+        "ping": ("example.com",),
+        "http_head": ("https://example.com/",),
+        "cert_expiration": ("example.com", 443),
+        "tcp_connect": ("example.com", 80),
+    }[name]
+    func = getattr(checks, name)
+
+    started = time.monotonic()
+    try:
+        result = asyncio.run(func(*args))
+    finally:
+        release.set()
+    assert time.monotonic() - started < 5
+    assert result.ok is False
+    assert "timeout" in result.detail
+    assert checks.is_retryable_detail(result.detail)
+
+    # Recovery: the next call is not affected by the abandoned worker thread.
+    monkeypatch.setattr(checks, "_is_host_blocked", lambda _host: True)
+    again = asyncio.run(func(*args))
+    assert again.ok is False
+    assert "timeout" not in (again.detail or "")
+
+
+def test_deadline_does_not_mask_inner_timeout_errors():
+    @checks._with_deadline  # noqa: SLF001 - the decorator is the unit under test
+    async def fn(timeout_seconds: float = 1.0):
+        raise TimeoutError(f"inner {timeout_seconds}")
+
+    with pytest.raises(TimeoutError):
+        asyncio.run(fn())

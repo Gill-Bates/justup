@@ -55,7 +55,7 @@ docker logs -f justup
 ## Ping or traceroute does not work
 
 ??? failure "Missing capability"
-    `ping` and `mtr` need `cap_net_raw`. Keep `NET_RAW` in the container's
+    `ping` and the Nmap-based traceroute need `cap_net_raw`. Keep `NET_RAW` in the container's
     capabilities. See [Docker](getting-started/docker.md).
 
 ## Port scan or UDP check does not work

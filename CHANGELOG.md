@@ -4,6 +4,7 @@
 - `Fix` The plain-text part of alert mails shows the URL of a link instead of dropping it.
 
 ## [Unreleased]
+- `Fix` A hanging DNS resolver can no longer stall a check indefinitely: every ping, HTTP, certificate and TCP check has an overall deadline (3x its timeout plus 10 s) and then fails as an ordinary timeout. System DNS lookups use their own bounded thread pool.
 - `Change` The downtime card of the target details is compact: one figure row `Downtimes` / `Data gaps`, events in at most three lines with short dates (`4 Nov · 18:57–21:50`), exact times on hover, and compact empty states. The explanatory paragraph and info icon are gone from the card (the terms are explained in the documentation); a data gap is never shown as uptime.
 - `Fix` The duration in the downtime list could be one minute short of the shown times (2 h 52 m for 18:57:06 to 21:50:06); it now follows the displayed seconds.
 - `Fix` Zooming into the availability chart no longer draws green or red lines over the axis labels or past the plot area; lines are cut at the edge of the plot.

@@ -4,7 +4,7 @@
 # Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 #
 
-"""The web fragment and the PDF report must build the same traceroute from the same MTR run."""
+"""The web fragment and the PDF report must build the same traceroute from the same trace."""
 
 # ruff: noqa: SLF001
 from __future__ import annotations

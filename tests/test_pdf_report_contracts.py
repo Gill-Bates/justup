@@ -1139,10 +1139,11 @@ def _synthetic_destination(n):
 
 
 def test_route_cut_at_the_hop_limit_is_flagged_incomplete(monkeypatch):
-    hops = [_hop(i) for i in range(1, 19)] + [_hop(i, status="timeout") for i in (19, 20)]
-    b = _route_builder(monkeypatch, [*hops, _synthetic_destination(20)])
+    limit = pdf_report._ROUTE_MAX_HOPS
+    hops = [_hop(i) for i in range(1, limit - 1)] + [_hop(i, status="timeout") for i in (limit - 1, limit)]
+    b = _route_builder(monkeypatch, [*hops, _synthetic_destination(limit)])
     text = _all_text(b)
-    assert text.count("Route incomplete – 20-hop limit reached") == 2  # chapter subtitle and warning note
+    assert text.count(f"Route incomplete – {limit}-hop limit reached") == 2  # chapter subtitle and warning note
     assert "not shown completely" in text and "NO REPLY" in text
 
 
@@ -1155,9 +1156,10 @@ def test_route_reaching_its_destination_is_not_flagged_incomplete(monkeypatch):
 
 
 def test_route_ending_in_silent_hops_at_the_limit_is_incomplete_without_a_resolved_destination(monkeypatch):
-    hops = [_hop(i) for i in range(1, 19)] + [_hop(i, status="timeout") for i in (19, 20)]
+    limit = pdf_report._ROUTE_MAX_HOPS
+    hops = [_hop(i) for i in range(1, limit - 1)] + [_hop(i, status="timeout") for i in (limit - 1, limit)]
     text = _all_text(_route_builder(monkeypatch, hops))
-    assert "Route incomplete – 20-hop limit reached" in text
+    assert f"Route incomplete – {limit}-hop limit reached" in text
     short = [_hop(i) for i in range(1, 9)] + [_hop(i, status="timeout") for i in (9, 10)]
     assert "Route incomplete" not in _all_text(_route_builder(monkeypatch, short))
 

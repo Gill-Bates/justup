@@ -368,7 +368,7 @@ test('a response stamped in the future is clamped to the client clock', async ()
 
 test('an unsuccessful fragment (no X-Measured-At) is shown but never cached', async () => {
   const storage = new FakeStorage(); const clock = { t: T0 };
-  const p = page({ storage, clock, responses: [reply({ html: '<p>MTR returned no hops</p>' })] });
+  const p = page({ storage, clock, responses: [reply({ html: '<p>trace returned no hops</p>' })] });
   await p.loader.show();
   assert.equal(p.rec.renders.length, 1);
   assert.equal(stored(storage).length, 0);
@@ -460,7 +460,7 @@ test('without Web Locks a second tab on its first load adopts the result of the 
   await running;
   clock.t += 31_000;
   await tabB.rec.timers.at(-1).fn(); // the fallback timer, or the storage event, rechecks
-  assert.equal(tabB.rec.calls.length, 0, 'no MTR request of its own');
+  assert.equal(tabB.rec.calls.length, 0, 'no trace request of its own');
   assert.equal(tabB.rec.renders.at(-1).html, '<p>from A</p>');
   assert.equal(tabB.loader.isLoaded(), true);
 });

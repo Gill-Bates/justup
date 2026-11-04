@@ -638,6 +638,7 @@ RATE_LIMITED_ROUTES = {
     ("POST", "/signal/verify"): ["10/hour", "60/minute"],
     ("POST", "/targets/{target_id}/test-alert"): ["5/minute"],
     ("POST", "/recipients/verify-signal"): ["10/minute"],
+    ("POST", "/recipients/{recipient_id}/recheck-signal"): ["5/minute"],
     ("POST", "/recipients/{recipient_id}/test"): ["10/minute"],
     ("GET", "/recipients/{recipient_id}/test/{queue_id}"): ["60/minute"],
     ("GET", "/me/dashboard-layout"): ["60/minute"],
@@ -664,7 +665,7 @@ def _route_specs(router_or_app) -> dict[tuple[str, str], list[str]]:
     return found
 
 
-def test_all_38_rate_limited_routes_keep_their_limit_exactly_once():
+def test_all_39_rate_limited_routes_keep_their_limit_exactly_once():
     found: dict[tuple[str, str], list[str]] = {}
     for router in (
         users.router,
@@ -680,7 +681,7 @@ def test_all_38_rate_limited_routes_keep_their_limit_exactly_once():
         frontend.router,
     ):
         found |= _route_specs(router)
-    assert len(RATE_LIMITED_ROUTES) == 38
+    assert len(RATE_LIMITED_ROUTES) == 39
     assert found == {k: sorted(v) for k, v in RATE_LIMITED_ROUTES.items()}
 
 

@@ -9,6 +9,8 @@
 from __future__ import annotations
 
 import asyncio
+import functools
+import inspect
 import ipaddress
 import logging
 import re
@@ -36,6 +38,14 @@ _log = logging.getLogger(__name__)
 
 # ThreadPool for blocking I/O (prevents thread explosion)
 _EXECUTOR = ThreadPoolExecutor(max_workers=10, thread_name_prefix="check_")
+
+# Separate pool for system-resolver calls: getaddrinfo cannot be cancelled, so a hung resolver
+# may pin at most these threads and never starves the ping/TCP/cert workers above.
+_DNS_EXECUTOR = ThreadPoolExecutor(max_workers=8, thread_name_prefix="check_dns_")
+
+# Overall per-check deadline = timeout_seconds * factor + margin (covers DNS, HEAD->GET fallback, redirects)
+CHECK_DEADLINE_FACTOR = 3.0
+CHECK_DEADLINE_MARGIN_SECONDS = 10.0
 
 # Semaphores for limiting concurrent operations (lazy-init per event loop)
 # Use WeakKeyDictionary to avoid memory leaks when event loops are destroyed
@@ -339,9 +349,15 @@ def _is_host_blocked(host: str) -> bool:
     return bool(_resolve_and_check_host(host_lower))
 
 
+async def _run_in_dns_executor(func, *args, **kwargs):
+    """Run a blocking resolver call in the bounded DNS pool (the thread itself cannot be cancelled)."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(_DNS_EXECUTOR, functools.partial(func, *args, **kwargs))
+
+
 async def _is_host_blocked_async(host: str) -> bool:
     """Same policy as _is_host_blocked, but DNS resolution runs off the event loop."""
-    return await asyncio.to_thread(_is_host_blocked, host)
+    return await _run_in_dns_executor(_is_host_blocked, host)
 
 
 async def _validate_url(url: str) -> tuple[bool, str | None]:
@@ -379,6 +395,31 @@ class CheckResult:
     value: dict[str, object] | None = None
 
 
+def _with_deadline(func):
+    """Bound a whole check (DNS + transport) and report an overrun as a normal timeout result.
+
+    Cancelling cannot interrupt a blocking thread: a hung resolver or socket call keeps its
+    worker until the OS call returns, so the pools (_EXECUTOR, _DNS_EXECUTOR) are the leak bound.
+    """
+    signature = inspect.signature(func)
+
+    @functools.wraps(func)
+    async def wrapper(*args, **kwargs):
+        bound = signature.bind(*args, **kwargs)
+        bound.apply_defaults()
+        limit = float(bound.arguments["timeout_seconds"]) * CHECK_DEADLINE_FACTOR + CHECK_DEADLINE_MARGIN_SECONDS
+        try:
+            async with asyncio.timeout(limit) as scope:
+                return await func(*args, **kwargs)
+        except TimeoutError:
+            if not scope.expired():
+                raise
+            _log.warning("%s exceeded its %.1fs deadline", func.__name__, limit)
+            return CheckResult(ok=False, detail="timeout")
+
+    return wrapper
+
+
 _ping_time_re = re.compile(r"time[=<]([0-9.]+)\s*ms", re.IGNORECASE)
 
 
@@ -402,7 +443,7 @@ async def _resolve_probe_target(host: str, *, skip_ssrf_check: bool) -> tuple[st
                 resolved_ip = None
         if not resolved_ip and not skip_ssrf_check:
             # Never hand the bare name to the connector: it would resolve it again after the check.
-            pinned = await asyncio.to_thread(resolve_validated, host, allow_private=True)
+            pinned = await _run_in_dns_executor(resolve_validated, host, allow_private=True)
             if pinned is None:
                 return None, True
             resolved_ip = str(pinned[0])
@@ -410,6 +451,7 @@ async def _resolve_probe_target(host: str, *, skip_ssrf_check: bool) -> tuple[st
     return host, False
 
 
+@_with_deadline
 async def ping(host: str, timeout_seconds: int = 4, *, skip_ssrf_check: bool = False) -> CheckResult:
     """
     Ping a host using system ping command.
@@ -515,6 +557,7 @@ async def _fetch_headers(client, method: str, url: str, extensions, headers):
         return response
 
 
+@_with_deadline
 async def http_head(
     url: str,
     timeout_seconds: float = 5.0,
@@ -577,7 +620,7 @@ async def http_head(
             except ValueError:
                 pass
         if not skip_ssrf_check:
-            system_ips = await asyncio.to_thread(resolve_validated, hostname, allow_private=True)
+            system_ips = await _run_in_dns_executor(resolve_validated, hostname, allow_private=True)
             if system_ips is None:
                 return CheckResult(ok=False, detail="blocked host")
             candidate_ips.extend(str(ip) for ip in system_ips if str(ip) not in candidate_ips)
@@ -695,6 +738,7 @@ async def http_head(
 _X509_V_ERR_CERT_HAS_EXPIRED = 10
 
 
+@_with_deadline
 async def cert_expiration(
     host: str,
     port: int = 443,
@@ -774,6 +818,7 @@ async def cert_expiration(
         return await loop.run_in_executor(_EXECUTOR, _run)
 
 
+@_with_deadline
 async def tcp_connect(
     host: str, port: int, timeout_seconds: float = 5.0, *, skip_ssrf_check: bool = False
 ) -> CheckResult:

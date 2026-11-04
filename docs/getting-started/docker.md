@@ -64,8 +64,9 @@ after 10 s. After a hard kill, SQLite recovers its WAL on the next start.
 
 ## Ping and traceroute
 
-`ping` and `mtr` need `cap_net_raw`. The image sets it on the binaries, and the
-Compose file adds `NET_RAW` back to the capability set.
+`ping` needs `cap_net_raw`; the image sets it on the binary. Traceroute runs in the
+Nmap worker with `--privileged` and raw sockets, which also need `NET_RAW`. The Compose
+file adds `NET_RAW` back to the capability set.
 
 ## UDP scans and the Nmap worker
 

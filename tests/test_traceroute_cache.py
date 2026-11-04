@@ -5,7 +5,7 @@
 #
 
 # ruff: noqa: SLF001, S106
-"""The authenticated traceroute fragment reuses recent MTR results."""
+"""The authenticated traceroute fragment reuses recent trace results."""
 
 from __future__ import annotations
 
@@ -166,7 +166,7 @@ def _timeout_hop(hop: int) -> dict:
 
 
 def _diagnostics_client(tmp_path: Path, monkeypatch, hops: list[dict], *, target_ip: str, geo_points: list[dict]):
-    """Authenticated client whose MTR/geo layer is stubbed; real interpolation and collapsing run."""
+    """Authenticated client whose trace/geo layer is stubbed; real interpolation and collapsing run."""
     monkeypatch.setenv("SECRET_KEY", Fernet.generate_key().decode("ascii"))
     monkeypatch.setenv("JUSTUP_DATA_DIR", str(tmp_path))
     monkeypatch.setattr(crypto, "_primary_key", None)
@@ -326,7 +326,7 @@ def test_run_again_forces_new_measurement_with_auth_and_parallel_guard(tmp_path:
     client.get(url, headers=_HX)
     assert len(calls) == 1  # normal tab loads still use the five-minute cache
 
-    # Without the HTMX header the refresh flag is ignored (no cross-site trigger of an MTR run).
+    # Without the HTMX header the refresh flag is ignored (no cross-site trigger of a trace).
     assert client.get(f"{url}?refresh=1").status_code == 200
     assert len(calls) == 1
 
@@ -335,7 +335,7 @@ def test_run_again_forces_new_measurement_with_auth_and_parallel_guard(tmp_path:
     assert client.get(url, headers=_HX).content == forced.content  # cache now holds the new result
     assert len(calls) == 2
 
-    # Immediate repeat is rejected (cooldown) and does not start another MTR run.
+    # Immediate repeat is rejected (cooldown) and does not start another trace.
     again = client.get(f"{url}?refresh=1", headers=_HX)
     assert again.status_code == 429 and "retry-after" in again.headers and len(calls) == 2
 

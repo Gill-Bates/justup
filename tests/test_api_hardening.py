@@ -335,6 +335,13 @@ class TestRecipients:
         too_long = env["admin"].call("POST", "/recipients/verify-signal", ["+" + "1" * 40])
         assert too_long.status_code == 422
 
+    def test_recheck_signal_rejects_anonymous_and_non_admin(self, env):
+        anon = TestClient(env["app"])
+        anon.get("/ui/login")
+        resp = anon.post("/recipients/1/recheck-signal", headers={"X-CSRF-Token": anon.cookies.get("csrf_token")})
+        assert resp.status_code == 401
+        assert env["user"].call("POST", "/recipients/1/recheck-signal").status_code == 403
+
 
 class TestSignal:
     def test_status_degrades_on_timeout(self, env, monkeypatch):

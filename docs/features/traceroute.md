@@ -4,13 +4,13 @@ The **Network diagnostics** tab of a target shows the route to the host: a route
 timeline, metrics, a hop table, and an interactive map. The data loads when you
 open the tab.
 
-Traceroute (`mtr`) runs only on demand, from the tab or as part of a PDF report.
+Traceroute runs through the Nmap worker (`nmap --traceroute`) only on demand, from the tab or as part of a PDF report.
 Three layers decide whether a new measurement happens:
 
 | Layer | Lifetime | Purpose |
 | --- | --- | --- |
 | Browser cache | 24 hours | Reload, new navigation and browser restart show the stored result without any request to the traceroute endpoint |
-| Server cache | 5 minutes | Protects against repeated `mtr` runs for the same target and host |
+| Server cache | 5 minutes | Protects against repeated traces for the same target and host |
 | New scan | on demand | The refresh icon (**Run new scan**) always measures again |
 
 - **Automatic scan.** A stored result is reused for 24 hours after the actual
@@ -44,6 +44,24 @@ the page works as before and keeps the result in memory only.
     removed on logout and when another user opens a target on the same browser.
     Entries of deleted targets are removed by the size and age limits.
 
+## Method and limits
+
+- **Probe order.** The first attempt is Nmap host discovery with its default probes
+  (`-sn --traceroute`). Only if that yields no trace (no trace found or time-out) does
+  one fallback run with a single port probe (default TCP 443) follow. A TCP or UDP probe
+  requested by the caller runs first, alone. There is never a third attempt.
+- **Privileges.** Nmap runs with `--privileged` and needs `NET_RAW`. The worker
+  receives only that capability; without it the page reports a permission error.
+- **Limits.** At most 30 hops. One shared deadline covers name resolution and all
+  attempts. Two traces run at a time; a further request is refused as busy.
+- **Values.** Each hop has a single round-trip time as reported by Nmap. There are no
+  loss, average, best or worst statistics. Hops that do not answer are shown as
+  *No reply*. IPv4 and IPv6 are supported; a host name is resolved once and that
+  address is traced.
+- **Without Docker.** A local worker started by the application has the same limits.
+  It needs an `nmap` binary and raw-socket rights (root or `cap_net_raw`); otherwise
+  traceroute is unavailable.
+
 ## Route timeline
 
 First hop, intermediate hops, and destination appear once each, in hop order. The
@@ -61,7 +79,7 @@ ran the measurement. Unknown values show `—`, never invented zeros.
 
 | State | Meaning |
 | --- | --- |
-| Measured | The hop replied (partial loss is stated) |
+| Measured | The hop replied |
 | No reply | The hop did not answer. This includes silent hops between measured hops (for example ICMP blocked). No address, host name, latency or location is shown, and nothing is estimated for it |
 | Not reached | Synthetic destination, because the target never answered |
 

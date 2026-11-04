@@ -5,7 +5,7 @@
 #
 
 # ruff: noqa: SLF001
-"""Probe target resolution, error labels, mtr feature cache and seed download hardening."""
+"""Probe target resolution, error labels, traceroute feature cache and seed download hardening."""
 
 from __future__ import annotations
 

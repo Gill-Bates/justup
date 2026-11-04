@@ -4,12 +4,12 @@
 
 - Python ≥ 3.13
 - Node.js (for JS/CSS lint and `node:test`)
-- The system tools `ping` and `mtr` (for checks and traceroute)
+- The system tools `ping` (for checks) and `nmap` (for traceroute and port scans)
 
 On Debian/Ubuntu:
 
 ```bash
-sudo apt-get install iputils-ping mtr-tiny
+sudo apt-get install iputils-ping nmap
 ```
 
 ## Python environment

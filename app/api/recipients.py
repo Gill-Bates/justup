@@ -14,7 +14,7 @@ import time
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from html import escape
-from threading import Lock
+from threading import BoundedSemaphore, Event, Lock
 from typing import Annotated, Any, NoReturn
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -43,6 +43,17 @@ _log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/recipients", tags=["recipients"])
 
+class _SignalFlight:
+    """One in-progress forced lookup; concurrent callers for the same number wait for its result."""
+
+    __slots__ = ("done", "error", "result")
+
+    def __init__(self) -> None:
+        self.done = Event()
+        self.result: bool | None = None
+        self.error: HTTPException | None = None
+
+
 # Cache for Signal registration status: phone -> (is_registered, timestamp_monotonic)
 # _SIGNAL_CACHE_LOCK makes access thread-safe within one worker process (request threads and the thread
 # pool). It is not shared between processes: every worker process keeps its own cache.
@@ -50,6 +61,16 @@ _SIGNAL_REGISTRATION_CACHE: dict[str, tuple[bool, float]] = {}
 _SIGNAL_CACHE_LOCK = Lock()
 _SIGNAL_CACHE_TTL = 86400.0
 _SIGNAL_CACHE_MAX_SIZE = 1000
+
+# Explicit "re-check" (force_refresh) bypasses the cache once. Like the cache, the flight table and the
+# slot limit live per worker process: the guarantees below hold within one process only.
+_SIGNAL_FORCE_RATE_LIMIT = "5/minute"
+_SIGNAL_FORCE_MAX_CONCURRENT = 2  # signal-cli lookups running at once across all recipients
+_SIGNAL_FORCE_MIN_INTERVAL = 10.0  # a number refreshed this recently is answered from the cache
+_SIGNAL_FLIGHT_WAIT = 30.0
+_SIGNAL_FORCE_SLOTS = BoundedSemaphore(_SIGNAL_FORCE_MAX_CONCURRENT)
+_SIGNAL_FLIGHT_LOCK = Lock()
+_SIGNAL_FLIGHTS: dict[str, _SignalFlight] = {}
 
 # Bound the verify-signal request body (each number costs a signal-cli lookup)
 _PhoneList = Annotated[list[Annotated[str, StringConstraints(max_length=32)]], Field(max_length=50)]
@@ -63,26 +84,29 @@ def _normalize_phone_or_400(phone: str) -> str:
         raise HTTPException(status_code=400, detail=f"Invalid phone number: {e}") from e
 
 
-def _signal_registration_status(phone: str) -> bool | None:
+def _signal_registration_status(phone: str, *, force_refresh: bool = False) -> bool | None:
     """Check if phone is registered with Signal.
 
     Centralized low-level function used by both warning generation and
     verification API. Caches results for 24h using time.monotonic().
-    Thread-safe via _SIGNAL_CACHE_LOCK.
+    Thread-safe via _SIGNAL_CACHE_LOCK. ``force_refresh`` skips the cache read; a fresh
+    result replaces the cache entry.
 
     Args:
             phone: E.164 formatted phone number
+            force_refresh: Bypass the cached value once (explicit user re-check only)
 
     Returns:
             True if registered, False if not registered, None if check unavailable
     """
     now = time.monotonic()
 
-    with _SIGNAL_CACHE_LOCK:
-        if phone in _SIGNAL_REGISTRATION_CACHE:
-            is_registered, cached_at = _SIGNAL_REGISTRATION_CACHE[phone]
-            if (now - cached_at) < _SIGNAL_CACHE_TTL:
-                return is_registered
+    if not force_refresh:
+        with _SIGNAL_CACHE_LOCK:
+            if phone in _SIGNAL_REGISTRATION_CACHE:
+                is_registered, cached_at = _SIGNAL_REGISTRATION_CACHE[phone]
+                if (now - cached_at) < _SIGNAL_CACHE_TTL:
+                    return is_registered
 
     try:
         from ..services.notifications.signal_backend import get_signal_backend
@@ -116,8 +140,61 @@ def _signal_registration_status(phone: str) -> bool | None:
         _log.debug("Signal backend unavailable")
         return None
     except Exception as e:  # noqa: BLE001 - Signal-check boundary: any failure degrades to unknown registration
-        _log.debug("Error checking Signal registration: %s", e)
+        # Type only: the message may carry the phone number.
+        _log.debug("Error checking Signal registration: %s", type(e).__name__)
         return None
+
+
+def _cached_signal_age(phone: str) -> tuple[bool, float] | None:
+    """Return (value, age in seconds) of a cache entry, or None."""
+    with _SIGNAL_CACHE_LOCK:
+        entry = _SIGNAL_REGISTRATION_CACHE.get(phone)
+    return None if entry is None else (entry[0], time.monotonic() - entry[1])
+
+
+def _force_signal_registration(phone: str) -> bool | None:
+    """Re-check one number against signal-cli, bypassing the cache.
+
+    Concurrent calls for the same number share one lookup (single flight); at most
+    ``_SIGNAL_FORCE_MAX_CONCURRENT`` lookups run at once and a number refreshed within
+    ``_SIGNAL_FORCE_MIN_INTERVAL`` is answered from the cache. Raises HTTP 429 when busy.
+    """
+    with _SIGNAL_FLIGHT_LOCK:
+        flight = _SIGNAL_FLIGHTS.get(phone)
+        leader = flight is None
+        if flight is None:
+            flight = _SIGNAL_FLIGHTS[phone] = _SignalFlight()
+
+    if not leader:
+        if not flight.done.wait(_SIGNAL_FLIGHT_WAIT):
+            raise _signal_busy()
+        if flight.error is not None:
+            raise flight.error
+        return flight.result
+
+    try:
+        cached = _cached_signal_age(phone)
+        if cached is not None and cached[1] < _SIGNAL_FORCE_MIN_INTERVAL:
+            flight.result = cached[0]
+        elif not _SIGNAL_FORCE_SLOTS.acquire(blocking=False):
+            raise _signal_busy()
+        else:
+            try:
+                flight.result = _signal_registration_status(phone, force_refresh=True)
+            finally:
+                _SIGNAL_FORCE_SLOTS.release()
+        return flight.result
+    except HTTPException as exc:
+        flight.error = exc
+        raise
+    finally:
+        with _SIGNAL_FLIGHT_LOCK:
+            _SIGNAL_FLIGHTS.pop(phone, None)
+        flight.done.set()
+
+
+def _signal_busy() -> HTTPException:
+    return HTTPException(status_code=429, detail="Signal check is busy. Try again shortly.", headers={"Retry-After": "5"})
 
 
 def _check_signal_registration(phone: str) -> str | None:
@@ -224,6 +301,34 @@ def verify_signal_numbers(
             results[normalized] = None
 
     return {"results": results, "invalid": invalid_phones}
+
+
+@router.post(
+    "/{recipient_id}/recheck-signal",
+    dependencies=[Depends(rate_limit(_SIGNAL_FORCE_RATE_LIMIT))],
+)
+def recheck_signal(recipient_id: int, conn=Depends(get_conn), _user=Depends(require_admin)):
+    """Re-check one recipient's Signal registration, bypassing the 24h cache once.
+
+    The number is read from the stored recipient (never from the URL or body) so it
+    stays out of access logs. ``registered`` is null when the check is unavailable.
+    """
+    row = sqlite_db.get_recipient(conn, recipient_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Recipient not found")
+    if not row["phone"]:
+        raise HTTPException(status_code=400, detail="Recipient has no Signal number")
+    try:
+        phone = normalize_phone(row["phone"])
+    except ValueError:
+        return {"registered": None}
+    try:
+        return {"registered": _force_signal_registration(phone)}
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 - Signal boundary: report unknown, never the internal text
+        _log.warning("Signal re-check for %s failed: %s", mask_phone(phone), type(exc).__name__)
+        return {"registered": None}
 
 
 def _raise_duplicate_phone(exc: sqlite3.IntegrityError) -> NoReturn:

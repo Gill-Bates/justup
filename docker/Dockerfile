@@ -450,7 +450,6 @@ RUN apt-get update && apt-get upgrade -y && DEBIAN_FRONTEND=noninteractive apt-g
     libssl3 \
     libstdc++6 \
     libzstd1 \
-    mtr-tiny \
     whatweb \
     gosu \
     iputils-ping \
@@ -459,9 +458,8 @@ RUN apt-get update && apt-get upgrade -y && DEBIAN_FRONTEND=noninteractive apt-g
  && printf '#!/bin/sh\nexec /usr/local/bin/signal-cli --config "${SIGNAL_DATA_DIR:-/app/data/signal}" "$@"\n' \
      > /usr/local/bin/signal \
  && chmod +x /usr/local/bin/signal \
- # Security: Grant raw socket capability for ping and mtr (required as non-root)
+ # Security: Grant raw socket capability for ping (required as non-root)
  && setcap cap_net_raw+ep /bin/ping \
- && setcap cap_net_raw+ep /usr/bin/mtr \
  && chmod u-s /bin/ping \
  && apt-get autoremove -y \
  && rm -rf /var/lib/apt/lists/* \
