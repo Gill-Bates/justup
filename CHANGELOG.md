@@ -5,6 +5,7 @@
 
 ## [Unreleased]
 - `Fix` A hanging DNS resolver can no longer stall a check indefinitely: every ping, HTTP, certificate and TCP check has an overall deadline (3x its timeout plus 10 s) and then fails as an ordinary timeout. System DNS lookups use their own bounded thread pool.
+- `New` Traceroute now uses Nmap through the worker instead of `mtr` (up to 30 hops, one round-trip time per hop). The Loss, Avg, Best and Worst columns are gone, silent hops show "No reply", and the Docker image no longer contains `mtr`. A host name that cannot be resolved is not traced.
 - `Change` The downtime card of the target details is compact: one figure row `Downtimes` / `Data gaps`, events in at most three lines with short dates (`4 Nov · 18:57–21:50`), exact times on hover, and compact empty states. The explanatory paragraph and info icon are gone from the card (the terms are explained in the documentation); a data gap is never shown as uptime.
 - `Fix` The duration in the downtime list could be one minute short of the shown times (2 h 52 m for 18:57:06 to 21:50:06); it now follows the displayed seconds.
 - `Fix` Zooming into the availability chart no longer draws green or red lines over the axis labels or past the plot area; lines are cut at the edge of the plot.
@@ -31,6 +32,7 @@
 - `New` UDP and TCP ports are monitored and shown per endpoint (protocol and port, such as `TCP:53` and `UDP:53`). UDP `open` is up, `closed` is down after two confirming scans; `open|filtered`, `filtered` and failed scans are unknown, never up and never downtime. UDP scans run at most every 5 minutes.
 - `Fix` Downtime no longer includes stretches without measurements: a gap between a down and a later up measurement is shown as "No measurements", unknown results as "Unknown", and neither counts as downtime or uptime.
 - `Security` UDP scans run in a separate Nmap worker with only the `NET_RAW` capability; the web process gets no raw-socket rights, Docker `privileged` stays off and `no-new-privileges` stays on. Scans are admin-only and accept just a host, protocols and a scope, with no free Nmap arguments, ranges or host lists.
+- `New` Settings > Recipients has a **Re-check Signal** button per recipient with a number. It asks signal-cli again instead of using the 24 h cached answer; the result replaces the status icon. Limited to 5 checks per minute, one lookup per number at a time and two at once overall.
 
 ## [1.0.2] - 2026-11-03
 

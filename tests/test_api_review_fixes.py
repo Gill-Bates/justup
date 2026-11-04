@@ -1505,7 +1505,7 @@ def _recheck_setup(conn, monkeypatch, *, admin: bool = True):
     release = threading.Event()
     release.set()
 
-    def lookup(phone, sender=None):
+    def lookup(phone, sender=None):  # noqa: ARG001
         calls.append(phone)
         release.wait(5)
         return False

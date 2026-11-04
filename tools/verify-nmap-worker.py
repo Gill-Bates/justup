@@ -10,6 +10,11 @@
 process holds none, both run with no_new_privs.
 ``binary <arch>``: the shipped nmap is an ELF for that architecture whose libraries resolve.
 ``status``: the supervisor published state ``ready``.
+``trace``: as the web user, traceroutes through the worker socket: the container's default gateway
+(a real route or a controlled ``no_trace``) and the documentation address 192.0.2.1 (route or
+controlled ``no_trace``/``timeout``). ``permission_denied`` or ``unavailable`` fail the check, which
+proves the ``--privileged`` raw-socket path works under NET_RAW only. It does not prove a multi-hop
+path; no reproducible multi-hop lab exists on a CI runner.
 ``scan``: as the web user, TCP, UDP and -sV scans of the container's own address go through
 the worker socket and come back as parsed results.
 docker-build.yml pipes this script into the container (``python - <mode> < tools/verify-nmap-worker.py``).
@@ -167,9 +172,37 @@ async def check_scan() -> None:
     print(f"TCP connect scan, UDP scan and -sV through the worker: {states}, service {service.name}")
 
 
+def default_gateway() -> str | None:
+    """IPv4 default gateway from /proc/net/route, or None."""
+    for line in Path("/proc/net/route").read_text(encoding="utf-8").splitlines()[1:]:
+        fields = line.split()
+        if len(fields) > 2 and fields[1] == "00000000":
+            return socket.inet_ntoa(struct.pack("<I", int(fields[2], 16)))
+    return None
+
+
+async def check_trace() -> None:
+    from app.services.nmap_client import NmapScannerError, request_traceroute
+
+    targets = [t for t in (default_gateway(), "192.0.2.1") if t]
+    outcomes = []
+    for host in targets:
+        try:
+            route = await request_traceroute(host, timeout=40)
+        except NmapScannerError as error:
+            require(error.code in ("no_trace", "timeout"), f"{host}: {error.code}: {error}")
+            outcomes.append(f"{host}: {error.code}")
+            continue
+        require(route.destination_ip == host and route.hops, f"{host}: {route}")
+        numbers = [hop.hop_number for hop in route.hops]
+        require(numbers == sorted(set(numbers)) and numbers[0] >= 1, f"{host}: hop order {numbers}")
+        outcomes.append(f"{host}: {len(route.hops)} hops, reached={route.destination_reached}")
+    print(f"traceroute through the worker: {'; '.join(outcomes)}")
+
+
 def main(argv: list[str]) -> int:
-    if argv not in (["capabilities"], ["scan"], ["status"]) and not (len(argv) == 2 and argv[0] == "binary"):
-        print("Usage: verify-nmap-worker.py capabilities|scan|status|binary <amd64|arm64>", file=sys.stderr)
+    if argv not in (["capabilities"], ["scan"], ["status"], ["trace"]) and not (len(argv) == 2 and argv[0] == "binary"):
+        print("Usage: verify-nmap-worker.py capabilities|scan|trace|status|binary <amd64|arm64>", file=sys.stderr)
         return 2
     try:
         if argv == ["capabilities"]:
@@ -178,6 +211,8 @@ def main(argv: list[str]) -> int:
             if argv[1] not in ELF_MACHINE:
                 raise CheckError(f"unsupported architecture {argv[1]}")
             check_binary(argv[1])
+        elif argv == ["trace"]:
+            asyncio.run(check_trace())
         elif argv == ["status"]:
             check_status("ready")
         else:

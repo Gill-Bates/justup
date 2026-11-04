@@ -315,6 +315,18 @@ def test_fragment_shows_unknown_for_unreached_destination(tmp_path: Path, monkey
     client.close()
 
 
+def test_rendered_fragment_names_no_removed_tool(tmp_path: Path, monkeypatch) -> None:
+    hops = [_ok_hop(1, "10.0.0.1", 1.0), _timeout_hop(2), _ok_hop(3, "203.0.113.9", 5.0)]
+    geo = [{**_DEST_GEO, "hop": 3, "_destination": True}]
+    client, url, _calls, _app, _tid = _diagnostics_client(
+        tmp_path, monkeypatch, hops, target_ip="203.0.113.9", geo_points=geo
+    )
+    text = client.get(url, headers=_HX).text
+    assert "No reply" in text
+    assert not re.search(r"\bmtr\b", text, re.IGNORECASE)
+    client.close()
+
+
 def test_run_again_forces_new_measurement_with_auth_and_parallel_guard(tmp_path: Path, monkeypatch) -> None:
     hops = [_ok_hop(1, "10.0.0.1", 1.0), _ok_hop(2, "203.0.113.9", 5.0)]
     geo = [{**_DEST_GEO, "hop": 2, "_destination": True}]

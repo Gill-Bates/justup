@@ -29,6 +29,13 @@ saving, pausing or deleting; creating a new recipient clears it so the new entry
 channels; the Edit Recipient dialog tests Signal and email separately. Tests use the
 saved values, work for disabled recipients, and are not retried on failure.
 
+**Signal status:** the Signal column shows whether the number is registered with Signal. The
+answer is cached for 24 hours. The *Re-check Signal* button (circular arrows, in the row actions)
+asks signal-cli again for that recipient and replaces the cached answer; admins only, at most
+5 checks per minute. Two checks of the same number at the same time share one lookup, and at most
+two lookups run at once. The number is read from the stored recipient and appears neither in the
+request address nor in the log. These limits and the cache apply per application process.
+
 ## Delivery
 
 - **Restarts:** the queue is stored in the database. After a restart or container restart, pending

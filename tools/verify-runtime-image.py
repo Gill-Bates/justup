@@ -11,6 +11,7 @@ the jlink Java runtime, the application and its runtime configuration, package m
 Forbidden: compilers and build tools (gcc, g++, cc, clang, cmake, make, cargo, rustc, rustup, javac,
 jar, jlink, jdeps, jshell, autoconf, automake, libtool, rpm tools, gpg) in a bin directory,
 Nmap source archives, RPMs, signatures and unpacked source trees, libtool archives (.la),
+the mtr tools (mtr, mtr-packet and the mtr-tiny package entry; traceroute runs through Nmap),
 Cargo/rustup/pip/Maven caches, a full JDK, .git
 directories, build source trees (Cargo.toml/Cargo.lock), object files (.o, .rlib, .obj and static
 .a archives), test caches, build credentials, and leftovers in /tmp, /var/tmp and /usr/src.
@@ -47,6 +48,7 @@ TOOL_NAME = re.compile(
     r"(?:-[0-9][0-9.]*)?$"
 )
 BIN_DIRS = frozenset({"bin", "sbin"})
+MTR_TOOL = re.compile(r"^mtr(?:-packet|-tiny)?$")
 FORBIDDEN_PATHS = (
     "/root/.cargo",
     "/root/.rustup",
@@ -108,6 +110,8 @@ def violation(path: str, is_dir: bool = False) -> str | None:
         return f"libtool archive {name}"
     if posix.parent.name in BIN_DIRS and TOOL_NAME.match(name):
         return f"build tool {name}"
+    if posix.parent.name in BIN_DIRS and MTR_TOOL.match(name):
+        return f"removed tool {name} (traceroute uses Nmap)"
     if name in FORBIDDEN_FILE_NAMES:
         return f"build source file {name}"
     if name.endswith(OBJECT_SUFFIXES) and not CPYTHON_CONFIG.match(path):
@@ -131,12 +135,26 @@ def tree_violations(root: Path) -> list[str]:
             if reason:
                 found.append(f"{path}: {reason}")
     found.extend(package_tooling(root))
+    found.extend(mtr_package_entries(root))
     for directory in EMPTY_DIRS:
         target = root / directory.lstrip("/")
         if target.is_dir():
             leftovers = sorted(item.name for item in target.iterdir())
             if leftovers:
                 found.append(f"{directory}: leftovers {', '.join(leftovers[:5])}")
+    return found
+
+
+def mtr_package_entries(root: Path) -> list[str]:
+    """The dpkg database must not list the removed mtr-tiny package."""
+    found: list[str] = []
+    status = root / "var/lib/dpkg/status"
+    if status.is_file() and re.search(rb"^Package: mtr-tiny\s*$", status.read_bytes(), re.MULTILINE):
+        found.append("/var/lib/dpkg/status: package mtr-tiny is installed")
+    found.extend(
+        f"/var/lib/dpkg/info/{entry.name}: package mtr-tiny is installed"
+        for entry in sorted((root / "var/lib/dpkg/info").glob("mtr-tiny*"))
+    )
     return found
 
 

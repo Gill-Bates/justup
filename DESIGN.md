@@ -172,6 +172,10 @@ One shared fragment, `fragments/network_scan_picker.html`, serves the wizard's a
 
 This section is the acceptance contract for modal implementation and code review. When existing modal markup or styling contradicts it, the shared system is authoritative; local CSS patches are not an acceptable substitute.
 
+## Recipients list: Signal re-check
+
+The recipients list row actions carry an icon-only `btn-icon` `.recheck-signal-btn` (icon `sync`) for rows with a Signal number; its `aria-label` is `Re-check Signal for <name>`. While the request runs the button is `aria-disabled="true"` plus `aria-busy="true"` and `.disabled`, never natively `disabled`, so keyboard focus stays on it; a second activation is ignored. The result is the Signal status icon of the row (`role="img"`, `aria-label` = status text: registered, not registered, no account linked, `Check failed`, `Checking...` while busy) plus a toast for announcement; there is no explanatory text in the list. The request carries the recipient id only, never the number. Checks: `tests/js/recipients-signal-recheck.test.mjs` and `tests/layout/recipient-signal-recheck.spec.mjs` (Chromium and WebKit, light and dark, 1280x720, 390x844, 320x640).
+
 ## Settings form fields
 
 - A settings text field that offers a helper action (for example "Public hostname" with auto-detect) uses a Bootstrap `input-group` with one icon-only `btn-icon` after the input. The button has an `aria-label` and a matching `title`; the field has a visible `<label>` and `aria-describedby` for its help text.

@@ -43,6 +43,7 @@ _log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/recipients", tags=["recipients"])
 
+
 class _SignalFlight:
     """One in-progress forced lookup; concurrent callers for the same number wait for its result."""
 
@@ -194,7 +195,9 @@ def _force_signal_registration(phone: str) -> bool | None:
 
 
 def _signal_busy() -> HTTPException:
-    return HTTPException(status_code=429, detail="Signal check is busy. Try again shortly.", headers={"Retry-After": "5"})
+    return HTTPException(
+        status_code=429, detail="Signal check is busy. Try again shortly.", headers={"Retry-After": "5"}
+    )
 
 
 def _check_signal_registration(phone: str) -> str | None:

@@ -249,3 +249,31 @@ def test_layer_scan_finds_nmap_build_leftovers_that_a_later_layer_deleted(tmp_pa
     found = " ".join(tool.layer_violations(archive))
     for expected in ("nmap-7.993.tar.bz2", ".asc", "libssh2.la", "main.o", "/usr/bin/gcc"):
         assert expected in found, found
+
+
+@pytest.mark.parametrize(
+    "relative", ["usr/bin/mtr", "usr/bin/mtr-packet", "usr/sbin/mtr", "usr/sbin/mtr-packet", "bin/mtr"]
+)
+def test_mtr_binaries_fail_the_file_system_check(tmp_path, relative):
+    root = make_image_root(tmp_path)
+    touch(root, relative)
+    assert any("mtr" in line for line in problems(root))
+
+
+@pytest.mark.parametrize(
+    ("relative", "content"),
+    [
+        ("var/lib/dpkg/status", b"Package: mtr-tiny\nStatus: install ok installed\n"),
+        ("var/lib/dpkg/info/mtr-tiny.list", b"/usr/bin/mtr\n"),
+    ],
+)
+def test_mtr_tiny_package_entry_fails_the_file_system_check(tmp_path, relative, content):
+    root = make_image_root(tmp_path)
+    touch(root, relative, content)
+    assert any("mtr-tiny" in line for line in problems(root))
+
+
+def test_dpkg_status_without_mtr_passes(tmp_path):
+    root = make_image_root(tmp_path)
+    touch(root, "var/lib/dpkg/status", b"Package: iputils-ping\nStatus: install ok installed\n")
+    assert problems(root) == []

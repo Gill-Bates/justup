@@ -424,6 +424,8 @@ jobs:
           docker exec -u justup "$CONTAINER" test -S /run/justup/nmap.sock
           docker exec -i "$CONTAINER" python - capabilities < tools/verify-nmap-worker.py
           docker exec -i -u justup "$CONTAINER" python - scan < tools/verify-nmap-worker.py
+          # Traceroute as the web user through the worker socket under the NET_RAW-only profile.
+          docker exec -i -u justup "$CONTAINER" python - trace < tools/verify-nmap-worker.py
           docker exec -i "$CONTAINER" python - status < tools/verify-nmap-worker.py
           # A killed worker is restarted by the supervisor and scans work again.
           worker_pid="$(docker top "$CONTAINER" -eo pid,args | awk '/app\.services\.nmap_worker/ && !/awk/ {print $1; exit}')"
@@ -438,6 +440,12 @@ jobs:
           done
           docker exec -i "$CONTAINER" python - status < tools/verify-nmap-worker.py
           docker exec -i -u justup "$CONTAINER" python - scan < tools/verify-nmap-worker.py
+          docker exec -i -u justup "$CONTAINER" python - trace < tools/verify-nmap-worker.py
+          # Traceroute runs through Nmap; the mtr tools must be gone from the image.
+          if docker exec "$CONTAINER" sh -c 'command -v mtr || command -v mtr-packet || test -e /usr/bin/mtr'; then
+            echo "ERROR: mtr is still present in the runtime image" >&2
+            exit 1
+          fi
 
       - name: Upload Nmap provenance (${{ matrix.arch }})
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
