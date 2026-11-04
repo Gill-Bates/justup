@@ -5,6 +5,7 @@
 
 ## [Unreleased]
 
+- `New` Settings > Recipients has a search field that filters by name, email or Signal number while you type.
 - `Fix` Settings > Delivery Queue shows the stored status `sent` as "Sent" (it read "Accepted by server"); the status carries no tooltip, the meaning is documented.
 - `Fix` The Delivery Queue Log shows the channel as an icon only; the name stays available as tooltip and for screen readers.
 

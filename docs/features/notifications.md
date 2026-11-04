@@ -19,6 +19,12 @@ all assignments, including manual ones, will be removed. Cancel keeps the edits 
 switch; phone number, hint and Send test appear when it is on. Values you typed stay while the dialog
 is open. On save, a switched-off channel is cleared (the recipient keeps only the channels that are on),
 and at least one channel must be on.
+**Search:** the field above the recipients list filters while you type, like the Targets search. It matches
+name, email address and Signal number (case-insensitive, ignoring accents and extra spaces) and runs only in
+the browser; the text is not stored or sent anywhere. Escape or the clear button resets it. Without a hit the
+list shows "No recipients match ..." with a *Show all recipients* button. The query stays active after
+saving, pausing or deleting; creating a new recipient clears it so the new entry is visible.
+
 **Test messages:** the paper-plane button in the recipients list tests all saved
 channels; the Edit Recipient dialog tests Signal and email separately. Tests use the
 saved values, work for disabled recipients, and are not retried on failure.

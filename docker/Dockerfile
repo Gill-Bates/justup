@@ -549,7 +549,8 @@ RUN mkdir -p \
 
 # Entrypoint performs UID/GID setup, then hands off to gosu.
 COPY docker/entrypoint.sh /entrypoint.sh
-RUN chmod 0755 /entrypoint.sh
+COPY docker/nmap-worker.sh /usr/local/bin/nmap-worker.sh
+RUN chmod 0755 /entrypoint.sh /usr/local/bin/nmap-worker.sh
 
 EXPOSE 8000
 

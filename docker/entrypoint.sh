@@ -127,30 +127,13 @@ echo ""
 # ------------------------------------------------------------------
 # Nmap worker: the only process holding CAP_NET_RAW (UDP scans)
 # ------------------------------------------------------------------
-# Own UID, ambient capability set reduced to net_raw, no_new_privs, scrubbed environment
-# (no SECRET_KEY). The web process below runs without raw-socket rights and talks to the
-# worker over a Unix socket. It is not supervised: if the worker dies, scans report
-# "unavailable" and the container restart policy is not involved. pdeathsig ends the worker
-# together with the web process, which keeps this PID.
-NMAP_SOCKET_PATH=${JUSTUP_NMAP_SOCKET:-/run/justup/nmap.sock}
-
-start_nmap_worker() {
-    install -d -m 0750 -o justup-nmap -g justup-nmap "$(dirname "$NMAP_SOCKET_PATH")" || return 1
-    setpriv --reuid=justup-nmap --regid=justup-nmap --clear-groups \
-        --inh-caps=-all,+net_raw --ambient-caps=-all,+net_raw \
-        --no-new-privs --pdeathsig=TERM -- \
-        env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/nonexistent LANG="$LANG" \
-            PYTHONPATH=/src PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 \
-            NMAPDIR="${NMAPDIR:-/usr/share/nmap}" JUSTUP_NMAP_SOCKET="$NMAP_SOCKET_PATH" \
-            LOG_LEVEL="${LOG_LEVEL:-INFO}" \
-            python -m app.services.nmap_worker &
-}
-
-if start_nmap_worker; then
-    echo "🔎 Nmap worker started (UID $NMAP_ID, CAP_NET_RAW only)"
-else
-    echo "Warning: Nmap worker could not be started; port scans will report 'unavailable'" >&2
-fi
+# docker/nmap-worker.sh starts it under its own UID with net_raw as the only capability,
+# checks readiness, restarts it with bounded backoff and publishes its state in
+# /run/justup-nmap.status. A worker failure is logged and never stops the web process,
+# which runs below without raw-socket rights.
+export JUSTUP_NMAP_SOCKET=${JUSTUP_NMAP_SOCKET:-/run/justup/nmap.sock}
+/usr/local/bin/nmap-worker.sh &
+echo "🔎 Nmap worker supervisor started (status: /run/justup-nmap.status)"
 
 # ------------------------------------------------------------------
 # Drop privileges and exec

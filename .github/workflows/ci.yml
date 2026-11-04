@@ -166,9 +166,10 @@ jobs:
       - name: Entrypoint shell syntax
         run: |
           bash -n docker/entrypoint.sh
+          bash -n docker/nmap-worker.sh
 
       - name: Entrypoint shellcheck
-        run: shellcheck docker/entrypoint.sh
+        run: shellcheck docker/entrypoint.sh docker/nmap-worker.sh
 
       # BuildKit checks the justUp image stages and COPY targets without
       # running the build.

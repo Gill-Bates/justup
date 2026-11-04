@@ -769,7 +769,7 @@ async function sendSetting(key, value) {
         if (resp.ok) {
             if (key === 'public_hostname') {
                 const saved = await resp.json().catch(() => null);
-                if (saved && typeof saved.public_hostname === 'string') showPublicHostname(saved.public_hostname);
+                if (saved && typeof saved.public_hostname === 'string') showPublicHostname(saved.public_hostname, value);
                 notify('success', 'Public hostname updated');
                 return true;
             }
@@ -806,11 +806,15 @@ async function sendSetting(key, value) {
     }
 }
 
-/** Show the stored public hostname (as normalised by the server) and the "no URL" hint when it is empty. */
-function showPublicHostname(value) {
+/**
+ * Show the stored public hostname (as normalised by the server) and the "no URL" hint when it is empty.
+ * `sent` is the value the confirmed request carried: a slower reply must not overwrite what the admin
+ * typed since, so the field is only rewritten while it still shows that value.
+ */
+function showPublicHostname(value, sent) {
     const input = DOM.publicHostname();
     if (input) {
-        input.value = value;
+        if (sent === undefined || input.value.trim() === String(sent).trim()) input.value = value;
         input.defaultValue = value;  // blur auto-save compares against it
     }
     const hint = document.getElementById('public_hostname_missing_hint');
@@ -830,7 +834,12 @@ async function applyDetectedPublicHostname() {
     }
     if (input.value.trim() === detected) return;
     input.value = detected;
-    await saveSetting('public_hostname', detected);
+    const saved = await saveSetting('public_hostname', detected);
+    // Links are always https://<hostname> on the default port, whatever address this page was opened on.
+    if (saved && (window.location.protocol !== 'https:' || window.location.port !== '')) {
+        notify('warning', 'Notification links use https://' + detected + ' without a port. This page is opened via '
+            + window.location.origin + ', so check that the link works.');
+    }
 }
 function formatDurationSeconds(value) {
     const seconds = Number.parseInt(value, 10);

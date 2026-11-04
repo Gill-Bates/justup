@@ -117,6 +117,28 @@ test.describe("Public hostname field in Settings > General @public-hostname-ui",
 		expect(await hintHidden(page)).toBe(false);
 	});
 
+	test("a late reply does not overwrite a value typed after the request was sent", async ({ page }) => {
+		await loadPage(page, BASE);
+		const field = page.locator("#public_hostname");
+		await field.fill("monitor.example.com");
+		await field.blur();
+		await waitForCalls(page, 1);
+		await field.fill("justup.example.com");
+		await respond(page, 0, 200, { public_hostname: "monitor.example.com" });
+		await expect.poll(() => toasts(page)).toContainEqual(["success", "Public hostname updated"]);
+		await expect(field).toHaveValue("justup.example.com");
+		await field.blur();
+		await waitForCalls(page, 2);
+		expect((await calls(page))[1].body).toEqual({ public_hostname: "justup.example.com" });
+	});
+	test("detect warns when the page is not opened via https on the default port", async ({ page }) => {
+		await loadPage(page, BASE);
+		await page.locator("#public_hostname_detect").click();
+		await waitForCalls(page, 1);
+		await respond(page, 0, 200, { public_hostname: new URL(baseUrl).hostname });
+		await expect.poll(async () => (await toasts(page)).filter(([kind]) => kind === "warning").length).toBe(1);
+		expect((await toasts(page)).find(([kind]) => kind === "warning")[1]).toContain("without a port");
+	});
 	test("clearing the field saves an empty value and shows the hint again", async ({ page }) => {
 		await loadPage(page, { ...BASE, public_hostname: "justup.example.com" });
 		await page.locator("#public_hostname").fill("");

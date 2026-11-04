@@ -20,7 +20,7 @@ SCRIPT = (ROOT / "app" / "static" / "js" / "settings.recipients.js").read_text(e
 def test_search_field_has_label_and_shared_component_classes() -> None:
     assert re.search(r'<div class="ui-search"[^>]*role="search"', TEMPLATE)
     assert re.search(r'<label class="visually-hidden" for="recipients-search">Search recipients</label>', TEMPLATE)
-    field = re.search(r'<input[^>]*id="recipients-search"[^>]*>', TEMPLATE, re.S)
+    field = re.search(r'<input[^>]*id="recipients-search"[^>]*>', TEMPLATE, re.DOTALL)
     assert field is not None
     for attr in ('type="search"', 'class="form-control ui-search-input"', 'maxlength="100"', 'autocomplete="off"'):
         assert attr in field.group(0)

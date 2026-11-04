@@ -12,6 +12,7 @@
 
 # ─── ALLOW: Build inputs read by docker/Dockerfile ───
 !docker/entrypoint.sh
+!docker/nmap-worker.sh
 !docker/libsignal-pins.txt
 !docker/requirements.lock
 !docker/vendor/wheels/
