@@ -11,11 +11,12 @@
   const MAX_FIELD_LENGTH = 200;
   const POLL_MS = 2000;
 
+  // The scan API takes a bare host; URL.hostname keeps the brackets of an IPv6 literal.
   function scanHost(input) {
     const value = input.value.trim();
     if (!value) return '';
     if (!value.includes('://')) return value;
-    try { return new URL(value).hostname; } catch (_) { return value; }
+    try { return new URL(value).hostname.replace(/^\[(.*)\]$/, '$1'); } catch (_) { return value; }
   }
   // Error body of the scan API: a string, {code, message} or a 422 list of {msg}.
   function errorMessage(detail, status) {

@@ -250,3 +250,61 @@ class TestClient:
                 assert time.monotonic() - started < 10
 
         asyncio.run(scenario())
+
+
+def test_selected_port_limit_is_the_scanner_max_ports():
+    """The worker request limit is the scanner's MAX_PORTS, not a second literal."""
+    from app.services import nmap_scanner, nmap_worker
+
+    assert nmap_worker.MAX_PORTS == nmap_scanner.MAX_PORTS
+    limit = nmap_scanner.MAX_PORTS
+    nmap_worker.WorkerRequest(host="example.org", tcp_ports=list(range(1, limit + 1)))
+    nmap_worker.WorkerRequest(host="example.org", tcp_ports=list(range(1, limit)), udp_ports=[53])
+    with pytest.raises(ValueError, match="Invalid selected-port count"):
+        nmap_worker.WorkerRequest(host="example.org", tcp_ports=list(range(1, limit)), udp_ports=[53, 123])
+    with pytest.raises(ValueError, match="Invalid selected-port count"):
+        nmap_worker.WorkerRequest(host="example.org", tcp_ports=[], udp_ports=[])
+
+
+class _FakeWriter:
+    def __init__(self):
+        self.closed = False
+        self.written = b""
+
+    def write(self, data):
+        self.written += data
+
+    async def drain(self):
+        return None
+
+    def close(self):
+        self.closed = True
+
+    async def wait_closed(self):
+        return None
+
+
+@pytest.mark.parametrize("peer", ["probe", "disconnect"])
+def test_handler_closes_the_connection_when_no_answer_is_sent(monkeypatch, peer):
+    """An availability probe or a client leaving mid-scan still closes the writer, without a reply."""
+    from app.services import nmap_worker
+
+    async def never_finishes(*args, **kwargs):
+        await asyncio.sleep(60)
+
+    monkeypatch.setattr(nmap_worker, "scan_selected_ports", never_finishes)
+    writer = _FakeWriter()
+
+    async def run():
+        reader = asyncio.StreamReader()
+        if peer == "probe":
+            reader.feed_eof()
+        else:
+            reader.feed_data(b'{"host":"example.org","tcp_ports":[80]}\n')
+            reader.feed_eof()  # read(1) returns b"" once the request line is consumed: the client is gone
+        await asyncio.wait_for(nmap_worker._handle(reader, writer), timeout=10)
+
+    asyncio.run(run())
+
+    assert writer.closed is True
+    assert writer.written == b""

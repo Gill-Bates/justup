@@ -1916,35 +1916,36 @@ def query_downtime_periods(
 class UnmeasuredPeriod:
     """Time without a confirmed result: a measurement ``gap`` or an explicit ``unknown`` result.
 
-    Neither is downtime nor uptime; ``end`` is None while no measurement has arrived since ``start``.
+    Neither is downtime nor uptime.
     """
 
     kind: str
     start: datetime
-    end: datetime | None
+    end: datetime
     services: list[str] = field(default_factory=list)
 
     @property
-    def duration_seconds(self) -> int | None:
-        return None if self.end is None else int((self.end - self.start).total_seconds())
+    def duration_seconds(self) -> int:
+        return int((self.end - self.start).total_seconds())
 
 
 def _series_unmeasured(
-    points: list[tuple[datetime, int | None]], *, interval_seconds: float, now: datetime | None
-) -> list[tuple[str, datetime, datetime | None]]:
-    """``(kind, start, end)`` of the unmeasured time of one series, by the shared gap rule."""
-    found: list[tuple[str, datetime, datetime | None]] = []
+    points: list[tuple[datetime, int | None]], *, interval_seconds: float
+) -> list[tuple[str, datetime, datetime]]:
+    """``(kind, start, end)`` of the unmeasured time of one series, by the shared gap rule.
+
+    Only time between two points is reported; silence after the last point is not (that is a stopped
+    check, which the target status and the missing data already show).
+    """
+    found: list[tuple[str, datetime, datetime]] = []
     for (ts, value), (next_ts, _next_value) in itertools.pairwise(points):
         if value is None:
             found.append(("unknown", ts, next_ts))
         elif is_gap((next_ts - ts).total_seconds(), interval_seconds):
             found.append(("gap", ts, next_ts))
-    if points:
-        last_ts, last_value = points[-1]
-        if last_value is None:
-            found.append(("unknown", last_ts, None if now is None else last_ts + timedelta(seconds=interval_seconds)))
-        elif now is not None and is_gap((now - last_ts).total_seconds(), interval_seconds):
-            found.append(("gap", last_ts, None))
+    if points and points[-1][1] is None:
+        last_ts = points[-1][0]
+        found.append(("unknown", last_ts, last_ts + timedelta(seconds=interval_seconds)))
     return found
 
 
@@ -1957,7 +1958,6 @@ def query_unmeasured_periods(
     limit: int = 20,
     series: Sequence[tuple[str, str]],
     check_interval_seconds: int = 60,
-    now: datetime | None = None,
 ) -> list[UnmeasuredPeriod]:
     """Measurement gaps and UNKNOWN results of the enabled series, merged per kind, most recent first.
 
@@ -1966,9 +1966,7 @@ def query_unmeasured_periods(
     """
     until_u = ensure_utc(until) if until else None
     since_u = ensure_utc(since) if since else None
-    ref_now = now or utcnow()
-    live_edge = until_u is None or until_u >= ref_now - timedelta(seconds=check_interval_seconds)
-    collected: dict[str, list[tuple[str, datetime, datetime | None]]] = {"gap": [], "unknown": []}
+    collected: dict[str, list[tuple[str, datetime, datetime]]] = {"gap": [], "unknown": []}
     for metric, label in series:
         interval = series_interval_seconds(metric, check_interval_seconds)
         points = _series_points(
@@ -1979,17 +1977,15 @@ def query_unmeasured_periods(
             until=until_u,
             interval_seconds=interval,
         )
-        for kind, start, end in _series_unmeasured(
-            points, interval_seconds=interval, now=ref_now if live_edge else None
-        ):
+        for kind, start, end in _series_unmeasured(points, interval_seconds=interval):
             collected[kind].append((label, start, end))
     periods: list[UnmeasuredPeriod] = []
     for kind, items in collected.items():
         merged: list[UnmeasuredPeriod] = []
         for label, start, end in sorted(items, key=lambda item: item[1]):
             last = merged[-1] if merged else None
-            if last is not None and (last.end is None or start < last.end):
-                last.end = None if last.end is None or end is None else max(last.end, end)
+            if last is not None and last.end is not None and start < last.end:
+                last.end = max(last.end, end)
                 if label not in last.services:
                     last.services.append(label)
             else:

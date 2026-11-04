@@ -54,6 +54,7 @@ for (const viewport of VIEWPORTS) {
 						regionOverflow: viewportEl.scrollWidth > viewportEl.clientWidth + 1,
 						icon: cell.querySelector(".material-icons")?.getAttribute("aria-hidden"),
 						channelColumnWidth: cell.getBoundingClientRect().width,
+						labelSizes: [...row.children].map((c) => getComputedStyle(c, "::before").fontSize),
 					};
 				});
 				assert.equal(m.pageOverflow, false, "the page scrolls horizontally");
@@ -64,6 +65,7 @@ for (const viewport of VIEWPORTS) {
 					assert.equal(m.label, '"Channel"', "the card row is labelled by data-label");
 					assert.ok(m.nameWidth > 20 && m.nameHeight > 8, `the channel name is visible in the card (${m.nameWidth}x${m.nameHeight})`);
 					assert.equal(m.regionOverflow, false, "the cards fit without horizontal scrolling");
+					assert.equal(new Set(m.labelSizes).size, 1, `every card label has the same size: ${m.labelSizes}`);
 				} else {
 					assert.equal(m.rowDisplay, "table-row", "wide container: the table");
 					assert.ok(m.nameWidth <= 1 && m.nameHeight <= 1, "the channel name is not visible in the table");

@@ -1462,6 +1462,11 @@ textarea.smtp-editor-frame {
 
 /* The channel is an icon in the table; the card row shows its name next to the icon. */
 @container ju-table (width <40rem) {
+	/* One label size for every card row, independent of the value's own size (Status badge, Error text). */
+	.spooler-log tbody td::before {
+		font-size: 0.875rem;
+	}
+
 	.spooler-log td[data-label="Channel"] {
 		justify-content: space-between;
 	}

@@ -1615,7 +1615,13 @@ async def fragment_downtime_history(
     )
     # Three separate kinds: measured downtime, measurement gap, UNKNOWN result (the last two are no downtime).
     entries = [
-        {"kind": "down", "start": p.start, "end": p.end, "duration_seconds": p.duration_seconds, "services": p.failed_services}
+        {
+            "kind": "down",
+            "start": p.start,
+            "end": p.end,
+            "duration_seconds": p.duration_seconds,
+            "services": p.failed_services,
+        }
         for p in periods
     ] + [
         {"kind": u.kind, "start": u.start, "end": u.end, "duration_seconds": u.duration_seconds, "services": u.services}

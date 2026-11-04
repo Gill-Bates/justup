@@ -20,7 +20,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.services.nmap_scanner import NmapScannerError, discover_ports, scan_selected_ports
+from app.services.nmap_scanner import MAX_PORTS, NmapScannerError, discover_ports, scan_selected_ports
 from app.utils.tcp_ports import parse_port_list
 
 _log = logging.getLogger(__name__)
@@ -49,19 +49,23 @@ class WorkerRequest(BaseModel):
         if selected:
             tcp = parse_port_list(self.tcp_ports)
             udp = parse_port_list(self.udp_ports)
-            if (not tcp and not udp) or len(tcp) + len(udp) > 128:
+            if (not tcp and not udp) or len(tcp) + len(udp) > MAX_PORTS:
                 raise ValueError("Invalid selected-port count")
         return self
 
 
+class _NoReplyError(Exception):
+    """Leave the request handler without an answer; the connection is still closed by its `finally`."""
+
+
 async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    response: dict | None = None
     scan_task: asyncio.Task | None = None
     disconnect_task: asyncio.Task | None = None
     try:
         raw = await asyncio.wait_for(reader.readline(), timeout=5)
         if raw == b"":  # availability probe: the peer connected and left without a request
-            writer.close()
-            return
+            raise _NoReplyError
         if len(raw) > MAX_REQUEST_BYTES:
             raise ValueError("Invalid request size")
         request = WorkerRequest.model_validate_json(raw)
@@ -85,12 +89,14 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) ->
             scan_task.cancel()
             with suppress(asyncio.CancelledError):
                 await scan_task
-            return
+            raise _NoReplyError  # the client is gone, nothing to answer
         disconnect_task.cancel()
         with suppress(asyncio.CancelledError):
             await disconnect_task
         result = scan_task.result()
         response = {"result": result.model_dump(mode="json")}
+    except _NoReplyError:
+        pass
     except NmapScannerError as exc:
         response = {"error": exc.error.model_dump()}
     except (ValueError, json.JSONDecodeError) as exc:
@@ -100,8 +106,9 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) ->
         _log.exception("Nmap worker scan failed")
         response = {"error": {"code": "process_failed", "message": "Nmap scan failed"}}
     try:
-        writer.write(json.dumps(response, separators=(",", ":")).encode() + b"\n")
-        await writer.drain()
+        if response is not None:
+            writer.write(json.dumps(response, separators=(",", ":")).encode() + b"\n")
+            await writer.drain()
     except (BrokenPipeError, ConnectionResetError, OSError):
         pass
     finally:

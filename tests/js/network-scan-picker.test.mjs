@@ -9,6 +9,7 @@ import test from 'node:test';
 import vm from 'node:vm';
 
 const source = readFileSync(new URL('../../app/static/js/network-scan-picker.js', import.meta.url), 'utf8');
+const coreSource = readFileSync(new URL('../../app/static/js/utils/port-scan-core.js', import.meta.url), 'utf8');
 
 function el(extra = {}) {
   const listeners = {};
@@ -55,6 +56,7 @@ async function scannedHost(hostValue) {
     },
     AbortController, Set, Number, JSON, Array, URL, Date, Error, Promise, clearTimeout, Event: class {},
   };
+  vm.runInNewContext(coreSource, sandbox);
   vm.runInNewContext(source, sandbox);
   await new Promise((resolve) => setImmediate(resolve));
   await parts['[data-scan-action="start"]'].fire('click');
