@@ -195,23 +195,25 @@ DIST = nmap_release.DIST
 STABLE_PAGE = (
     "<b>Latest stable Nmap release tarball: "
     f'<a href="{DIST}/nmap-7.993.tar.bz2">nmap-7.993.tar.bz2</a></b>'
-    f'<a href="{DIST}/nmap-7.993-1.x86_64.rpm">x86_64</a>'
-    f'<a href="{DIST}/nmap-7.992-1.x86_64.rpm">older</a>'
+    f'<a href="{DIST}/nmap-7.992.tar.bz2">older</a>'
     f'<b>Latest development: <a href="{DIST}/nmap-7.999BETA1.tar.bz2">beta</a></b>'
 )
 
 
-def test_nmap_latest_takes_only_the_stable_tarball_and_matching_rpm():
-    assert nmap_release.latest_release(STABLE_PAGE) == ("7.993", "nmap-7.993-1.x86_64.rpm")
+def test_nmap_latest_takes_only_the_stable_tarball():
+    assert nmap_release.latest_release(STABLE_PAGE) == "7.993"
 
 
-def test_nmap_latest_without_rpm_uses_placeholder():
-    page = STABLE_PAGE.replace("nmap-7.993-1.x86_64.rpm", "nmap-7.993-1.aarch64.rpm")
-    assert nmap_release.latest_release(page) == ("7.993", "-")
-
-
-@pytest.mark.parametrize("page", ["<p>nothing</p>", STABLE_PAGE + STABLE_PAGE])
-def test_nmap_latest_requires_exactly_one_stable_source(page):
+@pytest.mark.parametrize(
+    "page",
+    [
+        "<p>nothing</p>",
+        STABLE_PAGE + STABLE_PAGE,
+        STABLE_PAGE.replace("nmap-7.993.tar.bz2", "nmap-7.993BETA1.tar.bz2"),
+        STABLE_PAGE.replace(DIST, "https://evil.example/dist"),
+    ],
+)
+def test_nmap_latest_requires_exactly_one_official_stable_source(page):
     with pytest.raises(ValueError, match="exactly one"):
         nmap_release.latest_release(page)
 
@@ -246,6 +248,7 @@ def test_nmap_signature_accepts_the_pinned_key_also_for_a_subkey(monkeypatch, tm
         (validsig(nmap_release.PROJECT_KEY, nmap_release.PROJECT_KEY) * 2, 0),
         (validsig(nmap_release.PROJECT_KEY, nmap_release.PROJECT_KEY), 1),
         ("[GNUPG:] EXPKEYSIG X\n" + validsig(nmap_release.PROJECT_KEY, nmap_release.PROJECT_KEY), 0),
+        ("[GNUPG:] REVKEYSIG X\n" + validsig(nmap_release.PROJECT_KEY, nmap_release.PROJECT_KEY), 0),
         ("[GNUPG:] BADSIG X\n", 1),
         ("", 0),
     ],
@@ -255,26 +258,87 @@ def test_nmap_signature_rejects_untrusted_bad_or_ambiguous_results(monkeypatch, 
         run_verify(monkeypatch, tmp_path, status, returncode)
 
 
-@pytest.mark.parametrize(
-    ("version", "rpm"),
-    [("7.993;rm", "-"), ("", "-"), ("7.993", "nmap-7.992-1.x86_64.rpm"), ("7.993", "../x.rpm")],
-)
-def test_nmap_fetch_rejects_malformed_inputs_before_any_download(tmp_path, version, rpm):
+def stub_downloads(monkeypatch, content: bytes = b"archive"):
+    import hashlib
+
+    def fake_download(_url, path, **_kwargs):
+        path.write_bytes(content)
+        return hashlib.sha256(content).hexdigest()
+
+    monkeypatch.setattr(nmap_release, "download", fake_download)
+    return hashlib.sha256(content).hexdigest()
+
+
+def test_nmap_fetch_records_provenance_only_after_signature_and_hash_match(monkeypatch, tmp_path):
+    digest = stub_downloads(monkeypatch)
+    monkeypatch.setattr(nmap_release, "verify_signature", lambda *_a: None)
+    nmap_release.fetch("7.993", tmp_path / "out", digest)
+    lines = (tmp_path / "out" / "provenance.txt").read_text().splitlines()
+    assert lines == [
+        "nmap_version=7.993",
+        f"source_url={DIST}/nmap-7.993.tar.bz2",
+        f"source_sha256={digest}",
+        f"signing_key_fingerprint={nmap_release.PROJECT_KEY}",
+    ]
+
+
+def test_nmap_fetch_rejects_a_source_hash_that_differs_from_the_resolved_one(monkeypatch, tmp_path):
+    stub_downloads(monkeypatch)
+    monkeypatch.setattr(nmap_release, "verify_signature", lambda *_a: None)
+    with pytest.raises(ValueError, match="differs from the resolved"):
+        nmap_release.fetch("7.993", tmp_path / "out", "0" * 64)
+    assert not (tmp_path / "out" / "provenance.txt").exists()
+
+
+def test_nmap_fetch_aborts_on_a_failed_signature_without_provenance(monkeypatch, tmp_path):
+    stub_downloads(monkeypatch)
+
+    def reject(*_args):
+        raise ValueError("Nmap signature is invalid or was made by an untrusted key: x")
+
+    monkeypatch.setattr(nmap_release, "verify_signature", reject)
+    with pytest.raises(ValueError, match="untrusted key"):
+        nmap_release.fetch("7.993", tmp_path / "out")
+    assert not (tmp_path / "out" / "provenance.txt").exists()
+
+
+@pytest.mark.parametrize(("version", "digest"), [("7.993;rm", None), ("", None), ("7.993", "XYZ")])
+def test_nmap_fetch_rejects_malformed_inputs_before_any_download(tmp_path, version, digest):
     with pytest.raises(ValueError):
-        nmap_release.fetch(version, rpm, tmp_path / "out")
+        nmap_release.fetch(version, tmp_path / "out", digest)
     assert not (tmp_path / "out").exists()
+
+
+def test_nmap_download_refuses_non_https_urls(tmp_path):
+    with pytest.raises(ValueError, match="non-HTTPS"):
+        nmap_release.download("http://nmap.org/dist/x", tmp_path / "x", limit=10)
 
 
 def test_nmap_cli_reports_usage_and_errors(capsys):
     assert nmap_release.main(["bogus"]) == 2
-    assert nmap_release.main(["fetch", "bad version", "-", "/nonexistent-out"]) == 1
+    assert nmap_release.main(["fetch", "bad version", "/nonexistent-out"]) == 1
     assert "invalid Nmap version" in capsys.readouterr().err
 
 
-def test_dockerfile_nmap_stage_has_no_fixed_version_package_or_default():
+def test_dockerfile_nmap_stage_builds_the_pinned_source_without_fixed_version_package_or_default():
     text = (ROOT / "docker" / "Dockerfile").read_text(encoding="utf-8")
     stage = text[text.index("AS nmap-builder") : text.index("AS signal-cli-src")]
-    assert "\nARG NMAP_VERSION\n" in stage and "\nARG NMAP_RPM\n" in stage  # mandatory, no default
+    for arg in ("NMAP_VERSION", "NMAP_SOURCE_SHA256"):
+        assert f"\nARG {arg}\n" in stage  # mandatory, no default value
+    assert 'fetch "$version" /tmp/nmap "$source_sha256"' in stage  # hash is enforced in the builder
     assert not re.search(r"nmap[-= ]\d+\.\d+", stage.replace("nmap-${version}", ""))
     assert not re.search(r"apt-get install[^\n]*\bnmap\b", text)
+    assert "rpm2cpio" not in stage and "NMAP_RPM" not in stage
     assert "nmap-release.py latest" not in stage.split("RUN <<'EOF'", 1)[1]  # no resolution cached in a RUN
+
+
+def test_dockerfile_runtime_copies_only_explicit_nmap_paths():
+    text = (ROOT / "docker" / "Dockerfile").read_text(encoding="utf-8")
+    copies = re.findall(r"^COPY --from=nmap-builder (\S+) (\S+)$", text, re.MULTILINE)
+    assert copies == [
+        ("/out/usr/bin/nmap", "/usr/bin/nmap"),
+        ("/out/usr/share/nmap", "/usr/share/nmap"),
+        ("/out/usr/share/doc/nmap", "/usr/share/doc/nmap"),
+    ]
+    runtime = text[text.index("AS runtime") :]
+    assert not re.search(r"\b(build-essential|gcc|make|configure)\b", runtime)

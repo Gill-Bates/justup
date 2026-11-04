@@ -5,6 +5,7 @@
 
 ## [Unreleased]
 
+- `Fix` Resetting the response-time chart zoom (double-click or "Reset zoom") now restores the load view of all axes, series and peaks through one shared function and ignores a late zoom-detail response.
 - `New` Settings > Recipients has a search field that filters by name, email or Signal number while you type.
 - `Fix` Settings > Delivery Queue shows the stored status `sent` as "Sent" (it read "Accepted by server"); the status carries no tooltip, the meaning is documented.
 - `Fix` The Delivery Queue Log shows the channel as an icon only; the name stays available as tooltip and for screen readers.

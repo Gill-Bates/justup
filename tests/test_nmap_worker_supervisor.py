@@ -51,7 +51,7 @@ launch_worker() {{
     echo x >> "$FAKE_LAUNCHES"
     "$FAKE_PYTHON" -c "$FAKE_WORKER" &
 }}
-handshake() {{ return {0 if handshake_ok else 1}; }}
+handshake() {{ {'[ -S "$JUSTUP_NMAP_SOCKET" ]' if handshake_ok else "return 1"}; }}
 supervise
 """
     result = subprocess.run(

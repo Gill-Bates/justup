@@ -94,6 +94,19 @@ def test_clean_image_passes_and_required_native_libraries_are_not_flagged(tmp_pa
         "usr/lib/libfoo.a",
         "root/.docker/config.json",
         "root/.netrc",
+        "usr/bin/autoconf",
+        "usr/bin/automake",
+        "usr/bin/libtoolize",
+        "usr/bin/rpm2cpio",
+        "usr/bin/gpg",
+        "usr/lib/libpcap.la",
+        "opt/nmap-7.993.tar.bz2",
+        "var/lib/nmap-7.993-1.x86_64.rpm",
+        "usr/share/nmap/nmap-7.993.tar.bz2.asc",
+        "opt/nmap_gpgkeys.txt",
+        "opt/provenance.txt",
+        "opt/nmap-7.993/configure/config.log.o",
+        "home/justup/.gnupg/pubring.kbx",
     ],
 )
 def test_build_tool_cache_source_and_object_artifacts_fail(tmp_path, relative):
@@ -197,3 +210,18 @@ def test_main_exit_codes(tmp_path, capsys):
     assert "/usr/bin/gcc" in capsys.readouterr().err
     assert tool.main(["x", "layers", str(tmp_path / "missing.tar")]) == 2
     assert tool.main(["x"]) == 2
+
+
+def test_layer_scan_finds_nmap_build_leftovers_that_a_later_layer_deleted(tmp_path):
+    archive = tmp_path / "image.tar"
+    build_image_archive(
+        archive,
+        [
+            {"opt/nmap-7.993.tar.bz2": b"x", "opt/nmap-7.993.tar.bz2.asc": b"x", "usr/lib/libssh2.la": b"x"},
+            {"opt/nmap-7.993/main.o": b"x", "usr/bin/gcc": b"x"},
+            {"opt/nmap-7.993.tar.bz2": None, "opt/nmap-7.993/main.o": None, "usr/bin/gcc": None},
+        ],
+    )
+    found = " ".join(tool.layer_violations(archive))
+    for expected in ("nmap-7.993.tar.bz2", ".asc", "libssh2.la", "main.o", "/usr/bin/gcc"):
+        assert expected in found, found

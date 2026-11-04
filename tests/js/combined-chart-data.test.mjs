@@ -13,6 +13,7 @@ const sandbox = { window: {} };
 vm.runInNewContext(src, sandbox);
 const D = sandbox.window.CombinedChartData;
 // Arrays from the vm realm have another prototype; compare them as JSON.
+const resetSrc = readFileSync(new URL("../../app/static/js/charts/chart-reset.js", import.meta.url), "utf8");
 const plain = (v) => JSON.parse(JSON.stringify(v));
 const T0 = Date.parse("2026-01-01T00:00:00Z");
 const pt = (min, value) => ({ ts: new Date(T0 + min * 60000).toISOString(), value });
@@ -583,6 +584,7 @@ test("rebuilding a chart leaves exactly one dblclick listener on the canvas", ()
     removeEventListener: (_t, fn) => listeners.delete(fn),
   };
   const context = { window: {}, document: {}, appState: { charts: new Map() }, setTimeout: () => 0 };
+  vm.runInNewContext(resetSrc, context);
   vm.runInNewContext(src, context);
   for (let i = 0; i < 3; i += 1) {
     context._destroyExisting("c");
@@ -609,6 +611,7 @@ test("refreshing a chart reuses its instance and preserves dataset visibility", 
       this.destroy = () => { destroys += 1; };
     },
   };
+  vm.runInNewContext(resetSrc, context);
   vm.runInNewContext(src, context);
   const canvas = {
     dataset: {},
@@ -636,6 +639,7 @@ test("responsive legend follows chart width and updates when the chart resizes",
     window: { innerWidth: 1366, matchMedia: () => ({ matches: fitDashboard }) },
     appState: { charts: new Map() }, setTimeout: () => 0,
   };
+  vm.runInNewContext(resetSrc, context);
   vm.runInNewContext(src, context);
   const canvas = { dataset: {}, parentElement: { clientWidth: 640 }, addEventListener() {}, removeEventListener() {} };
   assert.equal(context._legendPosition(canvas), "bottom");

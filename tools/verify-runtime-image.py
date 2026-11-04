@@ -9,7 +9,9 @@
 Contract. Allowed: the Python interpreter and modules, native libraries, signal-cli and its JARs,
 the jlink Java runtime, the application and its runtime configuration, package metadata.
 Forbidden: compilers and build tools (gcc, g++, cc, clang, cmake, make, cargo, rustc, rustup, javac,
-jar, jlink, jdeps, jshell) in a bin directory, Cargo/rustup/pip/Maven caches, a full JDK, .git
+jar, jlink, jdeps, jshell, autoconf, automake, libtool, rpm tools, gpg) in a bin directory,
+Nmap source archives, RPMs, signatures and unpacked source trees, libtool archives (.la),
+Cargo/rustup/pip/Maven caches, a full JDK, .git
 directories, build source trees (Cargo.toml/Cargo.lock), object files (.o, .rlib, .obj and static
 .a archives), test caches, build credentials, and leftovers in /tmp, /var/tmp and /usr/src.
 Exceptions that are part of the shipped runtime, not of the build: static .a archives inside
@@ -39,7 +41,8 @@ from pathlib import Path, PurePosixPath
 
 TOOL_NAME = re.compile(
     r"^(?:[a-z0-9_]+-linux-gnu-)?(?:gcc|g\+\+|cc|c\+\+|clang|clang\+\+|cmake|make|cargo|rustc|rustup|rustdoc"
-    r"|javac|jar|jlink|jdeps|jshell)(?:-[0-9][0-9.]*)?$"
+    r"|javac|jar|jlink|jdeps|jshell|autoconf|automake|autoreconf|aclocal|libtool|libtoolize|rpm|rpm2cpio|gpg|gpgv)"
+    r"(?:-[0-9][0-9.]*)?$"
 )
 BIN_DIRS = frozenset({"bin", "sbin"})
 FORBIDDEN_PATHS = (
@@ -57,7 +60,12 @@ FORBIDDEN_PATHS = (
     "/usr/lib/jvm",
     "/build",
 )
-FORBIDDEN_DIR_NAMES = frozenset({".git", ".cache", ".pytest_cache", ".ruff_cache", ".mypy_cache"})
+FORBIDDEN_DIR_NAMES = frozenset({".git", ".cache", ".pytest_cache", ".ruff_cache", ".mypy_cache", ".gnupg"})
+# Nmap build leftovers: release archives, signatures, key files, an unpacked source tree, libtool archives.
+NMAP_ARTIFACT = re.compile(
+    r"^nmap-[0-9][0-9.]*.*\.(?:tar(?:\.[a-z0-9]+)?|tgz|rpm|asc)$|^nmap_gpgkeys\.txt$|^provenance\.txt$"
+)
+NMAP_SOURCE_DIR = re.compile(r"^nmap-[0-9][0-9.]*$")
 FORBIDDEN_FILE_NAMES = frozenset({"Cargo.toml", "Cargo.lock"})
 OBJECT_SUFFIXES = (".o", ".rlib", ".obj")
 STATIC_SUFFIX = ".a"
@@ -89,7 +97,13 @@ def violation(path: str, is_dir: bool = False) -> str | None:
         if path == forbidden or path.startswith(forbidden + "/"):
             return f"forbidden location {forbidden}"
     if is_dir:
-        return f"forbidden directory {name}" if name in FORBIDDEN_DIR_NAMES else None
+        if name in FORBIDDEN_DIR_NAMES:
+            return f"forbidden directory {name}"
+        return f"unpacked Nmap source tree {name}" if NMAP_SOURCE_DIR.match(name) else None
+    if NMAP_ARTIFACT.match(name):
+        return f"Nmap build leftover {name}"
+    if name.endswith(".la"):
+        return f"libtool archive {name}"
     if posix.parent.name in BIN_DIRS and TOOL_NAME.match(name):
         return f"build tool {name}"
     if name in FORBIDDEN_FILE_NAMES:

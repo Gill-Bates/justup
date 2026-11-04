@@ -578,32 +578,36 @@ function _createCombinedZoomLoader(
     controller = null;
   }
   chart._cancelZoomLoader = cancelPending;
+  function restoreLoadView() {
+    chart.data.datasets.forEach(function (d, i) {
+      d.data = original[i];
+    });
+    var annotations = chart.config.options.plugins.annotation.annotations;
+    Object.keys(annotations).forEach(function (key) {
+      delete annotations[key];
+    });
+    Object.assign(annotations, originalAnnotations);
+    _styleAnnotations(annotations, chart._palette);
+    _syncDownVisibility(
+      annotations,
+      chart._bandsVisible,
+    );
+    chart._bandCount = originalBandCount;
+    chart._presentClasses = originalPresentClasses;
+    _syncPeaks(chart);
+    chart.update("none");
+    chart._renderLegend();
+    _setCombinedZoomNote(chart, "");
+    if (onView) onView(null);
+  }
+  chart._restoreLoadView = restoreLoadView;
   return function () {
     cancelPending();
     var current = serial;
     var start = Math.max(fromMs, chart.scales.x.min);
     var end = Math.min(toMs, chart.scales.x.max);
     if (end <= start || end - start >= (toMs - fromMs) * 0.95) {
-      chart.data.datasets.forEach(function (d, i) {
-        d.data = original[i];
-      });
-      var annotations = chart.config.options.plugins.annotation.annotations;
-      Object.keys(annotations).forEach(function (key) {
-        delete annotations[key];
-      });
-      Object.assign(annotations, originalAnnotations);
-      _styleAnnotations(annotations, chart._palette);
-      _syncDownVisibility(
-        annotations,
-        chart._bandsVisible,
-      );
-      chart._bandCount = originalBandCount;
-      chart._presentClasses = originalPresentClasses;
-      _syncPeaks(chart);
-      chart.update("none");
-      chart._renderLegend();
-      _setCombinedZoomNote(chart, "");
-      if (onView) onView(null);
+      restoreLoadView();
       return;
     }
     chart._zoomTimer = setTimeout(async function () {

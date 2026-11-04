@@ -65,90 +65,92 @@ COPY pyproject.toml ./
 RUN find app/ -type d -name "__pycache__" -prune -exec rm -rf {} + || true
 
 # ──────────────────────────────────────────────────────────────
-# Stage 2a: Nmap (official stable release, signature-verified, isolated from the runtime)
+# Stage 2a: Nmap (official stable release, built from the signature-verified source)
 # ──────────────────────────────────────────────────────────────
-# The release workflow resolves the latest stable Nmap once (tools/nmap-release.py latest)
-# and passes the same version to both architectures. The build args are mandatory: a
-# default resolved inside a RUN would keep an unchanged command text, so BuildKit could
-# serve an old Nmap binary from cache. The version is part of every cache key here.
+# Both architectures build the same upstream source natively with identical configure options
+# (no vendor binary, no Debian package): one recipe, one provenance format, one set of runtime
+# libraries from this base. The official x86-64 RPM was dropped on purpose: it is a statically
+# linked vendor build with its own OpenSSL, so amd64 would differ from arm64 in options and TLS
+# stack and the image would depend on a binary package we cannot rebuild.
+#
+# The release workflow resolves the latest stable release once (tools/nmap-release.py latest),
+# downloads and verifies it once (fetch) and passes the same version and archive hash to both
+# builds. The args are mandatory and carry no default: they are part of every BuildKit cache key
+# here, so a new release or a changed upstream archive can never hit a cached old binary, and the
+# builder aborts if the archive it downloads does not match NMAP_SOURCE_SHA256.
 # Local build:
-#   read -r v r < <(python3 tools/nmap-release.py latest)
-#   docker build --target runtime --build-arg "NMAP_VERSION=$v" --build-arg "NMAP_RPM=$r" -f docker/Dockerfile .
-# linux/amd64 uses the official x86-64 RPM (binary only) when it runs on this Debian base;
-# otherwise, and always on linux/arm64, the same verified release is built from source.
-# Never a Debian package, never an older release.
+#   v="$(python3 tools/nmap-release.py latest)"
+#   python3 tools/nmap-release.py fetch "$v" /tmp/nmap-verify   # prints nothing, writes provenance.txt
+#   h="$(sed -n 's/^source_sha256=//p' /tmp/nmap-verify/provenance.txt)"
+#   docker build --target runtime --build-arg "NMAP_VERSION=$v" --build-arg "NMAP_SOURCE_SHA256=$h" -f docker/Dockerfile .
 FROM ${PYTHON_BASE} AS nmap-builder
 ARG TARGETARCH
 ARG NMAP_VERSION
-ARG NMAP_RPM
+ARG NMAP_SOURCE_SHA256
 COPY tools/nmap-release.py /usr/local/bin/nmap-release.py
+# Everything below exists only in this stage: compiler, headers, gpg, the source tree.
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      ca-certificates gnupg rpm2cpio cpio bzip2 \
+      ca-certificates gnupg bzip2 build-essential libssl-dev pkg-config zlib1g-dev \
  && rm -rf /var/lib/apt/lists/*
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 RUN <<'EOF'
 set -euo pipefail
 version="${NMAP_VERSION:-}"
-rpm="${NMAP_RPM:-}"
-if [[ -z "$version" || -z "$rpm" || -z "${TARGETARCH:-}" ]]; then
-  echo "NMAP_VERSION, NMAP_RPM and TARGETARCH are required (see the stage comment)" >&2
+source_sha256="${NMAP_SOURCE_SHA256:-}"
+if [[ -z "$version" || -z "$source_sha256" || -z "${TARGETARCH:-}" ]]; then
+  echo "NMAP_VERSION, NMAP_SOURCE_SHA256 and TARGETARCH are required (see the stage comment)" >&2
   exit 1
 fi
-python3 /usr/local/bin/nmap-release.py fetch "$version" "$rpm" /tmp/nmap
-prov() { sed -n "s/^$1=//p" /tmp/nmap/provenance.txt; }
-mkdir -p /out/usr/bin /out/usr/share/nmap /out/usr/share/doc/nmap
-tar -xOf "/tmp/nmap/nmap-${version}.tar.bz2" "nmap-${version}/LICENSE" > /out/usr/share/doc/nmap/LICENSE
-method=""
-artifact_url="$(prov source_url)"
-artifact_sha256="$(prov source_sha256)"
-if [[ "$TARGETARCH" == amd64 && "$rpm" != "-" ]]; then
-  mkdir -p /tmp/nmap/rpm
-  (cd /tmp/nmap/rpm && rpm2cpio "/tmp/nmap/${rpm}" | cpio -id --quiet)
-  if ldd /tmp/nmap/rpm/usr/bin/nmap > /tmp/nmap/rpm-libs.txt \
-      && ! grep -q 'not found' /tmp/nmap/rpm-libs.txt \
-      && NMAPDIR=/tmp/nmap/rpm/usr/share/nmap /tmp/nmap/rpm/usr/bin/nmap --version >/dev/null; then
-    install -m 755 /tmp/nmap/rpm/usr/bin/nmap /out/usr/bin/nmap
-    cp -a /tmp/nmap/rpm/usr/share/nmap/. /out/usr/share/nmap/
-    method="official-rpm"
-    artifact_url="$(prov rpm_url)"
-    artifact_sha256="$(prov rpm_sha256)"
-  else
-    echo "Official RPM does not run on this Debian base; building the verified source of ${version}:" >&2
-    cat /tmp/nmap/rpm-libs.txt >&2 || true
-  fi
-fi
-if [[ -z "$method" ]]; then
-  apt-get update
-  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends build-essential libssl-dev pkg-config zlib1g-dev
-  rm -rf /var/lib/apt/lists/*
-  tar -xjf "/tmp/nmap/nmap-${version}.tar.bz2" -C /tmp/nmap
-  cd "/tmp/nmap/nmap-${version}"
-  ./configure --prefix=/usr --with-libpcap=included --with-libpcre=included \
-    --with-libz=included --with-libssh2=included --with-liblinear=included \
-    --without-liblua --without-ncat --without-nping --without-ndiff --without-zenmap
-  make -j"$(nproc)" nmap
-  make DESTDIR=/out install-nmap
-  method="verified-source"
-fi
+case "$TARGETARCH" in
+  amd64) machine="Advanced Micro Devices X86-64" ;;
+  arm64) machine="AArch64" ;;
+  *) echo "Unsupported TARGETARCH '${TARGETARCH}'" >&2; exit 1 ;;
+esac
+python3 /usr/local/bin/nmap-release.py fetch "$version" /tmp/nmap "$source_sha256"
+tar -xjf "/tmp/nmap/nmap-${version}.tar.bz2" -C /tmp/nmap
+cd "/tmp/nmap/nmap-${version}"
+./configure --prefix=/usr --with-libpcap=included --with-libpcre=included \
+  --with-libz=included --with-libssh2=included --with-liblinear=included \
+  --without-liblua --without-ncat --without-nping --without-ndiff --without-zenmap
+make -j"$(nproc)" nmap
+make DESTDIR=/out install-nmap
+
+# Only what scans need: the binary and the data files (-sV needs the probes; no NSE, no man pages).
 find /out/usr/share/nmap -maxdepth 1 -type f \
   ! -name nmap-services ! -name nmap-service-probes ! -name nmap-protocols ! -name nmap-rpc -delete
 rm -rf /out/usr/share/nmap/scripts /out/usr/share/nmap/nselib /out/usr/share/man
+for data in nmap-services nmap-service-probes nmap-protocols nmap-rpc; do
+  test -s "/out/usr/share/nmap/${data}"
+done
+
+# ELF contract of the shipped binary: architecture, loader, no RPATH/RUNPATH, all libraries resolvable.
+readelf -h /out/usr/bin/nmap | grep -q "Machine:.*${machine}"
+readelf -l /out/usr/bin/nmap | grep -q "Requesting program interpreter"
+if readelf -d /out/usr/bin/nmap | grep -Eq 'RPATH|RUNPATH'; then
+  echo "nmap carries an RPATH/RUNPATH" >&2; exit 1
+fi
+mkdir -p /out/usr/share/doc/nmap
 ldd /out/usr/bin/nmap > /out/usr/share/doc/nmap/DEPENDENCIES.txt
 ! grep -q 'not found' /out/usr/share/doc/nmap/DEPENDENCIES.txt
+! grep -Eq '/tmp/|/out/|/build' /out/usr/share/doc/nmap/DEPENDENCIES.txt
 actual="$(NMAPDIR=/out/usr/share/nmap /out/usr/bin/nmap --version | sed -n 's/^Nmap version \([^ ]*\).*/\1/p')"
 [[ "$actual" == "$version" ]] || { echo "Built Nmap ${actual} differs from the resolved ${version}" >&2; exit 1; }
+
+# Licence, provenance and the notice (NPSL redistribution) travel with the binary.
+tar -xOf "/tmp/nmap/nmap-${version}.tar.bz2" "nmap-${version}/LICENSE" > /out/usr/share/doc/nmap/LICENSE
 {
   cat /tmp/nmap/provenance.txt
-  printf 'artifact_url=%s\nartifact_sha256=%s\narchitecture=%s\nbuild_method=%s\n' \
-    "$artifact_url" "$artifact_sha256" "$TARGETARCH" "$method"
+  printf 'architecture=%s\nbuild_method=verified-source\nbinary_sha256=%s\n' \
+    "$TARGETARCH" "$(sha256sum /out/usr/bin/nmap | cut -d' ' -f1)"
   printf 'runtime_dependencies=%s\n' "$(awk '/=>/ {print $1}' /out/usr/share/doc/nmap/DEPENDENCIES.txt | sort | paste -sd, -)"
 } > /out/usr/share/doc/nmap/PROVENANCE.txt
 cat > /out/usr/share/doc/nmap/NOTICE.txt <<NOTICE
 This image redistributes Nmap ${version} (nmap binary, nmap-services, nmap-service-probes,
 nmap-protocols, nmap-rpc) under the Nmap Public Source License (NPSL), https://nmap.org/npsl/.
 The licence text is in LICENSE next to this file. Nmap is a registered trademark of Nmap Software LLC.
-Source of this release: https://nmap.org/dist/nmap-${version}.tar.bz2 (signature verified)
-Build method: ${method}; provenance: PROVENANCE.txt
+Source of this release: https://nmap.org/dist/nmap-${version}.tar.bz2 (signature verified,
+SHA-256 ${source_sha256})
+Build: unmodified upstream source, built natively for ${TARGETARCH}; provenance: PROVENANCE.txt
 NOTICE
 EOF
 

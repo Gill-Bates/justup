@@ -4,7 +4,13 @@
 # Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 #
 
-"""Resolve Nmap's official stable release and verify its build artifacts."""
+"""Resolve Nmap's official stable release and fetch its signature-verified source archive.
+
+latest                           print the version of the latest stable release (nmap.org)
+fetch VERSION DIR [SHA256]       download the source archive and its signature into DIR, verify the
+                                 signature against the pinned Nmap signing key, optionally require
+                                 the archive hash, write DIR/provenance.txt; any failure exits 1
+"""
 
 from __future__ import annotations
 
@@ -23,11 +29,12 @@ SIGNING_KEYS = "https://svn.nmap.org/nmap/docs/nmap_gpgkeys.txt"
 PROJECT_KEY = "436D66AB9A798425FDA0E3F801AF9F036B9355D0"
 BAD_STATUS = ("[GNUPG:] EXPKEYSIG", "[GNUPG:] REVKEYSIG", "[GNUPG:] EXPSIG", "[GNUPG:] BADSIG", "[GNUPG:] ERRSIG")
 VERSION_RE = re.compile(r"^[0-9]+(?:\.[0-9]+)+$")
-RPM_RE = re.compile(r"^nmap-([0-9]+(?:\.[0-9]+)+)-[0-9]+\.x86_64\.rpm$")
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+SOURCE_RE = re.compile(rf"^{re.escape(DIST)}/nmap-([0-9]+(?:\.[0-9]+)+)\.tar\.bz2$")
 
 
-class StableLinks(HTMLParser):
-    """Collect the stable source link and published x86-64 RPM link."""
+class StableLink(HTMLParser):
+    """Collect the links inside the page's "Latest stable Nmap release tarball" line."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -35,7 +42,6 @@ class StableLinks(HTMLParser):
         self.bold_text: list[str] = []
         self.bold_links: list[str] = []
         self.source_links: list[str] = []
-        self.rpm_links: list[str] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         if tag == "b":
@@ -43,12 +49,8 @@ class StableLinks(HTMLParser):
                 self.bold_text = []
                 self.bold_links = []
             self.bold_depth += 1
-        if tag == "a":
-            href = dict(attrs).get("href") or ""
-            if self.bold_depth:
-                self.bold_links.append(href)
-            if href.startswith(f"{DIST}/") and RPM_RE.fullmatch(href.rsplit("/", 1)[-1]):
-                self.rpm_links.append(href)
+        elif tag == "a" and self.bold_depth:
+            self.bold_links.append(dict(attrs).get("href") or "")
 
     def handle_data(self, data: str) -> None:
         if self.bold_depth:
@@ -62,25 +64,14 @@ class StableLinks(HTMLParser):
             self.source_links.extend(self.bold_links)
 
 
-def latest_release(page: str) -> tuple[str, str]:
-    parser = StableLinks()
+def latest_release(page: str) -> str:
+    """Return the version of the one official stable source tarball announced on the download page."""
+    parser = StableLink()
     parser.feed(page)
-    sources = []
-    for url in parser.source_links:
-        match = re.fullmatch(rf"{re.escape(DIST)}/nmap-([0-9]+(?:\.[0-9]+)+)\.tar\.bz2", url)
-        if match:
-            sources.append(match.group(1))
-    if len(sources) != 1:
+    versions = [match.group(1) for url in parser.source_links if (match := SOURCE_RE.fullmatch(url))]
+    if len(versions) != 1:
         raise ValueError("expected exactly one official stable Nmap source tarball")
-    version = sources[0]
-    rpms = [
-        url.rsplit("/", 1)[-1]
-        for url in parser.rpm_links
-        if RPM_RE.fullmatch(url.rsplit("/", 1)[-1]).group(1) == version
-    ]
-    if len(rpms) > 1:
-        raise ValueError("expected at most one official x86-64 RPM for the stable release")
-    return version, rpms[0] if rpms else "-"
+    return versions[0]
 
 
 def open_https(url: str, timeout: int):
@@ -140,11 +131,11 @@ def verify_signature(artifact: Path, signature: Path, keyfile: Path, homedir: Pa
         raise ValueError(f"Nmap signature is invalid or was made by an untrusted key: {artifact.name}")
 
 
-def fetch(version: str, rpm: str, output: Path) -> None:
+def fetch(version: str, output: Path, expected_sha256: str | None = None) -> None:
     if not VERSION_RE.fullmatch(version):
         raise ValueError("invalid Nmap version")
-    if rpm != "-" and (not RPM_RE.fullmatch(rpm) or RPM_RE.fullmatch(rpm).group(1) != version):
-        raise ValueError("RPM filename does not match the selected stable release")
+    if expected_sha256 is not None and not SHA256_RE.fullmatch(expected_sha256):
+        raise ValueError("invalid expected SHA-256")
     output.mkdir(mode=0o700, parents=True, exist_ok=True)
     keyfile = output / "nmap_gpgkeys.txt"
     download(SIGNING_KEYS, keyfile, limit=1_000_000)
@@ -155,19 +146,14 @@ def fetch(version: str, rpm: str, output: Path) -> None:
     source_sig = output / f"{source_name}.asc"
     download(f"{DIST}/sigs/{source_name}.asc", source_sig, limit=100_000)
     verify_signature(source, source_sig, keyfile, output / "gnupg")
+    if expected_sha256 is not None and source_hash != expected_sha256:
+        raise ValueError(f"source archive hash {source_hash} differs from the resolved {expected_sha256}")
     lines = [
         f"nmap_version={version}",
-        f"signing_key_fingerprint={PROJECT_KEY}",
         f"source_url={source_url}",
         f"source_sha256={source_hash}",
+        f"signing_key_fingerprint={PROJECT_KEY}",
     ]
-    if rpm != "-":
-        rpm_url = f"{DIST}/{rpm}"
-        rpm_hash = download(rpm_url, output / rpm, limit=100_000_000)
-        rpm_sig = output / f"{rpm}.asc"
-        download(f"{DIST}/sigs/{rpm}.asc", rpm_sig, limit=100_000)
-        verify_signature(output / rpm, rpm_sig, keyfile, output / "gnupg")
-        lines.extend((f"rpm_url={rpm_url}", f"rpm_sha256={rpm_hash}"))
     (output / "provenance.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -178,15 +164,15 @@ def main(argv: list[str]) -> int:
                 page = response.read(2_000_001)
             if len(page) > 2_000_000:
                 raise ValueError("Nmap download page exceeds size limit")
-            print(*latest_release(page.decode("utf-8")))
+            print(latest_release(page.decode("utf-8")))
             return 0
-        if len(argv) == 4 and argv[0] == "fetch":
-            fetch(argv[1], argv[2], Path(argv[3]))
+        if len(argv) in (3, 4) and argv[0] == "fetch":
+            fetch(argv[1], Path(argv[2]), argv[3] if len(argv) == 4 else None)
             return 0
     except (OSError, UnicodeError, ValueError, urllib.error.URLError) as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 1
-    print("Usage: nmap-release.py latest | fetch VERSION RPM_FILENAME|- OUTPUT_DIR", file=sys.stderr)
+    print("Usage: nmap-release.py latest | fetch VERSION OUTPUT_DIR [SOURCE_SHA256]", file=sys.stderr)
     return 2
 
 

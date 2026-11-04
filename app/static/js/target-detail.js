@@ -563,11 +563,9 @@ function _stopLiveRefresh() {
 
 function resetAllZoom() {
 	appState.charts.forEach(ch => {
-		if (ch && ch.resetZoom) {
-			ch.resetZoom();
-			if (ch._reloadVisible) ch._reloadVisible();
-			setTimeout(() => updateChartSampling(ch), 0);
-		}
+		if (!ch) return;
+		window.JuChartReset.resetChartView(ch);
+		setTimeout(() => updateChartSampling(ch), 0);
 	});
 	if (_livePending) _scheduleLiveRefresh();
 }

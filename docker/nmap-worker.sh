@@ -78,8 +78,9 @@ worker_alive() {
 # Same limitation for signals: send them with the worker's own UID (needs only SETUID/SETGID).
 signal_worker() {
     kill -s "$1" "$2" 2> /dev/null && return 0
+    # shellcheck disable=SC2016 # sh expands the quoted script, not this shell
     setpriv --reuid="$WORKER_UID_NAME" --regid="$WORKER_UID_NAME" --clear-groups --no-new-privs \
-        kill -s "$1" "$2" 2> /dev/null
+        sh -c 'kill -s "$0" "$1"' "$1" "$2" 2> /dev/null
 }
 
 # 0 = ready, 1 = not ready within the timeout, 2 = worker exited during startup
@@ -87,7 +88,9 @@ wait_ready() {
     local deadline=$((SECONDS + READY_TIMEOUT))
     while (( SECONDS < deadline )); do
         worker_alive "$worker_pid" || return 2
-        if [ -S "$JUSTUP_NMAP_SOCKET" ] && handshake; then
+        # No -S test: root lacks DAC_OVERRIDE and cannot even stat inside the worker's 0750 directory,
+        # so readiness is decided by the connection of the web user alone.
+        if handshake; then
             return 0
         fi
         sleep 0.5

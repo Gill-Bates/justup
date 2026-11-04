@@ -156,24 +156,24 @@ function _registerChart(canvasId, chart, ctx, skipSampling) {
     }, 0);
   }
 
+  window.JuChartReset.captureLoadView(chart);
+
   // Use addEventListener to avoid overwriting existing handlers
   const dblClickHandler = function () {
     const ch = appState.charts.get(canvasId);
-    if (ch && ch.resetZoom) {
-      ch.resetZoom();
-      if (ch._reloadVisible) ch._reloadVisible();
-      if (!skipSampling) {
-        setTimeout(() => {
-          // Verify chart is still active before updating
-          if (
-            appState.charts.get(canvasId) === ch &&
-            ch.canvas &&
-            ch.canvas.isConnected
-          ) {
-            updateChartSampling(ch);
-          }
-        }, 0);
-      }
+    if (!ch) return;
+    window.JuChartReset.resetChartView(ch);
+    if (!skipSampling) {
+      setTimeout(() => {
+        // Verify chart is still active before updating
+        if (
+          appState.charts.get(canvasId) === ch &&
+          ch.canvas &&
+          ch.canvas.isConnected
+        ) {
+          updateChartSampling(ch);
+        }
+      }, 0);
     }
   };
 
