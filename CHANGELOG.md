@@ -1,3 +1,13 @@
+## [1.0.3] - 2026-11-04
+- `New` Settings > General has a **Public hostname** field with an auto-detect button. Alert mails (HTML and plain text) and Signal messages link to the target at `https://<hostname>/ui/targets/<id>`.
+- `Fix` The green "Open in justUp!" button was missing in real alert mails because no instance URL could be set. It now appears as soon as a public hostname is saved; without one, mails have no button and Signal messages no link.
+- `Fix` The plain-text part of alert mails shows the URL of a link instead of dropping it.
+
+## [Unreleased]
+
+- `Fix` Settings > Delivery Queue shows the stored status `sent` as "Sent" (it read "Accepted by server"); the tooltip still notes that final delivery is not verifiable.
+- `Fix` The Delivery Queue Log shows the channel as an icon only; the name stays available as tooltip and for screen readers.
+
 ## [1.0.2] - 2026-11-03
 
 - `New` The Targets page has a search field that filters by name, host, URL, TCP port or group while you type.

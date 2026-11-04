@@ -41,6 +41,7 @@ def make_image_root(root: Path) -> Path:
         "usr/share/nmap/nmap-service-probes",
         "usr/share/doc/nmap/LICENSE",
         "usr/share/doc/nmap/PROVENANCE.txt",
+        "usr/share/doc/nmap/NOTICE.txt",
     ):
         touch(root, path)
     touch(root, "usr/local/bin/python3")

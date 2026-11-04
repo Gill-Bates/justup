@@ -133,9 +133,7 @@
 		}
 
 		const rows = entries.map(function (e) {
-			const channelIcon = e.channel_type === 'signal'
-				? '<span class="material-icons me-1" style="font-size:16px;vertical-align:middle;">chat</span><span class="d-none d-md-inline">Signal</span>'
-				: '<span class="material-icons me-1" style="font-size:16px;vertical-align:middle;">email</span><span class="d-none d-md-inline">Email</span>';
+			const channelIcon = _channelIcon(e.channel_type);
 
 			const statusBadge = _statusBadge(e.status, e.retry_count);
 			const errorCell = e.last_error
@@ -150,7 +148,7 @@
 
 			return '<tr>'
 				+ '<td data-label="Time" class="small text-nowrap">' + timeStr + '</td>'
-				+ '<td data-label="Channel" class="small text-nowrap">' + channelIcon + '</td>'
+				+ '<td data-label="Channel" class="small text-center ju-cell-icon">' + channelIcon + '</td>'
 				+ '<td data-label="Target" class="small ju-cell-text">' + targetDisplay + '</td>'
 				+ '<td data-label="Recipient" class="small ju-cell-text">' + recipientDisplay + '</td>'
 				+ '<td data-label="Type" class="small">' + _typeBadge(e.notification_type) + '</td>'
@@ -267,12 +265,20 @@
 		if (el) el.textContent = String(text);
 	}
 
-	// Labels state what is known: "sent" only means the server accepted the message.
+	// Channel is shown as an icon only; the name stays available as tooltip and screen-reader text.
+	function _channelIcon(channelType) {
+		const channel = channelType === 'signal' ? ['chat', 'Signal'] : ['email', 'Email'];
+		return '<span title="' + channel[1] + '">'
+			+ '<span class="material-icons" style="font-size:16px;vertical-align:middle;" aria-hidden="true">' + channel[0] + '</span>'
+			+ '<span class="visually-hidden">' + channel[1] + '</span></span>';
+	}
+
+	// Labels state what is known; the tooltip keeps the caveat that "sent" only means the server accepted the message.
 	function _statusBadge(status, retries) {
 		const map = {
 			pending: ['ju-status-badge--warning', 'schedule', 'Waiting for handoff', 'Waiting for SMTP handoff'],
 			processing: ['ju-status-badge--info', 'sync', 'Handing over', 'Being handed to the server'],
-			sent: ['ju-status-badge--success', 'check', 'Accepted by server', 'Accepted by the server; final delivery is not verifiable'],
+			sent: ['ju-status-badge--success', 'check', 'Sent', 'Accepted by the server; final delivery is not verifiable'],
 			failed: ['ju-status-badge--danger', 'error_outline', 'Handoff failed', 'Handoff to the server failed'],
 		};
 		const entry = map[status];
@@ -374,7 +380,7 @@
 	// The HTMX after-settle event calls window._initSpoolerTab()
 	window._initSpoolerTab = init;
 	// Test hook: pure state helpers
-	window._spoolerInternals = { healthState: _healthState, statusBadge: _statusBadge };
+	window._spoolerInternals = { healthState: _healthState, statusBadge: _statusBadge, channelIcon: _channelIcon };
 
 	// Also try immediate init if already in DOM (e.g. direct page load)
 	if (document.getElementById('spooler-stat-queue')) {

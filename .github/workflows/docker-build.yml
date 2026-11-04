@@ -49,6 +49,7 @@ jobs:
       signal_cli_version: ${{ steps.rolling.outputs.signal_cli_version }}
       nmap_version: ${{ steps.rolling.outputs.nmap_version }}
       nmap_rpm: ${{ steps.rolling.outputs.nmap_rpm }}
+      nmap_source_sha256: ${{ steps.rolling.outputs.nmap_source_sha256 }}
 
     steps:
       - name: Checkout repository
@@ -159,17 +160,29 @@ jobs:
             exit 1
           fi
 
+          # Verify the release against the pinned Nmap signing key once, before any build
+          # starts; a failed signature aborts the release. The builds verify it again and must
+          # arrive at the same source hash.
+          verify_dir="${RUNNER_TEMP}/nmap-verify"
+          python3 tools/nmap-release.py fetch "$nmap_version" "$nmap_rpm" "$verify_dir"
+          nmap_source_sha256="$(sed -n 's/^source_sha256=//p' "${verify_dir}/provenance.txt")"
+          if [[ ! "$nmap_source_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "ERROR: Nmap source hash missing after verification" >&2
+            exit 1
+          fi
+
           {
             echo "python_base=${python_base}"
             echo "signal_cli_version=${signal_cli_version}"
             echo "nmap_version=${nmap_version}"
             echo "nmap_rpm=${nmap_rpm}"
+            echo "nmap_source_sha256=${nmap_source_sha256}"
           } >> "$GITHUB_OUTPUT"
 
           echo "Resolved once for every architecture:"
           echo "  python base      : ${python_base}"
           echo "  signal-cli       : ${signal_cli_version}"
-          echo "  nmap             : ${nmap_version} (${nmap_rpm})"
+          echo "  nmap             : ${nmap_version} (${nmap_rpm}), source sha256 ${nmap_source_sha256}"
 
       # The only place architectures are declared: build, create-manifest,
       # release-newest.py and the release notes all derive from it. Native
@@ -334,6 +347,7 @@ jobs:
       - name: Verify Nmap TCP and UDP in the runtime image (${{ matrix.arch }})
         env:
           EXPECTED_NMAP_VERSION: ${{ needs.meta.outputs.nmap_version }}
+          EXPECTED_NMAP_SOURCE_SHA256: ${{ needs.meta.outputs.nmap_source_sha256 }}
           TEST_IMAGE: ${{ matrix.test_image }}
           PLATFORM: ${{ matrix.platform }}
           ARCH: ${{ matrix.arch }}
@@ -378,8 +392,39 @@ jobs:
           docker run --rm --platform "$PLATFORM" --entrypoint cat "$TEST_IMAGE" \
             /usr/share/doc/nmap/PROVENANCE.txt > "nmap-provenance-${ARCH}.txt"
           grep -qx "nmap_version=${actual}" "nmap-provenance-${ARCH}.txt"
-          grep -q '^source_sha256=[0-9a-f]\{64\}$' "nmap-provenance-${ARCH}.txt"
+          # Same signed source as the one verified once in meta.
+          grep -qx "source_sha256=${EXPECTED_NMAP_SOURCE_SHA256}" "nmap-provenance-${ARCH}.txt"
           grep -qx "architecture=${ARCH}" "nmap-provenance-${ARCH}.txt"
+          grep -qx 'signing_key_fingerprint=436D66AB9A798425FDA0E3F801AF9F036B9355D0' "nmap-provenance-${ARCH}.txt"
+          grep -q '^artifact_sha256=[0-9a-f]\{64\}$' "nmap-provenance-${ARCH}.txt"
+          grep -Eqx 'build_method=(official-rpm|verified-source)' "nmap-provenance-${ARCH}.txt"
+          # arm64 has no official binary: it must be the verified source build.
+          if [[ "$ARCH" == arm64 ]]; then grep -qx 'build_method=verified-source' "nmap-provenance-${ARCH}.txt"; fi
+          docker run --rm --platform "$PLATFORM" --entrypoint sh "$TEST_IMAGE" \
+            -c 'test -s /usr/share/doc/nmap/LICENSE && test -s /usr/share/doc/nmap/NOTICE.txt'
+
+      # The shipped startup path: the container runs with the compose hardening, the entrypoint
+      # starts the Nmap worker, and the scan goes through the web user's client to the worker
+      # socket against this container's own address (a local test target only).
+      - name: Verify Nmap worker privilege separation and scans (${{ matrix.arch }})
+        env:
+          TEST_IMAGE: ${{ matrix.test_image }}
+          PLATFORM: ${{ matrix.platform }}
+          CONTAINER: nmap-worker-${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          trap 'docker rm -f "$CONTAINER" >/dev/null 2>&1 || true' EXIT
+          docker run -d --name "$CONTAINER" --platform "$PLATFORM" --init \
+            --cap-drop ALL --cap-add CHOWN --cap-add FOWNER --cap-add SETUID --cap-add SETGID --cap-add NET_RAW \
+            --security-opt no-new-privileges:true \
+            -e SECRET_KEY="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" "$TEST_IMAGE"
+          for _ in $(seq 1 45); do
+            docker exec "$CONTAINER" test -S /run/justup/nmap.sock 2>/dev/null && break
+            sleep 1
+          done
+          docker exec "$CONTAINER" test -S /run/justup/nmap.sock
+          docker exec -i "$CONTAINER" python - capabilities < tools/verify-nmap-worker.py
+          docker exec -i -u 1000:1000 "$CONTAINER" python - scan < tools/verify-nmap-worker.py
 
       - name: Upload Nmap provenance (${{ matrix.arch }})
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
@@ -570,6 +615,7 @@ jobs:
       IMAGE_NAME: ${{ format('{0}/justup', secrets.DOCKERHUB_USERNAME) }}
       MOVES_LATEST: ${{ needs.meta.outputs.moves_latest }}
       EXPECTED_ARCHS: ${{ needs.meta.outputs.archs }}
+      NMAP_VERSION: ${{ needs.meta.outputs.nmap_version }}
     permissions:
       contents: read
 
@@ -641,6 +687,14 @@ jobs:
       # manifest (required fields, every direct dependency) stops the publish.
       - name: Verify architectures carry identical versions
         run: python3 tools/toolchain-parity.py toolchain --pyproject pyproject.toml
+
+      # Parity proves the architectures agree; this proves they carry the one version meta resolved.
+      - name: Verify every architecture carries the resolved Nmap version
+        run: |
+          set -euo pipefail
+          for file in toolchain/*.txt; do
+            grep -qxF "nmap=${NMAP_VERSION}" "$file" || { echo "ERROR: ${file} lacks nmap=${NMAP_VERSION}" >&2; exit 1; }
+          done
 
       # Candidate first: the index is built from the pushed digests under a run-specific
       # temporary tag, so a failed verification never touches a public version tag.

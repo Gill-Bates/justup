@@ -4,6 +4,7 @@
 # Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 #
 """Public hostname: validation, the settings API, and the links it puts into alert mails and Signal texts."""
+
 from __future__ import annotations
 
 import html as html_lib
@@ -141,7 +142,7 @@ def test_base_url_is_derived_from_public_hostname_only(client, conn):
 
 
 def test_corrupt_stored_hostname_yields_no_base_url(conn):
-    sqlite_db.set_setting(conn, SettingKeys.PUBLIC_HOSTNAME, "evil.example.com/\"><script>")
+    sqlite_db.set_setting(conn, SettingKeys.PUBLIC_HOSTNAME, 'evil.example.com/"><script>')
     assert get_public_base_url(conn) == ""
 
 
@@ -151,7 +152,8 @@ def test_corrupt_stored_hostname_yields_no_base_url(conn):
 def _target(conn) -> int:
     cur = conn.execute(
         "INSERT INTO targets (name, interval_seconds, retention_days, enable_ping, enable_http_check, "
-        "enable_cert_expiration, host, created_at, updated_at) VALUES ('T1', 60, 30, 1, 0, 0, 'host.example.com', ?, ?)",
+        "enable_cert_expiration, host, created_at, updated_at) "
+        "VALUES ('T1', 60, 30, 1, 0, 0, 'host.example.com', ?, ?)",
         (utcnow(), utcnow()),
     )
     conn.commit()
@@ -200,7 +202,12 @@ def test_html_to_text_ignores_non_http_hrefs():
 
 def test_hostname_is_html_escaped_in_the_cta_link():
     ctx = build_alert_context(
-        {"status": "OPEN", "started_at": utcnow().isoformat(), "reason": "x", "system_url": 'https://a.example.com/"><b>'},
+        {
+            "status": "OPEN",
+            "started_at": utcnow().isoformat(),
+            "reason": "x",
+            "system_url": 'https://a.example.com/"><b>',
+        },
         {"name": "n", "host": "h", "group": "Default", "check_type": "PING"},
     )
     html = render_template(DEFAULT_HTML_TEMPLATE, ctx)

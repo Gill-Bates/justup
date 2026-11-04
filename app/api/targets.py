@@ -41,9 +41,9 @@ from ..services.target_profiles import PROFILE_LABELS, build_profile
 from ..utils import maintenance
 from ..utils.client_ip import audit_client_ip
 from ..utils.crypto import encrypt_secret
-from ..utils.public_url import get_public_base_url, target_url
 from ..utils.deps import get_conn, get_tsdb_dir
 from ..utils.http_status import DEFAULT_HTTP_SUCCESS_CODES
+from ..utils.public_url import get_public_base_url, target_url
 from ..utils.rate_limit import rate_limit
 from ..utils.tcp_ports import parse_port_list
 from .auth import get_current_user, require_admin

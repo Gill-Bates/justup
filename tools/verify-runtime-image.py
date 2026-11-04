@@ -75,6 +75,7 @@ REQUIRED_FILES = (
     "/usr/share/nmap/nmap-service-probes",
     "/usr/share/doc/nmap/LICENSE",
     "/usr/share/doc/nmap/PROVENANCE.txt",
+    "/usr/share/doc/nmap/NOTICE.txt",
 )
 ARCHS = frozenset({"amd64", "arm64"})
 MAX_LISTED = 50

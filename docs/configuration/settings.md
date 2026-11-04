@@ -6,7 +6,7 @@ values are [environment variables](environment.md).
 
 ## Tabs
 
-- **General**: display (UTC times, PDF paper size) and the Down Alert Delay.
+- **General**: display (UTC times, PDF paper size), the Down Alert Delay and the Public hostname.
 - **Network**: connection quality, provider lookup, geolocation, GeoLite2 auto-update.
 - **Storage**: statistics, purge permission, data deletion; see [Storage & retention](storage.md).
 - **Backup**: backup and restore; see [Backup & restore](../features/backup.md).
@@ -22,6 +22,11 @@ values are [environment variables](environment.md).
 
 - **Down Alert Delay** (`metrics_timeout_minutes`, 1-10 min, default 5): how long
   a failure must last before a DOWN alert is raised.
+- **Public hostname** (`public_hostname`, General tab, empty by default): bare host
+  name or IP address, no scheme, port, path or `@`. Notifications use it as
+  `https://<hostname>` for links, see [Notifications](../features/notifications.md#links-in-notifications).
+  The wand button fills in the address of the current browser tab. justUp! never
+  derives the value from request headers. Invalid input is rejected with `422`.
 - **Allow Metric Purge** (`purge_enabled`): permits "Delete all Metrics". The
   action and **Clear Alert History** require the admin password.
 - **Login Rate Limit** (`rate_limit_auth`, default `10/minute`): maximum login

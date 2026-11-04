@@ -83,11 +83,18 @@ def latest_release(page: str) -> tuple[str, str]:
     return version, rpms[0] if rpms else "-"
 
 
+def open_https(url: str, timeout: int):
+    """Open a fixed https://nmap.org or svn.nmap.org URL; any other scheme is refused."""
+    if not url.startswith("https://"):
+        raise ValueError(f"refusing non-HTTPS URL: {url}")
+    request = urllib.request.Request(url, headers={"User-Agent": "justUp-Nmap-build/1"})  # noqa: S310 # https only
+    return urllib.request.urlopen(request, timeout=timeout)  # noqa: S310 # https only, checked above
+
+
 def download(url: str, path: Path, *, limit: int) -> str:
-    request = urllib.request.Request(url, headers={"User-Agent": "justUp-Nmap-build/1"})
     digest = hashlib.sha256()
     total = 0
-    with urllib.request.urlopen(request, timeout=60) as response, path.open("wb") as target:
+    with open_https(url, 60) as response, path.open("wb") as target:
         while chunk := response.read(1024 * 1024):
             total += len(chunk)
             if total > limit:
@@ -167,8 +174,7 @@ def fetch(version: str, rpm: str, output: Path) -> None:
 def main(argv: list[str]) -> int:
     try:
         if argv == ["latest"]:
-            request = urllib.request.Request(DOWNLOAD_PAGE, headers={"User-Agent": "justUp-Nmap-build/1"})
-            with urllib.request.urlopen(request, timeout=30) as response:
+            with open_https(DOWNLOAD_PAGE, 30) as response:
                 page = response.read(2_000_001)
             if len(page) > 2_000_000:
                 raise ValueError("Nmap download page exceeds size limit")

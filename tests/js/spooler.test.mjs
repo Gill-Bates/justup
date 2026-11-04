@@ -152,10 +152,31 @@ test("status labels say accepted/handoff and never claim delivery", () => {
   h.fragment();
   vm.runInContext(src, h.ctx);
   const { statusBadge } = h.ctx._spoolerInternals;
-  assert.match(statusBadge("sent", 0), /Accepted by server/);
+  assert.match(statusBadge("sent", 0), />\s*Sent<\/span>$/);
   assert.match(statusBadge("sent", 0), /not verifiable/);
   assert.match(statusBadge("pending", 0), /Waiting for handoff/);
   assert.match(statusBadge("pending", 2), /Retrying handoff/);
   assert.match(statusBadge("failed", 3), /Handoff failed/);
   for (const status of ["sent", "pending", "failed", "processing"]) assert.doesNotMatch(statusBadge(status, 1), /[Dd]elivered/);
+});
+
+test("channel column is icon-only with an accessible name", () => {
+  const h = build();
+  h.fragment();
+  vm.runInContext(src, h.ctx);
+  const { channelIcon } = h.ctx._spoolerInternals;
+  for (const [type, icon, name] of [["email", "email", "Email"], ["signal", "chat", "Signal"]]) {
+    const html = channelIcon(type);
+    assert.match(html, new RegExp(`title="${name}"`));
+    assert.match(html, new RegExp(`aria-hidden="true">${icon}</span>`));
+    assert.match(html, new RegExp(`<span class="visually-hidden">${name}</span>`));
+    assert.equal(html.replace(/<[^>]*>/g, "").replace(icon, "").replace(name, ""), "", "no further visible text");
+  }
+});
+
+test("status label 'Sent' is used in the template and 'Accepted by server' is gone", () => {
+  const tpl = readFileSync(new URL("../../app/templates/settings/spooler.html", import.meta.url), "utf8");
+  assert.match(tpl, /<option value="sent">Sent<\/option>/);
+  assert.match(tpl, /text-uppercase">Sent<\/div>/);
+  assert.doesNotMatch(tpl + src, /Accepted by server/);
 });

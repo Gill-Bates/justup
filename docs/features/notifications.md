@@ -58,7 +58,7 @@ saved values, work for disabled recipients, and are not retried on failure.
 | --- | --- | --- |
 | `pending` | Waiting for handoff | Queued; waiting for its turn or a scheduled retry |
 | `pending` with retries | Retrying handoff | The last SMTP handoff failed; another attempt is scheduled |
-| `sent` | Accepted by server | The configured SMTP server accepted the message (`RCPT TO` and `DATA`). Final delivery is not verifiable |
+| `sent` | Sent | The configured SMTP server accepted the message (`RCPT TO` and `DATA`). Final delivery is not verifiable |
 | `failed` | Handoff failed | Rejected, retry budget used up, or not handed over within 24 h |
 
 `sent` is the stored status of a message that the SMTP server accepted. It never means that the
@@ -168,6 +168,20 @@ Transport security (encrypted by default):
     Earlier versions treated a missing choice as "off". If you relied on that for a plaintext
     relay without credentials, open Settings > SMTP and switch **Use STARTTLS** off once;
     otherwise mail now needs STARTTLS from your server. An already saved "off" is kept as is.
+
+## Links in notifications
+
+Links need the **Public hostname** (Settings > General, see [Settings](../configuration/settings.md)).
+With it set, notifications link to `https://<hostname>/ui/targets/<id>`; without it they
+carry no link, and the settings page shows a hint.
+
+- **Email:** the green **Open in justUp!** button only renders when the instance URL is a
+  valid `http(s)` URL, so a missing public hostname means no button. The plain-text part
+  shows the URL as text. The default template contains the button; a saved custom template
+  keeps its own markup and needs the `{{#if cta}}` block around the button to show it.
+- **Signal:** the default DOWN and UP templates end with a `Link:` line. Add
+  `{{#if cta}}{{system.url}}{{/if cta}}` to a saved custom template to include the link.
+- **Welcome messages** link to the start page.
 
 ## Signal
 
