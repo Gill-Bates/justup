@@ -650,24 +650,97 @@ details[open]>summary .target-details-chevron {
 	display: none;
 }
 
-.target-downtime-card .downtime-scroll {
-	max-height: clamp(240px, 30vh, 340px);
-	overflow-y: auto;
-	scrollbar-width: thin;
+/* The card is the container: every layout choice below follows the card width, not the viewport. */
+.target-downtime-card {
+	container: downtime / inline-size;
 }
 
-.downtime-summary {
-	display: flex;
-	align-items: center;
-	gap: 0.5rem;
-	margin: 0 0 0.5rem;
+.downtime-range {
+	margin-left: 0.25rem;
 	color: var(--bs-secondary-color);
+	font-size: 0.8125rem;
+	font-weight: 400;
+}
+
+.downtime-panel {
+	display: flex;
+	flex-direction: column;
+	min-height: 0;
+}
+
+.downtime-head {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: space-between;
+	gap: 0.25rem 0.75rem;
+	margin-bottom: 0.25rem;
+}
+
+.downtime-stats {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 0.125rem 1rem;
+	margin: 0;
+	padding: 0;
+	color: var(--bs-secondary-color);
+	font-size: 0.8125rem;
+	list-style: none;
+}
+
+.downtime-stat strong {
+	color: var(--bs-body-color);
+	font-size: 1.125rem;
+	font-variant-numeric: tabular-nums;
+}
+
+.downtime-ongoing {
+	color: var(--td-bad);
+	font-weight: 600;
+}
+
+.downtime-info {
+	margin-left: auto;
+	color: var(--bs-secondary-color);
+}
+
+.downtime-info[open] {
+	flex: 1 0 100%;
+}
+
+.downtime-info summary {
+	display: flex;
+	justify-content: flex-end;
+	padding: 0.125rem;
+	border-radius: var(--bs-border-radius-sm);
+	cursor: pointer;
+	list-style: none;
+}
+
+.downtime-info summary::-webkit-details-marker {
+	display: none;
+}
+
+.downtime-info summary:focus-visible {
+	outline: var(--ju-focus-outline-width) solid var(--ju-focus-ring);
+	outline-offset: var(--ju-focus-outline-offset);
+}
+
+.downtime-info .material-icons {
+	font-size: 1.125rem;
+}
+
+.downtime-info p {
+	margin: 0.25rem 0;
 	font-size: 0.8125rem;
 }
 
-.downtime-summary strong {
-	color: var(--bs-body-color);
-	font-size: 1rem;
+/* Only the list scrolls; the figures above stay in view. The cap matches the neighbouring availability plot. */
+.downtime-scroll {
+	max-height: calc(clamp(240px, 30vh, 340px) - 2.25rem);
+	overflow-y: auto;
+	scrollbar-width: thin;
 }
 
 .downtime-list {
@@ -676,12 +749,19 @@ details[open]>summary .target-details-chevron {
 	list-style: none;
 }
 
+/* Marker | kind | duration; time range and services follow on their own lines. */
 .downtime-item {
 	display: grid;
-	grid-template-columns: auto minmax(0, 1fr) auto;
-	gap: 0.25rem 0.875rem;
-	padding: 0.75rem 0.25rem;
+	grid-template-columns: 0.75rem minmax(0, 1fr) auto;
+	grid-template-areas:
+		"mark kind dur"
+		". when when"
+		". meta meta";
+	gap: 0.05rem 0.625rem;
+	padding: 0.4rem 0.25rem;
 	border-top: 1px solid var(--ju-panel-line);
+	font-size: 0.8125rem;
+	line-height: 1.35;
 }
 
 .downtime-item:first-child {
@@ -689,19 +769,17 @@ details[open]>summary .target-details-chevron {
 }
 
 .downtime-marker {
-	width: 0.75rem;
-	height: 0.75rem;
-	margin-top: 0.3rem;
+	box-sizing: border-box;
+	grid-area: mark;
+	align-self: center;
+	width: 0.625rem;
+	height: 0.625rem;
 	border: 2px solid var(--td-bad);
 	border-radius: 50%;
-	background: color-mix(in srgb, var(--td-bad) 25%, transparent);
-}
-
-.downtime-item--ongoing .downtime-marker {
 	background: var(--td-bad);
 }
 
-/* Unmeasured time is no downtime: a dashed ring (gap) and a diamond (UNKNOWN) differ from the solid red dot by shape. */
+/* Unmeasured time is no downtime: a dashed ring (gap) and a diamond (unknown) differ from the filled dot by shape. */
 .downtime-item--gap .downtime-marker {
 	border-color: var(--bs-secondary-color);
 	border-style: dashed;
@@ -716,109 +794,90 @@ details[open]>summary .target-details-chevron {
 }
 
 .downtime-kind {
-	display: flex;
-	align-items: center;
-	gap: 0.25rem;
-	margin-bottom: 0.15rem;
-	font-size: 0.8125rem;
-}
-
-.downtime-kind .material-icons {
-	font-size: 1rem;
-}
-
-.downtime-kind--down {
+	grid-area: kind;
+	min-width: 0;
 	color: var(--td-bad);
+	overflow-wrap: anywhere;
 }
 
-.downtime-kind--gap,
-.downtime-kind--unknown {
+.downtime-item--gap .downtime-kind,
+.downtime-item--unknown .downtime-kind {
 	color: var(--bs-secondary-color);
 }
 
-.downtime-note {
-	margin-top: 0.15rem;
-	color: var(--bs-secondary-color);
-	font-size: 0.8125rem;
-}
-
-.downtime-summary-note {
-	font-size: 0.8125rem;
-}
-
-.downtime-times {
-	display: flex;
-	align-items: center;
-	flex-wrap: wrap;
-	gap: 0.15rem 0.5rem;
-	font-size: 0.875rem;
+.downtime-when {
+	grid-area: when;
+	min-width: 0;
 	font-variant-numeric: tabular-nums;
+	overflow-wrap: anywhere;
 }
 
-.downtime-arrow {
+.downtime-meta {
+	grid-area: meta;
+	min-width: 0;
 	color: var(--bs-secondary-color);
+	font-size: 0.75rem;
+	overflow-wrap: anywhere;
 }
 
-.downtime-services {
-	display: flex;
-	flex-wrap: wrap;
-	gap: 0.25rem;
-	margin-top: 0.35rem;
+.downtime-meta:empty {
+	display: none;
 }
 
 .downtime-duration {
-	align-self: start;
-	font-size: 0.9375rem;
+	grid-area: dur;
+	justify-self: end;
 	font-variant-numeric: tabular-nums;
 	font-weight: 600;
+	text-align: right;
 	white-space: nowrap;
 }
 
-/* Empty, error and loading states */
-.target-empty-state {
-	display: grid;
-	justify-items: center;
-	gap: 0.35rem;
-	padding: 2.5rem 1rem;
-	text-align: center;
-}
-
-.target-empty-icon {
-	display: inline-grid;
-	place-items: center;
-	width: 3rem;
-	height: 3rem;
-	margin-bottom: 0.35rem;
-	border-radius: 50%;
-	background: color-mix(in srgb, var(--bs-secondary-color) 14%, transparent);
-	color: var(--bs-secondary-color);
-}
-
-.target-empty-icon .material-icons {
-	font-size: 1.75rem;
-}
-
-.target-empty-icon--ok {
-	background: color-mix(in srgb, var(--td-ok) 15%, transparent);
-	color: var(--td-ok);
-}
-
-.target-empty-icon--error {
-	background: color-mix(in srgb, var(--td-bad) 15%, transparent);
+.downtime-item--ongoing .downtime-duration {
 	color: var(--td-bad);
 }
 
-.target-empty-title {
-	margin: 0;
-	font-size: 1rem;
-	font-weight: 600;
+/* Wide card: the range moves up next to the kind, two lines per event. */
+@container downtime (min-width: 30rem) {
+	.downtime-item {
+		grid-template-columns: 0.75rem 8.5rem minmax(0, 1fr) auto;
+		grid-template-areas:
+			"mark kind when dur"
+			". meta meta meta";
+	}
 }
 
-.target-empty-text {
-	max-width: 24rem;
+/* Very narrow card: the duration drops under the kind so range and duration never collide. */
+@container downtime (max-width: 15rem) {
+	.downtime-item {
+		grid-template-areas:
+			"mark kind kind"
+			". dur dur"
+			". when when"
+			". meta meta";
+	}
+
+	.downtime-duration {
+		justify-self: start;
+	}
+}
+
+/* Empty and error states stay as small as the text: no illustration, no reserved height. */
+.downtime-empty {
+	display: grid;
+	gap: 0.1rem;
 	margin: 0;
 	color: var(--bs-secondary-color);
+	font-size: 0.8125rem;
+}
+
+.downtime-empty strong {
+	color: var(--bs-body-color);
 	font-size: 0.875rem;
+}
+
+.downtime-empty--error strong {
+	color: var(--td-bad);
 }
 
 .target-skeleton {
@@ -902,7 +961,7 @@ details[open]>summary .target-details-chevron {
 		border: 1px solid CanvasText;
 	}
 
-	.downtime-marker {
+	.downtime-item--down .downtime-marker {
 		background: CanvasText;
 	}
 }
@@ -1280,14 +1339,6 @@ details[open]>summary .target-details-chevron {
 	.target-combined-card>.card-body {
 		padding: 1rem;
 	}
-
-	.downtime-item {
-		grid-template-columns: auto minmax(0, 1fr);
-	}
-
-	.downtime-duration {
-		grid-column: 2;
-	}
 }
 
 /* ---- 6. Desktop fill mode: dashboard tab fills the space between topbar and footer ----
@@ -1488,23 +1539,18 @@ details[open]>summary .target-details-chevron {
 		min-height: 0;
 	}
 
-	#target-dashboard-pane.active .target-downtime-card .target-empty-state {
+	#target-dashboard-pane.active .downtime-panel {
 		flex: 1 1 auto;
-		align-content: center;
-		min-height: 0;
-		padding: 0.5rem;
 	}
 
-	#target-dashboard-pane.active .target-downtime-card .downtime-scroll {
+	#target-dashboard-pane.active .downtime-scroll {
 		flex: 1 1 auto;
 		min-height: 0;
 		max-height: none;
-		overflow-y: auto;
-		scrollbar-width: thin;
 	}
 
 	#target-dashboard-pane.active .downtime-item {
-		padding-block: 0.5rem;
+		padding-block: 0.3rem;
 	}
 }
 

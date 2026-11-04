@@ -83,15 +83,13 @@
 	<div class="card target-panel target-downtime-card" id="downtime-history-card">
 		<div class="card-header target-panel-header">
 			<div class="target-panel-heading">
-				<span class="target-panel-title"><i class="material-icons" aria-hidden="true">history</i> <span id="downtime-header-label">Downtimes (30d)</span></span>
-				<span class="target-panel-sub">Outages detected in the selected range</span>
+				<span class="target-panel-title"><i class="material-icons" aria-hidden="true">history</i> Downtimes <span class="downtime-range" id="downtime-header-label">30d</span></span>
 			</div>
 		</div>
 		<div class="card-body">
 			<div id="downtime-history-body" aria-live="polite"
 				hx-get="/ui/fragments/downtime-history/{{ target.id }}" hx-trigger="load" hx-swap="innerHTML">
 				<div class="target-skeleton" role="status">
-					<span class="target-skeleton-line"></span>
 					<span class="target-skeleton-line"></span>
 					<span class="target-skeleton-line"></span>
 					<span class="visually-hidden">Loading downtimes…</span>

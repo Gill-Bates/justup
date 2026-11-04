@@ -71,6 +71,7 @@ from ..utils.auth_helpers import (
     resolve_user_or_htmx_redirect,
 )
 from ..utils.availability_rules import downtime_series
+from ..utils.downtime_view import build_history
 from ..utils.constants import (
     DATE_FORMAT_ISO,
     DEFAULT_GEOIP_AUTO_UPDATE,
@@ -1645,7 +1646,7 @@ async def fragment_downtime_history(
         request,
         "fragments/downtime_history.html",
         {
-            "periods": entries,
+            "history": build_history(entries, now=utcnow()),
             "has_data": has_data,
             "use_utc": use_utc_dashboard(conn),
             "range_label": range_label,

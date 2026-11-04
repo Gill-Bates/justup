@@ -4,6 +4,7 @@
 - `Fix` The plain-text part of alert mails shows the URL of a link instead of dropping it.
 
 ## [Unreleased]
+- `Fix` Zooming into the availability chart no longer draws green or red lines over the axis labels or past the plot area; lines are cut at the edge of the plot.
 - `Fix` Cards keep their rounded border at the corners when their content is collapsed (for example the check cards in the target form): the inner radius now follows the card radius.
 - `Fix` The chart of a target without an HTTP check no longer shows the note "No HTTP status codes: the HTTP check is not enabled."
 - `Fix` "Insert link" in the mail template editor no longer opens a browser popup: the address is typed into a field of the editor, and a blocked address (for example `javascript:`) is shown as an error at that field.

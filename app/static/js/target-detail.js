@@ -281,7 +281,7 @@ function _downtimeSkeleton() {
 	const wrap = document.createElement('div');
 	wrap.className = 'target-skeleton';
 	wrap.setAttribute('role', 'status');
-	for (let i = 0; i < 3; i++) {
+	for (let i = 0; i < 2; i++) {
 		const line = document.createElement('span');
 		line.className = 'target-skeleton-line';
 		wrap.appendChild(line);
@@ -293,23 +293,16 @@ function _downtimeSkeleton() {
 	return wrap;
 }
 
-/** Replace the downtime panel body with a designed error state. */
+/** Replace the downtime panel body with a compact error state. */
 function _showDowntimeError() {
 	const bodyEl = document.getElementById('downtime-history-body');
 	if (!bodyEl) return;
-	const box = document.createElement('div');
-	box.className = 'target-empty-state';
+	const box = document.createElement('p');
+	box.className = 'downtime-empty downtime-empty--error';
 	box.setAttribute('role', 'alert');
-	const icon = document.createElement('span');
-	icon.className = 'target-empty-icon target-empty-icon--error';
-	icon.innerHTML = '<i class="material-icons" aria-hidden="true">error_outline</i>';
-	const title = document.createElement('p');
-	title.className = 'target-empty-title';
+	const title = document.createElement('strong');
 	title.textContent = 'Downtimes could not be loaded';
-	const text = document.createElement('p');
-	text.className = 'target-empty-text';
-	text.textContent = 'Try another range or reload the page.';
-	box.append(icon, title, text);
+	box.append(title, 'Try another range or reload the page.');
 	bodyEl.replaceChildren(box);
 }
 
@@ -626,7 +619,17 @@ document.addEventListener('DOMContentLoaded', () => {
 	_startLiveRefresh();
 
 	// The KPI cards are swapped by HTMX on live events; keep the certificate value the charts computed.
-	document.getElementById('target-info-cards')?.addEventListener('htmx:afterSwap', () => {
+	const infoCards = document.getElementById('target-info-cards');
+	// WebKit has no scroll anchoring: replacing the cards above the charts jumped the scrolled
+	// main area (about 280 px at 1024x768). Restore the offset synchronously, before the next paint.
+	let scrollHost = null;
+	let scrollTopBeforeSwap = 0;
+	infoCards?.addEventListener('htmx:beforeSwap', () => {
+		scrollHost = document.getElementById('main-content');
+		scrollTopBeforeSwap = scrollHost ? scrollHost.scrollTop : 0;
+	});
+	infoCards?.addEventListener('htmx:afterSwap', () => {
+		if (scrollHost && scrollHost.scrollTop !== scrollTopBeforeSwap) scrollHost.scrollTop = scrollTopBeforeSwap;
 		if (appState.certDays === null) return;
 		const certEl = document.getElementById('cert-days-value');
 		if (certEl) certEl.textContent = appState.certDays + ' days';

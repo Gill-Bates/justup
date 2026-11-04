@@ -569,35 +569,22 @@
 				var rangeEl = card.querySelector('[data-range-label]');
 				var headerLabel = document.getElementById('downtime-header-label');
 				if (headerLabel && rangeEl && rangeEl.dataset.rangeLabel) {
-					headerLabel.textContent = 'Downtimes (' + rangeEl.dataset.rangeLabel + ')';
+					headerLabel.textContent = rangeEl.dataset.rangeLabel;
 				}
 
-				var isMobile = window.innerWidth < 576;
-				card.querySelectorAll('.local-time').forEach(function (el) {
-					var utcStr = el.dataset.utc;
-					var useUtc = el.dataset.useUtc === 'true';
-					if (!utcStr) return;
-					var dt = new Date(utcStr);
-					if (isNaN(dt.getTime())) return;
-
-					if (useUtc) {
-						if (isMobile) {
-							el.textContent = dt.toISOString().substring(5, 16).replace('T', ' ');
-						} else {
-							el.textContent = dt.toISOString().replace('T', ' ').substring(0, 19) + ' UTC';
-						}
-					} else {
-						if (isMobile) {
-							el.textContent = dt.toLocaleString(undefined, {
-								month: '2-digit',
-								day: '2-digit',
-								hour: '2-digit',
-								minute: '2-digit'
-							});
-						} else {
-							el.textContent = dt.toLocaleString();
-						}
-					}
+				card.querySelectorAll('.downtime-when').forEach(function (el) {
+					var utc = el.dataset.useUtc === 'true';
+					var range = formatDowntimeRange(el.dataset.start, el.dataset.end, { utc: utc });
+					if (!range) return;
+					var text = el.querySelector('.downtime-when-text');
+					var precise = formatDowntimePrecise(el.dataset.start, el.dataset.end, { utc: utc });
+					var exact = el.querySelector('.downtime-when-precise');
+					var serverPrecise = exact ? exact.textContent : '';
+					text.textContent = range;
+					// Keep the server's duration suffix; only the timestamps depend on the zone.
+					var duration = serverPrecise.indexOf(' · ') >= 0 ? serverPrecise.slice(serverPrecise.indexOf(' · ')) : '';
+					text.title = precise + duration;
+					if (exact) exact.textContent = precise + duration;
 				});
 			}
 

@@ -12,7 +12,8 @@ import { waitForVisualStability } from "./harness.mjs";
 const VIEWPORTS = [{ name: "1280x720", width: 1280, height: 900 }, { name: "390x844", width: 390, height: 844 }];
 const TARGET_PATH = "/ui/targets/4";
 
-// Pixels of a series color outside the plot area (legend hidden so its swatches cannot count).
+// Pixels of a series color left or right of the plot area, level with it (where the y axis labels and the card edge
+// are); legend hidden so its swatches cannot count.
 const scan = (page) => page.evaluate(() => {
 	const canvas = document.getElementById("chart-uptime");
 	const chart = window.Chart.getChart(canvas);
@@ -27,7 +28,7 @@ const scan = (page) => page.evaluate(() => {
 		return Array.from(probe.getImageData(0, 0, 1, 1).data.slice(0, 3));
 	});
 	const { data, width, height } = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height);
-	const left = Math.floor(area.left * ratio) - 2, right = Math.ceil(area.right * ratio) + 2;
+	const left = Math.floor(area.left * ratio) - 1, right = Math.ceil(area.right * ratio) + 1;
 	const top = Math.floor(area.top * ratio) - 2, bottom = Math.ceil(area.bottom * ratio) + 2;
 	let outside = 0, inside = 0; const bbox = { x1: 1e9, y1: 1e9, x2: -1, y2: -1 }, sample = [];
 	for (let y = 0; y < height; y++) {
@@ -35,7 +36,7 @@ const scan = (page) => page.evaluate(() => {
 			const i = (y * width + x) * 4;
 			if (data[i + 3] < 200) continue;
 			if (!colors.some((c) => Math.abs(data[i] - c[0]) <= 10 && Math.abs(data[i + 1] - c[1]) <= 10 && Math.abs(data[i + 2] - c[2]) <= 10)) continue;
-			if (x >= left && x <= right && y >= top && y <= bottom) inside += 1; else { outside += 1; bbox.x1 = Math.min(bbox.x1, x); bbox.y1 = Math.min(bbox.y1, y); bbox.x2 = Math.max(bbox.x2, x); bbox.y2 = Math.max(bbox.y2, y); if (sample.length < 3) sample.push([x, y, data[i], data[i + 1], data[i + 2]]); }
+			if (x >= left && x <= right && y >= top && y <= bottom) inside += 1; else if (y >= top && y <= bottom) { outside += 1; bbox.x1 = Math.min(bbox.x1, x); bbox.y1 = Math.min(bbox.y1, y); bbox.x2 = Math.max(bbox.x2, x); bbox.y2 = Math.max(bbox.y2, y); if (sample.length < 3) sample.push([x, y, data[i], data[i + 1], data[i + 2]]); }
 		}
 	}
 	chart.options.plugins.legend.display = true;
