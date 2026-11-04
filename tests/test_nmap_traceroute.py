@@ -20,6 +20,7 @@ import stat
 import sys
 import tempfile
 import textwrap
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -250,3 +251,267 @@ class TestWorkerRoundTrip:
         with pytest.raises(NmapScannerError) as exc:
             asyncio.run(scenario())
         assert exc.value.error.code == "invalid_host"
+
+
+# --- Review fixes: probe choice, shared deadline, DNS bound, global Nmap cap, request type, route model -----
+
+_LOG_ARGV = "open({log!r}, 'a').write(' '.join(sys.argv[1:]) + '\\n')\n"
+
+
+def _trace_for(sock_dir, monkeypatch, body: str) -> Path:
+    log = sock_dir / "argv"
+    monkeypatch.setattr(nmap_scanner, "NMAP_BINARY", str(_fake_nmap(sock_dir, _LOG_ARGV.format(log=str(log)) + body)))
+    return log
+
+
+def _calls(log: Path) -> list[str]:
+    return log.read_text().splitlines() if log.exists() else []
+
+
+class TestProbeChoiceAndDeadline:
+    @pytest.mark.parametrize(("protocol", "flag"), [("udp", "-sU"), ("tcp", "-sS")])
+    def test_requested_probe_runs_first_and_alone(self, sock_dir, monkeypatch, protocol, flag):
+        log = _trace_for(sock_dir, monkeypatch, XML_TRACE)
+        asyncio.run(nmap_scanner.trace_route("10.0.0.5", timeout=10, probe_protocol=protocol, probe_port=53))
+        calls = _calls(log)
+        assert len(calls) == 1 and flag in calls[0].split() and "-sn" not in calls[0].split()
+
+    def test_requested_probe_is_not_widened_by_a_second_attempt(self, sock_dir, monkeypatch):
+        log = _trace_for(sock_dir, monkeypatch, XML_NO_TRACE)
+        with pytest.raises(NmapScannerError) as exc:
+            asyncio.run(nmap_scanner.trace_route("10.0.0.5", timeout=10, probe_protocol="udp", probe_port=53))
+        assert exc.value.error.code == "no_trace" and len(_calls(log)) == 1
+
+    def test_default_trace_starts_with_discovery(self, sock_dir, monkeypatch):
+        log = _trace_for(sock_dir, monkeypatch, XML_TRACE)
+        asyncio.run(nmap_scanner.trace_route("10.0.0.5", timeout=10))
+        assert "-sn" in _calls(log)[0].split()
+
+    def test_timeout_of_discovery_falls_back_once_within_one_deadline(self, sock_dir, monkeypatch):
+        log = _trace_for(sock_dir, monkeypatch, f"if '-sn' in sys.argv:\n    time.sleep(60)\nelse:\n    {XML_TRACE}")
+        started = time.monotonic()
+        route = asyncio.run(nmap_scanner.trace_route("10.0.0.5", timeout=12, probe_port=443, probe_protocol=None))
+        calls = _calls(log)
+        assert route.destination_reached and len(calls) == 2
+        assert "-sn" in calls[0].split() and "-sS" in calls[1].split()
+        assert time.monotonic() - started < 12 + 1
+
+    def test_two_timeouts_stay_inside_the_deadline_and_never_make_a_third_attempt(self, sock_dir, monkeypatch):
+        log = _trace_for(sock_dir, monkeypatch, "time.sleep(60)")
+        started = time.monotonic()
+        with pytest.raises(NmapScannerError) as exc:
+            asyncio.run(nmap_scanner.trace_route("10.0.0.5", timeout=12))
+        assert exc.value.error.code == "timeout" and len(_calls(log)) == 2
+        assert time.monotonic() - started < 12 + 1
+
+    def test_no_fallback_when_too_little_budget_is_left(self, sock_dir, monkeypatch):
+        log = _trace_for(sock_dir, monkeypatch, "time.sleep(60)")
+        with pytest.raises(NmapScannerError) as exc:
+            asyncio.run(nmap_scanner.trace_route("10.0.0.5", timeout=5))
+        assert exc.value.error.code == "timeout" and len(_calls(log)) == 1
+
+    @pytest.mark.parametrize(
+        ("body", "code"),
+        [
+            ("sys.stderr.write('Traceroute has to be run as root')\nsys.exit(1)", "permission_denied"),
+            ("sys.stderr.write('boom')\nsys.exit(2)", "process_failed"),
+            ("sys.stdout.write('<html/>')", "invalid_xml"),
+        ],
+    )
+    def test_permission_and_internal_errors_are_not_masked_by_a_second_attempt(self, sock_dir, monkeypatch, body, code):
+        log = _trace_for(sock_dir, monkeypatch, body)
+        with pytest.raises(NmapScannerError) as exc:
+            asyncio.run(nmap_scanner.trace_route("10.0.0.5", timeout=10))
+        assert exc.value.error.code == code and len(_calls(log)) == 1
+
+
+class TestDnsBound:
+    def test_slow_dns_is_bounded_and_reported_as_timeout(self, monkeypatch):
+        monkeypatch.setattr(nmap_scanner, "resolve_validated", lambda *a, **k: time.sleep(2) or [])
+        monkeypatch.setattr(nmap_scanner, "DNS_TIMEOUT", 0.3, raising=False)
+        started = time.monotonic()
+        with pytest.raises(NmapScannerError) as exc:
+            asyncio.run(nmap_scanner.trace_route("slow.example.net", timeout=10))
+        assert exc.value.error.code == "timeout" and time.monotonic() - started < 1.9
+
+    def test_concurrent_resolutions_are_capped_even_after_a_caller_gave_up(self, monkeypatch):
+        state = {"now": 0, "peak": 0}
+
+        def slow(*_a, **_k):
+            state["now"] += 1
+            state["peak"] = max(state["peak"], state["now"])
+            time.sleep(0.4)
+            state["now"] -= 1
+            return []
+
+        monkeypatch.setattr(nmap_scanner, "resolve_validated", slow)
+        monkeypatch.setattr(nmap_scanner, "DNS_TIMEOUT", 0.1, raising=False)
+
+        async def scenario():
+            monkeypatch.setattr(nmap_scanner, "_resolve_slots", asyncio.Semaphore(2), raising=False)
+            monkeypatch.setattr(nmap_scanner, "MAX_CONCURRENT_RESOLUTIONS", 2, raising=False)
+            await asyncio.gather(
+                *(nmap_scanner._resolve(f"h{n}.example.net") for n in range(6)), return_exceptions=True
+            )
+
+        asyncio.run(scenario())
+        assert state["peak"] <= 2
+
+
+_CONCURRENCY_BODY = """
+run = os.path.join({root!r}, 'run')
+os.makedirs(run, exist_ok=True)
+mark = os.path.join(run, str(os.getpid()))
+open(mark, 'w').close()
+open(os.path.join({root!r}, 'peak'), 'a').write(str(len(os.listdir(run))) + '\\n')
+time.sleep(0.8)
+os.remove(mark)
+addr = sys.argv[-1]
+if '--traceroute' in sys.argv:
+    sys.stdout.write('<nmaprun><host><status state="up"/><address addr="%s" addrtype="ipv4"/>'
+                     '<trace><hop ttl="1" ipaddr="10.0.0.1" rtt="0.5"/><hop ttl="2" ipaddr="%s" rtt="1.5"/></trace>'
+                     '</host><runstats><finished exit="success"/></runstats></nmaprun>' % (addr, addr))
+else:
+    sys.stdout.write('<nmaprun><host><status state="up"/><address addr="%s" addrtype="ipv4"/><ports/></host>'
+                     '<runstats><finished exit="success"/></runstats></nmaprun>' % addr)
+"""
+
+
+class TestGlobalNmapCap:
+    def _setup(self, sock_dir, monkeypatch):
+        body = _CONCURRENCY_BODY.format(root=str(sock_dir))
+        monkeypatch.setattr(nmap_scanner, "NMAP_BINARY", str(_fake_nmap(sock_dir, body)))
+
+    @staticmethod
+    def _peak(sock_dir) -> int:
+        return max(int(x) for x in (sock_dir / "peak").read_text().split())
+
+    @staticmethod
+    def _fresh_limits(monkeypatch):
+        monkeypatch.setattr(nmap_scanner, "_scan_slots", asyncio.Semaphore(nmap_scanner.MAX_CONCURRENT_SCANS))
+        monkeypatch.setattr(nmap_scanner, "_trace_slots", asyncio.Semaphore(nmap_scanner.MAX_CONCURRENT_TRACEROUTES))
+        monkeypatch.setattr(
+            nmap_scanner, "_nmap_slots", asyncio.Semaphore(nmap_scanner.MAX_CONCURRENT_NMAP), raising=False
+        )
+
+    def test_scans_and_traces_share_one_process_cap_and_neither_kind_is_starved(self, sock_dir, monkeypatch):
+        self._setup(sock_dir, monkeypatch)
+        assert nmap_scanner.MAX_CONCURRENT_NMAP < (
+            nmap_scanner.MAX_CONCURRENT_SCANS + nmap_scanner.MAX_CONCURRENT_TRACEROUTES
+        )
+
+        async def scenario():
+            self._fresh_limits(monkeypatch)
+            scans = [
+                asyncio.create_task(nmap_scanner.scan_selected_ports(f"10.0.1.{n}", [22], [], timeout=10))
+                for n in (1, 2)
+            ]
+            await asyncio.sleep(0.3)
+            traces = await asyncio.gather(
+                *(nmap_scanner.trace_route(f"10.0.2.{n}", timeout=10) for n in (1, 2)), return_exceptions=True
+            )
+            return await asyncio.gather(*scans, return_exceptions=True), traces
+
+        scans, traces = asyncio.run(scenario())
+        assert self._peak(sock_dir) <= nmap_scanner.MAX_CONCURRENT_NMAP
+        assert all(not isinstance(item, BaseException) for item in scans)
+        assert sum(isinstance(item, nmap_scanner.Route) for item in traces) >= 1
+
+    def test_busy_traces_cannot_starve_a_scan(self, sock_dir, monkeypatch):
+        self._setup(sock_dir, monkeypatch)
+
+        async def scenario():
+            self._fresh_limits(monkeypatch)
+            traces = [asyncio.create_task(nmap_scanner.trace_route(f"10.0.2.{n}", timeout=10)) for n in (1, 2)]
+            await asyncio.sleep(0.3)
+            started = time.monotonic()
+            scan = await nmap_scanner.scan_selected_ports("10.0.1.1", [22], [], timeout=10)
+            waited = time.monotonic() - started
+            await asyncio.gather(*traces)
+            return scan, waited
+
+        _scan, waited = asyncio.run(scenario())
+        assert waited < 0.7 + 0.5 and self._peak(sock_dir) <= nmap_scanner.MAX_CONCURRENT_NMAP
+
+
+class TestRequestType:
+    def test_client_worker_and_scanner_offer_the_same_probe_protocols(self):
+        import typing
+
+        def args(func_or_model, name):
+            hints = typing.get_type_hints(func_or_model)
+            return set(typing.get_args(hints[name]) or ()) - {type(None)}
+
+        client = args(nmap_client.request_traceroute, "probe_protocol")
+        scanner = args(nmap_scanner.trace_route, "probe_protocol")
+        worker = {
+            arg
+            for arg in typing.get_args(nmap_worker.TracerouteRequest.model_fields["probe_protocol"].annotation)
+            if arg is not type(None)
+        }
+        assert client == scanner == worker == {"tcp", "udp"}
+
+    def test_route_result_may_still_report_an_icmp_probe(self):
+        route = _parse(_xml("1.1.1.1", '<trace proto="icmp"><hop ttl="1" ipaddr="1.1.1.1" rtt="1.0"/></trace>'))
+        assert route.probe_protocol == "icmp" and route.probe_port is None
+
+
+def _route_kwargs(**over):
+    base = {
+        "destination_ip": "10.0.0.5",
+        "address_family": "ipv4",
+        "probe_protocol": "tcp",
+        "probe_port": 443,
+        "started_at": T0,
+        "completed_at": T1,
+        "duration_ms": 2000,
+        "destination_reached": True,
+        "complete": True,
+        "hops": [
+            {"hop_number": 1, "ip": "10.0.0.1", "rtt_ms": 0.5, "status": "ok"},
+            {"hop_number": 2, "status": "no_reply"},
+            {"hop_number": 3, "ip": "10.0.0.5", "rtt_ms": 2.5, "status": "ok"},
+        ],
+    }
+    base.update(over)
+    return base
+
+
+class TestRouteModel:
+    def test_consistent_route_is_accepted(self):
+        assert nmap_scanner.Route(**_route_kwargs()).destination_reached
+
+    @pytest.mark.parametrize(
+        "over",
+        [
+            {"destination_ip": "not-an-ip"},
+            {"address_family": "ipv6"},
+            {"hops": [{"hop_number": 1, "ip": "999.1.1.1", "status": "ok"}], "destination_reached": False},
+            {"hops": [{"hop_number": 1, "ip": "fd00::1", "status": "ok"}], "destination_reached": False},
+            {
+                "hops": [
+                    {"hop_number": 2, "ip": "10.0.0.1", "status": "ok"},
+                    {"hop_number": 2, "ip": "10.0.0.5", "status": "ok"},
+                ]
+            },
+            {
+                "hops": [
+                    {"hop_number": 3, "ip": "10.0.0.1", "status": "ok"},
+                    {"hop_number": 1, "ip": "10.0.0.5", "status": "ok"},
+                ]
+            },
+            {"completed_at": datetime(2025, 12, 31, tzinfo=UTC)},
+            {"duration_ms": 5},
+            {"probe_protocol": "icmp", "probe_port": 443},
+            {"probe_protocol": None, "probe_port": 443},
+            {"probe_protocol": "udp", "probe_port": None},
+            {"destination_reached": True, "hops": [{"hop_number": 1, "ip": "10.0.0.1", "status": "ok"}]},
+        ],
+    )
+    def test_inconsistent_routes_are_rejected(self, over):
+        with pytest.raises(ValidationError):
+            nmap_scanner.Route(**_route_kwargs(**over))
+
+    def test_parser_drops_a_port_without_a_port_protocol(self):
+        route = _parse(_xml("1.1.1.1", '<trace port="443"><hop ttl="1" ipaddr="1.1.1.1" rtt="1.0"/></trace>'))
+        assert route.probe_protocol is None and route.probe_port is None

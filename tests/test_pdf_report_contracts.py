@@ -548,7 +548,7 @@ def _full_builder(
     monkeypatch.setattr(b, "_get_whatweb_data", lambda: None)
     monkeypatch.setattr(b, "_get_ssl_data", lambda: ssl)
     hop_list = list(hops)
-    monkeypatch.setattr(b, "_get_mtr_data", lambda **_k: (hop_list, [], False))
+    monkeypatch.setattr(b, "_get_route_data", lambda **_k: (hop_list, [], False))
     return b
 
 
@@ -813,7 +813,7 @@ def test_odd_measurement_values_and_naive_dates_do_not_abort_the_report(monkeypa
     b2 = PDFReportBuilder(naive)
     monkeypatch.setattr(b2, "_get_whatweb_data", lambda: None)
     monkeypatch.setattr(b2, "_get_ssl_data", lambda: None)
-    monkeypatch.setattr(b2, "_get_mtr_data", lambda **_k: ([], [], False))
+    monkeypatch.setattr(b2, "_get_route_data", lambda **_k: ([], [], False))
     assert b.build().startswith(b"%PDF") and b2.build().startswith(b"%PDF")
     assert b.kpis.avg_response_ms is not None  # valid points still count, bad ones are skipped
 
@@ -1120,11 +1120,11 @@ def _route_builder(monkeypatch, hops, *, host="dest.example", size="a4"):
     b = _full_builder(monkeypatch, hops=[], ssl=None, size=size)
     monkeypatch.setattr(
         b,
-        "_get_mtr_data",
-        lambda *, max_hops=pdf_report._MTR_MAX_HOPS: PDFReportBuilder._get_mtr_data(b, max_hops=max_hops),
+        "_get_route_data",
+        lambda *, max_hops=pdf_report._ROUTE_MAX_HOPS: PDFReportBuilder._get_route_data(b, max_hops=max_hops),
     )
     monkeypatch.setattr(b, "_get_traceroute_host", lambda: host)
-    monkeypatch.setattr(pdf_report, "_run_mtr_with_interpolation", lambda *_a, **_k: (list(hops), [], False))
+    monkeypatch.setattr(pdf_report, "_run_traceroute_with_interpolation", lambda *_a, **_k: (list(hops), [], False))
     return b
 
 
@@ -1267,7 +1267,7 @@ def test_long_ungroupable_route_splits_over_pages_and_keeps_every_hop(monkeypatc
 def test_route_ending_in_silent_hops_is_not_truncated_in_the_pdf(monkeypatch):
     hops = [_hop(i) for i in range(1, 9)] + [_hop(i, status="timeout") for i in (9, 10)]
     b = _route_builder(monkeypatch, hops)
-    assert [h["hop"] for h in b._get_mtr_data()[0]][-1] == 10
+    assert [h["hop"] for h in b._get_route_data()[0]][-1] == 10
     spans = [e["span"] for e in pdf_report._build_route_entries(hops, None)["entries"]]
     assert spans[-1] in ("10", "9–10")
 
@@ -1395,7 +1395,7 @@ def test_coverage_indicator_and_low_coverage_caveat():
     assert not b._is_low_coverage() and b._effective_level() == "ok"
 
 
-def test_empty_mtr_route_is_cached_so_mtr_runs_once(monkeypatch):
+def test_empty_route_is_cached_so_the_trace_runs_once(monkeypatch):
     b = _route_builder(monkeypatch, [])
     calls = []
 
@@ -1403,9 +1403,9 @@ def test_empty_mtr_route_is_cached_so_mtr_runs_once(monkeypatch):
         calls.append(1)
         return [], [], False
 
-    monkeypatch.setattr(pdf_report, "_run_mtr_with_interpolation", _silent_route)
-    assert b._get_mtr_data() == ([], [], False)
-    assert b._get_mtr_data() == ([], [], False)
+    monkeypatch.setattr(pdf_report, "_run_traceroute_with_interpolation", _silent_route)
+    assert b._get_route_data() == ([], [], False)
+    assert b._get_route_data() == ([], [], False)
     assert len(calls) == 1
 
 

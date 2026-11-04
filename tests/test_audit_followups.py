@@ -21,7 +21,6 @@ import pytest
 
 from app.api import signal as signal_api
 from app.monitor import checks
-from app.services import mtr_run
 from app.services.notifications.signal_errors import SignalUnavailable
 from tests import _support  # noqa: F401 - imported for its sys.path side effect
 
@@ -85,27 +84,6 @@ def test_network_unreachable_has_own_label_and_stays_retryable() -> None:
     assert checks.is_retryable_detail("Timeout")
     assert not checks.is_retryable_detail("connection refused")
     assert not checks.is_retryable_detail(None)
-
-
-def test_mtr_json_support_probed_once_per_binary() -> None:
-    mtr_run._reset_json_support_cache()
-    done = subprocess.CompletedProcess([], 0, stdout="usage: --json", stderr="")
-    with mock.patch.object(mtr_run.subprocess, "run", return_value=done) as run:
-        assert mtr_run._mtr_supports_json("/usr/bin/mtr") is True
-        assert mtr_run._mtr_supports_json("/usr/bin/mtr") is True
-        assert run.call_count == 1
-        mtr_run._mtr_supports_json("/usr/bin/mtr-tiny")
-        assert run.call_count == 2
-    mtr_run._reset_json_support_cache()
-
-
-def test_mtr_json_support_probe_failure_is_not_cached() -> None:
-    mtr_run._reset_json_support_cache()
-    with mock.patch.object(mtr_run.subprocess, "run", side_effect=subprocess.TimeoutExpired("mtr", 5)) as run:
-        assert mtr_run._mtr_supports_json("/usr/bin/mtr") is False
-        assert mtr_run._mtr_supports_json("/usr/bin/mtr") is False
-        assert run.call_count == 2
-    mtr_run._reset_json_support_cache()
 
 
 class _DownBackend:

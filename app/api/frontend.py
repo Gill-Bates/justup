@@ -1824,7 +1824,6 @@ async def _run_traceroute_fragment(request: Request, target_id: int, lookup_host
                 "unavailable_reason": outcome.error_message,
                 "error_code": outcome.error_code,
             },
-            headers={"Cache-Control": "private, no-store"},
         )
     hops = outcome.hops
     route = outcome.route

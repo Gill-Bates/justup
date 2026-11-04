@@ -529,7 +529,7 @@ def test_pdf_report_is_built_from_compressed_history(tmp_path, monkeypatch):
     builder = PDFReportBuilder(data, "a4")
     monkeypatch.setattr(builder, "_get_whatweb_data", lambda: None)
     monkeypatch.setattr(builder, "_get_ssl_data", lambda: None)
-    monkeypatch.setattr(builder, "_get_mtr_data", lambda **_k: ([], [], False))
+    monkeypatch.setattr(builder, "_get_route_data", lambda **_k: ([], [], False))
     assert builder.build().startswith(b"%PDF")
 
 

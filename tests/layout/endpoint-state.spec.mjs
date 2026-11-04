@@ -115,9 +115,9 @@ for (const viewport of VIEWPORTS) {
 				assert.match(byKind.gap.text, /No measurements/);
 				assert.match(byKind.unknown.text, /Unknown/);
 				assert.equal(new Set(Object.values(byKind).map((item) => item.marker)).size, 3, "three distinct marker shapes");
-				const summary = await page.locator("#downtime-history-body .downtime-summary").innerText();
-				assert.match(summary, /^1\s+downtime\b/);
-				assert.match(summary, /not counted as downtime/);
+				const summary = await page.locator("#downtime-history-body .downtime-stats").innerText();
+				assert.match(summary, /^1\s+Downtime\b/);
+				assert.match(summary, /2\s+Data gaps/);
 				assert.deepEqual(errors, []);
 				assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), true, "no horizontal page overflow");
 			} finally {

@@ -311,7 +311,7 @@ def _build_with_map(monkeypatch, geo, hops, *, size="a4"):
 
         monkeypatch.setattr(rl_canvas.Canvas, name, spy)
     b = pdf_contracts._full_builder(monkeypatch, size=size, hops=hops)
-    monkeypatch.setattr(b, "_get_mtr_data", lambda **_k: (hops, geo, True))
+    monkeypatch.setattr(b, "_get_route_data", lambda **_k: (hops, geo, True))
     b.build()
     return b, " | ".join(drawn)
 

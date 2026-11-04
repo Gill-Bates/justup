@@ -133,7 +133,7 @@ def test_collect_resolved_uses_one_shared_budget() -> None:
     import time
     from concurrent.futures import ThreadPoolExecutor
 
-    from app.services.mtr_run import _collect_resolved
+    from app.services.traceroute_service import _collect_resolved
 
     def slow(ip: str) -> str:
         time.sleep(2)
@@ -153,7 +153,7 @@ def test_collect_resolved_uses_one_shared_budget() -> None:
 def test_collect_resolved_empty_and_failing() -> None:
     from concurrent.futures import ThreadPoolExecutor
 
-    from app.services.mtr_run import _collect_resolved
+    from app.services.traceroute_service import _collect_resolved
 
     assert _collect_resolved({}, 0.1) == {}
     with ThreadPoolExecutor(max_workers=1) as ex:

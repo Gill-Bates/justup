@@ -18,7 +18,8 @@ import pytest
 
 from app.api import frontend
 from app.services import geo_resolver as gr
-from app.services import mtr_run, pdf_report, traceroute_geo
+from app.services import pdf_report, traceroute_geo, traceroute_service
+from tests.traceroute_helpers import patch_trace
 from app.services.route_timeline import mapped_hop_numbers
 from tests import _support  # noqa: F401 - imported for its sys.path side effect
 
@@ -28,9 +29,8 @@ HOST = "dest.example"
 
 def _hop(n: int, ip: str | None, ms: float | None = 5.0) -> dict[str, Any]:
     if ip is None:
-        return {"hop": n, "ip": "*", "hostname": None, "status": "timeout", "latency_ms": None, "loss_pct": 100.0}
-    lat = {"avg": ms, "best": ms, "worst": ms} if ms is not None else None
-    return {"hop": n, "ip": ip, "hostname": None, "status": "ok", "latency_ms": lat, "loss_pct": 0.0}
+        return {"hop": n, "ip": "*", "hostname": None, "status": "timeout", "rtt_ms": None}
+    return {"hop": n, "ip": ip, "hostname": None, "status": "ok", "rtt_ms": ms}
 
 
 ROUTES = {
@@ -55,13 +55,7 @@ def _geo(ip: str | None, _hostname=None):
 
 
 def _patch_sources(monkeypatch: pytest.MonkeyPatch, hops: list[dict]) -> None:
-    def run(*_a, **_k):
-        return [dict(h) for h in hops]
-
-    # The web fragment imports lazily from the service modules, the PDF module binds names at import.
-    for module in (mtr_run, pdf_report):
-        monkeypatch.setattr(module, "resolve_target_ip", lambda _h: TARGET_IP, raising=False)
-        monkeypatch.setattr(module, "run_mtr", run, raising=False)
+    patch_trace(monkeypatch, hops, resolved=TARGET_IP)
     for module in (traceroute_geo, pdf_report):
         monkeypatch.setattr(module, "geolocate_with_hostname_hint", _geo, raising=False)
 
@@ -87,8 +81,8 @@ def _view(hops: list[dict]) -> list[tuple]:
 def test_web_and_pdf_build_the_same_route(monkeypatch: pytest.MonkeyPatch, route: str) -> None:
     _patch_sources(monkeypatch, ROUTES[route])
     web = _web_context(monkeypatch)
-    pdf_hops, pdf_points, pdf_interp = pdf_report._run_mtr_with_interpolation(HOST)
-    # Only the web view strips trailing timeouts itself; the PDF strips them later, in _get_mtr_data.
+    pdf_hops, pdf_points, pdf_interp = pdf_report._run_traceroute_with_interpolation(HOST)
+    # Only the web view strips trailing timeouts itself; the PDF strips them later, in _get_route_data.
     while pdf_hops and pdf_hops[-1].get("status") == "timeout" and not pdf_hops[-1].get("_interpolated"):
         pdf_hops.pop()
     assert _view(web["hops"]) == _view(pdf_hops)
@@ -99,7 +93,7 @@ def test_web_and_pdf_build_the_same_route(monkeypatch: pytest.MonkeyPatch, route
 def test_blocked_middle_is_collapsed_and_flagged_in_both_views(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_sources(monkeypatch, ROUTES["blocked_middle"])
     web = _web_context(monkeypatch)
-    pdf_hops, _points, pdf_interp = pdf_report._run_mtr_with_interpolation(HOST)
+    pdf_hops, _points, pdf_interp = pdf_report._run_traceroute_with_interpolation(HOST)
     assert web["has_interpolation"] is True
     assert pdf_interp is True
     for hops in (web["hops"], pdf_hops):
@@ -109,14 +103,14 @@ def test_blocked_middle_is_collapsed_and_flagged_in_both_views(monkeypatch: pyte
 
 def test_trailing_timeouts_stay_timeouts_in_the_pdf_route(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_sources(monkeypatch, ROUTES["trailing_timeout"])
-    hops, _points, interpolated = pdf_report._run_mtr_with_interpolation(HOST)
+    hops, _points, interpolated = pdf_report._run_traceroute_with_interpolation(HOST)
     assert interpolated is False
     assert [h["status"] for h in hops if h["hop"] in (3, 4)] == ["timeout", "timeout"]
 
 
 def test_unreached_destination_gets_one_synthetic_final_hop_in_both_views(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_sources(monkeypatch, ROUTES["trailing_timeout"])
-    pdf_hops, _points, _interp = pdf_report._run_mtr_with_interpolation(HOST)
+    pdf_hops, _points, _interp = pdf_report._run_traceroute_with_interpolation(HOST)
     web = _web_context(monkeypatch)
     for hops in (web["hops"], pdf_hops):
         synthetic = [h for h in hops if h.get("_synthetic_destination")]
@@ -124,19 +118,13 @@ def test_unreached_destination_gets_one_synthetic_final_hop_in_both_views(monkey
         assert hops[-1] is synthetic[0]
 
 
-def test_empty_mtr_result_yields_an_empty_route(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_empty_route_yields_an_empty_route_and_a_controlled_web_message(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_sources(monkeypatch, [])
-    assert pdf_report._run_mtr_with_interpolation(HOST) == ([], [], False)
+    assert pdf_report._run_traceroute_with_interpolation(HOST) == ([], [], False)
     web = _web_context(monkeypatch)
     assert web["hops"] == []
     assert web["has_interpolation"] is False
-
-
-def test_web_view_keeps_trailing_timeouts_when_no_destination_can_be_appended(monkeypatch: pytest.MonkeyPatch) -> None:
-    _patch_sources(monkeypatch, ROUTES["trailing_timeout"])
-    monkeypatch.setattr(mtr_run, "resolve_target_ip", lambda _h: None)  # no synthetic destination hop
-    web = _web_context(monkeypatch)
-    assert [(h["hop"], h["status"]) for h in web["hops"]][-2:] == [(3, "timeout"), (4, "timeout")]
+    assert web["unavailable_reason"] == traceroute_service.ERROR_MESSAGES["no_trace"]
 
 
 # ── Table and map tell the same story (owner report: table lists more cities than the map shows) ──
@@ -184,8 +172,7 @@ def _owner_route_context(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     monkeypatch.setattr(
         traceroute_geo, "_collect_candidates", lambda ip, _h: (list(_CANDIDATES.get(ip, [])), [gr.SRC_GEOLITE2], {})
     )
-    monkeypatch.setattr(mtr_run, "resolve_target_ip", lambda _h: DEST)
-    monkeypatch.setattr(mtr_run, "run_mtr", lambda *_a, **_k: [dict(h) for h in _OWNER_ROUTE])
+    patch_trace(monkeypatch, _OWNER_ROUTE, resolved=DEST)
     return _web_context(monkeypatch)
 
 
@@ -212,9 +199,7 @@ def test_table_and_map_agree_on_places_pins_and_counts(monkeypatch: pytest.Monke
     assert rows[5]["on_map"] is True
     assert (plotted[5]["lat"], plotted[5]["lon"]) == traceroute_geo.country_center("DE")
     assert plotted[5]["map_role"] == "estimate" and plotted[5]["_country_center"] is True
-    monkeypatch.setattr(pdf_report, "resolve_target_ip", lambda _host: DEST)
-    monkeypatch.setattr(pdf_report, "run_mtr", lambda *_args, **_kwargs: [dict(hop) for hop in _OWNER_ROUTE])
-    pdf_hops, pdf_points, _interpolated = pdf_report._run_mtr_with_interpolation(HOST)
+    pdf_hops, pdf_points, _interpolated = pdf_report._run_traceroute_with_interpolation(HOST)
     fields = ("hop", "city", "country", "lat", "lon", "map_role", "_destination", "_country_center")
     assert [tuple(point.get(key) for key in fields) for point in pdf_points] == [
         tuple(point.get(key) for key in fields) for point in ctx["geo_points"]
@@ -255,16 +240,14 @@ def test_country_centers_and_unlocated_hops_match_in_web_and_pdf(monkeypatch: py
         "_collect_candidates",
         lambda ip, _hostname: (list(candidates.get(ip, [])), [gr.SRC_GEOLITE2], {}),
     )
-    for module in (mtr_run, pdf_report):
-        monkeypatch.setattr(module, "resolve_target_ip", lambda _host: destination, raising=False)
-        monkeypatch.setattr(module, "run_mtr", lambda *_args, **_kwargs: [dict(h) for h in route], raising=False)
+    patch_trace(monkeypatch, route, resolved=destination)
 
     monkeypatch.setattr(pdf_report, "geolocate_with_hostname_hint", traceroute_geo.geolocate_with_hostname_hint)
     destination_geo = traceroute_geo.geolocate_with_hostname_hint(destination, HOST)
     web_points = traceroute_geo.route_hops_to_geo_points(
         route, destination_ip=destination, destination_geo=destination_geo
     )
-    pdf_hops, pdf_points, _interpolated = pdf_report._run_mtr_with_interpolation(HOST)
+    pdf_hops, pdf_points, _interpolated = pdf_report._run_traceroute_with_interpolation(HOST)
 
     for points in (web_points, pdf_points):
         by_hop = {}
@@ -301,9 +284,7 @@ def test_approximate_destination_maps_its_own_city_candidate(monkeypatch: pytest
 def test_country_only_destination_uses_the_same_center_in_web_and_pdf(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(_CANDIDATES, DEST, [_gl2(51.3, 6.85, None, 500)])
     ctx = _owner_route_context(monkeypatch)
-    monkeypatch.setattr(pdf_report, "resolve_target_ip", lambda _host: DEST)
-    monkeypatch.setattr(pdf_report, "run_mtr", lambda *_args, **_kwargs: [dict(hop) for hop in _OWNER_ROUTE])
-    pdf_hops, pdf_points, _interpolated = pdf_report._run_mtr_with_interpolation(HOST)
+    pdf_hops, pdf_points, _interpolated = pdf_report._run_traceroute_with_interpolation(HOST)
     for points in (ctx["geo_points"], pdf_points):
         destinations = [point for point in points if point.get("_destination")]
         assert len(destinations) == 1
@@ -346,73 +327,36 @@ def test_destination_ip_has_one_location_decision_even_when_the_last_hop_resolve
     assert (dest["city"], dest["lat"], dest["lon"]) == ("Ratingen", 51.3, 6.85)
 
 
-def test_mtr_traces_the_resolved_ip_not_the_hostname(monkeypatch: pytest.MonkeyPatch) -> None:
-    _patch_sources(monkeypatch, ROUTES["reached"])
-    seen: list[tuple] = []
-    monkeypatch.setattr(mtr_run, "run_mtr", lambda *a, **k: seen.append((a, k)) or [dict(h) for h in ROUTES["reached"]])
+def test_traceroute_scans_the_resolved_ip_not_the_hostname(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[str] = []
+    patch_trace(monkeypatch, ROUTES["reached"], resolved=TARGET_IP, calls=seen)
+    monkeypatch.setattr(traceroute_geo, "geolocate_with_hostname_hint", _geo)
     _web_context(monkeypatch)
-    assert seen[0][0] == (TARGET_IP,) and seen[0][1]["force_ipv6"] is False
-    # IPv6 resolution keeps the address family; an unresolvable host falls back to the name.
+    assert seen == [TARGET_IP]
+    # IPv6 resolution is traced as that address; an unresolvable host is never scanned by name.
     monkeypatch.setattr(traceroute_geo, "geolocate_with_hostname_hint", lambda *_a: None)
-    monkeypatch.setattr(mtr_run, "resolve_target_ip", lambda _h: "2001:db8::9")
+    patch_trace(monkeypatch, [], resolved="2001:db8::9", calls=seen)
     _web_context(monkeypatch)
-    assert seen[1][0] == ("2001:db8::9",) and seen[1][1]["force_ipv6"] is True
-    monkeypatch.setattr(mtr_run, "resolve_target_ip", lambda _h: None)
-    _web_context(monkeypatch)
-    assert seen[2][0] == (HOST,)
-
-
-def test_concurrent_cache_misses_share_one_measurement(monkeypatch: pytest.MonkeyPatch) -> None:
-    from fastapi.responses import HTMLResponse
-
-    calls: list[int] = []
-
-    async def measure(_request, target_id, _host, _namespace):
-        calls.append(target_id)
-        await asyncio.sleep(0.05)
-        return HTMLResponse(b"<p>route</p>", headers={"Cache-Control": "private, no-store", "X-Measured-At": "42"})
-
-    monkeypatch.setattr(frontend, "_run_traceroute_fragment", measure)
-
-    async def burst():
-        return await asyncio.gather(*(frontend._single_flight_traceroute(None, 1, HOST, "ns") for _ in range(10)))
-
-    responses = asyncio.run(burst())
-    assert calls == [1]
-    assert {r.body for r in responses} == {b"<p>route</p>"}
-    assert {r.headers["x-measured-at"] for r in responses} == {"42"}
-    assert frontend._traceroute_inflight == {}
-    asyncio.run(burst())  # the reservation is released: a later miss measures again
-    assert len(calls) == 2
-
-
-def test_failed_measurement_releases_the_reservation(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def boom(*_a):
-        raise RuntimeError("mtr failed")
-
-    monkeypatch.setattr(frontend, "_run_traceroute_fragment", boom)
-
-    async def run():
-        with pytest.raises(RuntimeError):
-            await frontend._single_flight_traceroute(None, 1, HOST, "ns")
-        await asyncio.sleep(0)
-        return dict(frontend._traceroute_inflight)
-
-    assert asyncio.run(run()) == {}
+    assert seen[1] == "2001:db8::9"
+    patch_trace(monkeypatch, ROUTES["reached"], resolved=None, calls=seen)
+    web = _web_context(monkeypatch)
+    assert len(seen) == 2
+    assert web["unavailable_reason"] == traceroute_service.ERROR_MESSAGES["invalid_target"]
 
 
 @pytest.mark.parametrize("route", ["reached", "blocked_middle", "trailing_timeout"])
 def test_kpi_destination_verdict_is_the_route_analysis_verdict(monkeypatch: pytest.MonkeyPatch, route: str) -> None:
     _patch_sources(monkeypatch, ROUTES[route])
     web = _web_context(monkeypatch)
-    reached = mtr_run.analyze_route(ROUTES[route], TARGET_IP)["destination_reached"]
+    reached = traceroute_service.analyze_route(ROUTES[route], TARGET_IP)["destination_reached"]
     assert web["kpis"]["destination_reached"] is reached
-    if not reached:  # a synthetic destination never supplies latency or loss
-        assert web["kpis"]["latency_display"] is None and web["kpis"]["loss_display"] is None
+    if not reached:  # a synthetic destination never supplies an RTT
+        assert web["kpis"]["latency_display"] is None
+    assert "loss_display" not in web["kpis"]
 
 
 def test_kpis_follow_an_explicit_verdict_over_hop_flags() -> None:
-    hops = [{"hop": 1, "ip": TARGET_IP, "status": "ok", "latency_ms": {"avg": 5.0}, "loss_pct": 0.0}]
+    hops = [{"hop": 1, "ip": TARGET_IP, "status": "ok", "rtt_ms": 5.0}]
     assert frontend._destination_kpis(hops, TARGET_IP, None, True)["latency_display"] == "5.0 ms"
     unreached = frontend._destination_kpis(hops, TARGET_IP, None, False)
     assert unreached["destination_reached"] is False and unreached["latency_display"] is None

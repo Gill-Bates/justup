@@ -930,7 +930,8 @@ def test_downtime_of_fresh_series_is_ongoing(conn):
 
 # --- CR-02: per-hop geolocation must not block the event loop ------------------------------------
 def test_traceroute_hop_geolocation_runs_off_event_loop(monkeypatch):
-    from app.services import mtr_run, route_interpolator, traceroute_geo
+    from app.services import route_interpolator, traceroute_geo, traceroute_service
+    from tests.traceroute_helpers import patch_trace
 
     hop = {"hop": 1, "ip": "203.0.113.7", "hostname": "h.example", "status": "ok", "latency_ms": {"avg": 1.0}}
     threads: list[int] = []
@@ -940,10 +941,9 @@ def test_traceroute_hop_geolocation_runs_off_event_loop(monkeypatch):
             threads.append(threading.get_ident())
             raise RuntimeError("stop")
 
-    monkeypatch.setattr(mtr_run, "resolve_target_ip", lambda host: "198.51.100.1")
-    monkeypatch.setattr(mtr_run, "run_mtr", lambda *a, **k: [hop])
+    patch_trace(monkeypatch, [hop], resolved="198.51.100.1")
     monkeypatch.setattr(
-        mtr_run, "analyze_route", lambda hops, ip: {"last_responding_hop": 0, "destination_reached": True}
+        traceroute_service, "analyze_route", lambda hops, ip: {"last_responding_hop": 0, "destination_reached": True}
     )
     monkeypatch.setattr(route_interpolator, "interpolate_route", lambda hops, **k: hops)
     monkeypatch.setattr(route_interpolator, "collapse_interpolated_hops", lambda hops, *a, **k: hops)

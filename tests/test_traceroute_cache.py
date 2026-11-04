@@ -19,7 +19,8 @@ from fastapi.testclient import TestClient
 from app.api import frontend as frontend_api
 from app.db import sqlite as sqlite_db
 from app.models.users import hash_token, new_token
-from app.services import mtr_run, route_interpolator, traceroute_geo
+from app.services import route_interpolator, traceroute_geo, traceroute_service
+from tests.traceroute_helpers import patch_trace
 from app.utils import crypto
 from tests import _support  # noqa: F401 - imported for its sys.path side effect
 
@@ -89,9 +90,8 @@ def test_traceroute_fragment_reuses_authorized_recent_result(tmp_path: Path, mon
             "_destination": True,
         },
     ]
-    monkeypatch.setattr(mtr_run, "resolve_target_ip", lambda _host: "203.0.113.2")
-    monkeypatch.setattr(mtr_run, "run_mtr", lambda *args, **_kwargs: calls.append(args) or hops)
-    monkeypatch.setattr(mtr_run, "analyze_route", lambda *_args: {"destination_reached": True})
+    patch_trace(monkeypatch, hops, resolved="203.0.113.2", calls=calls)
+    monkeypatch.setattr(traceroute_service, "analyze_route", lambda *_args: {"destination_reached": True})
     monkeypatch.setattr(route_interpolator, "interpolate_route", lambda route, **_kwargs: route)
     monkeypatch.setattr(route_interpolator, "collapse_interpolated_hops", lambda route: route)
     monkeypatch.setattr(
@@ -135,7 +135,7 @@ def test_traceroute_fragment_reuses_authorized_recent_result(tmp_path: Path, mon
     assert unauthorized.headers["hx-redirect"] == "/ui/login"
     assert len(calls) == 2
 
-    key = (str(app.state.db_path), target_id, "replacement.example.net")
+    key = (f"{frontend_api._TRACEROUTE_CACHE_VERSION}:{app.state.db_path}", target_id, "replacement.example.net")
     with frontend_api._traceroute_fragment_cache_lock:
         _expires_at, body, measured_at = frontend_api._traceroute_fragment_cache[key]
         frontend_api._traceroute_fragment_cache[key] = (time.monotonic() - 1, body, measured_at)
@@ -193,8 +193,7 @@ def _diagnostics_client(tmp_path: Path, monkeypatch, hops: list[dict], *, target
         frontend_api._traceroute_refresh_finished.clear()
 
     calls: list[tuple] = []
-    monkeypatch.setattr(mtr_run, "resolve_target_ip", lambda _host: target_ip)
-    monkeypatch.setattr(mtr_run, "run_mtr", lambda *args, **_kwargs: calls.append(args) or [dict(h) for h in hops])
+    patch_trace(monkeypatch, hops, resolved=target_ip, calls=calls)
     monkeypatch.setattr(
         traceroute_geo,
         "geolocate_with_hostname_hint",
@@ -224,26 +223,26 @@ def test_destination_kpis_use_measured_values_and_never_default_to_zero() -> Non
         {
             "hop": 2,
             "ip": "203.0.113.9",
-            "latency_ms": {"avg": 15.74},
-            "loss_pct": 0.0,
+            "rtt_ms": 15.74,
             "city": "Frankfurt",
             "country": "DE",
         },
     ]
     kpis = frontend_api._destination_kpis(reached, "203.0.113.9", None)
-    assert (kpis["hop_count"], kpis["latency_display"], kpis["loss_display"]) == (2, "15.7 ms", "0%")
+    assert (kpis["hop_count"], kpis["latency_display"]) == (2, "15.7 ms")
+    assert "loss_display" not in kpis and "loss_pct" not in kpis
     assert (kpis["destination_reached"], kpis["city"], kpis["country"]) == (True, "Frankfurt", "DE")
 
-    lossy = [{"hop": 1, "ip": "203.0.113.9", "latency_ms": {"avg": 3.0}, "loss_pct": 33.33}]
-    assert frontend_api._destination_kpis(lossy, "203.0.113.9", None)["loss_display"] == "33.3%"
+    lossy = [{"hop": 1, "ip": "203.0.113.9", "rtt_ms": 3.0}]
+    assert frontend_api._destination_kpis(lossy, "203.0.113.9", None)["latency_display"] == "3.0 ms"
 
     # A synthetic destination was never measured: latency and loss stay unknown, not 0.
     synthetic = [
-        {"hop": 1, "ip": "10.0.0.1", "latency_ms": {"avg": 1.0}, "loss_pct": 0.0},
-        {"hop": 2, "ip": "203.0.113.9", "latency_ms": None, "loss_pct": None, "_synthetic_destination": True},
+        {"hop": 1, "ip": "10.0.0.1", "rtt_ms": 1.0},
+        {"hop": 2, "ip": "203.0.113.9", "rtt_ms": None, "_synthetic_destination": True},
     ]
     kpis = frontend_api._destination_kpis(synthetic, "203.0.113.9", {"city": "Berlin", "country": "DE"})
-    assert kpis["latency_display"] is None and kpis["loss_display"] is None
+    assert kpis["latency_display"] is None
     assert kpis["destination_reached"] is False and kpis["city"] == "Berlin"
 
     # Without a destination hop or a loss value nothing is invented.
@@ -290,9 +289,9 @@ def test_fragment_counts_collapsed_hops_and_renders_panels(tmp_path: Path, monke
     # Visible text names each step; an aria-label would trip axe's label-content-name-mismatch.
     assert not re.search(r"<button[^>]*tr-step-btn[^>]*aria-label", text)
     assert text.count(">No reply<") >= 4 and text.count("ju-status-badge--warning") >= 1
-    assert "15.7 ms" in text and "0%" in text and "Frankfurt am Main, DE" in text
+    assert "15.7 ms" in text and "%" not in text.split("hop-table", 1)[1].split("</table>")[0] and "Frankfurt am Main, DE" in text
     assert "Geolocated route for 2 of 7 hops" in text
-    for header in ("IP address", "Hostname", "Location", "Latency", "Loss", "Status"):
+    for header in ("IP address", "Hostname", "Location", "RTT", "Status"):
         assert f">{header}</th>" in text
     # Hostnames are escaped; never emitted as markup.
     assert "<script>alert(1)" not in text and "&lt;script&gt;alert(1)" in text
@@ -308,8 +307,8 @@ def test_fragment_shows_unknown_for_unreached_destination(tmp_path: Path, monkey
     text = client.get(url, headers=_HX).text
 
     assert "not measured" in text
-    assert text.count('data-known="false"') == 2  # latency and loss stay unknown, never 0
-    assert text.count('class="tr-kpi-value">—</dd>') == 2
+    assert text.count('data-known="false"') == 1  # the RTT stays unknown, never 0
+    assert text.count('class="tr-kpi-value">—</dd>') == 1
     assert "No reply" in text
     client.close()
 
@@ -339,7 +338,7 @@ def test_run_again_forces_new_measurement_with_auth_and_parallel_guard(tmp_path:
     assert again.status_code == 429 and "retry-after" in again.headers and len(calls) == 2
 
     # After the cooldown another forced run is allowed.
-    key = (str(app.state.db_path), target_id, "diag.example.com")
+    key = (f"{frontend_api._TRACEROUTE_CACHE_VERSION}:{app.state.db_path}", target_id, "diag.example.com")
     with frontend_api._traceroute_refresh_lock:
         frontend_api._traceroute_refresh_finished[key] = time.monotonic() - 60
     assert client.get(f"{url}?refresh=1", headers=_HX).status_code == 200
@@ -370,7 +369,7 @@ def test_refresh_is_rejected_while_a_cache_miss_measurement_is_in_flight(tmp_pat
     client, url, calls, app, target_id = _diagnostics_client(
         tmp_path, monkeypatch, hops, target_ip="203.0.113.9", geo_points=geo
     )
-    key = (str(app.state.db_path), target_id, "diag.example.com")
+    key = (f"{frontend_api._TRACEROUTE_CACHE_VERSION}:{app.state.db_path}", target_id, "diag.example.com")
     frontend_api._traceroute_inflight[key] = SimpleNamespace(done=lambda: False)
     try:
         blocked = client.get(f"{url}?refresh=1", headers=_HX)
@@ -388,7 +387,7 @@ def _measured_at(response) -> int:
 
 def _allow_refresh(app, target_id: int, host: str = "diag.example.com") -> None:
     with frontend_api._traceroute_refresh_lock:
-        frontend_api._traceroute_refresh_finished[(str(app.state.db_path), target_id, host)] = time.monotonic() - 60
+        frontend_api._traceroute_refresh_finished[(f"{frontend_api._TRACEROUTE_CACHE_VERSION}:{app.state.db_path}", target_id, host)] = time.monotonic() - 60
 
 
 def test_response_carries_the_original_measurement_time(tmp_path: Path, monkeypatch) -> None:
@@ -427,7 +426,7 @@ def test_refresh_bypasses_the_server_cache_and_reports_the_new_time(tmp_path: Pa
     assert limited.status_code == 429 and "x-measured-at" not in limited.headers and len(calls) == 2
     _allow_refresh(app, target_id)
     with frontend_api._traceroute_refresh_lock:
-        frontend_api._traceroute_refresh_inflight.add((str(app.state.db_path), target_id, "diag.example.com"))
+        frontend_api._traceroute_refresh_inflight.add((f"{frontend_api._TRACEROUTE_CACHE_VERSION}:{app.state.db_path}", target_id, "diag.example.com"))
     assert client.get(f"{url}?refresh=1", headers=_HX).status_code == 429
     assert len(calls) == 2
     client.close()
@@ -438,7 +437,7 @@ def test_unsuccessful_measurement_has_no_time_and_is_not_cached(tmp_path: Path, 
         tmp_path, monkeypatch, [], target_ip="203.0.113.9", geo_points=[]
     )
     response = client.get(url, headers=_HX)
-    assert response.status_code == 200 and "MTR returned no hops" in response.text
+    assert response.status_code == 200 and "No route could be traced" in response.text
     assert "x-measured-at" not in response.headers  # the browser must not keep this as a measurement
     client.get(url, headers=_HX)
     assert len(calls) == 2  # and the server does not cache it either
