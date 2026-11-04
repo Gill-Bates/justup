@@ -120,9 +120,20 @@
 		});
 	});
 
+	// A live refresh replaces the whole fragment; WebKit then clamps the scroll position of <main> to the
+	// momentarily shorter content and the list jumps to the top. Restore it for refreshes the fragment
+	// triggered itself (not for the pager buttons, which should start at the top).
+	const scroller = document.getElementById('main-content');
+	let keptScroll = null;
+	document.body.addEventListener('htmx:beforeSwap', function (event) {
+		keptScroll = scroller && event.target === container && event.detail.elt === container ? scroller.scrollTop : null;
+	});
+
 	// Polling and paging replace the fragment: the new DOM carries the stored group state, so re-evaluate it.
 	document.body.addEventListener('htmx:afterSwap', function (event) {
 		if (event.target !== container) return;
+		if (keptScroll !== null && scroller.scrollTop !== keptScroll) scroller.scrollTop = keptScroll;
+		keptScroll = null;
 		requestedScope = null;
 		memory.clear();
 		render();
