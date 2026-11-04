@@ -143,6 +143,7 @@ nav:
       - Docker: getting-started/docker.md
   - Features:
       - Monitoring & Checks: features/monitoring.md
+      - Network monitoring (Nmap): features/network-monitoring.md
       - Monitoring alerts: features/alerts.md
       - Notifications: features/notifications.md
       - PDF reports: features/reports.md

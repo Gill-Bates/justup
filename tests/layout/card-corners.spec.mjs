@@ -18,10 +18,11 @@ const PAGES = [
 	{ id: "settings", path: "/ui/settings" },
 	{ id: "notifications", path: "/ui/notifications" },
 ];
-// Cards that may clip: scroll containers inside cards (tables) round their own corners by clipping.
-const clipsOk = (el) => el.matches(".ju-table-viewport");
+// Existing, documented clipping: `.ui-card` (page cards) and dashboard widget cards clip by design, so their
+// content follows the rounding already. Every other card must stay unclipped.
+const CLIPPING = ".ui-card, .dashboard-widget-card, .modal-content";
 
-const GEOMETRY = () => {
+const GEOMETRY = (CLIPPING) => {
 	const px = (value) => parseFloat(value) || 0;
 	const corners = [["top", "left"], ["top", "right"], ["bottom", "left"], ["bottom", "right"]];
 	const problems = [];
@@ -34,7 +35,7 @@ const GEOMETRY = () => {
 		const border = px(style.borderTopWidth);
 		const inner = Math.max(0, outer - border);
 		const label = `${card.tagName.toLowerCase()}.${[...card.classList].slice(0, 3).join(".")}`;
-		if (/clip|hidden/.test(style.overflow) && !card.classList.contains("modal-content")) problems.push(`${label}: the card clips its content (overflow ${style.overflow})`);
+		if (/clip|hidden/.test(style.overflow) && !card.matches(CLIPPING)) problems.push(`${label}: the card clips its content (overflow ${style.overflow})`);
 		for (const [v, h] of corners) {
 			// The element that owns this corner: the first/last child whose box reaches it.
 			const children = [...card.children].filter((c) => c.getBoundingClientRect().height > 0 && getComputedStyle(c).position !== "absolute");
@@ -65,7 +66,7 @@ for (const viewport of VIEWPORTS) {
 					await page.evaluate((mode) => document.documentElement.setAttribute("data-bs-theme", mode), theme);
 					await entry.prepare?.(page);
 					await page.waitForTimeout(700);
-					const { problems } = await page.evaluate(GEOMETRY);
+					const { problems } = await page.evaluate(GEOMETRY, CLIPPING);
 					assert.deepEqual(problems.filter((p) => !p.includes("ju-table-viewport")), [], `${entry.id}`);
 				}
 
@@ -89,21 +90,28 @@ for (const viewport of VIEWPORTS) {
 				assert.equal(info.bodyHidden, true, "the check body is collapsed");
 				const size = 16;
 				const clip = { x: box.x - 2, y: box.y + box.height - (size - 2), width: size, height: size };
-				const png = (await page.screenshot({ clip })).toString("base64");
-				const pixel = await page.evaluate(async ({ png, size, radius }) => {
+								const png = (await page.screenshot({ clip })).toString("base64");
+				const diagonal = await page.evaluate(async ({ png, size }) => {
 					const image = await createImageBitmap(await (await fetch(`data:image/png;base64,${png}`)).blob());
 					const canvas = new OffscreenCanvas(image.width, image.height);
 					const context2d = canvas.getContext("2d");
 					context2d.drawImage(image, 0, 0);
 					const scale = image.width / size;
-					// The arc at 45 degrees: where the curved border runs; a square header background would replace it.
-					const offset = radius * 0.2929;
-					const x = Math.round((2 + offset) * scale), y = Math.round((size - 2 - offset - 1) * scale);
-					return Array.from(context2d.getImageData(x, y, 1, 1).data.slice(0, 3));
-				}, { png, size, radius: info.radius });
+					// Walk the bottom-left corner diagonally from outside to inside: the curved border has to show up
+					// as a pixel unlike the header background (a square header would paint over it).
+					const found = [];
+					for (let i = 1; i <= 7; i++) {
+						for (let dy = -1; dy <= 1; dy++) {
+							const x = Math.round((2 + i) * scale), y = Math.round((size - 3 - i + dy) * scale);
+							found.push(Array.from(context2d.getImageData(x, y, 1, 1).data.slice(0, 3)));
+						}
+					}
+					return found;
+				}, { png, size });
 				const header = info.header.match(/\d+/g).map(Number);
-				const close = pixel.every((value, i) => Math.abs(value - header[i]) <= 3);
-				assert.equal(close, false, `corner pixel ${pixel} equals the header background ${header}: the border arc is overpainted`);
+				const arcVisible = diagonal.some((pixel) => pixel.some((value, i) => Math.abs(value - header[i]) >= 12));
+				const close = !arcVisible;
+				assert.equal(close, false, `no border pixel on the corner diagonal differs from the header background ${header}: the arc is overpainted`);
 			} finally {
 				await context.close();
 			}

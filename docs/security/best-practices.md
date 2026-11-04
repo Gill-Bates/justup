@@ -46,6 +46,12 @@ locally; if the service is unreachable the report shows the country code only.
 Block outbound access at the network level if a service is not acceptable.
 GeoLite2 needs a MaxMind account and license key.
 
+## Port scans
+
+Only administrators can start Nmap scans. Scan hosts you are authorized to scan; scans can
+trigger alerts at the target. See
+[Network monitoring with Nmap](../features/network-monitoring.md#security-and-operations).
+
 ## Updates
 
 Pull the current image regularly (`docker compose pull`) and read the

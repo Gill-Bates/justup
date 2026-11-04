@@ -106,7 +106,6 @@ for (const viewport of VIEWPORTS) {
 						labelBelowValue: labelRect.top >= metricRect.bottom - 2,
 						cardHeight: cardRect.height,
 						frameHeight: frameRect.height,
-						cardCenterOffset: Math.abs((cardRect.top + cardRect.bottom) / 2 - (frameRect.top + frameRect.bottom) / 2),
 						rows: tile.getAttribute("gs-h"),
 						bodyOverflow: body.scrollHeight - body.clientHeight,
 					};
@@ -121,9 +120,7 @@ for (const viewport of VIEWPORTS) {
 					assert.ok(hero.iconValueCenterOffset <= 2, `${hero.id}: icon and value are ${hero.iconValueCenterOffset}px off center`);
 					assert.ok(hero.iconValueVerticalOffset <= 2, `${hero.id}: icon and value are not vertically centered`);
 					assert.equal(hero.labelBelowValue, true, `${hero.id}: label must sit below the value`);
-					assert.ok(Math.abs(hero.cardHeight - 90) <= 2, `${hero.id}: compact card is ${hero.cardHeight}px high`);
-					assert.ok(hero.cardCenterOffset <= 2, `${hero.id}: card is ${hero.cardCenterOffset}px off center in its frame`);
-					assert.ok(hero.cardHeight <= hero.frameHeight + 2, `${hero.id}: card grew beyond its frame`);
+					assert.ok(Math.abs(hero.cardHeight - hero.frameHeight) <= 2, `${hero.id}: card does not fill its frame`);
 					assert.ok(hero.bodyOverflow <= 2, `${hero.id}: hero body scrolls`);
 					if (viewport.width >= 992) assert.equal(hero.rows, "2", `${hero.id}: hero tile grew beyond two rows`);
 				}

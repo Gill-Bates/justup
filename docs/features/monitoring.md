@@ -73,6 +73,9 @@ both and a **Quick** or **Extended** scope, then select the ports to adopt.
   **Check again**. `GET /network-scans/status` reports it; starting a scan answers `503`
   with `code` `unavailable`.
 
+Details on discovery, status values, uncertain UDP results, capabilities and licence:
+[Network monitoring with Nmap](network-monitoring.md).
+
 ## Host rules
 
 - Hosts must be valid hostnames or IP addresses.

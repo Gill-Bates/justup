@@ -58,6 +58,13 @@ docker logs -f justup
     `ping` and `mtr` need `cap_net_raw`. Keep `NET_RAW` in the container's
     capabilities. See [Docker](getting-started/docker.md).
 
+## Port scan or UDP check does not work
+
+??? failure "Nmap worker unavailable or permission_denied"
+    The scan worker is down, or `NET_RAW` is missing. UDP results that are not clear stay
+    `unknown` and are never downtime. See
+    [Network monitoring with Nmap](features/network-monitoring.md#troubleshooting).
+
 ## Status does not update live
 
 ??? question "Live updates are delayed"

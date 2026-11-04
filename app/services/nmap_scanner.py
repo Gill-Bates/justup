@@ -92,6 +92,7 @@ class NmapScanError(BaseModel):
         "output_limit",
         "process_failed",
         "invalid_xml",
+        "no_trace",
     ]
     message: str
 

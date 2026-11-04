@@ -14,6 +14,10 @@ Release images are not bit-for-bit reproducible.
 
 `ARG PYTHON_BASE=python:3.13-slim` in `docker/Dockerfile` is a tag only. A local `docker build` without `--build-arg PYTHON_BASE=…@sha256:…` therefore uses whatever the tag points to at that moment.
 
+## Nmap
+
+Nmap is not pinned. The release workflow resolves the latest stable release once, verifies its PGP signature and source hash and builds both architectures from that same source (details: [Network monitoring with Nmap](../features/network-monitoring.md#docker-image-and-nmap-version)). A new Nmap release ships with the next justUp image build.
+
 ## Inputs that move with the build time
 
 The runtime and `signal-cli-dist` stages run `apt-get update && apt-get upgrade` during each build.

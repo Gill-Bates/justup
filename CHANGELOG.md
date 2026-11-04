@@ -4,6 +4,7 @@
 - `Fix` The plain-text part of alert mails shows the URL of a link instead of dropping it.
 
 ## [Unreleased]
+- `Fix` Cards keep their rounded border at the corners when their content is collapsed (for example the check cards in the target form): the inner radius now follows the card radius.
 - `Fix` The chart of a target without an HTTP check no longer shows the note "No HTTP status codes: the HTTP check is not enabled."
 - `Fix` "Insert link" in the mail template editor no longer opens a browser popup: the address is typed into a field of the editor, and a blocked address (for example `javascript:`) is shown as an error at that field.
 - `Fix` "Reset metrics" and "Delete target" ask in the application's own dialog (naming the target and the consequence) instead of the browser's native popup.
@@ -22,6 +23,10 @@
 - `New` Settings > Recipients has a search field that filters by name, email or Signal number while you type.
 - `Fix` Settings > Delivery Queue shows the stored status `sent` as "Sent" (it read "Accepted by server"); the status carries no tooltip, the meaning is documented.
 - `Fix` The Delivery Queue Log shows the channel as an icon only; the name stays available as tooltip and for screen readers.
+- `New` The Docker image contains the latest stable Nmap release at build time. It is built from the PGP-signature-verified source for amd64 and arm64 (same version and source hash), with build data in `/usr/share/doc/nmap/PROVENANCE.txt` and the Nmap Public Source License notice in the image. See "Network monitoring with Nmap" in the documentation.
+- `New` UDP and TCP ports are monitored and shown per endpoint (protocol and port, such as `TCP:53` and `UDP:53`). UDP `open` is up, `closed` is down after two confirming scans; `open|filtered`, `filtered` and failed scans are unknown, never up and never downtime. UDP scans run at most every 5 minutes.
+- `Fix` Downtime no longer includes stretches without measurements: a gap between a down and a later up measurement is shown as "No measurements", unknown results as "Unknown", and neither counts as downtime or uptime.
+- `Security` UDP scans run in a separate Nmap worker with only the `NET_RAW` capability; the web process gets no raw-socket rights, Docker `privileged` stays off and `no-new-privileges` stays on. Scans are admin-only and accept just a host, protocols and a scope, with no free Nmap arguments, ranges or host lists.
 
 ## [1.0.2] - 2026-11-03
 

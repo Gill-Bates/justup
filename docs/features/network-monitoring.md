@@ -1,0 +1,305 @@
+# Network monitoring with Nmap
+
+justUp! monitors network services without agents and without any change on the target.
+You enter a host, let [Nmap](https://nmap.org/) discover its ports, pick the ones to watch
+or type them in, and justUp! checks exactly those endpoints from then on.
+
+Nmap does the generic network work. justUp! does configuration, scheduling, status
+evaluation, history, alerts and the UI. There are no service-specific health checks for
+SMTP, FTP, SSH, DNS, Redis and so on.
+
+## What is checked
+
+| Check | How | Needs |
+| --- | --- | --- |
+| ICMP | The existing ping check (system `ping`), not Nmap. | `NET_RAW` (already required for ping) |
+| TCP | A plain connect to each configured port, no Nmap and no extra rights. | nothing |
+| UDP | A targeted Nmap UDP scan of exactly the configured ports. | The Nmap worker with `CAP_NET_RAW` |
+
+ICMP, TCP and UDP can be combined on one target and are independent of the HTTP and
+certificate checks. A port is identified by protocol **and** number: `TCP:53` and `UDP:53`
+are two endpoints with separate status and history.
+
+UDP is off for every target by default, including targets created before UDP support
+existed. Existing TCP ports and ping settings are unchanged by the upgrade.
+
+## Setting up ports
+
+There are two ways, and you can mix them. A scan is never required to create a target.
+
+### Automatic discovery
+
+In the target wizard and the target editor, **Scan ports** starts an Nmap scan of the
+target host with TCP, UDP or both and one of two scopes:
+
+| Scope | TCP ports | UDP ports |
+| --- | --- | --- |
+| Quick | 16 common ports (21, 22, 25, 53, 80, 110, 143, 443, 465, 587, 993, 995, 3306, 5432, 8080, 8443) | 9 common ports (53, 67, 68, 123, 161, 162, 500, 514, 1900) |
+| Extended | Quick plus 23, 111, 135, 139, 389, 445, 636, 1521, 2375, 27017 | Quick plus 69, 137, 138, 389, 4500, 5353 |
+
+There is no full 65,535-port scan, no NSE script, no OS fingerprinting and no traceroute.
+Discovery uses service detection (`-sV --version-light`) so the result table can show the
+service Nmap recognised.
+
+The scan runs as a background job. The page stays usable and shows an activity indicator,
+not a progress percentage, because Nmap gives no reliable progress. A scan can be
+cancelled; a cancelled or expired job never delivers late results.
+
+The result table lists protocol, port, service and state:
+
+- **Open** is a confirmed result. **Select all confirmed open ports** adds exactly these.
+- Uncertain UDP states (`open|filtered`, `filtered`, and similar) are shown as uncertain,
+  never as open, and are never selected automatically. You can still tick them yourself.
+- **Adopt selected ports** merges the choice into the TCP and UDP port fields without
+  duplicates and keeps ports you typed by hand. Nothing is stored until you save the form.
+
+Which service Nmap named (and whether it was identified by a probe or only guessed from the
+port table) is stored with the port when you save. The server takes this from its own
+completed scan job, not from the browser, so it cannot be forged by a client.
+
+### Manual configuration
+
+The TCP and UDP port fields accept single ports and comma-separated lists in the range
+1-65535. A manually entered port has no service name and is monitored like any other.
+
+## Status values
+
+Each endpoint has a **transport status**:
+
+| Value | Meaning |
+| --- | --- |
+| `PORT_UP` (`up`) | The port was reached (TCP connect succeeded, UDP state `open`). |
+| `PORT_DOWN` (`down`) | The port was confirmed unreachable (TCP refused or timed out after the retries, UDP state `closed` in two consecutive scans). |
+| `PORT_UNKNOWN` (`unknown`) | No reliable result: an uncertain UDP state, a failed scan engine, a stale or missing result. |
+
+The wire and database values are lower case; the UI shows `Up`, `Down` and `Unknown` with
+different icon shapes, so colour is never the only cue.
+
+The **service identity** is a separate dimension and never changes the transport status:
+
+| Value | Meaning |
+| --- | --- |
+| `SERVICE_IDENTIFIED` | A probe identified the service (name from an active Nmap probe). |
+| `SERVICE_UNKNOWN` | Not identified. A name that only comes from the port table (`nmap-services`) is shown as a hint and does **not** count as identified. Manual ports are unknown. |
+| `SERVICE_CHANGED` | A later explicit re-detection found a different service name or product than the stored one. A changed version string alone is a note, not a change. |
+
+A changed service never turns a port down and never raises a DOWN alert.
+
+!!! note "Open decision: re-detection"
+    The scheduler can compare a fresh service detection with the stored identity
+    (`SERVICE_CHANGED`), but no UI action, API route or schedule triggers that
+    detection yet. Today the identity comes from the discovery scan at set-up time.
+
+### Overall target status
+
+A target is `down` if at least one enabled endpoint is confirmed down. Otherwise it is
+`unknown` if at least one endpoint is unknown, otherwise `up`. Unknown endpoints do not
+cause DOWN alerts and do not send recovery messages. Endpoints that were measured keep
+their own status on the target page even when the target as a whole is `unknown`.
+
+## Uncertain UDP results
+
+UDP has no handshake. Silence can mean an open port that does not answer, a filtering
+firewall or a lost packet. Nmap reports this honestly, and justUp! maps the Nmap state
+like this (the original Nmap state is stored unchanged next to the status):
+
+| Nmap state | Status | Downtime |
+| --- | --- | --- |
+| `open` | `up` | no |
+| `closed` | `down`, once confirmed by two consecutive scans | yes, after confirmation |
+| `open\|filtered` | `unknown` | never |
+| `filtered` | `unknown` | never |
+| `closed\|filtered`, `unfiltered`, unknown state, port missing in the result | `unknown` | never |
+
+`open|filtered` is **never** treated as up and never as down. Typical open UDP ports of
+services that ignore Nmap's empty probe, such as many DNS or NTP servers, therefore often
+stay `unknown`. A single `closed` scan keeps the previous status (or `unknown`) until the
+next scan confirms it.
+
+A failure of the scan engine (worker not running, missing privileges, crash, invalid
+result, timeout) says nothing about the target. All UDP ports of that run become
+`unknown`, never `down`, and the scheduler carries on.
+
+## Downtime, gaps and unknown
+
+- **Downtime** counts only from confirmed `down` measurements. An outage ends at the next
+  `up` measurement; when measurements are missing in between, it ends at its last `down`
+  measurement. A gap is never downtime and never uptime.
+- A **gap** is a distance of more than three expected check intervals between two
+  measurements of the same endpoint (for example after a restart or a long pause).
+  UDP series are spaced by the UDP interval.
+- **Unknown** phases are neither downtime nor uptime. The downtime history of the target
+  page shows three kinds, told apart by text and icon: *Downtime*, *No measurements* and
+  *Unknown*. Only *Downtime* counts.
+- The uptime percentage is based on the measurements that exist. Gaps and unknown phases
+  carry no samples and are excluded from numerator and denominator.
+- Outages shorter than 60 s are treated as transient and not listed as downtime.
+- Endpoint history is kept per protocol and port. Disabled checks and removed ports create
+  no downtime.
+- Alerts follow the existing rules (cooldown, confirmation window). UDP needs two
+  consecutive `closed` scans before it can alert, and an unknown result resets the pending
+  confirmation, so single UDP timeouts do not flood your recipients. The alert text names
+  the failing endpoint (for example `udp:123, tcp:25`).
+
+## Intervals and limits
+
+| Item | Value |
+| --- | --- |
+| TCP check | Every target interval (5 s to 24 h), plain connect. |
+| UDP scan | Every `max(target interval, 300 s)`. A scan never overlaps the previous one of the same target; a skipped cycle is logged. |
+| UDP result age | A result older than two UDP intervals counts as `unknown`. |
+| UDP scan timeout | The smaller of 60 s and half the UDP interval (at least 5 s). |
+| Parallel UDP scans | 2 across all targets. A slow scan never delays the other checks of its target. |
+| Monitoring scan | Only the configured ports, no service detection, no extra ports. |
+| Discovery scan (API) | At most 128 ports; 90 s (Quick) or 180 s (Extended) timeout; 2 Nmap runs at once; 1 active scan per address; 4 active jobs per administrator and 16 in total. |
+| Scan job lifetime | 15 min, then `expired` for 5 more minutes, then removed. |
+| Rate limit | 10 scan starts per minute per IP and 3 per minute per user. |
+
+Service detection (`-sV`) runs only during discovery, never in a monitoring cycle.
+
+## Limits compared with application health checks
+
+An open port proves **transport reachability** and nothing more.
+
+- *Port up* means the operating system accepted the connection (TCP) or Nmap saw an
+  `open` answer (UDP). The application behind it can still be hung, misconfigured or
+  returning errors.
+- *Service identity* from Nmap is additional evidence of what answered when the port was
+  scanned. It is not a function test.
+- justUp! does not log in, send mail, resolve names or run queries. If you need that, use
+  the HTTP check or a dedicated probe next to this feature.
+- A middlebox, proxy or load balancer can accept connections on behalf of a dead service.
+- UDP results are inherently weaker than TCP results (see above).
+
+## Docker image and Nmap version
+
+- The image contains the **latest stable Nmap release at build time**. There is no
+  pinned version number in the repository; a new Nmap release means a new image build.
+  Betas, nightlies, Debian's `nmap` package and third-party downloads are not used, and
+  Nmap is not updated inside a running container.
+- The release workflow resolves the version once (`tools/nmap-release.py latest`),
+  downloads the source archive, verifies its PGP signature against a fixed Nmap signing-key
+  fingerprint and records the SHA-256 of the archive. A failed verification stops the build.
+  Both architectures are then built from that same version and archive hash, which the
+  Dockerfile checks again (`NMAP_VERSION`, `NMAP_SOURCE_SHA256`, both mandatory and part of
+  the BuildKit cache key, so an old cached binary can not be reused).
+- `linux/amd64` and `linux/arm64` are both **compiled natively from the verified source**
+  with identical configure options. The official x86-64 RPM is deliberately not used: it is
+  a statically linked vendor build with its own OpenSSL, which would make the two
+  architectures differ. Compiler and build tools exist only in a builder stage; the
+  runtime image gets the `nmap` binary and the four data files (`nmap-services`,
+  `nmap-service-probes`, `nmap-protocols`, `nmap-rpc`) through three explicit `COPY`
+  lines. There is no Zenmap, Ncat, Nping or NSE.
+- Each image carries build metadata in `/usr/share/doc/nmap/PROVENANCE.txt`:
+  `nmap_version`, `source_url`, `source_sha256`, `signing_key_fingerprint`,
+  `architecture`, `build_method` (`verified-source`), `binary_sha256` and
+  `runtime_dependencies`. Read it with:
+
+  ```bash
+  docker run --rm --entrypoint cat giiibates/justup:<version> /usr/share/doc/nmap/PROVENANCE.txt
+  ```
+
+- The release gates check, per architecture, that `nmap --version` equals the resolved
+  version, that the provenance matches, that TCP and UDP scans produce parseable XML, that
+  the worker runs with the Compose capability set and that both architectures report the
+  same version and source hash. See [Release image](../development/release-image.md).
+
+!!! warning "Not verified here"
+    The `linux/arm64` build and its tests run only in the release workflow on a native
+    arm64 runner; they were not run on the development host. Trivy's vulnerability scan
+    does not see the Nmap binary (it has no package database entry); it covers only the
+    base libraries.
+
+## Linux capabilities
+
+- UDP scans send raw packets and need `CAP_NET_RAW`. The web process (`uvicorn`) does **not**
+  get that capability and never starts Nmap.
+- In the Docker image, the entrypoint starts a separate **Nmap worker** under its own user
+  (`justup-nmap`, UID/GID 10001) with only `CAP_NET_RAW` as effective, permitted and ambient
+  capability. The web process talks to it over a Unix socket (`/run/justup/nmap.sock`).
+  If the worker dies, a small supervisor restarts it with growing delays and gives up
+  after 8 consecutive failures (the web server keeps running).
+- The Compose file keeps `cap_drop: ALL` and adds only `CHOWN`, `FOWNER`, `SETUID`,
+  `SETGID` and `NET_RAW`. `NET_RAW` was already needed for ping and traceroute.
+  `no-new-privileges` stays on and there is no `privileged: true`.
+- UDP scans run with Nmap's `--privileged` flag in a fixed argument list so Nmap uses the
+  capability instead of checking for UID 0. TCP needs no extra rights.
+- Without `NET_RAW` in the container, UDP scans fail with `permission_denied` and the UDP
+  ports show `unknown`.
+- Outside Docker (`python run.py`) justUp! starts its own unprivileged worker. TCP
+  discovery works there; UDP needs raw-socket rights that the process does not have.
+
+## Security and operations
+
+- **Only administrators** can start scans. Jobs belong to the administrator who started
+  them; other users get `404`.
+- **Authorized hosts only.** Scan only hosts you are allowed to scan. Port scans can
+  look like an attack to the target's owner and to intrusion detection.
+- The host passes the same validation as a check target (loopback, link-local and cloud
+  metadata addresses are blocked; private RFC 1918 ranges are allowed). The name is
+  resolved once and Nmap receives only the validated IP address, so DNS rebinding between
+  validation and scan is not possible.
+- **No free Nmap arguments.** The API accepts only a host, the protocols and the scope. It
+  rejects extra fields, ports, options, ranges, CIDR blocks and host lists. The command
+  line is built on the server from a fixed list and started without a shell.
+- Nmap's XML output is parsed with `defusedxml` (entities and external references
+  refused, 1 MB output cap). Nmap texts are shown as plain text, never as HTML.
+- Nmap's raw output and error text are not echoed into normal logs or API errors.
+- A scan-engine failure never crashes the application and never marks a port down.
+
+## Troubleshooting
+
+??? failure "Scan ports is disabled: the Nmap scan worker is unavailable"
+    The form shows the reason. Common causes: `nmap` is not installed (outside Docker:
+    `apt install nmap`), the worker is restarting, or it gave up after repeated failures.
+    Check the container log for the supervisor messages and restart the container. Ports can
+    still be entered by hand. The form re-checks when the page regains focus.
+
+??? failure "UDP scans report permission_denied"
+    The worker lacks `CAP_NET_RAW`. Keep `NET_RAW` in `cap_add` and do not remove it with
+    a stricter `cap_drop` or a custom security profile. Outside Docker, the process cannot
+    send raw packets.
+
+??? question "A UDP port shows Unknown"
+    Nmap saw `open|filtered`, `filtered` or no answer. This is expected for many UDP
+    services and is never treated as downtime. The target page shows the Nmap state next to
+    the status. If you need a definite answer, check the service with a protocol-aware tool
+    or add an HTTP check.
+
+??? question "A scan says busy (429)"
+    A scan for this host is already running, or the limits above are reached. Wait a
+    moment or cancel the running scan.
+
+??? question "The scan timed out or produced too much output"
+    Use the Quick scope, scan only TCP or only UDP, or enter the ports manually. UDP
+    scans are slow by design.
+
+??? question "The scan result expired"
+    Results are kept for 15 minutes. Scan again, then adopt the ports before saving.
+
+??? question "The downtime list shows 'No measurements' or 'Unknown'"
+    The scheduler was paused or restarted, a scan could not run, or the result was
+    uncertain. These periods are neither downtime nor uptime.
+
+??? question "Image check: which Nmap version is inside?"
+    Run the `docker run ... cat /usr/share/doc/nmap/PROVENANCE.txt` command above, or
+    `docker exec <container> nmap --version`.
+
+## Nmap licence
+
+Nmap is distributed under the [Nmap Public Source License (NPSL)](https://nmap.org/npsl/)
+and is a registered trademark of Nmap Software LLC. Nmap is **not** covered by justUp!'s MIT
+licence.
+
+The justUp! image redistributes the unmodified upstream Nmap build described above. The
+licence text and a notice are included in the image in `/usr/share/doc/nmap/LICENSE` and
+`/usr/share/doc/nmap/NOTICE.txt`. The notice names the exact release and its upstream
+source archive, for example `https://nmap.org/dist/nmap-<version>.tar.bz2`; the
+`source_url` and `source_sha256` in `PROVENANCE.txt` identify the same archive.
+The build applies no patches, so the source offered by Nmap is the corresponding source.
+
+!!! note "Open decision"
+    The licence gate for redistributing Nmap in the public image was cleared by the
+    project owner. Whether the in-image notice plus the upstream source link is enough for
+    the project's own source-availability policy (for example mirroring the archive next
+    to the image) is not decided here.

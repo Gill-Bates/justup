@@ -67,6 +67,12 @@ after 10 s. After a hard kill, SQLite recovers its WAL on the next start.
 `ping` and `mtr` need `cap_net_raw`. The image sets it on the binaries, and the
 Compose file adds `NET_RAW` back to the capability set.
 
+## UDP scans and the Nmap worker
+
+UDP monitoring and port discovery use Nmap, which is built into the image. A separate worker
+process holds `NET_RAW` for it; the web process does not. See
+[Network monitoring with Nmap](../features/network-monitoring.md#linux-capabilities).
+
 ## Container hardening
 
 - The entrypoint starts as root only to set up `PUID`/`PGID` and the data
