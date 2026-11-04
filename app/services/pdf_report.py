@@ -85,6 +85,7 @@ from app.services.traceroute_geo import (
     mtr_hops_to_geo_points,
 )
 from app.utils.availability_rules import MIN_DOWNTIME_SECONDS, effective_interval_seconds, measured_outages
+from app.utils.cert_target import resolve_cert_target
 from app.utils.ssrf import redact_url
 from app.utils.status_palette import STATUS_PALETTE
 from app.utils.tls_model import Check, ScanStatus, TlsScanResult, Verdict

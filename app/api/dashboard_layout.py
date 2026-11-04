@@ -111,13 +111,9 @@ def _availability_seconds(points: list[dict], since: datetime, until: datetime, 
         start = parse_utc(point["ts"])
         if start is None or point["up"] not in (0, 1):
             continue
-        end = (
-            parse_utc(points[index + 1]["ts"])
-            if index + 1 < len(points)
-            else min(until, start + timedelta(seconds=stale_after))
-        )
-        if end is None:
-            continue
+        # A sample only vouches for stale_after seconds, however late the next one arrives.
+        next_ts = parse_utc(points[index + 1]["ts"]) if index + 1 < len(points) else None
+        end = min(next_ts or until, start + timedelta(seconds=stale_after))
         duration = max(0.0, (min(until, end) - max(since, start)).total_seconds())
         known += duration
         up += duration * point["up"]

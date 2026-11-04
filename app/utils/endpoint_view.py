@@ -85,6 +85,7 @@ def _entry(
     checked_at: Any = None,
     last_up_at: Any = None,
     stored: Mapping[str, Any] | None = None,
+    measured: bool = True,
 ) -> dict[str, Any]:
     label, icon, variant = _STATUS_PRESENTATION[status]
     service, service_note = service_text(stored)
@@ -96,6 +97,8 @@ def _entry(
         "port": port,
         "name": "ICMP" if kind == "icmp" else f"{str(protocol).upper()} {port}",
         "status": status,
+        # False only while the check is configured but no measurement exists yet ("waiting").
+        "measured": measured,
         "status_label": label,
         "status_icon": icon,
         "status_variant": variant,
@@ -126,6 +129,7 @@ def build_endpoint_views(target: Mapping[str, Any], stored_ports: Iterable[Mappi
                 protocol=None,
                 port=None,
                 status=status,
+                measured=bool(checked) or status != STATUS_UNKNOWN,
                 checked_at=checked,
                 # ICMP keeps no history column: the last success is only known while the host answers.
                 last_up_at=checked if status == STATUS_UP else None,
@@ -135,13 +139,18 @@ def build_endpoint_views(target: Mapping[str, Any], stored_ports: Iterable[Mappi
     if _get(target, "enable_tcp_connect"):
         for port in _ports(_get(target, "tcp_ports"), default=[80]):
             row = stored.get(("tcp", port))
-            raw = row["status"] if row else legacy.get(str(port))
+            # A row that was never written (migration 7 seeds it empty) defers to the status cache the charts agree with.
+            if row and row.get("checked_at"):
+                raw = row["status"]
+            else:
+                raw = legacy.get(str(port)) or (row["status"] if row else None)
             views.append(
                 _entry(
                     kind="port",
                     protocol="tcp",
                     port=port,
                     status=normalise_status(raw),
+                    measured=bool((row and row.get("checked_at")) or legacy.get(str(port))),
                     checked_at=row["checked_at"] if row else None,
                     last_up_at=row["last_up_at"] if row else None,
                     stored=row,
@@ -156,6 +165,7 @@ def build_endpoint_views(target: Mapping[str, Any], stored_ports: Iterable[Mappi
                     protocol="udp",
                     port=port,
                     status=normalise_status(row["status"] if row else None),
+                    measured=bool(row and row.get("checked_at")),
                     checked_at=row["checked_at"] if row else None,
                     last_up_at=row["last_up_at"] if row else None,
                     stored=row,

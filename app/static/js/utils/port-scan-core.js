@@ -115,7 +115,8 @@
 		invalid_ports: 'The scan was refused because of invalid ports.',
 		output_limit: 'The scan produced more output than allowed and was stopped.',
 		process_failed: 'The scan process failed.',
-		invalid_xml: 'The scan result could not be read.'
+		invalid_xml: 'The scan result could not be read.',
+		forbidden: 'Only administrators can scan ports. Sign in again or ask an administrator.'
 	};
 
 	/**
@@ -134,7 +135,7 @@
 			const code = job.error?.code;
 			const fallback = typeof job.error?.message === 'string' && job.error.message ? job.error.message : 'The scan failed.';
 			return {
-				kind: 'failed', tone: 'error', unavailable: code === 'unavailable',
+				kind: 'failed', tone: 'error', unavailable: code === 'unavailable', reason: fallback,
 				message: `${ERROR_TEXT[code] || fallback} You can still enter ports manually.`
 			};
 		}
@@ -163,7 +164,10 @@
 	function describeRequestError(error) {
 		const code = error && error.code;
 		const message = ERROR_TEXT[code] || (error && error.message) || 'The scan request failed.';
-		return { kind: 'failed', tone: 'error', unavailable: code === 'unavailable', message: `${message} You can still enter ports manually.` };
+		return {
+			kind: 'failed', tone: 'error', unavailable: code === 'unavailable', reason: error && error.message,
+			message: `${message} You can still enter ports manually.`
+		};
 	}
 
 	/** Protocols to scan: the active checks, or TCP when neither is on yet. */

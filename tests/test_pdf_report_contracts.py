@@ -464,7 +464,7 @@ def test_pdf_tls_scan_deadline_leaves_time_before_the_job_timeout(monkeypatch):
 def test_get_ssl_data_uses_the_shared_certificate_target_resolution(monkeypatch, fields, expected):
     calls = []
 
-    def scan(target, **kwargs):
+    def scan(target, **_kwargs):
         calls.append(target)
         return _tls_result()
 

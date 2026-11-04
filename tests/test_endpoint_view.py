@@ -72,7 +72,9 @@ def render(rel: str, **context) -> str:
 
 
 def test_icmp_is_listed_apart_and_tcp_and_udp_are_told_apart_by_protocol() -> None:
-    views = build_endpoint_views(target(tcp_ports="53", udp_ports="53"), [stored("tcp", 53, "up"), stored("udp", 53, "down")])
+    views = build_endpoint_views(
+        target(tcp_ports="53", udp_ports="53"), [stored("tcp", 53, "up"), stored("udp", 53, "down")]
+    )
     assert [(v["kind"], v["name"], v["status"]) for v in views] == [
         ("icmp", "ICMP", "up"),
         ("port", "TCP 53", "up"),
@@ -146,7 +148,9 @@ def test_status_helper_keeps_measured_up_checks_while_the_overall_status_is_unkn
 
 
 def endpoint_table(html: str) -> str:
-    match = re.search(r'<table[^>]*aria-label="[^"]*">.*?</table>|<section[^>]*network-endpoints.*?</section>', html, re.S)
+    match = re.search(
+        r'<table[^>]*aria-label="[^"]*">.*?</table>|<section[^>]*network-endpoints.*?</section>', html, re.DOTALL
+    )
     assert match, "endpoint table missing"
     return match.group(0)
 
@@ -162,7 +166,7 @@ def test_detail_endpoint_table_lists_icmp_tcp_and_udp_with_distinct_unknown_and_
     t["endpoints"] = build_endpoint_views(t, t["network_ports"])
     html = render("fragments/target_detail/info_cards.html", target=t, user={"is_admin": True})
     table = endpoint_table(html)
-    rows = {m.group(1): m.group(0) for m in re.finditer(r'<tr[^>]*data-endpoint="([^"]+)".*?</tr>', table, re.S)}
+    rows = {m.group(1): m.group(0) for m in re.finditer(r'<tr[^>]*data-endpoint="([^"]+)".*?</tr>', table, re.DOTALL)}
     assert list(rows) == ["icmp", "tcp:25", "tcp:587", "udp:53", "udp:161"]
     down, unknown = rows["tcp:587"], rows["udp:161"]
     assert "Down" in down and "Unknown" not in down
@@ -180,9 +184,11 @@ def test_every_enabled_endpoint_has_a_status_badge_with_text_for_unknown() -> No
     t["network_ports"] = [stored("udp", 161, "unknown", raw_state="open|filtered")]
     t["endpoints"] = build_endpoint_views(t, t["network_ports"])
     html = render("fragments/target_detail/info_cards.html", target=t, user={})
-    badges = re.search(r'<div class="ju-badges target-kpi-badges">(.*?)</div>', html, re.S).group(1)
+    badges = re.search(r'<div class="ju-badges target-kpi-badges">(.*?)</div>', html, re.DOTALL).group(1)
     assert "UDP:161" in badges and "TCP:25" in badges
-    udp161 = re.search(r"<span[^>]*>(?:(?!</span>\s*<span class=\"badge).)*?UDP:161.*?</span>\s*</span>", badges, re.S)
+    udp161 = re.search(
+        r"<span[^>]*>(?:(?!</span>\s*<span class=\"badge).)*?UDP:161.*?</span>\s*</span>", badges, re.DOTALL
+    )
     assert udp161 and "Unknown" in udp161.group(0)
 
 
@@ -201,8 +207,11 @@ def test_dashboard_table_shows_endpoint_status_with_text_not_only_colour() -> No
         total=1,
         show_all=False,
     )
+
     def badge(label: str) -> str:
-        return re.search(rf'<span class="badge[^>]*>(?:(?!<span class="badge).)*?{label}.*?</span></span>', html, re.S).group(0)
+        return re.search(
+            rf'<span class="badge[^>]*>(?:(?!<span class="badge).)*?{label}.*?</span></span>', html, re.DOTALL
+        ).group(0)
 
     down, unknown = badge("TCP:25"), badge("UDP:161")
     assert "Down" in down and "Unknown" in unknown
@@ -230,10 +239,114 @@ def test_downtime_history_has_three_separate_presentations() -> None:
         {"kind": "unknown", "start": start, "end": end, "duration_seconds": 1800, "services": ["UDP:161"]},
     ]
     html = render("fragments/downtime_history.html", periods=items, has_data=True, use_utc=True, range_label="30d")
-    entries = {m.group(1): m.group(0) for m in re.finditer(r'<li class="downtime-item downtime-item--(\w+)[^"]*".*?</li>', html, re.S)}
+    entries = {
+        m.group(1): m.group(0)
+        for m in re.finditer(r'<li class="downtime-item downtime-item--(\w+)[^"]*".*?</li>', html, re.DOTALL)
+    }
     assert set(entries) == {"down", "gap", "unknown"}
     assert "Downtime" in entries["down"] and "cancel" in entries["down"]
     assert "No measurements" in entries["gap"] and "timer_off" in entries["gap"]
     assert "Unknown" in entries["unknown"] and "help" in entries["unknown"]
     assert "not counted as downtime" in entries["gap"] and "not counted as downtime" in entries["unknown"]
     assert "Downtime" not in entries["gap"].replace("not counted as downtime", "")
+
+
+def _endpoint_card(t: dict) -> str:
+    t["endpoints"] = build_endpoint_views(t, t.get("network_ports", []))
+    return endpoint_table(render("fragments/target_detail/info_cards.html", target=t, user={}))
+
+
+def _tcp25(**overrides) -> dict:
+    return target(enable_ping=False, enable_udp_scan=False, tcp_ports="25", **overrides)
+
+
+def test_detail_view_lists_the_tcp_endpoint_of_a_target_without_port_rows(tmp_path) -> None:
+    # A target saved before the port table existed has no rows; the card still lists its endpoint.
+    from app.api import frontend
+    from app.db import sqlite as sqlite_db
+
+    conn = sqlite_db.connect(tmp_path / "db" / "justup.db")
+    sqlite_db.init_schema(conn)
+    try:
+        tid = sqlite_db.create_target(
+            conn,
+            {
+                "name": "mail",
+                "host": "mail.example.org",
+                "interval_seconds": 60,
+                "retention_days": 30,
+                "enable_tcp_connect": 1,
+                "tcp_ports": "25",
+            },
+        )
+        view = frontend._target_detail_view(conn, sqlite_db.get_target(conn, tid), tid)
+    finally:
+        sqlite_db.close_connection(conn)
+    html = render("fragments/target_detail/info_cards.html", target=view, user={})
+    assert "No port measurements yet" not in html
+    assert re.search(r'data-endpoint="tcp:25"', html)
+
+
+def test_unmeasured_endpoint_waits_for_its_first_measurement_instead_of_looking_empty() -> None:
+    t = _tcp25()
+    t["network_ports"] = [stored("tcp", 25, None, checked_at=None)]
+    card = _endpoint_card(t)
+    assert "TCP 25" in card and "Waiting for first measurement" in card
+    assert "No port measurements yet" not in card
+
+
+def test_measured_endpoint_shows_its_state_and_no_waiting_text() -> None:
+    t = _tcp25()
+    t["network_ports"] = [stored("tcp", 25, "up")]
+    card = _endpoint_card(t)
+    assert "Up" in card and "Waiting for first measurement" not in card
+
+
+def test_measured_udp_unknown_stays_unknown_and_is_not_waiting() -> None:
+    t = target(enable_ping=False, enable_tcp_connect=False, udp_ports="161")
+    t["network_ports"] = [stored("udp", 161, "unknown", raw_state="open|filtered")]
+    card = _endpoint_card(t)
+    assert "Unknown" in card and "Waiting for first measurement" not in card
+
+
+def test_legacy_target_without_port_rows_takes_its_state_from_the_tcp_status_cache() -> None:
+    t = _tcp25(tcp_port_status={"25": "up"})
+    card = _endpoint_card(t)
+    assert "Up" in card and "Waiting for first measurement" not in card
+
+
+def test_unmeasured_port_row_defers_to_the_tcp_status_cache() -> None:
+    # Migration 7 creates the row empty; the cache holds the pre-upgrade measurement the charts also show.
+    t = _tcp25(tcp_port_status={"25": "down"})
+    t["network_ports"] = [stored("tcp", 25, None, checked_at=None)]
+    [view] = build_endpoint_views(t, t["network_ports"])
+    assert (view["status"], view["measured"]) == ("down", True)
+
+
+def test_target_without_a_port_check_has_no_endpoint_card() -> None:
+    t = target(enable_ping=False, enable_tcp_connect=False, enable_udp_scan=False)
+    t["endpoints"] = build_endpoint_views(t, [])
+    assert "target-network-endpoints-title" not in render("fragments/target_detail/info_cards.html", target=t, user={})
+
+
+def test_detail_view_takes_an_unmeasured_tcp_port_state_from_the_series_the_charts_plot(tmp_path) -> None:
+    # The Response time chart plots tcp_up_25; the endpoint card must not say "waiting" next to it.
+    from datetime import UTC, datetime
+
+    from app.api import frontend
+    from app.db import sqlite as sqlite_db
+    from app.db.tsdb import append_point
+
+    conn = sqlite_db.connect(tmp_path / "db" / "justup.db")
+    sqlite_db.init_schema(conn)
+    try:
+        tid = sqlite_db.create_target(
+            conn,
+            {"name": "mail", "host": "mail.example.org", "interval_seconds": 60, "retention_days": 30, "enable_tcp_connect": 1, "tcp_ports": "25,587"},
+        )
+        append_point(tmp_path / "tsdb", target_id=tid, metric="tcp_up_25", value=1, retention_days=30, at=datetime.now(UTC))
+        view = frontend._target_detail_view(conn, sqlite_db.get_target(conn, tid), tid, tsdb_dir=tmp_path / "tsdb")
+    finally:
+        sqlite_db.close_connection(conn)
+    states = {v["key"]: (v["status"], v["measured"]) for v in view["endpoints"]}
+    assert states == {"tcp:25": ("up", True), "tcp:587": ("unknown", False)}

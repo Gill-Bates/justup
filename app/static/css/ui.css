@@ -1532,17 +1532,21 @@ textarea.smtp-editor-frame {
 .ju-state-badge {
 	gap: 0.2rem;
 }
+
 .ju-state-badge--unknown {
-	border: 1px dashed currentColor;
+	border: 1px dashed currentcolor;
 }
+
 @media (forced-colors: active) {
 	.ju-state-badge {
 		border: 1px solid CanvasText;
 	}
+
 	.ju-state-badge--unknown {
 		border-style: dashed;
 	}
 }
+
 /* Compact badges in tables */
 .table .badge {
 	font-size: 0.7rem;

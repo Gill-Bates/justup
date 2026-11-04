@@ -94,7 +94,7 @@
 </section>
 
 {% if target.endpoints|default([]) %}
-<section class="card target-panel" aria-labelledby="target-network-endpoints-title">
+<section class="card target-panel target-endpoints-card" aria-labelledby="target-network-endpoints-title">
 	<div class="card-header" id="target-network-endpoints-title">Network endpoints</div>
 	<div class="card-body">
 		<div class="table-responsive" role="region" tabindex="0" aria-label="Network endpoint status">
@@ -106,6 +106,7 @@
 					<th scope="row">{{ endpoint.name }}{% if endpoint.kind == 'icmp' %} <span class="text-body-secondary fw-normal">(ping)</span>{% endif %}</th>
 					<td>
 						{{ state_pill(endpoint.status) }}
+						{% if not endpoint.measured %}<div class="small text-body-secondary">Waiting for first measurement</div>{% endif %}
 						{% if endpoint.state_note %}<div class="small text-body-secondary">Nmap: {{ endpoint.state_note }}</div>{% endif %}
 					</td>
 					<td>{% if endpoint.service %}{{ endpoint.service }}{% if endpoint.service_note %} <span class="small text-body-secondary">({{ endpoint.service_note }})</span>{% endif %}{% else %}<span class="text-body-secondary">&mdash;<span class="visually-hidden">not identified</span></span>{% endif %}</td>

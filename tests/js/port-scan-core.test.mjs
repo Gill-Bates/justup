@@ -36,7 +36,7 @@ test("the same port number on TCP and UDP stays two ports", () => {
   assert.deepEqual([parsed.tcp, parsed.udp], [[53], [53]]);
 });
 test("merging keeps existing manual ports, adds new ones and never duplicates", () => {
-  assert.deepEqual(core.mergePorts([443, 22], [22, 8080, 25]), [22, 25, 443, 8080]);
+  assert.deepEqual(plain(core.mergePorts([443, 22], [22, 8080, 25])), [22, 25, 443, 8080]);
   assert.equal(core.formatPorts(core.mergePorts([], [])), "");
 });
 test("only open is confirmed; open|filtered and the other UDP states are uncertain", () => {
@@ -57,7 +57,7 @@ test("scan rows are distinct, sorted by protocol and port, and malformed entries
     { protocol: "tcp", port: "22", state: "open" },
     { protocol: "udp", port: 53, state: "open" }
   ]));
-  assert.deepEqual(rows.map(row => `${row.protocol}:${row.port}`), ["tcp:443", "udp:53", "udp:161"]);
+  assert.deepEqual(plain(rows.map(row => `${row.protocol}:${row.port}`)), ["tcp:443", "udp:53", "udp:161"]);
   assert.equal(rows[0].service, "https · nginx · 1.2");
   assert.equal(rows[2].service, "snmp (table hint)");
   assert.equal(rows[1].service, "Unknown");
@@ -72,7 +72,7 @@ test("confirmedOpen selects exactly the confirmed rows", () => {
     { protocol: "udp", port: 53, state: "open" },
     { protocol: "udp", port: 161, state: "open|filtered" }
   ]));
-  assert.deepEqual(core.confirmedOpen(rows).map(row => `${row.protocol}:${row.port}`), ["tcp:22", "udp:53"]);
+  assert.deepEqual(plain(core.confirmedOpen(rows).map(row => `${row.protocol}:${row.port}`)), ["tcp:22", "udp:53"]);
 });
 test("job states: queued and running show activity, terminal states say what happened", () => {
   assert.equal(core.describeJob(job("queued"), ["tcp"]).kind, "running");
@@ -83,7 +83,7 @@ test("job states: queued and running show activity, terminal states say what hap
   assert.equal(core.describeJob(null, ["tcp"]).kind, "failed");
 });
 test("each error code has a sensible message and manual entry stays offered", () => {
-  for (const code of ["unavailable", "busy", "timeout", "permission_denied", "invalid_host", "process_failed", "output_limit", "invalid_xml"]) {
+  for (const code of ["unavailable", "busy", "timeout", "permission_denied", "invalid_host", "process_failed", "output_limit", "invalid_xml", "forbidden"]) {
     const outcome = core.describeJob(job("failed", { error: { code, message: "server text" } }), ["tcp"]);
     assert.equal(outcome.kind, "failed");
     assert.equal(outcome.tone, "error");
@@ -114,6 +114,7 @@ test("UDP without a confirmed open port says so and never calls uncertain ports 
 test("request errors map to the same messages and flag a missing worker", () => {
   const unavailable = core.describeRequestError(Object.assign(new Error("x"), { code: "unavailable" }));
   assert.equal(unavailable.unavailable, true);
+  assert.equal(unavailable.reason, "x");
   assert.match(core.describeRequestError(new Error("Scan request failed (500).")).message, /500/);
 });
 test("the scanned protocols follow the active checks, TCP when none is on", () => {

@@ -707,12 +707,14 @@ details[open]>summary .target-details-chevron {
 	border-style: dashed;
 	background: transparent;
 }
+
 .downtime-item--unknown .downtime-marker {
 	border-color: var(--bs-secondary-color);
 	border-radius: 0.1rem;
 	background: transparent;
 	transform: rotate(45deg) scale(0.85);
 }
+
 .downtime-kind {
 	display: flex;
 	align-items: center;
@@ -720,24 +722,30 @@ details[open]>summary .target-details-chevron {
 	margin-bottom: 0.15rem;
 	font-size: 0.8125rem;
 }
+
 .downtime-kind .material-icons {
 	font-size: 1rem;
 }
+
 .downtime-kind--down {
 	color: var(--td-bad);
 }
+
 .downtime-kind--gap,
 .downtime-kind--unknown {
 	color: var(--bs-secondary-color);
 }
+
 .downtime-note {
 	margin-top: 0.15rem;
 	color: var(--bs-secondary-color);
 	font-size: 0.8125rem;
 }
+
 .downtime-summary-note {
 	font-size: 0.8125rem;
 }
+
 .downtime-times {
 	display: flex;
 	align-items: center;
@@ -1322,8 +1330,25 @@ details[open]>summary .target-details-chevron {
 	}
 
 	#target-dashboard-pane.active #target-info-cards>.target-kpi-row,
+	#target-dashboard-pane.active #target-info-cards>.target-endpoints-card,
 	#target-dashboard-pane.active>.target-toolbar {
 		grid-column: 1 / -1;
+	}
+
+	/* The endpoint card is a row of its own: without it the toolbar would land in the 1fr row and
+	   stretch into an empty band. A long port list scrolls inside the card instead of growing it. */
+	#target-dashboard-pane.active:has(.target-endpoints-card) {
+		grid-template-rows: auto auto auto minmax(24rem, 1fr);
+	}
+
+	#target-dashboard-pane.active .target-endpoints-card .table-responsive {
+		max-height: 9rem;
+		overflow-y: auto;
+	}
+
+	/* Floor grows by the card at its capped height so the footer is still never overlapped. */
+	.target-detail-page:has(#target-dashboard-pane.active .target-endpoints-card) {
+		min-height: calc(50rem + 14rem);
 	}
 
 	#target-dashboard-pane.active .target-kpi-card .card-body {

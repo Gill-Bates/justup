@@ -278,7 +278,9 @@ def test_uptime_summary_excludes_unknown_time_and_disabled_targets(env, monkeypa
     alice = env["alice"]
     response = alice.client.get(URL + "/uptime", headers={"Authorization": f"Bearer {alice.token}"})
     assert response.status_code == 200
-    assert response.json() == {"uptime_percent": 100, "coverage_percent": 50}
+    # A sample vouches only for stale_after (3 intervals = 180 s), not for the 12 h until the next one.
+    body = response.json()
+    assert body["uptime_percent"] == 100 and body["coverage_percent"] == pytest.approx(180 / 86400 * 100)
     assert len(calls) == 1
     assert calls[0]["target_id"] == 1
     assert calls[0]["enabled_services"] == {"HTTP"}
@@ -292,3 +294,30 @@ def test_uptime_summary_without_measurements_is_unknown(env, monkeypatch):
     response = alice.client.get(URL + "/uptime", headers={"Authorization": f"Bearer {alice.token}"})
     assert response.status_code == 200
     assert response.json() == {"uptime_percent": None, "coverage_percent": 0}
+
+
+def _avail(points, *, stale_after=100.0, minutes=10):
+    from datetime import UTC, datetime, timedelta
+
+    from app.api.dashboard_layout import _availability_seconds
+
+    until = datetime(2026, 1, 1, 12, minutes, tzinfo=UTC)
+    since = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+    return _availability_seconds(
+        [{"ts": (since + timedelta(seconds=s)).isoformat(), "up": up} for s, up in points], since, until, stale_after
+    )
+
+
+def test_availability_gap_longer_than_stale_after_is_unknown_not_carried_forward():
+    # up at 0s, next sample only at 400s: only stale_after (100s) of the gap is known
+    assert _avail([(0, 1), (400, 0)]) == (100.0, 100.0 + 100.0)
+
+
+def test_availability_transition_within_stale_after_uses_the_next_timestamp():
+    assert _avail([(0, 1), (60, 0), (120, 1)], minutes=3) == (60.0 + 60.0, 60.0 + 60.0 + 60.0)
+
+
+def test_availability_invalid_state_and_window_bounds():
+    assert _avail([(0, 2), (30, 1)], stale_after=1000.0, minutes=1) == (30.0, 30.0)
+    assert _avail([(0, 1)], stale_after=1000.0, minutes=1) == (60.0, 60.0)
+    assert _avail([], minutes=1) == (0.0, 0.0)

@@ -857,6 +857,8 @@
 
 		function updateHiddenInput() {
 			hiddenInput.value = ports.join(',');
+			// Lets the port picker's selected-ports list follow tag edits ("change" would re-initialise this input).
+			hiddenInput.dispatchEvent(new Event('input', { bubbles: true }));
 		}
 
 		function addPort(value) {
@@ -1363,5 +1365,6 @@
 
 	loadAlertUsersCheckboxes();
 </script>
+<script src="/static/js/utils/port-scan-core.js" defer></script>
 <script src="/static/js/network-scan-picker.js" defer></script>
 {% endblock %}

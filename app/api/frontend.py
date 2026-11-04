@@ -472,7 +472,24 @@ def target_new_page(request: Request, conn=Depends(get_conn)):
     )
 
 
-def _target_detail_view(conn, row, target_id: int) -> dict:
+def _fill_tcp_status_from_series(target: dict, tsdb_dir) -> None:
+    """Give a TCP port without any stored state the latest ``tcp_up_<port>`` point, the series the charts plot."""
+    stored = {(p["protocol"], p["port"]): p for p in target["network_ports"] if p.get("checked_at")}
+    cache = dict(target.get("tcp_port_status") or {})
+    try:
+        ports = parse_port_list(str(target.get("tcp_ports") or "")) or [80]
+    except ValueError:
+        return
+    for port in ports:
+        if ("tcp", port) in stored or cache.get(str(port)):
+            continue
+        points = tsdb_db.query_latest(tsdb_dir, target_id=target["id"], metric=f"tcp_up_{port}", count=1)
+        if points and points[-1].value in (0, 1):
+            cache[str(port)] = "up" if points[-1].value == 1 else "down"
+    target["tcp_port_status"] = cache
+
+
+def _target_detail_view(conn, row, target_id: int, tsdb_dir=None) -> dict:
     """Target row merged with its cached status, as the detail page and its KPI fragment render it."""
     target = _row_to_dict(row)
     cached = sqlite_db.get_target_status(conn, target_id)
@@ -483,6 +500,8 @@ def _target_detail_view(conn, row, target_id: int) -> dict:
         target.update(get_status_defaults())
         target["overall_status"] = "unknown" if bool(row["is_enabled"]) else "disabled"
     target["network_ports"] = sqlite_db.list_network_ports(conn, target_id)
+    if tsdb_dir is not None and target.get("enable_tcp_connect"):
+        _fill_tcp_status_from_series(target, tsdb_dir)
     target["endpoints"] = build_endpoint_views(target, target["network_ports"])
     return target
 
@@ -503,7 +522,7 @@ def fragment_target_info_cards(target_id: int, request: Request, conn=Depends(ge
     response = templates.TemplateResponse(
         request,
         "fragments/target_detail/info_cards.html",
-        {"user": user, "target": _target_detail_view(conn, row, target_id)},
+        {"user": user, "target": _target_detail_view(conn, row, target_id, get_tsdb_dir(request))},
     )
     response.headers["Cache-Control"] = "no-store"
     return response
@@ -518,7 +537,7 @@ def target_detail_page(target_id: int, request: Request, conn=Depends(get_conn))
     row = sqlite_db.get_target(conn, target_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Target not found")
-    target = _target_detail_view(conn, row, target_id)
+    target = _target_detail_view(conn, row, target_id, get_tsdb_dir(request))
 
     return templates.TemplateResponse(
         request,

@@ -448,6 +448,7 @@
 
 .dashboard-monitor-metrics {
 	display: grid;
+
 	/* A column is at least as wide as its longest word, so labels wrap between words, not inside one. */
 	grid-template-columns: repeat(3, minmax(min-content, 1fr));
 	gap: var(--ui-space-tile-compact);
