@@ -17,6 +17,7 @@ from starlette.concurrency import run_in_threadpool
 
 from ..db import sqlite as sqlite_db
 from ..db import tsdb as tsdb_db
+from ..utils.availability_rules import downtime_series
 from ..utils.deps import get_conn, get_tsdb_dir
 from ..utils.metric_limits import choose_display_bucket_seconds
 from ..utils.time import assume_utc, utcnow
@@ -221,44 +222,33 @@ async def get_all_uptime(
     return {"targets": response_data}
 
 
-# Incidents shorter than this are transient check failures, not downtime.
-MIN_DOWNTIME_SECONDS = 60
-# Raw points read per series for the 24h overview (covers a 1s interval).
-DOWNTIME_MAX_POINTS = 100_000
 # Window used by /dashboard/downtime when the caller sends no ``since``.
 DOWNTIME_DEFAULT_WINDOW = timedelta(hours=24)
+# Periods read per service; far above what a day of 5 s checks can produce.
+DOWNTIME_MAX_PERIODS = 10_000
+# Dashboard column key of a service group: the aggregate metric name the widget has always used.
+_SERVICE_KEYS = (("http_up", "HTTP"), ("ping_up", "Ping"), ("tcp_up", "TCP:"), ("udp_up", "UDP:"))
 
 
-def _summarize_downtime(points, *, now: datetime, stale_after: float) -> dict:
-    """Sum down periods (value 0 until the next up point) of one binary series.
+def _service_groups(target) -> dict[str, list[tuple[str, str]]]:
+    """Currently enabled series of a target, grouped by dashboard service key."""
+    groups: dict[str, list[tuple[str, str]]] = {}
+    for metric, label in downtime_series(target):
+        for key, prefix in _SERVICE_KEYS:
+            if label == prefix or (prefix.endswith(":") and label.startswith(prefix)):
+                groups.setdefault(key, []).append((metric, label))
+                break
+    return groups
 
-    A series that ends down is ongoing only while its last point is fresh; a stale one is
-    cut off at the last observed point so a stopped scheduler cannot grow the downtime.
-    """
-    total = 0.0
-    incidents = 0
-    down_since: datetime | None = None
-    last_ts: datetime | None = None
-    for pt in points:
-        last_ts = pt.ts
-        if pt.value == 0:
-            if down_since is None:
-                down_since = pt.ts
-        elif down_since is not None:
-            duration = (pt.ts - down_since).total_seconds()
-            if duration >= MIN_DOWNTIME_SECONDS:
-                total += duration
-                incidents += 1
-            down_since = None
-    ongoing = False
-    if down_since is not None and last_ts is not None:
-        ongoing = (now - last_ts).total_seconds() <= stale_after
-        end = now if ongoing else last_ts
-        duration = (end - down_since).total_seconds()
-        if duration >= MIN_DOWNTIME_SECONDS:
-            total += duration
-            incidents += 1
-    return {"downtime_seconds": round(total), "incidents": incidents, "ongoing": ongoing}
+
+def _summarize_periods(periods, *, now: datetime) -> dict:
+    """Total of the downtime periods of one service; an ongoing period runs up to ``now``."""
+    total = sum(((p.end or now) - p.start).total_seconds() for p in periods)
+    return {
+        "downtime_seconds": round(total),
+        "incidents": len(periods),
+        "ongoing": any(p.end is None for p in periods),
+    }
 
 
 @router.get("/dashboard/downtime")
@@ -286,40 +276,35 @@ async def get_downtime_targets(
     # Semaphore limits concurrent TSDB I/O to prevent resource exhaustion
     sem = asyncio.Semaphore(MAX_CONCURRENT_DASHBOARD_QUERIES)
 
-    async def summarize(target_id: int, metric: str, stale_after: float):
+    async def summarize(target_id: int, series: list[tuple[str, str]], interval_seconds: int):
         async with sem:
-            points = await run_in_threadpool(
-                tsdb_db.query,
+            periods = await run_in_threadpool(
+                tsdb_db.query_downtime_periods,
                 tsdb_dir,
                 target_id=target_id,
-                metric=metric,
                 since=since,
                 until=until,
-                limit=DOWNTIME_MAX_POINTS,
-                latest=False,
+                limit=DOWNTIME_MAX_PERIODS,
+                series=series,
+                check_interval_seconds=interval_seconds,
+                now=now,
             )
-        return _summarize_downtime(points, now=now, stale_after=stale_after)
+        return _summarize_periods(periods, now=now)
 
     tasks = []
-    meta = []  # (target_id, target_name, enabled_services)
+    meta = []  # (target_id, target_name, service keys)
 
     for target in targets:
         # Disabled targets are not measured; their last state is not a running outage.
         if not target["is_enabled"]:
             continue
-        enabled = []
-        if target["enable_http_check"]:
-            enabled.append("http_up")
-        if target["enable_ping"]:
-            enabled.append("ping_up")
-        if target["enable_tcp_connect"]:
-            enabled.append("tcp_up")
-        if not enabled:
+        # Only the checks enabled now count; the shared rule in tsdb treats gaps as unknown.
+        groups = _service_groups(target)
+        if not groups:
             continue
-
-        stale_after = max(3 * target["interval_seconds"], MIN_DOWNTIME_SECONDS)
-        meta.append((target["id"], target["name"], enabled))
-        tasks.extend(summarize(target["id"], svc, stale_after) for svc in enabled)
+        interval = max(int(target["interval_seconds"]), 1)
+        meta.append((target["id"], target["name"], list(groups)))
+        tasks.extend(summarize(target["id"], series, interval) for series in groups.values())
 
     if not tasks:
         return {"targets": []}
@@ -327,7 +312,7 @@ async def get_downtime_targets(
     results = iter(await asyncio.gather(*tasks))
     response_data = []
     for target_id, name, enabled in meta:
-        services = {svc: summary for svc in enabled if (summary := next(results))["incidents"] > 0}
+        services = {key: summary for key in enabled if (summary := next(results))["incidents"] > 0}
         if services:
             response_data.append({"target_id": target_id, "name": name, "services": services})
 

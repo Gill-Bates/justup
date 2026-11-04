@@ -914,3 +914,113 @@ async def has_connectivity(timeout_seconds: float = 2.0) -> bool:
     """
     result = await check_connectivity(timeout_seconds)
     return result.ok
+
+
+# ---------------------------------------------------------------------------
+# Network port checks (UDP via the Nmap worker) and service identity
+# ---------------------------------------------------------------------------
+
+# Port status is the transport dimension; service identity is a separate one (see assess_service_identity).
+PORT_UP = "up"
+PORT_DOWN = "down"
+PORT_UNKNOWN = "unknown"
+SERVICE_IDENTIFIED = "identified"
+SERVICE_UNKNOWN = "unknown"
+SERVICE_CHANGED = "changed"
+
+# Only these Nmap states are unambiguous. filtered, open|filtered, closed|filtered, unfiltered and
+# anything unexpected stay UNKNOWN: they never raise a downtime and open|filtered is never UP.
+_UDP_STATE_STATUS = {"open": PORT_UP, "closed": PORT_DOWN}
+UDP_SCAN_TIMEOUT_SECONDS = 60.0
+
+
+def udp_state_status(state: str | None) -> str:
+    """Map an Nmap UDP port state to the internal port status."""
+    return _UDP_STATE_STATUS.get(state or "", PORT_UNKNOWN)
+
+
+@dataclass(frozen=True)
+class PortCheck:
+    """Outcome of one protocol + port check; ``raw_state`` is the Nmap state, recorded unchanged."""
+
+    protocol: str
+    port: int
+    status: str
+    raw_state: str | None = None
+    detail: str | None = None
+    latency_ms: float | None = None
+
+
+async def udp_scan_ports(
+    host: str,
+    ports: list[int],
+    *,
+    timeout_seconds: float = UDP_SCAN_TIMEOUT_SECONDS,
+    scan=None,
+) -> dict[int, PortCheck]:
+    """Scan exactly the configured UDP ports (no service detection) and map each to a status.
+
+    A failing scan engine (worker down, missing privileges, crash, invalid result, timeout) says nothing
+    about the target, so every port becomes UNKNOWN with the error code; it never becomes DOWN. A port
+    missing from the result is UNKNOWN too.
+    """
+    if scan is None:
+        from app.services.nmap_client import request_scan as scan
+
+    def unknown_all(detail: str) -> dict[int, PortCheck]:
+        return {p: PortCheck("udp", p, PORT_UNKNOWN, None, detail) for p in ports}
+
+    try:
+        result = await scan(host, udp_ports=list(ports), timeout=timeout_seconds, detect_services=False)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - any scan-engine failure is UNKNOWN, never a target outage
+        code = getattr(exc, "code", None) or type(exc).__name__
+        _log.warning("UDP scan engine failure for %s: %s", host, code)
+        return unknown_all(f"scan {code}")
+    observed = {(p.protocol, p.port): p for h in result.hosts for p in h.ports}
+    checks: dict[int, PortCheck] = {}
+    for port in ports:
+        found = observed.get(("udp", port))
+        if found is None or not result.complete:
+            checks[port] = PortCheck("udp", port, PORT_UNKNOWN, found.state if found else None, "no result")
+        else:
+            checks[port] = PortCheck("udp", port, udp_state_status(found.state), found.state, found.reason)
+    return checks
+
+
+@dataclass(frozen=True)
+class IdentityAssessment:
+    """Result of comparing a fresh service detection with the stored base identity."""
+
+    identity: str | None  # None: nothing to judge, keep the stored value
+    detail: str | None = None
+    adopt: bool = False  # store the observed service as the new base
+    version: str | None = None
+
+
+def assess_service_identity(stored: dict | None, service) -> IdentityAssessment:
+    """Compare an explicit service re-detection with the stored identity.
+
+    A changed version string (an update) is only a diagnostic note. A different service name or product
+    is SERVICE_CHANGED. Neither ever affects the port status: identity is not availability.
+    """
+    name = (getattr(service, "name", None) or "").strip()
+    if service is None or getattr(service, "method", None) != "probed" or not name:
+        return IdentityAssessment(None)
+    product = (getattr(service, "product", None) or "").strip()
+    version = (getattr(service, "version", None) or "").strip()
+    old_name = ((stored or {}).get("service_name") or "").strip()
+    if not old_name or (stored or {}).get("service_identity") != SERVICE_IDENTIFIED:
+        return IdentityAssessment(SERVICE_IDENTIFIED, None, adopt=True, version=version)
+    old_product = ((stored or {}).get("service_product") or "").strip()
+    old_version = ((stored or {}).get("service_version") or "").strip()
+    if name.lower() != old_name.lower() or (product and old_product and product.lower() != old_product.lower()):
+        return IdentityAssessment(
+            SERVICE_CHANGED, f"service identity changed: {old_product or old_name} -> {product or name}"
+        )
+    if version != old_version:
+        return IdentityAssessment(
+            SERVICE_IDENTIFIED, f"version changed: {old_version or '-'} -> {version or '-'}", version=version
+        )
+    return IdentityAssessment(SERVICE_IDENTIFIED)

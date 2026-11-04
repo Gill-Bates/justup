@@ -70,6 +70,7 @@ from ..utils.auth_helpers import (
     resolve_user_optional,
     resolve_user_or_htmx_redirect,
 )
+from ..utils.availability_rules import downtime_series
 from ..utils.constants import (
     DATE_FORMAT_ISO,
     DEFAULT_GEOIP_AUTO_UPDATE,
@@ -105,6 +106,7 @@ from ..utils.status_helper import (
     get_status_defaults,
 )
 from ..utils.storage_stats import compute_storage_stats
+from ..utils.tcp_ports import parse_port_list
 from ..utils.time import assume_utc, utcnow
 from ..utils.uptime_metric import enabled_availability_metrics, uptime_level
 from ..utils.version import BUILD_INFO, VERSION
@@ -1474,6 +1476,13 @@ async def fragment_availability_series(
         enabled_services.add("HTTP")
     if row["enable_tcp_connect"]:
         enabled_services.add("TCP")
+    udp_ports = None
+    if row["enable_udp_scan"]:
+        enabled_services.add("UDP")
+        try:
+            udp_ports = parse_port_list(str(row["udp_ports"] or "")) or None
+        except ValueError:
+            udp_ports = None
 
     tcp_ports = None
     if row["enable_tcp_connect"] and row["tcp_ports"]:
@@ -1491,6 +1500,7 @@ async def fragment_availability_series(
         limit=limit,
         enabled_services=enabled_services,
         tcp_ports=tcp_ports,
+        udp_ports=udp_ports,
         check_interval_seconds=row["interval_seconds"] or 60,
     )
 
@@ -1566,6 +1576,8 @@ async def fragment_downtime_history(
         since=query_since,
         until=query_until,
         limit=limit,
+        series=downtime_series(row),
+        check_interval_seconds=row["interval_seconds"] or 60,
     )
 
     # Only claim "all up" when the range actually holds measurements.
@@ -1575,7 +1587,7 @@ async def fragment_downtime_history(
         target_id,
         query_since,
         query_until,
-        enabled_availability_metrics(row),
+        tuple(metric for metric, _label in downtime_series(row)),
     )
 
     return templates.TemplateResponse(
@@ -1714,6 +1726,7 @@ async def _single_flight_traceroute(request: Request, target_id: int, lookup_hos
 async def _run_traceroute_fragment(request: Request, target_id: int, lookup_host: str, cache_namespace: str):
     """Run MTR for ``lookup_host``, render the fragment and store it in the cache."""
     # MTR utilities (imports at function level for lazy loading)
+    from ..services import route_map_rules
     from ..services.mtr_run import analyze_route, resolve_target_ip, run_mtr
     from ..services.route_interpolator import (
         collapse_interpolated_hops,
@@ -1897,6 +1910,8 @@ async def _run_traceroute_fragment(request: Request, target_id: int, lookup_host
             "geo_points": geo_points,
             "has_interpolation": has_interpolation,
             "map_features": route_map_features(geo_points),
+            "map_style": route_map_rules.map_style(),
+            "map_labels": route_map_rules.select_labels(geo_points),
             "geo_unavailable_reason": geo_unavailable_reason,
             "unavailable_reason": None,
             "route_start_hop": route_start.get("hop_display") or route_start.get("hop"),

@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.models.targets import validate_host
 from app.services.nmap_client import request_scan
@@ -26,11 +26,16 @@ from app.utils.time import utcnow
 
 _log = logging.getLogger(__name__)
 MAX_ACTIVE_JOBS = 16
+MAX_ACTIVE_JOBS_PER_OWNER = 4
 JOB_TTL = timedelta(minutes=15)
 EXPIRED_RETENTION = timedelta(minutes=5)
 
 
 class NmapScanRequest(BaseModel):
+    """Host and protocols only: ports, ranges and Nmap options are never accepted from clients."""
+
+    model_config = ConfigDict(extra="forbid")
+
     host: str = Field(min_length=1, max_length=255)
     protocols: set[Literal["tcp", "udp"]] = Field(min_length=1, max_length=2)
     profile: Literal["quick", "extended"] = "quick"
@@ -71,15 +76,21 @@ _jobs: dict[str, _Record] = {}
 _active_addresses: set[str] = set()
 
 
+def _release(record: _Record) -> None:
+    _active_addresses.discard(record.address)
+
+
 def _prune() -> None:
     now = utcnow()
     for job_id, record in list(_jobs.items()):
         if record.job.expires_at > now:
             continue
-        if record.job.status in {"queued", "running"}:
-            record.job.status = "expired"
-            if record.task:
+        if record.job.status != "expired":
+            if record.job.status in {"queued", "running"} and record.task:
                 record.task.cancel()
+            record.job.status = "expired"
+            record.job.result = None
+            _release(record)
         if now >= record.job.expires_at + EXPIRED_RETENTION:
             del _jobs[job_id]
 
@@ -111,8 +122,11 @@ async def create_job(request: NmapScanRequest, owner_id: int) -> NmapScanJob:
     address = str(addresses[0])
     if address in _active_addresses:
         raise NmapScannerError("busy", "A scan is already running for this target")
-    if sum(record.job.status in {"queued", "running"} for record in _jobs.values()) >= MAX_ACTIVE_JOBS:
+    active = [record for record in _jobs.values() if record.job.status in {"queued", "running"}]
+    if len(active) >= MAX_ACTIVE_JOBS:
         raise NmapScannerError("busy", "The scan queue is full")
+    if sum(record.owner_id == owner_id for record in active) >= MAX_ACTIVE_JOBS_PER_OWNER:
+        raise NmapScannerError("busy", "Too many scans are already running for this user")
     now = utcnow()
     job = NmapScanJob(
         id=str(uuid.uuid4()),
@@ -159,7 +173,7 @@ async def _run(record: _Record) -> None:
             job.error = NmapScanError(code="process_failed", message="Nmap discovery failed")
             job.status = "failed"
     finally:
-        _active_addresses.discard(record.address)
+        _release(record)
 
 
 async def cancel_job(job_id: str, owner_id: int) -> bool:
@@ -172,6 +186,7 @@ async def cancel_job(job_id: str, owner_id: int) -> bool:
         record.task.cancel()
         with suppress(asyncio.CancelledError):
             await record.task
+        _release(record)
     return True
 
 

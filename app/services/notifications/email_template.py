@@ -229,7 +229,7 @@ DEFAULT_HTML_TEMPLATE = """<!DOCTYPE html>
   <meta name="supported-color-schemes" content="light">
   <meta name="format-detection" content="telephone=no,date=no,address=no,email=no">
   <meta http-equiv="X-UA-Compatible" content="IE=edge">
-  <title>justUp! Monitoring alert</title>
+  <title>justUp!</title>
 
   <!--[if mso]>
   <noscript><xml><o:OfficeDocumentSettings>
@@ -296,7 +296,7 @@ DEFAULT_HTML_TEMPLATE = """<!DOCTYPE html>
                     font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
                     color:#1b2733;">
 
-        <!-- HEADER: logo + Monitoring alert -->
+        <!-- HEADER: logo -->
         <tr>
           <td class="ju-pad" style="padding:22px 28px 16px 28px;">
             <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
@@ -305,12 +305,6 @@ DEFAULT_HTML_TEMPLATE = """<!DOCTYPE html>
                   <img src="{{logo_url}}" width="150" alt="justUp!"
                        style="display:inline-block;height:auto;width:150px;
                               max-width:60vw;vertical-align:middle;">
-                </td>
-                <td valign="middle" align="right" class="ju-muted"
-                    style="padding:0;font-size:13px;color:#5b6b7b;white-space:nowrap;">
-                  <span style="display:inline-block;border-left:1px solid #e2e7ee;padding-left:14px;">
-                    &#128276; Monitoring alert
-                  </span>
                 </td>
               </tr>
             </table>

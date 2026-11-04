@@ -90,6 +90,7 @@ FIELDS = {
     "libsignal_client": "0.1",
     "signal_cli": "0.14",
     "nmap": "7.993",
+    "nmap_source_sha256": "a" * 64,
     "fastapi": "1",
 }
 
@@ -104,7 +105,9 @@ def test_parity_flags_difference_and_single_architecture():
     assert any("at least two" in p for p in parity.problems({"amd64": FIELDS}, []))
 
 
-@pytest.mark.parametrize("field", ["java_version", "libsignal_client", "signal_cli", "nmap", "python"])
+@pytest.mark.parametrize(
+    "field", ["java_version", "libsignal_client", "signal_cli", "nmap", "nmap_source_sha256", "python"]
+)
 def test_parity_requires_fields_even_when_missing_everywhere(field):
     gap = {k: v for k, v in FIELDS.items() if k != field}
     found = parity.problems({"amd64": gap, "arm64": dict(gap)}, list(parity.REQUIRED_FIELDS))
@@ -342,3 +345,77 @@ def test_dockerfile_runtime_copies_only_explicit_nmap_paths():
     ]
     runtime = text[text.index("AS runtime") :]
     assert not re.search(r"\b(build-essential|gcc|make|configure)\b", runtime)
+
+
+def nmap_workflow_problems(workflow: str, builder_fields: set[str]) -> list[str]:
+    """Contract between docker-build.yml, nmap-release.py and the fields the Dockerfile builder writes."""
+    problems = []
+    if re.search(r"nmap_rpm|NMAP_RPM|artifact_sha256|nmap-release\.py fetch[^\n]*\$nmap_rpm", workflow):
+        problems.append("workflow still uses the RPM contract (nmap_rpm / NMAP_RPM / artifact_sha256)")
+    if 'tools/nmap-release.py latest)"' not in workflow:
+        problems.append("meta does not resolve the version with `nmap-release.py latest`")
+    if not re.search(r'nmap-release\.py fetch "\$nmap_version" "\$verify_dir"', workflow):
+        problems.append("meta does not call `fetch VERSION DIR` with the new signature")
+    for arg, source in (("NMAP_VERSION", "nmap_version"), ("NMAP_SOURCE_SHA256", "nmap_source_sha256")):
+        if workflow.count(f'--build-arg "{arg}=${{{{ needs.meta.outputs.{source} }}}}"') != 1:
+            problems.append(f"build-arg {arg} is not passed (once, from meta) to the matrix build")
+    gate = workflow[workflow.index("Verify Nmap TCP and UDP in the runtime image") :]
+    gate = gate[: gate.index("- name: Upload Nmap provenance")]
+    problems.extend(
+        f"provenance gate does not check '{field}' written by the builder"
+        for field in sorted(builder_fields)
+        if f"{field}=" not in gate
+    )
+    if not re.search(r"--entrypoint sha256sum [^\n]*/usr/bin/nmap", gate) or "binary_sha256=${shipped}" not in gate:
+        problems.append("gate does not compare the shipped /usr/bin/nmap hash with binary_sha256")
+    if "- binary " not in gate or "verify-nmap-worker.py" not in workflow:
+        problems.append("gate lacks the ELF/library check or the -sV worker scan")
+    if "build_method=verified-source" not in gate:
+        problems.append("gate does not require build_method=verified-source on every architecture")
+    return problems
+
+
+def dockerfile_builder_fields() -> set[str]:
+    text = (ROOT / "docker" / "Dockerfile").read_text(encoding="utf-8")
+    stage = text[text.index("AS nmap-builder") : text.index("AS signal-cli-src")]
+    block = stage[stage.index("cat /tmp/nmap/provenance.txt") : stage.index("> /out/usr/share/doc/nmap/PROVENANCE.txt")]
+    # provenance.txt (nmap_version, source_*, signing_key_fingerprint) is copied; the builder appends the rest.
+    return {"nmap_version", "source_sha256", "signing_key_fingerprint"} | set(
+        re.findall(r"(?:'|\\n)([a-z][a-z0-9_]*)=", block)
+    )
+
+
+def test_builder_writes_the_provenance_fields_the_release_contract_names():
+    assert dockerfile_builder_fields() >= {
+        "architecture",
+        "build_method",
+        "binary_sha256",
+        "runtime_dependencies",
+        "nmap_version",
+        "source_sha256",
+        "signing_key_fingerprint",
+    }
+
+
+def test_release_workflow_matches_the_nmap_release_tool_and_the_builder_contract():
+    workflow = (ROOT / ".github" / "workflows" / "docker-build.yml").read_text(encoding="utf-8")
+    assert nmap_workflow_problems(workflow, dockerfile_builder_fields()) == []
+
+
+def test_contract_check_rejects_the_rpm_era_workflow():
+    workflow = (ROOT / ".github" / "workflows" / "docker-build.yml").read_text(encoding="utf-8")
+    old = workflow.replace('--build-arg "NMAP_SOURCE_SHA256=', '--build-arg "NMAP_RPM=').replace(
+        "binary_sha256=${shipped}", "artifact_sha256"
+    )
+    problems = nmap_workflow_problems(old, dockerfile_builder_fields())
+    assert any("RPM contract" in p for p in problems)
+    assert any("NMAP_SOURCE_SHA256" in p for p in problems)
+    assert any("binary_sha256" in p for p in problems)
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="needs a Linux ELF binary")
+def test_nmap_worker_check_reads_the_dynamic_section_of_an_elf():
+    check = load("verify-nmap-worker")
+    tags = check.dynamic_tags(Path(sys.executable).resolve().read_bytes())
+    assert 1 in tags  # DT_NEEDED
+    assert 5 in tags  # DT_STRTAB

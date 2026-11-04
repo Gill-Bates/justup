@@ -407,6 +407,10 @@ class NetworkPortPublic(BaseModel):
     checked_at: datetime | None = None
     last_up_at: datetime | None = None
     detail: str | None = None
+    raw_state: str | None = None
+    service_identity: Literal["identified", "unknown", "changed"] | None = None
+    identity_changed_at: datetime | None = None
+    latency_ms: float | None = None
 
 
 class TargetPublic(BaseModel):

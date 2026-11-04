@@ -94,3 +94,10 @@ def test_search_data_lists_name_host_and_group_but_no_unrelated_defaults(client)
     assert "host-000.example.org" in first and "Ungrouped" in first
     # tcp_ports defaults to 80 even when TCP is off; it must not become a searchable port.
     assert " 80" not in first
+
+
+def test_rows_carry_the_target_id_the_live_update_matches_on(client) -> None:
+    html = client.get("/ui/fragments/targets-table?all=1").text
+    ids = re.findall(r'<tr data-search="[^"]*" data-target-id="(\d+)"', html)
+    assert len(ids) == len(_rows(html)) > 0
+    assert len(set(ids)) == len(ids)

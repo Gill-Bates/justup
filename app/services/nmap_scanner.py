@@ -12,6 +12,7 @@ import asyncio
 import ipaddress
 import os
 import signal
+from contextlib import suppress
 from datetime import datetime
 from typing import Literal
 
@@ -112,6 +113,8 @@ def parse_nmap_xml(data: bytes, *, started_at: datetime, completed_at: datetime)
             number = node.get("portid")
             if protocol not in {"tcp", "udp"} or not number or not number.isascii() or not number.isdigit():
                 continue
+            if not 1 <= int(number) <= 65535:
+                continue
             state_el = node.find("state")
             raw_state = state_el.get("state") if state_el is not None else "unknown"
             state: ScanState = (
@@ -128,7 +131,9 @@ def parse_nmap_xml(data: bytes, *, started_at: datetime, completed_at: datetime)
                     product=service_el.get("product"),
                     version=service_el.get("version"),
                     method=service_el.get("method") if service_el.get("method") in {"probed", "table"} else None,
-                    confidence=int(confidence) if confidence and confidence.isdigit() else None,
+                    confidence=int(confidence)
+                    if confidence and confidence.isascii() and confidence.isdigit() and int(confidence) <= 10
+                    else None,
                 )
             ports.append(
                 NmapPortResult(
@@ -184,18 +189,19 @@ async def _resolve(host: str) -> str:
     return str(addresses[0])
 
 
+def _signal_group(pid: int, sig: int) -> None:
+    with suppress(ProcessLookupError):
+        os.killpg(pid, sig)
+
+
 async def _stop_process(proc: asyncio.subprocess.Process) -> None:
-    if proc.returncode is not None:
-        return
-    try:
-        os.killpg(proc.pid, signal.SIGTERM)
-    except ProcessLookupError:
-        return
-    try:
-        await asyncio.wait_for(proc.wait(), timeout=2)
-    except TimeoutError:
-        os.killpg(proc.pid, signal.SIGKILL)
-        await proc.wait()
+    """Terminate the scan's whole process group; the final SIGKILL also reaps stragglers."""
+    if proc.returncode is None:
+        _signal_group(proc.pid, signal.SIGTERM)
+        with suppress(TimeoutError):
+            await asyncio.wait_for(proc.wait(), timeout=2)
+    _signal_group(proc.pid, signal.SIGKILL)
+    await proc.wait()
 
 
 async def _read_bounded(stream: asyncio.StreamReader) -> bytes:

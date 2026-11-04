@@ -490,3 +490,31 @@ def test_debug_log_of_placeholder_rendering_never_contains_the_values(caplog):
     assert "system.url" in logged  # ... the name and length are logged, never the value
     for value in ("s3cr3t-token-value", "internal.example", "db01", "Payroll-DB"):
         assert value not in logged
+
+
+# ─── Header is the logo only: no "Monitoring alert" label, bell or divider ───
+
+_HEADER_STATES = ["OPEN", "DOWN", "RESOLVED", "UP", "WARNING", "UNKNOWN"]
+
+
+@pytest.mark.parametrize("status", _HEADER_STATES)
+def test_mail_header_carries_no_monitoring_alert_label(status):
+    html = render_template(DEFAULT_HTML_TEMPLATE, _ctx(status=status))
+    assert "Monitoring alert" not in html
+    assert "&#128276;" not in html and "\U0001f514" not in html
+    assert "Monitoring alert" not in html_to_text(html)
+
+
+def test_test_notification_header_carries_no_monitoring_alert_label():
+    alert, target = build_test_alert_sample(now=_FIXED_NOW)
+    html = render_template(DEFAULT_HTML_TEMPLATE, build_alert_context(alert, target))
+    assert "Monitoring alert" not in html
+    assert "Monitoring alert" not in html_to_text(html)
+
+
+def test_header_keeps_the_logo_left_and_the_status_line():
+    html = render_template(DEFAULT_HTML_TEMPLATE, _ctx(status="DOWN"))
+    header = html[html.index("<!-- HEADER") : html.index("<!-- PRIMARY EVENT -->")]
+    assert 'alt="justUp!"' in header
+    assert "<!-- STATUS ACCENT LINE -->" in header
+    assert "border-left" not in header  # the divider belonged to the removed label

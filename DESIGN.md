@@ -28,6 +28,10 @@ Use one shared token system, visible status labels alongside color, and a compac
 
 Keep the established justUp! teal accent (#0e7a65 light, #1fc7a6 dark) for links, primary actions and active states. Use modest radii, thin borders, and one subtle shared shadow. Keep the existing IBM Plex Sans asset as the local sans family rather than adding an external font request. Maintain the current Material Icons set. Motion is limited to existing navigation transitions and follows reduced-motion preferences.
 
+Elevation comes from two shared tokens in `gentelella-layout.css`, each defined for light and dark: `--ju-shadow` for cards and `--ju-shadow-raised` for floating panels such as popovers. A component never writes its own shadow colour.
+
+Metadata in mails and PDF reports (check types, target details) is always neutral grey; status colours belong to the status banner and status text only. The default mail header is the logo alone, with the status accent line below it and no extra label.
+
 ## Components
 
 `gentelella-layout.css` owns the application palette, shell, navigation, and baseline buttons, forms, cards, and tables. `ui.css` owns shared page layout, spacing, page primitives, modal presentation, and component refinements. `dashboard.css` owns dashboard widget presentation; the registry owns widget identities, labels, defaults, and minimum sizes; `dashboard-grid.js` owns layout interaction and persistence. `target-detail.css`, `target-wizard.css`, `notifications.css`, and `traceroute-map.css` own their feature-specific layout and presentation. New feature rules use these owners and the existing shared tokens; they must not reproduce shared palette, type, spacing, control, or surface rules locally. All modal dialogs use the shared modal contract below. The wordmark follows `data-bs-theme`; the standalone login and password-change screens use the same theme and shared visual tokens.
@@ -271,7 +275,16 @@ Applies to the route map of the target detail page and the PDF route map (`trace
 - A link between two reliable positions is solid. A link with an estimated or approximate end, or across unmapped hops, is dashed; solid and dashed differ by pattern, not only by color. Real geographic back-jumps stay visible and are not smoothed or reordered.
 - The chain is the primary element: at least 3 px wide, at least 3:1 contrast against land and sea in light and dark (checked in `tests/test_route_map_rules.py`), dashes coarse (stroke and gap at least the line width), drawn above the basemap and below the markers.
 - The basemap recedes: borders and the land/sea tones stay barely visible. Names appear only for countries the chain touches and for chain hop cities plus at most three nearby orientation cities (eight place names in total); distant places are never named. The shared limits and zoom levels live in `route_map_rules.py`.
-- Open (see `.agents/OPEN_TASKS.md`): web rendering of these basemap, label, halo and zoom rules is not yet implemented in `traceroute-map.js`.
+- The web map reads the shared rules from the server as `data-map-style` (palette, line, label limits, zoom levels) and `data-map-labels` (the selected names) on the map container; `traceroute-map.js` holds no second set of colors or names (a built-in copy only serves a cached fragment without the attributes). The chain is drawn between the marker display positions (after the fan-out), stops `markerGap` px before each marker and has a contrast halo under it; panes run basemap < names < halo < chain < markers. Direction arrows sit only on solid links of at least `minArrowSegment` px. Names are placed per zoom (countries up to `countryMaxZoom`, places from `cityMinZoom`) and are dropped or moved when they would cover a marker, the chain or another name. The fit contains every chain node, an outlier included. The legend names Hop (reliable), Hop (approximate), Destination, Connection measured (solid) and Connection estimated or unknown (dashed). Checks: `tests/js/traceroute-map-layout.test.mjs`, `tests/test_traceroute_map_markup.py`, `tests/layout/traceroute-map.spec.mjs` (Chromium and WebKit, light and dark, 1280x720 and 390x844).
+
+## Load stability
+
+Applies to pages that refresh themselves (`targets.html` first, `targets-live-update.js`).
+
+- A live refresh never replaces a list that did not change structurally. The poll answer is compared with the page: with the same groups and rows (matched by `data-target-id`), only cells whose shown value changed are rewritten. Rows, self-updating status icons, focus, open or closed groups and the search state stay untouched. A structural change (target added or removed, other group, page or scope) uses the normal swap.
+- Unchanged text is not rewritten (a repeated write replaces the text node and repeats a live-region announcement).
+- Checks: `tests/layout/targets-live-update.spec.mjs` (Chromium and WebKit, 1280x720 and 390x844: row and status-icon identity, removed nodes, focus, groups, filter, layout shift in Chromium) and `tests/test_targets_search.py` (row ids).
+- Open: in WebKit the first paint of the target detail page uses the fallback font and the Plex font arrives about 200 ms later (measured: first complete frame at about 300 ms without Plex, stable from about 530 ms with it), so title and top bar move; `font-display: optional` is not honoured there. `tests/layout/load-stability.spec.mjs` reports it for WebKit.
 
 ## Accessibility
 

@@ -84,6 +84,7 @@ from app.services.traceroute_geo import (
     location_view,
     mtr_hops_to_geo_points,
 )
+from app.utils.availability_rules import MIN_DOWNTIME_SECONDS, measured_outages
 from app.utils.ssrf import redact_url
 from app.utils.status_palette import STATUS_PALETTE
 from app.utils.tls_model import Check, ScanStatus, TlsScanResult, Verdict
@@ -1457,7 +1458,7 @@ def _coverage_pct(report_data: ReportData, total_checks: int, interval_seconds: 
 def _compute_kpis(report_data: ReportData) -> KPIMetrics:
     """Compute KPI metrics; a metric without measurements stays None (never 0).
 
-    downtime_minutes is an estimate: failed checks times the check interval.
+    downtime_minutes sums the measured outages of the downtime table (shared rule, gaps excluded).
     """
     interval_seconds = report_data.target.get("interval_seconds") or 60
 
@@ -1472,7 +1473,10 @@ def _compute_kpis(report_data: ReportData) -> KPIMetrics:
         uptime_percent=_availability_pct(up_count, total_checks),
         avg_response_ms=round(sum(response) / len(response)) if response else None,
         max_response_ms=round(max(response)) if response else None,
-        downtime_minutes=int(down_count * interval_seconds / 60),
+        downtime_minutes=sum(
+            e.duration_minutes or 0
+            for e in _extract_downtime_events(report_data.uptime_data, interval_seconds, report_data.to_date)
+        ),
         total_checks=total_checks,
         up_count=up_count,
         down_count=down_count,
@@ -1482,13 +1486,15 @@ def _compute_kpis(report_data: ReportData) -> KPIMetrics:
     )
 
 
-def _extract_downtime_events(uptime_data: list[dict]) -> list[DowntimeEvent]:
-    """Extract downtime periods from uptime data (points without a value are ignored)."""
-    events: list[DowntimeEvent] = []
-    in_downtime = False
-    downtime_start: datetime | None = None
-    skipped_count = 0
+def _extract_downtime_events(
+    uptime_data: list[dict], interval_seconds: float = 60, now: datetime | None = None
+) -> list[DowntimeEvent]:
+    """Extract downtime periods from uptime data by the shared rule in ``availability_rules``.
 
+    Points without a value are UNKNOWN, and a gap between two points is neither downtime nor uptime.
+    """
+    points: list[tuple[datetime, int | None]] = []
+    skipped_count = 0
     for p in sorted(uptime_data or [], key=lambda p: p.get("ts", "")):
         ts_raw = p.get("ts")
         if not ts_raw:
@@ -1499,24 +1505,20 @@ def _extract_downtime_events(uptime_data: list[dict]) -> list[DowntimeEvent]:
         except (ValueError, AttributeError):
             skipped_count += 1
             continue
-
         value = p.get("value")
-        if value == 0 and not in_downtime:
-            in_downtime = True
-            downtime_start = ts
-        elif value == 1 and in_downtime:
-            in_downtime = False
-            if downtime_start:
-                duration = int((ts - downtime_start).total_seconds() / 60)
-                events.append(DowntimeEvent(start=downtime_start, end=ts, duration_minutes=duration))
-            downtime_start = None
+        points.append((ts, value if value in (0, 1) else None))
 
-    if in_downtime and downtime_start:
-        events.append(DowntimeEvent(start=downtime_start, end=None, duration_minutes=None))
-
+    events = [
+        DowntimeEvent(
+            start=o.start,
+            end=o.end,
+            duration_minutes=None if o.end is None else int((o.seconds() or 0) / 60),
+        )
+        for o in measured_outages(points, interval_seconds=interval_seconds, now=now)
+        if o.end is None or (o.seconds() or 0) >= MIN_DOWNTIME_SECONDS
+    ]
     if skipped_count > 0:
         _log.warning("Downtime extraction: skipped %d datapoints with invalid/missing timestamps", skipped_count)
-
     return events
 
 
@@ -2250,7 +2252,11 @@ class PDFReportBuilder:
         self.styles = self._create_styles()
         self.elements: list = []
         self.kpis = _compute_kpis(report_data)
-        self.downtime_events = _extract_downtime_events(report_data.uptime_data)
+        self.downtime_events = _extract_downtime_events(
+            report_data.uptime_data,
+            report_data.target.get("interval_seconds") or 60,
+            report_data.to_date,
+        )
         self.chapter_pages: dict[str, int] = {}
         self.page_count = 0
         self.content_pages: set[int] = set()
@@ -4006,8 +4012,8 @@ class PDFReportBuilder:
             [
                 Paragraph(
                     "Estimated downtime: durations run from the first failed check to the next successful check "
-                    "and are not exact measured outage durations. An ongoing outage is shown as at least the time "
-                    "up to the last sample.",
+                    "and are not exact measured outage durations. Periods without measurements are not counted "
+                    "as downtime. An ongoing outage is shown as at least the time up to the last sample.",
                     st["note"],
                 ),
                 *[""] * 4,

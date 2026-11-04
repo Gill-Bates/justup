@@ -110,7 +110,7 @@ def test_new_file_is_initialised_as_baseline(db_path: Path):
     _init(db_path)
     conn = sqlite_db.connect(db_path)
     try:
-        assert sqlite_db.SCHEMA_VERSION == 6  # baseline plus schema migrations through PoP review metadata
+        assert sqlite_db.SCHEMA_VERSION == 8  # baseline plus schema migrations through network port state
         assert sqlite_db.get_schema_version(conn) == sqlite_db.SCHEMA_VERSION
         tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         assert tables >= EXPECTED_TABLES
@@ -417,8 +417,8 @@ def _baseline_with(path: Path, *statements: str) -> None:
     [
         pytest.param(_old_unversioned, "unversioned", sqlite_db.SCHEMA_UNVERSIONED, id="old-unversioned-tables"),
         pytest.param(
-            lambda p: _baseline_with(p, "PRAGMA user_version = 7"),
-            "schema version is 7",
+            lambda p: _baseline_with(p, f"PRAGMA user_version = {sqlite_db.SCHEMA_VERSION + 1}"),
+            f"schema version is {sqlite_db.SCHEMA_VERSION + 1}",
             sqlite_db.SCHEMA_FUTURE,
             id="newer-user_version",
         ),
@@ -646,6 +646,8 @@ def test_upgrade_preserves_data_ids_and_integrity_across_restarts(db_path: Path,
         "Schema migration 3 -> 4 (dashboard widget automatic and manual height contract): ok",
         "Schema migration 4 -> 5 (recipients.enable_for_all_targets flag): ok",
         "Schema migration 5 -> 6 (bounded PoP candidate evidence and explicit review metadata): ok",
+        "Schema migration 6 -> 7 (UDP configuration and protocol-specific port metadata): ok",
+        "Schema migration 7 -> 8 (raw port state, service identity and latency per network port): ok",
     ]
 
     conn = sqlite_db.connect(db_path)

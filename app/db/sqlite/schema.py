@@ -45,6 +45,12 @@ def ensure_target_network_ports_table(conn: sqlite3.Connection) -> None:
             checked_at timestamp,
             last_up_at timestamp,
             detail TEXT,
+            raw_state TEXT CHECK (raw_state IN (
+                'open', 'closed', 'filtered', 'unfiltered', 'open|filtered', 'closed|filtered', 'unknown'
+            )),
+            service_identity TEXT CHECK (service_identity IN ('identified', 'unknown', 'changed')),
+            identity_changed_at timestamp,
+            latency_ms REAL,
             PRIMARY KEY (target_id, protocol, port)
         )
         """
@@ -540,7 +546,7 @@ def _ensure_unique_recipient_phone(conn: sqlite3.Connection) -> None:
 # MIGRATIONS that upgrades a database from ``version - 1``. _create_baseline_schema() must then
 # create the new current schema for fresh databases, so migrations only transform older ones.
 # Migrations run inside init_schema's transaction (an error rolls schema and user_version back).
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 
 # IncompatibleSchemaError.kind values

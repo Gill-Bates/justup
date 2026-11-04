@@ -48,7 +48,6 @@ jobs:
       python_base: ${{ steps.rolling.outputs.python_base }}
       signal_cli_version: ${{ steps.rolling.outputs.signal_cli_version }}
       nmap_version: ${{ steps.rolling.outputs.nmap_version }}
-      nmap_rpm: ${{ steps.rolling.outputs.nmap_rpm }}
       nmap_source_sha256: ${{ steps.rolling.outputs.nmap_source_sha256 }}
 
     steps:
@@ -153,18 +152,17 @@ jobs:
             exit 1
           fi
 
-          nmap_release="$(python3 tools/nmap-release.py latest)"
-          read -r nmap_version nmap_rpm <<< "$nmap_release"
-          if [[ ! "$nmap_version" =~ ^[0-9]+(\.[0-9]+)+$ || -z "$nmap_rpm" ]]; then
-            echo "ERROR: could not resolve the official stable Nmap release" >&2
+          nmap_version="$(python3 tools/nmap-release.py latest)"
+          if [[ ! "$nmap_version" =~ ^[0-9]+(\.[0-9]+)+$ ]]; then
+            echo "ERROR: could not resolve the official stable Nmap release (got '${nmap_version}')" >&2
             exit 1
           fi
 
           # Verify the release against the pinned Nmap signing key once, before any build
-          # starts; a failed signature aborts the release. The builds verify it again and must
-          # arrive at the same source hash.
+          # starts; a failed signature aborts the release. Both architecture builds receive
+          # the archive hash and must download exactly that archive.
           verify_dir="${RUNNER_TEMP}/nmap-verify"
-          python3 tools/nmap-release.py fetch "$nmap_version" "$nmap_rpm" "$verify_dir"
+          python3 tools/nmap-release.py fetch "$nmap_version" "$verify_dir"
           nmap_source_sha256="$(sed -n 's/^source_sha256=//p' "${verify_dir}/provenance.txt")"
           if [[ ! "$nmap_source_sha256" =~ ^[0-9a-f]{64}$ ]]; then
             echo "ERROR: Nmap source hash missing after verification" >&2
@@ -175,14 +173,13 @@ jobs:
             echo "python_base=${python_base}"
             echo "signal_cli_version=${signal_cli_version}"
             echo "nmap_version=${nmap_version}"
-            echo "nmap_rpm=${nmap_rpm}"
             echo "nmap_source_sha256=${nmap_source_sha256}"
           } >> "$GITHUB_OUTPUT"
 
           echo "Resolved once for every architecture:"
           echo "  python base      : ${python_base}"
           echo "  signal-cli       : ${signal_cli_version}"
-          echo "  nmap             : ${nmap_version} (${nmap_rpm}), source sha256 ${nmap_source_sha256}"
+          echo "  nmap             : ${nmap_version}, source sha256 ${nmap_source_sha256}"
 
       # The only place architectures are declared: build, create-manifest,
       # release-newest.py and the release notes all derive from it. Native
@@ -292,7 +289,7 @@ jobs:
             --build-arg "PYTHON_BASE=${{ needs.meta.outputs.python_base }}" \
             --build-arg "SIGNAL_CLI_VERSION=${{ needs.meta.outputs.signal_cli_version }}" \
             --build-arg "NMAP_VERSION=${{ needs.meta.outputs.nmap_version }}" \
-            --build-arg "NMAP_RPM=${{ needs.meta.outputs.nmap_rpm }}" \
+            --build-arg "NMAP_SOURCE_SHA256=${{ needs.meta.outputs.nmap_source_sha256 }}" \
             --build-arg "APP_VERSION=${{ needs.meta.outputs.tag }}" \
             --build-arg "BUILD_DATE=${{ needs.meta.outputs.build_date }}" \
             --build-arg "VCS_REF=${{ github.sha }}" \
@@ -396,10 +393,12 @@ jobs:
           grep -qx "source_sha256=${EXPECTED_NMAP_SOURCE_SHA256}" "nmap-provenance-${ARCH}.txt"
           grep -qx "architecture=${ARCH}" "nmap-provenance-${ARCH}.txt"
           grep -qx 'signing_key_fingerprint=436D66AB9A798425FDA0E3F801AF9F036B9355D0' "nmap-provenance-${ARCH}.txt"
-          grep -q '^artifact_sha256=[0-9a-f]\{64\}$' "nmap-provenance-${ARCH}.txt"
-          grep -Eqx 'build_method=(official-rpm|verified-source)' "nmap-provenance-${ARCH}.txt"
-          # arm64 has no official binary: it must be the verified source build.
-          if [[ "$ARCH" == arm64 ]]; then grep -qx 'build_method=verified-source' "nmap-provenance-${ARCH}.txt"; fi
+          grep -qx 'build_method=verified-source' "nmap-provenance-${ARCH}.txt"
+          # The recorded binary hash is the hash of the binary the image actually ships.
+          shipped="$(docker run --rm --platform "$PLATFORM" --entrypoint sha256sum "$TEST_IMAGE" /usr/bin/nmap | cut -d' ' -f1)"
+          grep -qx "binary_sha256=${shipped}" "nmap-provenance-${ARCH}.txt"
+          grep -q '^runtime_dependencies=' "nmap-provenance-${ARCH}.txt"
+          docker run --rm -i --platform "$PLATFORM" --entrypoint python "$TEST_IMAGE" - binary "$ARCH" < tools/verify-nmap-worker.py
           docker run --rm --platform "$PLATFORM" --entrypoint sh "$TEST_IMAGE" \
             -c 'test -s /usr/share/doc/nmap/LICENSE && test -s /usr/share/doc/nmap/NOTICE.txt'
 
@@ -493,6 +492,10 @@ jobs:
             --entrypoint signal-cli "${{ matrix.test_image }}" --version)"
           printf 'signal_cli=%s\n' "$signal_cli_version" >> "toolchain/${{ matrix.image_suffix }}.txt"
           printf 'nmap=%s\n' "$NMAP_ACTUAL_VERSION" >> "toolchain/${{ matrix.image_suffix }}.txt"
+          # Taken from the image, not from the build args: a stale layer cannot hide a different archive.
+          nmap_source_sha256="$(docker run --rm --platform "${{ matrix.platform }}" --entrypoint cat \
+            "${{ matrix.test_image }}" /usr/share/doc/nmap/PROVENANCE.txt | sed -n 's/^source_sha256=//p')"
+          printf 'nmap_source_sha256=%s\n' "$nmap_source_sha256" >> "toolchain/${{ matrix.image_suffix }}.txt"
 
           # COMPONENTS.txt mixes formats, so each value is extracted on its own.
           # Only arch-independent values belong here; library names and hashes differ by design.
@@ -630,6 +633,7 @@ jobs:
       MOVES_LATEST: ${{ needs.meta.outputs.moves_latest }}
       EXPECTED_ARCHS: ${{ needs.meta.outputs.archs }}
       NMAP_VERSION: ${{ needs.meta.outputs.nmap_version }}
+      NMAP_SOURCE_SHA256: ${{ needs.meta.outputs.nmap_source_sha256 }}
     permissions:
       contents: read
 
@@ -708,6 +712,7 @@ jobs:
           set -euo pipefail
           for file in toolchain/*.txt; do
             grep -qxF "nmap=${NMAP_VERSION}" "$file" || { echo "ERROR: ${file} lacks nmap=${NMAP_VERSION}" >&2; exit 1; }
+            grep -qxF "nmap_source_sha256=${NMAP_SOURCE_SHA256}" "$file" || { echo "ERROR: ${file} lacks the resolved Nmap source hash" >&2; exit 1; }
           done
 
       # Candidate first: the index is built from the pushed digests under a run-specific

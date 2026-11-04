@@ -40,6 +40,7 @@ from app.services.notifications import (
 )
 from app.services.notifications.signal_backend import get_signal_backend
 from app.utils import maintenance
+from app.utils.availability_rules import UDP_RESULT_MAX_AGE_FACTOR, udp_interval_seconds
 from app.utils.cert_target import resolve_cert_target
 from app.utils.constants import (
     DEFAULT_METRICS_TIMEOUT_MINUTES,
@@ -72,10 +73,11 @@ class TargetStatus:
 
 
 class PortStatus:
-    """Constants for port status values."""
+    """Constants for port status values (PORT_UP / PORT_DOWN / PORT_UNKNOWN)."""
 
-    UP: str = "up"
-    DOWN: str = "down"
+    UP: str = checks.PORT_UP
+    DOWN: str = checks.PORT_DOWN
+    UNKNOWN: str = checks.PORT_UNKNOWN
 
 
 class AlertStatus:
@@ -168,10 +170,12 @@ def _restorable_services(cfg: dict[str, Any], failed_service: str) -> list[str]:
             ("http", "enable_http_check"),
             ("ping", "enable_ping"),
             ("tcp", "enable_tcp_connect"),
+            ("udp", "enable_udp_scan"),
         )
         if cfg.get(flag)
     ]
-    named = {s.strip().lower() for s in failed_service.split(",")}
+    # Endpoint tokens such as "tcp:25" name their service before the colon.
+    named = {s.strip().lower().split(":")[0] for s in failed_service.split(",")}
     return [svc for svc in enabled if svc in named] or enabled
 
 
@@ -206,6 +210,22 @@ def _stored_tcp_ports(value: str | int | None) -> list[int]:
         return parse_port_list(value) or [80]
     except ValueError:
         return []
+
+
+def _stored_udp_ports(value: str | int | None) -> list[int]:
+    """UDP ports to check: unlike TCP there is no default port; an invalid or empty list means none."""
+    try:
+        return parse_port_list(value) if value else []
+    except ValueError:
+        return []
+
+
+def _row_value(row: Any, key: str, default: Any = None) -> Any:
+    """Read a column that may be missing in rows of older fixtures."""
+    try:
+        return row[key]
+    except (KeyError, IndexError):
+        return default
 
 
 def _stored_datetime(value: datetime | str | None) -> datetime | None:
@@ -280,9 +300,19 @@ class TargetRuntime:
             "http": None,
             "ping": None,
             "tcp": None,
+            "udp": None,
             "cert": None,
         }
     )
+    # Latest per-port UDP outcome from the background scan task (never blocks the check cycle)
+    udp_task: asyncio.Task | None = None
+    udp_last_started: datetime | None = None
+    udp_result: dict[int, checks.PortCheck] = field(default_factory=dict)
+    udp_result_at: datetime | None = None
+    udp_skipped_cycles: int = 0
+    udp_seeded: bool = False
+    # Endpoints (e.g. "tcp:25", "udp:53") that are down in the current cycle, for traceable alerts
+    down_endpoints: dict[str, list[str]] = field(default_factory=dict)
     current_alert_id: str | None = None
     failed_services: set[str] = field(default_factory=set)
     cert_alert_sent: bool = False  # True if cert expiry alert was already sent
@@ -327,6 +357,12 @@ MIN_DOWN_SECONDS = 120  # Minimum duration before DOWN alert
 FAIL_WINDOW_SECONDS = 300  # Sliding window: FAILs must occur within this time to count
 
 
+# Simultaneous UDP scans across all targets; a slow scan never delays the check cycle of its target.
+UDP_MAX_PARALLEL_SCANS = 2
+# Explicit re-detection of services is not scheduled by default (0 = off, set a large interval to enable).
+SERVICE_REDETECT_INTERVAL_SECONDS = 0
+
+
 class MonitorScheduler:
     """Periodic scheduler that runs checks, writes metrics, and updates cached status."""
 
@@ -340,6 +376,8 @@ class MonitorScheduler:
         self._targets: dict[int, dict[str, Any]] = {}
         self._rt: dict[int, TargetRuntime] = {}
         self._inflight: set[int] = set()  # Targets currently being checked
+        # Global cap on simultaneous UDP scans; the Nmap worker enforces its own limit as well.
+        self._udp_slots = asyncio.Semaphore(UDP_MAX_PARALLEL_SCANS)
         # After the first target load, a target without runtime state is new: check it right away.
         # Targets present at startup stay staggered by their jitter offset instead.
         self._initial_load_done = False
@@ -551,7 +589,9 @@ class MonitorScheduler:
 
     def forget_target(self, target_id: int) -> None:
         self._targets.pop(target_id, None)
-        self._rt.pop(target_id, None)
+        rt = self._rt.pop(target_id, None)
+        if rt is not None and rt.udp_task is not None and not rt.udp_task.done():
+            rt.udp_task.cancel()
         self._inflight.discard(target_id)
         self._housekeeping_due.pop(target_id, None)
         self._last_alert_at.pop(target_id, None)
@@ -1027,6 +1067,8 @@ class MonitorScheduler:
                 "host": r["host"],
                 "tcp_host": r["tcp_host"],
                 "tcp_ports": _stored_tcp_ports(r["tcp_ports"]),
+                "enable_udp_scan": bool(_row_value(r, "enable_udp_scan", 0)),
+                "udp_ports": _stored_udp_ports(_row_value(r, "udp_ports", "")),
                 "max_retries": int(r["max_retries"]),
                 "auto_close_alert": bool(r["auto_close_alert"]),
                 "_jitter_offset": _stable_jitter_offset(tid),
@@ -1179,6 +1221,7 @@ class MonitorScheduler:
                 "http_latency_ms": None,
                 "tcp_up": None,
                 "tcp_latency_ms": None,
+                "udp_up": None,
                 "cert_days_left": None,
             }
 
@@ -1404,6 +1447,23 @@ class MonitorScheduler:
                 )
                 await asyncio.sleep(backoff)
 
+            # UDP runs as a background scan; the cycle only consumes its latest fresh result.
+            udp_checks: list[checks.PortCheck] = []
+            if cfg.get("enable_udp_scan") and cfg.get("udp_ports"):
+                udp_checks = await self._udp_cycle(target_id, cfg, rt, utcnow(), generation)
+                statuses = [c.status for c in udp_checks]
+                if PortStatus.DOWN in statuses:
+                    snapshot["udp_up"] = 0
+                elif all(st == PortStatus.UP for st in statuses):
+                    snapshot["udp_up"] = 1
+                else:
+                    snapshot["udp_up"] = None  # UNKNOWN: neither down nor up
+            tcp_checks = self._tcp_port_checks(cfg, snapshot)
+            rt.down_endpoints = {
+                "tcp": [f"tcp:{c.port}" for c in tcp_checks if c.status == PortStatus.DOWN],
+                "udp": [f"udp:{c.port}" for c in udp_checks if c.status == PortStatus.DOWN],
+            }
+
             # If target was deleted while this task is running, abort to avoid writing new metrics
             if target_id not in self._targets:
                 return
@@ -1454,6 +1514,17 @@ class MonitorScheduler:
                             if port_ms is not None:
                                 put(f"tcp_ms_{port}", float(port_ms))
 
+                    # Ternary UDP state: only confirmed ports get a 0/1 point; UNKNOWN is its own flag
+                    # series, so it can never be read as down (and the gap stays explainable).
+                    confirmed = [c for c in udp_checks if c.status in (PortStatus.UP, PortStatus.DOWN)]
+                    for c in udp_checks:
+                        if c.status == PortStatus.UNKNOWN:
+                            put(f"udp_unknown_{c.port}", 1)
+                        else:
+                            put(f"udp_up_{c.port}", 1 if c.status == PortStatus.UP else 0)
+                    if confirmed:
+                        put("udp_up", int(all(c.status == PortStatus.UP for c in confirmed)))
+
                     if cfg["enable_cert_expiration"] and snapshot["cert_days_left"] is not None:
                         put("cert_days_left", float(snapshot["cert_days_left"]))
 
@@ -1496,12 +1567,20 @@ class MonitorScheduler:
                     checks_for_status.append(snapshot.get("ping_up"))
                 if cfg["enable_tcp_connect"]:
                     checks_for_status.append(snapshot.get("tcp_up"))
-                if not checks_for_status:
+                udp_enabled = bool(cfg.get("enable_udp_scan") and cfg.get("udp_ports"))
+                if not checks_for_status and not udp_enabled:
                     return TargetStatus.DISABLED  # Already str constant
                 if any(v is None for v in checks_for_status):
                     return TargetStatus.UNKNOWN  # Already str constant
                 if any(v != 1 for v in checks_for_status):
                     return TargetStatus.DOWN  # Already str constant
+                if udp_enabled:
+                    # A confirmed UDP DOWN is down; an unconfirmed port (filtered, open|filtered, scan
+                    # failure, stale result) is UNKNOWN and never down.
+                    if snapshot.get("udp_up") == 0:
+                        return TargetStatus.DOWN
+                    if snapshot.get("udp_up") is None:
+                        return TargetStatus.UNKNOWN
                 return TargetStatus.UP  # Already str constant
 
             async def _compute_uptime_percent(hours: int = 24) -> float | None:
@@ -1557,6 +1636,11 @@ class MonitorScheduler:
                         _update_service("ping", snapshot.get("ping_up"))
                     if cfg["enable_tcp_connect"]:
                         _update_service("tcp", snapshot.get("tcp_up"))
+                    if cfg.get("enable_udp_scan") and cfg.get("udp_ports"):
+                        _update_service("udp", snapshot.get("udp_up"))
+                        if snapshot.get("udp_up") is None:
+                            rt.down_since_by_service["udp"] = None  # UNKNOWN restarts the confirmation
+                    self._persist_tcp_ports(conn, target_id, tcp_checks)
                     if cfg["enable_cert_expiration"] and snapshot.get("cert_days_left") is not None:
                         _update_service("cert", 1)
                     if calculate_uptime and uptime_percent is not None:
@@ -1606,6 +1690,183 @@ class MonitorScheduler:
             with suppress(asyncio.CancelledError):
                 await heartbeat
             await self._release_target_lock(target_id)
+
+    @staticmethod
+    def _tcp_port_checks(cfg: dict[str, Any], snapshot: dict[str, Any]) -> list[checks.PortCheck]:
+        """Per-port TCP outcomes of this cycle; an open port proves transport reachability only."""
+        if not cfg.get("enable_tcp_connect"):
+            return []
+        result = []
+        for port in cfg.get("tcp_ports") or []:
+            up = snapshot.get(f"tcp_up_{port}")
+            if up is None:
+                continue
+            result.append(
+                checks.PortCheck(
+                    "tcp",
+                    port,
+                    PortStatus.UP if up == 1 else PortStatus.DOWN,
+                    "open" if up == 1 else "closed",
+                    None,
+                    snapshot.get(f"tcp_ms_{port}"),
+                )
+            )
+        return result
+
+    @staticmethod
+    def _persist_tcp_ports(conn, target_id: int, port_checks: list[checks.PortCheck]) -> None:
+        """Store the latest per-port TCP status; service identity is left to explicit re-detection."""
+        for c in port_checks:
+            sqlite_db.update_network_port_status(
+                conn, target_id, c.protocol, c.port, c.status, c.detail, raw_state=c.raw_state, latency_ms=c.latency_ms
+            )
+
+    async def _udp_cycle(
+        self, target_id: int, cfg: dict[str, Any], rt: TargetRuntime, now: datetime, generation: int | None
+    ) -> list[checks.PortCheck]:
+        """Start a due UDP scan in the background and return the latest fresh per-port outcome.
+
+        At most one scan runs per target. A due cycle that finds the previous scan still running is
+        skipped (counted and logged); results older than two UDP intervals are UNKNOWN, never DOWN.
+        """
+        ports: list[int] = list(cfg["udp_ports"])
+        interval = max(5, int(cfg["interval_seconds"]))
+        udp_interval = udp_interval_seconds(interval)
+        if not rt.udp_seeded:
+            rt.udp_seeded = True
+            await asyncio.to_thread(self._seed_udp_result, target_id, rt)
+        elapsed = (now - rt.udp_last_started).total_seconds() if rt.udp_last_started else None
+        due = elapsed is None or elapsed >= udp_interval - interval / 2
+        if rt.udp_task is not None and rt.udp_task.done():
+            rt.udp_task = None
+        if due and rt.udp_task is None:
+            host = str(cfg.get("host") or cfg.get("tcp_host") or "")
+            if host:
+                rt.udp_last_started = now
+                rt.udp_task = asyncio.create_task(
+                    self._run_udp_scan(target_id, host, ports, udp_interval, rt, generation)
+                )
+                rt.udp_skipped_cycles = 0
+        elif due:
+            rt.udp_skipped_cycles += 1
+            _log.log(
+                logging.WARNING if rt.udp_skipped_cycles == 1 else logging.DEBUG,
+                "Target %s: UDP scan still running, cycle skipped (%d in a row); results turn UNKNOWN when stale",
+                target_id,
+                rt.udp_skipped_cycles,
+            )
+        max_age = udp_interval * UDP_RESULT_MAX_AGE_FACTOR
+        fresh = rt.udp_result_at is not None and (now - rt.udp_result_at).total_seconds() <= max_age
+        outcome = []
+        for port in ports:
+            known = rt.udp_result.get(port) if fresh else None
+            outcome.append(known or checks.PortCheck("udp", port, PortStatus.UNKNOWN, None, "no fresh result"))
+        return outcome
+
+    def _seed_udp_result(self, target_id: int, rt: TargetRuntime) -> None:
+        """After a restart, reuse the persisted per-port status so a fresh result is not thrown away."""
+        try:
+            with self._db_conn() as conn:
+                rows = sqlite_db.list_network_ports(conn, target_id)
+        except Exception as exc:  # noqa: BLE001 - seeding is best effort; UNKNOWN is the safe default
+            _log.debug("Target %s: could not seed UDP state: %s", target_id, exc)
+            return
+        newest: datetime | None = None
+        for row in rows:
+            checked_at = _stored_datetime(row["checked_at"])
+            if row["protocol"] != "udp" or checked_at is None or row["status"] not in (PortStatus.UP, PortStatus.DOWN):
+                continue
+            rt.udp_result[row["port"]] = checks.PortCheck(
+                "udp", row["port"], row["status"], row["raw_state"], row["detail"]
+            )
+            newest = checked_at if newest is None else min(newest, checked_at)
+        rt.udp_result_at = newest
+        rt.udp_last_started = newest
+
+    async def _run_udp_scan(
+        self, target_id: int, host: str, ports: list[int], udp_interval: int, rt: TargetRuntime, generation: int | None
+    ) -> None:
+        """Background UDP scan: result and port status are stored when it ends, however late that is."""
+        timeout = min(checks.UDP_SCAN_TIMEOUT_SECONDS, max(5.0, udp_interval * 0.5))
+        try:
+            async with self._udp_slots:
+                outcome = await asyncio.wait_for(
+                    checks.udp_scan_ports(host, ports, timeout_seconds=timeout), timeout=timeout + 15
+                )
+        except TimeoutError:
+            outcome = {p: checks.PortCheck("udp", p, PortStatus.UNKNOWN, None, "scan timeout") for p in ports}
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - a scan failure must never stop the scheduler
+            _log.warning("Target %s: UDP scan task failed: %s", target_id, type(exc).__name__)
+            outcome = {p: checks.PortCheck("udp", p, PortStatus.UNKNOWN, None, "scan failed") for p in ports}
+        if self._rt.get(target_id) is not rt or target_id not in self._targets:
+            return  # target deleted or re-created meanwhile: a late result must not be adopted
+        if list(self._targets[target_id].get("udp_ports") or []) != ports:
+            return  # port configuration changed while scanning
+        rt.udp_result = outcome
+        rt.udp_result_at = utcnow()
+        try:
+            with maintenance.work_section(generation), self._db_conn() as conn:
+                for c in outcome.values():
+                    sqlite_db.update_network_port_status(
+                        conn, target_id, "udp", c.port, c.status, c.detail, raw_state=c.raw_state
+                    )
+                conn.commit()
+        except maintenance.MaintenanceActiveError:
+            return
+        except Exception as exc:  # noqa: BLE001 - persistence failure is logged, the in-memory result stays
+            _log.warning("Target %s: could not store UDP port status: %s", target_id, exc)
+
+    async def redetect_services(self, target_id: int, generation: int | None = None) -> dict[str, str]:
+        """Explicit service re-detection (``-sV``) for the configured ports of one target.
+
+        Compares each probed service with the stored base identity: a changed version is only noted,
+        a different service is SERVICE_CHANGED. The port status is never touched. Returns
+        ``{"<protocol>:<port>": identity}`` for the ports that could be judged.
+        """
+        cfg = self._targets.get(target_id)
+        if not cfg:
+            return {}
+        host = str(cfg.get("tcp_host") or cfg.get("host") or "")
+        tcp = list(cfg.get("tcp_ports") or []) if cfg.get("enable_tcp_connect") else []
+        udp = list(cfg.get("udp_ports") or []) if cfg.get("enable_udp_scan") else []
+        if not host or not (tcp or udp):
+            return {}
+        from app.services.nmap_client import request_scan
+
+        try:
+            result = await request_scan(host, tcp_ports=tcp or None, udp_ports=udp or None, detect_services=True)
+        except Exception as exc:  # noqa: BLE001 - a failed detection says nothing about the target
+            _log.warning(
+                "Target %s: service re-detection failed: %s", target_id, getattr(exc, "code", type(exc).__name__)
+            )
+            return {}
+        observed = {(p.protocol, p.port): p for h in result.hosts for p in h.ports}
+        judged: dict[str, str] = {}
+        generation = maintenance.current_generation() if generation is None else generation
+        with maintenance.work_section(generation), self._db_conn() as conn:
+            stored = {(r["protocol"], r["port"]): r for r in sqlite_db.list_network_ports(conn, target_id)}
+            for key, found in observed.items():
+                assessment = checks.assess_service_identity(stored.get(key), found.service)
+                if assessment.identity is None:
+                    continue
+                sqlite_db.record_service_observation(
+                    conn,
+                    target_id,
+                    key[0],
+                    key[1],
+                    identity=assessment.identity,
+                    detail=assessment.detail,
+                    service=found.service,
+                    adopt=assessment.adopt,
+                    version=assessment.version,
+                )
+                judged[f"{key[0]}:{key[1]}"] = assessment.identity
+                if assessment.identity == checks.SERVICE_CHANGED:
+                    _log.warning("Target %s: %s (port %s/%s)", target_id, assessment.detail, key[0], key[1])
+            conn.commit()
+        return judged
 
     def _write_metric_points(
         self,
@@ -1778,7 +2039,10 @@ class MonitorScheduler:
                 # Host went DOWN - create alert record
                 rt.failed_services = alerting_services
 
-                failed_service_str = ", ".join(sorted(alerting_services))
+                # Name the failing endpoints (e.g. "tcp:25, udp:53") so the cause is traceable per port.
+                failed_service_str = ", ".join(
+                    sorted(endpoint for svc in alerting_services for endpoint in (rt.down_endpoints.get(svc) or [svc]))
+                )
 
                 # Only create a new alert record if we don't already have an active one
                 is_new_alert = False

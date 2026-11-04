@@ -29,8 +29,12 @@ function setup({ geoPoints = 'not-json', leaflet = {} } = {}) {
   const map = {
     stop() { removed.stop += 1; }, off() { removed.off += 1; }, remove() { removed.remove += 1; },
     createPane() {}, getPane() { return { style: {} }; },
-    project([lat, lon]) { return { x: lon, y: lat }; },
-    unproject(point) { return [point.y, point.x]; },
+    // 20 px per degree: far enough apart that the markers do not touch and a link remains.
+    project([lat, lon]) { return { x: lon * 20, y: lat * 20 }; },
+    unproject(point) {
+      const [x, y] = Array.isArray(point) ? point : [point.x, point.y];
+      return [y / 20, x / 20];
+    },
     getZoom() { return 4; }, getSize() { return { x: 400, y: 200 }; },
     invalidateSize() {}, fitBounds() { removed.fitBounds += 1; }, setView() { removed.setView += 1; },
     on() {},
@@ -43,7 +47,7 @@ function setup({ geoPoints = 'not-json', leaflet = {} } = {}) {
   const polyline = (points) => {
     removed.polylines += 1;
     routeLines.push(points);
-    return { addTo() { return this; }, on() {}, setStyle() {} };
+    return { addTo() { return this; }, on() {}, setStyle() {}, bindTooltip() { return this; } };
   };
   const element = () => ({
     style: {}, setAttribute() {}, appendChild() {}, addEventListener() {}, remove() {},
@@ -89,7 +93,9 @@ test('valid geo points initialise a route and cleanup releases the Leaflet map',
   await tick();
   assert.equal(errors.length, 0, JSON.stringify(errors));
   assert.ok(container._leaflet_map, 'the map was created');
-  assert.ok(routeLines.some((line) => JSON.stringify(line) === JSON.stringify([[50, 7], [52, 13]])), 'the route segment was created');
+  // The visible link is trimmed to stop before each marker, so it lies strictly between the two hops.
+  assert.ok(routeLines.some((line) => line.length === 2 && line.every(([lat, lon]) => lat >= 50 && lat <= 52 && lon >= 7 && lon <= 13)
+    && line[0][1] > 7 && line[1][1] < 13), 'the route segment was created');
   assert.ok(removed.markers >= 2, 'hop markers and direction marker were created');
   assert.equal(removed.fitBounds, 1, 'the route bounds were fitted');
 

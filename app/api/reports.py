@@ -238,6 +238,16 @@ async def get_target_pdf_report(
             )
 
     tcp_port_data = {}
+    if uptime_metric == "udp_up":  # UDP is the only enabled check: its availability drives the report
+        uptime_data = await _fetch_metric_data_async(
+            tsdb_dir,
+            target_id,
+            "udp_up",
+            from_date,
+            to_date,
+            limit=choose_points_limit(metric="udp_up", since=from_date, until=to_date, profile="pdf"),
+            errors=fetch_errors,
+        )
     if target_dict.get("enable_tcp_connect"):
         tcp_data = await _fetch_metric_data_async(
             tsdb_dir,

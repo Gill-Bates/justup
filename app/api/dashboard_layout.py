@@ -31,6 +31,7 @@ from ..db.dashboard_layouts import (
     get_dashboard_layout,
     set_dashboard_layout,
 )
+from ..utils.availability_rules import gap_threshold_seconds
 from ..utils.deps import get_conn, get_tsdb_dir
 from ..utils.rate_limit import RATE_LIMIT_DEFAULT, rate_limit
 from ..utils.time import parse_utc, utcnow
@@ -136,7 +137,7 @@ async def get_uptime_widget(request: Request, conn=Depends(get_conn), _user=Depe
 
     async def summarize(target):
         metric = select_uptime_metric(target)
-        service = {"http_up": "HTTP", "ping_up": "PING", "tcp_up": "TCP"}[metric]
+        service = {"http_up": "HTTP", "ping_up": "PING", "tcp_up": "TCP", "udp_up": "UDP"}[metric]
         async with semaphore:
             series = await run_in_threadpool(
                 tsdb_db.query_availability_series,
@@ -148,7 +149,9 @@ async def get_uptime_widget(request: Request, conn=Depends(get_conn), _user=Depe
                 enabled_services={service},
                 check_interval_seconds=target["interval_seconds"],
             )
-        return _availability_seconds(series.get(service, []), since, until, max(60, target["interval_seconds"] * 3))
+        return _availability_seconds(
+            series.get(service, []), since, until, max(60, gap_threshold_seconds(target["interval_seconds"]))
+        )
 
     results = await asyncio.gather(*(summarize(target) for target in targets))
     up = sum(result[0] for result in results)

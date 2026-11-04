@@ -47,7 +47,7 @@ function recorder(sidebarCollapsed) {
 			const marks = Object.fromEntries(Object.entries(landmarks).map(([key, selector]) => [key, rectOf(selector)]));
 			record.frames.push({
 				t: Math.round(performance.now()), theme: root.getAttribute("data-bs-theme"), sidebarSmall: root.classList.contains("ju-nav-sm"),
-				ready: Object.values(marks).every(Boolean), marks,
+				ready: Object.values(marks).every(Boolean), marks, plex: document.fonts.check('1em "IBM Plex Sans"'),
 			});
 		}
 		requestAnimationFrame(frame);
@@ -100,7 +100,8 @@ function assertStable(record, { theme, sidebarCollapsed, label }) {
 			if (rect.some((value, index) => Math.abs(value - reference[index]) > LANDMARK_TOLERANCE_PX)) moved.push(`${frame.t}ms ${key} ${reference} -> ${rect}`);
 		}
 	}
-	assert.deepEqual(moved.slice(0, 6), [], `${label}: landmarks moved after first paint (${moved.length} frames)`);
+	const settled = ready.find((frame) => Object.entries(frame.marks).every(([key, rect]) => rect.every((value, index) => Math.abs(value - ready[ready.length - 1].marks[key][index]) <= LANDMARK_TOLERANCE_PX)));
+	assert.deepEqual(moved.slice(0, 6), [], `${label}: landmarks moved after first paint (${moved.length} of ${ready.length} frames; first ready at ${first.t} ms with Plex ${first.plex}, stable from ${settled ? settled.t : "never"} ms with Plex ${settled ? settled.plex : "?"})`);
 }
 
 for (const viewport of VIEWPORTS) {

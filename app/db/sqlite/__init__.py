@@ -176,6 +176,13 @@ from .monitor_quality import (
     insert_monitor_quality,
     query_monitor_quality,
 )
+from .network_ports import (
+    all_network_ports,
+    list_network_ports,
+    record_service_observation,
+    sync_network_ports,
+    update_network_port_status,
+)
 from .recipients import (
     DuplicatePhoneError,
     _assert_phone_free,
@@ -201,7 +208,6 @@ from .report_jobs import (
     prune_expired_report_jobs,
     update_report_job,
 )
-from .network_ports import all_network_ports, list_network_ports, sync_network_ports, update_network_port_status
 from .scheduler_runs import (
     cleanup_stale_scheduler_runs,
     register_scheduler_run,

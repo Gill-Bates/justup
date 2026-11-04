@@ -334,6 +334,8 @@ class PDFWorker:
                                 port_data = _fetch(f"tcp_ms_{port}", limit_metric="tcp_ms")
                                 if port_data:
                                     tcp_port_data[port] = port_data
+                    if uptime_metric == "udp_up":
+                        uptime_data = _fetch("udp_up")
                     if target.get("enable_cert_expiration"):
                         cert_data = _fetch("cert_days_left")
                     display_data = {}

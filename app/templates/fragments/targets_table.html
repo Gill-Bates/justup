@@ -41,7 +41,7 @@
 						<tbody>
 							{% for t in group_targets %}
 			{# data-search lists the fields the targets search matches: name, host, URL, ports, group #}
-			<tr data-search="{{ [t.name, t.host, t.http_url, (t.tcp_ports if t.enable_tcp_connect), (t.udp_ports if t.enable_udp_scan), group_name] | select | join(' ') }}">
+			<tr data-search="{{ [t.name, t.host, t.http_url, (t.tcp_ports if t.enable_tcp_connect), (t.udp_ports if t.enable_udp_scan), group_name] | select | join(' ') }}" data-target-id="{{ t.id }}">
 								<td data-label="Status" class="text-center ju-cell-icon">
 									<span hx-get="/ui/fragments/target-status/{{ t.id }}" hx-trigger="load, justup-target-{{ t.id }} from:body throttle:1s"
 										hx-swap="innerHTML">

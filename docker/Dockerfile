@@ -447,6 +447,9 @@ RUN apt-get update && apt-get upgrade -y && DEBIAN_FRONTEND=noninteractive apt-g
     libfreetype6 \
     libjpeg62-turbo \
     zlib1g \
+    libssl3 \
+    libstdc++6 \
+    libzstd1 \
     mtr-tiny \
     whatweb \
     gosu \

@@ -14,7 +14,12 @@ from typing import Any
 
 from .constants import UPTIME_THRESHOLD_GREEN, UPTIME_THRESHOLD_YELLOW
 
-_PRIORITY = (("enable_http_check", "http_up"), ("enable_ping", "ping_up"), ("enable_tcp_connect", "tcp_up"))
+_PRIORITY = (
+    ("enable_http_check", "http_up"),
+    ("enable_ping", "ping_up"),
+    ("enable_tcp_connect", "tcp_up"),
+    ("enable_udp_scan", "udp_up"),
+)
 
 
 def _flag(target: Mapping[str, Any] | Any, key: str) -> bool:
@@ -57,7 +62,7 @@ def combine_availability(events: Iterable[tuple[datetime, str, int]]) -> Iterato
 
 
 def select_uptime_metric(target: Mapping[str, Any] | Any) -> str | None:
-    """Return the uptime metric for a target. Priority: HTTP > Ping > TCP; None if no check is enabled."""
+    """Return the uptime metric for a target. Priority: HTTP > Ping > TCP > UDP; None if no check is enabled."""
     for flag, metric in _PRIORITY:
         if _flag(target, flag):
             return metric

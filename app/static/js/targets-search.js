@@ -21,6 +21,11 @@
 	const memory = filter.createExpansionMemory();
 	let requestedScope = null;
 
+	// Writing identical text still replaces the text node (a mutation, and a repeated announcement).
+	function setText(element, text) {
+		if (element.textContent !== text) element.textContent = text;
+	}
+
 	function collapseOf(item) {
 		return item.querySelector('.accordion-collapse');
 	}
@@ -44,7 +49,7 @@
 			element.hidden = false;
 		});
 		container.querySelectorAll('.targets-group-count').forEach(function (badge) {
-			badge.textContent = badge.dataset.total;
+			setText(badge, badge.dataset.total);
 		});
 	}
 
@@ -82,13 +87,13 @@
 					setOpen(collapse, true);
 				}
 				const badge = item.querySelector('.targets-group-count');
-				if (badge) badge.textContent = filter.countLabel(groupHits, rows.length);
+				if (badge) setText(badge, filter.countLabel(groupHits, rows.length));
 			});
 		}
 		const noMatch = searching && rowTotal > 0 && hits === 0;
 		if (emptyState) emptyState.hidden = !noMatch;
-		if (termLabel) termLabel.textContent = noMatch ? '"' + input.value.trim() + '"' : '';
-		if (status) status.textContent = searching && rowTotal > 0 ? filter.statusMessage(hits) : '';
+		if (termLabel) setText(termLabel, noMatch ? '"' + input.value.trim() + '"' : '');
+		if (status) setText(status, searching && rowTotal > 0 ? filter.statusMessage(hits) : '');
 		syncScope(searching);
 	}
 
@@ -133,6 +138,9 @@
 		memory.clear();
 		render();
 	});
+
+	// A live update rewrites cells in place: re-apply the query to the changed rows.
+	container.addEventListener('targets:patched', render);
 
 	if (input.value !== '') render();
 })();

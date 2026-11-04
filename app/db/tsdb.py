@@ -41,6 +41,14 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Self
 
+from ..utils.availability_rules import (
+    MIN_DOWNTIME_SECONDS,
+    Outage,
+    gap_threshold_seconds,
+    is_gap,
+    measured_outages,
+    merge_outages,
+)
 from ..utils.time import ensure_utc, parse_utc, utcnow
 from ..utils.uptime_metric import combine_availability
 from . import tsdb_segments as seg
@@ -64,15 +72,26 @@ ROLLUP_CONFIG = {
 }
 
 # Metrics that are 0/1 (up/down) - use min() instead of median
-BINARY_METRICS = {"ping_up", "http_up", "tcp_up"}
-_TCP_UP_PORT_RE = re.compile(r"^tcp_up_([0-9]{1,5})$")
+BINARY_METRICS = {"ping_up", "http_up", "tcp_up", "udp_up"}
+# Per-port series are keyed by protocol + port, so ``tcp_up_53`` and ``udp_up_53`` never collide.
+_PORT_UP_RE = re.compile(r"^(?:tcp|udp)_up_([0-9]{1,5})$")
+_UDP_UNKNOWN_RE = re.compile(r"^udp_unknown_([0-9]{1,5})$")
 
 
 def is_binary_metric(base: str) -> bool:
-    """True for 0/1 availability metrics, including per-port ``tcp_up_<1..65535>``."""
+    """True for 0/1 availability metrics, including per-port ``tcp_up_<port>`` and ``udp_up_<port>``."""
     if base in BINARY_METRICS:
         return True
-    m = _TCP_UP_PORT_RE.match(base)
+    m = _PORT_UP_RE.match(base)
+    return m is not None and 1 <= int(m.group(1)) <= 65535
+
+
+def is_flag_metric(base: str) -> bool:
+    """True for ``udp_unknown_<port>``: a 1 means UNKNOWN in the bucket, so rollups keep the max.
+
+    The ternary UDP state stays lossless: confirmed 0/1 live in ``udp_up_<port>``, UNKNOWN is its own flag.
+    """
+    m = _UDP_UNKNOWN_RE.match(base)
     return m is not None and 1 <= int(m.group(1)) <= 65535
 
 
@@ -903,7 +922,7 @@ def _resample_points(
         vals = buckets[bucket_start]
         if not vals:
             continue
-        agg_value = min(vals) if is_binary else _compute_median(vals)
+        agg_value = min(vals) if is_binary else max(vals) if is_flag_metric(base) else _compute_median(vals)
         resampled.append(MetricPoint(ts=bucket_start, value=agg_value))
 
     # Ensure we keep the first/last timestamps for stable charts
@@ -1023,6 +1042,7 @@ def downsample_series(
         return 0
 
     is_binary = is_binary_metric(_base_metric(metric))
+    is_flag = is_flag_metric(_base_metric(metric))
     with _FileLock(target_path):
         target_path.parent.mkdir(parents=True, exist_ok=True)
         # Re-check under the exclusive lock: another run may have written meanwhile.
@@ -1033,7 +1053,7 @@ def downsample_series(
                 if newest is not None and bucket_start <= newest:
                     continue
                 # For up/down metrics: 0 if any check failed, 1 if all passed
-                agg_value = min(values) if is_binary else _compute_median(values)
+                agg_value = min(values) if is_binary else max(values) if is_flag else _compute_median(values)
                 f.write(json.dumps({"ts": bucket_start.isoformat(), "value": agg_value}, ensure_ascii=False) + "\n")
                 created += 1
             f.flush()
@@ -1752,6 +1772,8 @@ def query_display_series(
             value = max(values, key=lambda code: (6 if code == 0 else int(code) // 100, code))
         elif is_binary_metric(metric):
             value = min(values)
+        elif is_flag_metric(metric):
+            value = max(values)
         else:
             value = _compute_median(values)
         code_counts = None
@@ -1790,6 +1812,46 @@ class DowntimePeriod:
     failed_services: list[str] = field(default_factory=list)  # e.g. ["HTTP", "Ping", "TCP"]
 
 
+def _series_points(
+    tsdb_dir: Path,
+    *,
+    target_id: int,
+    metric: str,
+    since: datetime | None,
+    until: datetime | None,
+    interval_seconds: float,
+) -> list[tuple[datetime, int | None]]:
+    """Time-ordered ``(ts, 1 | 0 | None)`` points of one availability series.
+
+    A UDP series also carries its explicit UNKNOWN markers (``udp_unknown_<port>``), which end an outage
+    like a gap does. The last point before ``since`` seeds the state, clipped to ``since``.
+    """
+
+    def read(**kw: Any) -> list[MetricPoint]:
+        return query(tsdb_dir, target_id=target_id, metric=metric, **kw)
+
+    points: list[tuple[datetime, int | None]] = []
+    if since is not None:
+        before = read(until=since, limit=1, latest=True)
+        if (
+            before
+            and before[0].ts < since
+            and (since - before[0].ts).total_seconds() <= gap_threshold_seconds(interval_seconds)
+        ):
+            points.append((since, 1 if before[0].value in (1, True) else 0))
+    points.extend(
+        (pt.ts, int(pt.value))
+        for pt in read(since=since, until=until, limit=_ALL_POINTS_LIMIT, latest=False)
+        if pt.value in (0, 1)
+    )
+    if metric.startswith("udp_up_"):
+        unknown = f"udp_unknown_{metric[len('udp_up_') :]}"
+        marks = query(tsdb_dir, target_id=target_id, metric=unknown, since=since, until=until, limit=_ALL_POINTS_LIMIT)
+        points.extend((pt.ts, None) for pt in marks if pt.value == 1)
+    points.sort(key=lambda item: item[0])
+    return points
+
+
 def query_downtime_periods(
     tsdb_dir: Path,
     *,
@@ -1797,120 +1859,55 @@ def query_downtime_periods(
     since: datetime | None = None,
     until: datetime | None = None,
     limit: int = 20,
-    min_duration_seconds: int = 60,
+    min_duration_seconds: int = MIN_DOWNTIME_SECONDS,
+    series: Sequence[tuple[str, str]] | None = None,
+    check_interval_seconds: int = 60,
+    now: datetime | None = None,
 ) -> list[DowntimePeriod]:
+    """Find downtime periods from the confirmed measurements of the given availability series.
+
+    ``series`` lists ``(metric, label)`` of the checks currently enabled (see ``downtime_series``), one
+    series per TCP/UDP port; without it the legacy aggregate series are used. Every series yields its
+    outages by the shared rule in ``availability_rules`` (gaps and UNKNOWN points are neither downtime
+    nor uptime); a period is the union of overlapping outages of all series.
+
+    Only closed periods >= min_duration_seconds are counted, an ongoing one always.
+    Returns the most recent first.
     """
-    Find downtime periods by analyzing metric transitions across all check types.
-
-    A downtime period starts when any metric goes from 1 to 0,
-    and ends when all metrics go back to 1 (or is ongoing).
-
-    Only closed periods >= min_duration_seconds are counted
-    to avoid false positives from transient packet loss or single check failures.
-
-    Returns a list of DowntimePeriod (most recent first), each with a list
-    of which services (HTTP, Ping, TCP) were down during that period.
-    """
-    # Metric name → display label mapping
-    metric_labels = {
-        "http_up": "HTTP",
-        "ping_up": "Ping",
-        "tcp_up": "TCP",
-    }
-
-    # Query all metrics and collect points with their metric type
-    # Build a dict: timestamp → {metric: is_up}
-    timeline: dict[datetime, dict[str, bool]] = {}
-
-    for metric in ("http_up", "ping_up", "tcp_up"):
-        points = query(
+    if series is None:
+        series = (("http_up", "HTTP"), ("ping_up", "Ping"), ("tcp_up", "TCP"))
+    series = list(series)
+    port_series = [item for item in series if item[1].startswith("TCP:")]
+    if port_series and not any(_series_exists(_series_path(tsdb_dir, target_id, m)) for m, _label in port_series):
+        # Data written before per-port series existed only has the aggregate.
+        series = [item for item in series if item not in port_series] + [("tcp_up", "TCP")]
+    until_u = ensure_utc(until) if until else None
+    since_u = ensure_utc(since) if since else None
+    ref_now = now or utcnow()
+    found: list[tuple[str, Outage]] = []
+    for metric, label in series:
+        points = _series_points(
             tsdb_dir,
             target_id=target_id,
             metric=metric,
-            since=since,
-            until=until,
-            limit=_ALL_POINTS_LIMIT,  # a head-limited read would drop the newest points
-            latest=False,
+            since=since_u,
+            until=until_u,
+            interval_seconds=check_interval_seconds,
         )
-        for point in points:
-            if point.ts not in timeline:
-                timeline[point.ts] = {}
-            is_up = point.value == 1 or point.value is True
-            timeline[point.ts][metric] = is_up
-
-    if not timeline:
-        return []
-
-    # Sort timestamps and process transitions
-    sorted_times = sorted(timeline.keys())
-
+        # An ongoing outage is only ongoing at the live edge of the query, never inside a closed range.
+        closed_range = until_u is not None and until_u < ref_now - timedelta(seconds=check_interval_seconds)
+        live = None if closed_range else ref_now
+        found.extend(
+            (label, outage) for outage in measured_outages(points, interval_seconds=check_interval_seconds, now=live)
+        )
     periods: list[DowntimePeriod] = []
-    downtime_start: datetime | None = None
-    current_failed: set[str] = set()
-
-    # Track last known state for each metric
-    # Pre-query: get state before 'since' to avoid assuming initial state is "up"
-    last_state: dict[str, bool] = {}
-    if since:
-        for metric in ("http_up", "ping_up", "tcp_up"):
-            pre_points = query(
-                tsdb_dir,
-                target_id=target_id,
-                metric=metric,
-                until=since,
-                limit=1,
-                latest=True,
-            )
-            if pre_points:
-                is_up = pre_points[0].value == 1 or pre_points[0].value is True
-                last_state[metric] = is_up
-
-    for ts in sorted_times:
-        states = timeline[ts]
-
-        # Update last known states with new data
-        last_state.update(states)
-
-        # Determine which services are currently down
-        failed_now = {m for m, is_up in last_state.items() if not is_up}
-
-        if failed_now and downtime_start is None:
-            # Start of downtime
-            downtime_start = ts
-            current_failed = failed_now.copy()
-        elif failed_now and downtime_start is not None:
-            # Still in downtime - track any additional failures
-            current_failed.update(failed_now)
-        elif not failed_now and downtime_start is not None:
-            # End of downtime - check minimum duration
-            duration = int((ts - downtime_start).total_seconds())
-            if duration >= min_duration_seconds:
-                failed_labels = sorted([metric_labels[m] for m in current_failed])
-                periods.append(
-                    DowntimePeriod(
-                        start=downtime_start,
-                        end=ts,
-                        duration_seconds=duration,
-                        failed_services=failed_labels,
-                    )
-                )
-            downtime_start = None
-            current_failed = set()
-
-    # If still in downtime at end of data
-    # Always include ongoing downtime regardless of duration
-    if downtime_start is not None:
-        failed_labels = sorted([metric_labels[m] for m in current_failed])
-        periods.append(
-            DowntimePeriod(
-                start=downtime_start,
-                end=None,
-                duration_seconds=None,
-                failed_services=failed_labels,
-            )
-        )
-
-    # Return most recent first, limited
+    for merged in merge_outages(found):
+        if merged.end is None:
+            periods.append(DowntimePeriod(merged.start, None, None, list(merged.services)))
+            continue
+        duration = int((merged.end - merged.start).total_seconds())
+        if duration >= min_duration_seconds:
+            periods.append(DowntimePeriod(merged.start, merged.end, duration, list(merged.services)))
     periods.reverse()
     return periods[:limit]
 
@@ -1966,7 +1963,7 @@ def _availability_transitions(
                 if previous_ts is not None:
                     delta = (ts - previous_ts).total_seconds()
                     expected = rollup_interval or interval or check_interval_seconds
-                    if expected is not None and delta > expected * 3:
+                    if expected is not None and is_gap(delta, expected):
                         if previous_up is not None and result[-1]["ts"] != previous_ts.isoformat():
                             result.append({"ts": previous_ts.isoformat(), "up": previous_up})
                         if previous_up is not None:
@@ -2031,6 +2028,7 @@ def query_availability_series(
     enabled_services: set[str] | None = None,
     tcp_ports: list[int] | None = None,
     check_interval_seconds: int = 60,
+    udp_ports: list[int] | None = None,
 ) -> dict[str, list[dict]]:
     """
     Query availability time series per service (not aggregated).
@@ -2082,5 +2080,13 @@ def query_availability_series(
         else:
             # No per-port list: fall back to the aggregated tcp_up series.
             add_series("TCP", "tcp_up")
+
+    if enabled_services is None or "UDP" in enabled_services:
+        # UNKNOWN UDP cycles write no udp_up point, so they surface as gaps, never as down.
+        if udp_ports:
+            for port in udp_ports:
+                add_series(f"UDP:{port}", f"udp_up_{port}")
+        else:
+            add_series("UDP", "udp_up")
 
     return series

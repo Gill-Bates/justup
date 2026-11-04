@@ -346,3 +346,13 @@ def test_focus_rules_use_the_shared_tokens_not_the_primary_colour() -> None:
                 if re.search(r"--bs-primary|#[0-9a-fA-F]{3,8}\b|rgba?\(", value)
             )
     assert not offenders, "focus rules must use the --ju-focus-* tokens:\n" + "\n".join(offenders)
+
+
+def test_floating_panels_use_the_shared_elevation_token_in_both_themes() -> None:
+    css = TEMPLATES.parent / "static" / "css"
+    layout = (css / "gentelella-layout.css").read_text(encoding="utf-8")
+    assert len(re.findall(r"--ju-shadow-raised:", layout)) == 2, "light and dark each define the elevation token"
+    notifications = (css / "notifications.css").read_text(encoding="utf-8")
+    shadows = re.findall(r"box-shadow:\s*([^;]+);", notifications)
+    assert "var(--ju-shadow-raised)" in shadows
+    assert not [s for s in shadows if "rgb(" in s and "var(" not in s and "0 0 0 2px" not in s], shadows

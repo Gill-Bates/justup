@@ -13,6 +13,7 @@ import sqlite3
 from collections.abc import Callable
 from typing import NamedTuple
 
+from ...utils.tcp_ports import parse_port_list
 from .connection import ensure_wal_mode, transaction
 from .layout import (
     _SAFE_HINT,
@@ -38,7 +39,6 @@ from .schema import (
     get_schema_version,
 )
 from .schema_notifications import ensure_alert_dispatch_outbox_table, ensure_notification_queue_table
-from ...utils.tcp_ports import parse_port_list
 
 # Keep the pre-split logger name: log filters and caplog assertions address app.db.sqlite.
 _log = logging.getLogger("app.db.sqlite")
@@ -248,7 +248,10 @@ def _migrate_6_pop_candidates(conn: sqlite3.Connection) -> None:
 def _migrate_7_network_ports(conn: sqlite3.Connection) -> None:
     columns = {row[1] for row in conn.execute("PRAGMA table_info(targets)")}
     if "enable_udp_scan" not in columns:
-        conn.execute("ALTER TABLE targets ADD COLUMN enable_udp_scan INTEGER NOT NULL DEFAULT 0 CHECK (enable_udp_scan IN (0, 1))")
+        conn.execute(
+            "ALTER TABLE targets ADD COLUMN enable_udp_scan "
+            "INTEGER NOT NULL DEFAULT 0 CHECK (enable_udp_scan IN (0, 1))"
+        )
     if "udp_ports" not in columns:
         conn.execute("ALTER TABLE targets ADD COLUMN udp_ports TEXT NOT NULL DEFAULT ''")
     ensure_target_network_ports_table(conn)
@@ -258,9 +261,40 @@ def _migrate_7_network_ports(conn: sqlite3.Connection) -> None:
         except ValueError:
             continue
         conn.executemany(
-            "INSERT OR IGNORE INTO target_network_ports(target_id, protocol, port, source) VALUES(?, 'tcp', ?, 'manual')",
+            "INSERT OR IGNORE INTO target_network_ports(target_id, protocol, port, source) "
+            "VALUES(?, 'tcp', ?, 'manual')",
             ((row["id"], port) for port in ports),
         )
+
+
+_NETWORK_PORT_STATE_COLUMNS = (
+    (
+        "raw_state",
+        (
+            "TEXT CHECK (raw_state IN ('open', 'closed', 'filtered', 'unfiltered', "
+            "'open|filtered', 'closed|filtered', 'unknown'))"
+        ),
+    ),
+    ("service_identity", "TEXT CHECK (service_identity IN ('identified', 'unknown', 'changed'))"),
+    ("identity_changed_at", "timestamp"),
+    ("latency_ms", "REAL"),
+)
+
+
+def _migrate_8_network_port_state(conn: sqlite3.Connection) -> None:
+    ensure_target_network_ports_table(conn)
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(target_network_ports)")}
+    for name, definition in _NETWORK_PORT_STATE_COLUMNS:
+        if name not in columns:
+            conn.execute(f"ALTER TABLE target_network_ports ADD COLUMN {name} {definition}")  # constants only
+    # Only a probed, named service counts as identified; a nmap-services table hit or a manual port does not.
+    conn.execute(
+        """UPDATE target_network_ports
+           SET service_identity = CASE
+               WHEN service_method = 'probed' AND COALESCE(service_name, '') != '' THEN 'identified'
+               ELSE 'unknown' END
+           WHERE service_identity IS NULL"""
+    )
 
 
 # Ordered by version, contiguous from 2.
@@ -275,6 +309,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(5, "recipients.enable_for_all_targets flag", _migrate_5_recipient_enable_for_all_targets),
     Migration(6, "bounded PoP candidate evidence and explicit review metadata", _migrate_6_pop_candidates),
     Migration(7, "UDP configuration and protocol-specific port metadata", _migrate_7_network_ports),
+    Migration(8, "raw port state, service identity and latency per network port", _migrate_8_network_port_state),
 )
 
 

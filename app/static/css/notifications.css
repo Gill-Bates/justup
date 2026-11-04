@@ -73,7 +73,7 @@
 	border: 1px solid var(--ju-panel-line);
 	border-radius: 0.5rem;
 	background: var(--ju-panel-bg);
-	box-shadow: 0 0.5rem 1.5rem rgb(0 0 0 / 20%);
+	box-shadow: var(--ju-shadow-raised);
 	color: var(--bs-body-color);
 }
 

@@ -884,33 +884,43 @@ code.tr-ip {
     background: transparent;
 }
 
-.tr-legend-dash {
+.tr-legend-line {
     display: inline-block;
-    width: 1.1rem;
-    border-top: 2px dashed var(--tr-route-dashed, var(--tr-muted));
+    width: 1.6rem;
+    height: 0;
+    border-top: 3px solid var(--tr-route-color, #0b4fc0);
+}
+
+/* Pattern, not color, marks an estimated or unknown link; dash and gap follow the shared 9:6 rule. */
+.tr-legend-line--dashed {
+    border-top-style: dashed;
 }
 
 /* ============================================================================
    Leaflet map skin
    ============================================================================ */
-.traceroute-map-container {
-    --tr-route-color: #0d6efd;
-    --tr-route-dashed: #6c757d;
-    --tr-label-color: #6c757d;
-    --tr-label-strong: #343a40;
-    --tr-label-halo: #eef3f8;
 
-    background-color: #dbe8f4;
+/* Fallbacks only: traceroute-map.js writes the shared palette (route_map_rules.PALETTE) onto the frame. */
+.tr-map-frame {
+    --tr-route-color: #0b4fc0;
+    --tr-label-color: #6b7785;
+    --tr-label-strong: #1f2a37;
+    --tr-label-halo: #f4f6f9;
+}
+
+[data-bs-theme="dark"] .tr-map-frame {
+    --tr-route-color: #7cc0ff;
+    --tr-label-color: #7d90a8;
+    --tr-label-strong: #d6e2f0;
+    --tr-label-halo: #0c1726;
+}
+
+.traceroute-map-container {
+    background-color: #e4ecf4;
 }
 
 [data-bs-theme="dark"] .traceroute-map-container {
-    --tr-route-color: #4da3ff;
-    --tr-route-dashed: #8fb8f0;
-    --tr-label-color: #7f93aa;
-    --tr-label-strong: #c4d2e2;
-    --tr-label-halo: #0b1a2c;
-
-    background-color: #0b1a2c;
+    background-color: #0c1726;
 }
 
 .traceroute-map-container .leaflet-control-zoom {
@@ -1037,10 +1047,6 @@ code.tr-ip {
     text-shadow: 0 0 3px var(--tr-label-halo);
 }
 
-.traceroute-direction-arrow--dashed {
-    color: var(--tr-route-dashed);
-    opacity: 0.85;
-}
 
 /* "Show entire route" reset; shown only while a segment is selected. Sits above
    the Leaflet panes (route pane is 400) and keeps a comfortable touch target. */
@@ -1076,53 +1082,25 @@ code.tr-ip {
         1px 1px 0 var(--tr-label-halo);
 }
 
+/* Placement is computed in traceroute-map.js (collision-free); the text sits at an offset from its anchor. */
+.tr-label-text {
+    position: absolute;
+    display: block;
+}
+
 .tr-label-country {
     color: var(--tr-label-color);
     text-transform: uppercase;
     letter-spacing: 0.08em;
-    opacity: 0.7;
-}
-
-.tr-label-country .tr-label-text {
-    display: block;
-    transform: translate(-50%, -50%);
+    opacity: 0.8;
 }
 
 .tr-label-city {
+    color: var(--tr-label-color);
+}
+
+.tr-label-route {
     color: var(--tr-label-strong);
-}
-
-.tr-label-city .tr-label-dot {
-    position: absolute;
-    left: -2px;
-    top: -2px;
-    width: 4px;
-    height: 4px;
-    border-radius: 50%;
-    background: var(--tr-label-strong);
-}
-
-.tr-label-capital .tr-label-dot {
-    background: transparent;
-    border: 1px solid var(--tr-label-strong);
-    left: -3px;
-    top: -3px;
-}
-
-.tr-label-city .tr-label-text {
-    position: absolute;
-    left: 6px;
-    top: -7px;
-}
-
-/* Route cities sit beside a 2rem hop marker: keep the name clear of it */
-.tr-label-route .tr-label-dot {
-    display: none;
-}
-
-.tr-label-route .tr-label-text {
-    left: 22px;
-    color: var(--bs-body-color);
     font-weight: 600;
 }
 

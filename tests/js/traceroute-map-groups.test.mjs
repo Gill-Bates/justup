@@ -74,12 +74,23 @@ test('direction arrows collapse a contiguous solid run to a single mid-run arrow
   assert.ok(arrows[0] >= 1 && arrows[0] <= 2, `arrow should sit mid-run; got ${arrows[0]}`);
 });
 
-test('a dashed gap splits the route into separately-arrowed runs', () => {
-  // segments: 0 solid, 1 dashed (gap), 2 solid  -> one arrow per solid run + the gap.
+test('a dashed gap splits the route into separately-arrowed solid runs and never carries an arrow itself', () => {
+  // segments: 0 solid, 1 dashed (gap), 2 solid, 3 solid -> one arrow per solid run, none on the gap.
   const dashedAt = (i) => i === 1;
-  const arrows = arrowSegments(4, dashedAt, null);
-  assert.ok(arrows.includes(1), 'the dashed gap segment is marked');
-  assert.ok(arrows.length >= 2, `each run keeps its own arrow; got ${arrows}`);
+  const arrows = arrowSegments(5, dashedAt, null);
+  assert.ok(!arrows.includes(1), 'the dashed gap segment carries no arrow');
+  assert.deepEqual(plain(arrows), [0, 2]);
+});
+
+test('segments shorter than the minimum length carry no arrow', () => {
+  const lengths = [200, 30, 200];
+  assert.deepEqual(plain(arrowSegments(4, () => false, null, (i) => lengths[i], 64)), [0, 2]);
+  assert.deepEqual(plain(arrowSegments(4, () => false, 1, (i) => lengths[i], 64)), []);
+  assert.deepEqual(plain(arrowSegments(4, () => false, 2, (i) => lengths[i], 64)), [2]);
+});
+
+test('a selected dashed segment shows no arrow', () => {
+  assert.deepEqual(plain(arrowSegments(4, (i) => i === 1, 1)), []);
 });
 
 test('a selected segment shows only that one arrow', () => {

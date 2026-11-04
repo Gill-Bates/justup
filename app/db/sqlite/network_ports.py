@@ -15,6 +15,14 @@ from app.services.nmap_scanner import NmapScanResult
 from app.utils.tcp_ports import parse_port_list
 from app.utils.time import utcnow
 
+RAW_STATES = frozenset({"open", "closed", "filtered", "unfiltered", "open|filtered", "closed|filtered", "unknown"})
+SERVICE_IDENTITIES = frozenset({"identified", "unknown", "changed"})
+
+
+def _identity_of(service) -> str:
+    """Only an actively probed, named service is an identification; a nmap-services table hit is not."""
+    return "identified" if service and service.method == "probed" and service.name else "unknown"
+
 
 def _port_dict(row: sqlite3.Row) -> dict:
     return {
@@ -31,6 +39,10 @@ def _port_dict(row: sqlite3.Row) -> dict:
         "checked_at": row["checked_at"],
         "last_up_at": row["last_up_at"],
         "detail": row["detail"],
+        "raw_state": row["raw_state"],
+        "service_identity": row["service_identity"],
+        "identity_changed_at": row["identity_changed_at"],
+        "latency_ms": row["latency_ms"],
     }
 
 
@@ -60,16 +72,12 @@ def sync_network_ports(
     tcp = parse_port_list(list(tcp_ports))
     udp = parse_port_list(list(udp_ports))
     selected = {("tcp", port) for port in tcp} | {("udp", port) for port in udp}
-    observed = {
-        (port.protocol, port.port): port
-        for host in scan_result.hosts
-        for port in host.ports
-    } if scan_result else {}
+    observed = (
+        {(port.protocol, port.port): port for host in scan_result.hosts for port in host.ports} if scan_result else {}
+    )
     existing = {
         (row["protocol"], row["port"])
-        for row in conn.execute(
-            "SELECT protocol, port FROM target_network_ports WHERE target_id = ?", (target_id,)
-        )
+        for row in conn.execute("SELECT protocol, port FROM target_network_ports WHERE target_id = ?", (target_id,))
     }
     for protocol, port in existing - selected:
         conn.execute(
@@ -79,7 +87,8 @@ def sync_network_ports(
     for protocol, port in sorted(selected):
         finding = observed.get((protocol, port))
         conn.execute(
-            "INSERT OR IGNORE INTO target_network_ports(target_id, protocol, port, source) VALUES(?, ?, ?, 'manual')",
+            "INSERT OR IGNORE INTO target_network_ports(target_id, protocol, port, source, service_identity) "
+            "VALUES(?, ?, ?, 'manual', 'unknown')",
             (target_id, protocol, port),
         )
         if finding is None:
@@ -88,7 +97,8 @@ def sync_network_ports(
         conn.execute(
             """UPDATE target_network_ports
                SET source = 'discovered', service_name = ?, service_product = ?, service_version = ?,
-                   service_method = ?, confidence = ?, discovered_at = ?
+                   service_method = ?, confidence = ?, discovered_at = ?, service_identity = ?,
+                   identity_changed_at = NULL
                WHERE target_id = ? AND protocol = ? AND port = ?""",
             (
                 service.name[:100] if service and service.name else None,
@@ -96,7 +106,8 @@ def sync_network_ports(
                 service.version[:150] if service and service.version else None,
                 service.method if service else None,
                 service.confidence if service else None,
-                utcnow(),
+                scan_result.completed_at,
+                _identity_of(service),
                 target_id,
                 protocol,
                 port,
@@ -111,14 +122,101 @@ def update_network_port_status(
     port: int,
     status: str,
     detail: str | None = None,
+    *,
+    raw_state: str | None = None,
+    latency_ms: float | None = None,
+    service_identity: str | None = None,
 ) -> None:
+    """Store the latest measurement; the port is addressed by protocol + number, never by number alone."""
     if protocol not in {"tcp", "udp"} or status not in {"up", "down", "unknown"}:
         raise ValueError("Invalid network port status")
+    if raw_state is not None and raw_state not in RAW_STATES:
+        raise ValueError("Invalid raw port state")
+    if service_identity is not None and service_identity not in SERVICE_IDENTITIES:
+        raise ValueError("Invalid service identity")
     now = utcnow()
     conn.execute(
         """UPDATE target_network_ports
-           SET status = ?, checked_at = ?, last_up_at = CASE WHEN ? = 'up' THEN ? ELSE last_up_at END,
-               detail = ?
+           SET status = :status, checked_at = :now,
+               last_up_at = CASE WHEN :status = 'up' THEN :now ELSE last_up_at END,
+               detail = :detail, raw_state = :raw_state, latency_ms = :latency_ms,
+               identity_changed_at = CASE
+                   WHEN :identity = 'changed' AND COALESCE(service_identity, '') != 'changed' THEN :now
+                   ELSE identity_changed_at END,
+               service_identity = COALESCE(:identity, service_identity)
+           WHERE target_id = :target_id AND protocol = :protocol AND port = :port""",
+        {
+            "status": status,
+            "now": now,
+            "detail": detail[:200] if detail else None,
+            "raw_state": raw_state,
+            "latency_ms": latency_ms,
+            "identity": service_identity,
+            "target_id": target_id,
+            "protocol": protocol,
+            "port": port,
+        },
+    )
+
+
+def record_service_observation(
+    conn: sqlite3.Connection,
+    target_id: int,
+    protocol: str,
+    port: int,
+    *,
+    identity: str,
+    detail: str | None = None,
+    service=None,
+    adopt: bool = False,
+    version: str | None = None,
+) -> None:
+    """Store the outcome of an explicit service re-detection without touching the port status.
+
+    ``adopt`` replaces the base identity; otherwise only identity, diagnostic note and (for a plain
+    update) the version are written, so a changed identity stays visible until it is re-adopted.
+    """
+    if protocol not in {"tcp", "udp"} or identity not in SERVICE_IDENTITIES:
+        raise ValueError("Invalid service observation")
+    now = utcnow()
+    if adopt and service is not None:
+        conn.execute(
+            """UPDATE target_network_ports
+               SET service_name = ?, service_product = ?, service_version = ?, service_method = ?,
+                   confidence = ?, discovered_at = ?, service_identity = ?, identity_changed_at = NULL
+               WHERE target_id = ? AND protocol = ? AND port = ?""",
+            (
+                service.name[:100] if service.name else None,
+                service.product[:150] if service.product else None,
+                service.version[:150] if service.version else None,
+                service.method,
+                service.confidence,
+                now,
+                identity,
+                target_id,
+                protocol,
+                port,
+            ),
+        )
+        return
+    conn.execute(
+        """UPDATE target_network_ports
+           SET service_identity = ?,
+               identity_changed_at = CASE
+                   WHEN ? = 'changed' AND COALESCE(service_identity, '') != 'changed' THEN ?
+                   WHEN ? != 'changed' THEN NULL ELSE identity_changed_at END,
+               service_version = COALESCE(?, service_version),
+               detail = COALESCE(?, detail)
            WHERE target_id = ? AND protocol = ? AND port = ?""",
-        (status, now, status, now, detail[:200] if detail else None, target_id, protocol, port),
+        (
+            identity,
+            identity,
+            now,
+            identity,
+            version[:150] if version else None,
+            detail[:200] if detail else None,
+            target_id,
+            protocol,
+            port,
+        ),
     )

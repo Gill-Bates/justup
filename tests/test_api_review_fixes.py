@@ -1086,6 +1086,8 @@ def test_downtime_history_empty_state_all_up(conn, monkeypatch):
 
 def test_downtime_history_lists_periods_when_down(conn, monkeypatch):
     tid = _target(conn, "down")
+    conn.execute("UPDATE targets SET enable_http_check = 1 WHERE id = ?", (tid,))  # only enabled checks count
+    conn.commit()
     start = datetime.now(UTC) - timedelta(hours=2)
     _seed_http_up(Path(conn.execute("PRAGMA database_list").fetchone()[2]).parent, tid, [1, 0] + [0] * 200 + [1], start)
     html = _downtime_fragment(conn, monkeypatch, tid, start - timedelta(hours=1))

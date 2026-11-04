@@ -5,6 +5,9 @@
 
 ## [Unreleased]
 
+- `Fix` The alert email header shows only the logo; the "Monitoring alert" label with bell and divider is gone. Templates you saved yourself are not changed.
+- `Fix` The Targets list no longer flickers on live updates: only changed cells are rewritten, so rows, status icons, focus, open groups and the search stay as they are.
+- `Fix` The route map is easier to read: the route is drawn between the markers with an outline, estimated sections are dashed, the basemap is calmer, only a few place names remain and the legend names every kind of node and link.
 - `Fix` Resetting the response-time chart zoom (double-click or "Reset zoom") now restores the load view of all axes, series and peaks through one shared function and ignores a late zoom-detail response.
 - `New` Settings > Recipients has a search field that filters by name, email or Signal number while you type.
 - `Fix` Settings > Delivery Queue shows the stored status `sent` as "Sent" (it read "Accepted by server"); the status carries no tooltip, the meaning is documented.

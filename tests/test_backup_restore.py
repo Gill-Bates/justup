@@ -28,6 +28,7 @@ from app.utils import backup as backup_mod
 from app.utils import crypto, maintenance
 from app.utils.backup import BackupError, parse_backup_filename, verify_backup_hmac
 from app.utils.rate_limit import reset_all
+from app.utils.version import get_version
 from tests import _support  # noqa: F401 - imported for its sys.path side effect
 
 PASSWORD = "correct horse battery"  # noqa: S105 - throwaway test value
@@ -68,12 +69,33 @@ def _tar(path: Path, entries: list[tuple[str, bytes | None]], *, extra=None) -> 
     return path
 
 
-def _db_bytes(schema_version: int = sqlite_db.SCHEMA_VERSION) -> bytes:
+def _db_bytes(schema_version: int = sqlite_db.SCHEMA_VERSION, *, legacy_target: bool = False) -> bytes:
     """A real application database image at the requested supported schema version."""
     with TemporaryDirectory() as tmp:
         db = Path(tmp) / "justup.db"
         conn = sqlite_db.connect(db)
         sqlite_db.init_schema(conn)
+        if legacy_target:
+            sqlite_db.create_target(
+                conn,
+                {
+                    "name": "legacy",
+                    "host": "legacy.example.com",
+                    "interval_seconds": 60,
+                    "retention_days": 30,
+                    "enable_ping": True,
+                    "enable_tcp_connect": True,
+                    "tcp_host": "legacy.example.com",
+                    "tcp_ports": "22,53",
+                },
+            )
+        if schema_version <= 7:
+            for column in ("raw_state", "service_identity", "identity_changed_at", "latency_ms"):
+                conn.execute(f"ALTER TABLE target_network_ports DROP COLUMN {column}")
+        if schema_version <= 6:
+            conn.execute("DROP TABLE target_network_ports")
+            conn.execute("ALTER TABLE targets DROP COLUMN enable_udp_scan")
+            conn.execute("ALTER TABLE targets DROP COLUMN udp_ports")
         if schema_version <= 2:
             conn.execute("DROP TABLE alert_dispatch_outbox")
             conn.execute("ALTER TABLE alerts DROP COLUMN active_incident")
@@ -689,7 +711,7 @@ class TestRestoreEndpoint:
         old_db = tmp_path / "old.db"
         raw = sqlite3.connect(old_db)
         raw.execute("CREATE TABLE t(a INTEGER)")
-        raw.execute("PRAGMA user_version=7")
+        raw.execute(f"PRAGMA user_version={sqlite_db.SCHEMA_VERSION + 1}")
         raw.commit()
         raw.close()
         archive = _tar(
@@ -711,12 +733,12 @@ class TestRestoreEndpoint:
         assert live.read_bytes() == before
 
     def test_backup_from_newer_application_is_rejected(self, env, tmp_path: Path):
-        name, payload = _named(_good(tmp_path / "newer-app.tar.bz2", app_version="1.0.3"))
+        name, payload = _named(_good(tmp_path / "newer-app.tar.bz2", app_version="1.0.4"))
         resp = _post(env, name, payload)
         assert resp.status_code == 400
         assert "newer application version" in resp.json()["detail"]
 
-    @pytest.mark.parametrize("schema_version", [1, 2])
+    @pytest.mark.parametrize("schema_version", [1, 2, 6, 7])
     def test_older_schema_is_migrated_before_restore(self, env, tmp_path: Path, schema_version: int):
         name, payload = _named(_good(tmp_path / f"schema-{schema_version}.tar.bz2", db=_db_bytes(schema_version)))
         resp = _post(env, name, payload)
@@ -730,6 +752,68 @@ class TestRestoreEndpoint:
             assert conn.execute("SELECT value FROM settings WHERE key='migration-marker'").fetchone()[0] == "preserved"
             assert conn.execute("PRAGMA foreign_key_check").fetchone() is None
             assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        finally:
+            conn.close()
+
+    def test_schema_6_backup_keeps_tcp_and_ping_and_leaves_udp_off(self, env, tmp_path: Path):
+        name, payload = _named(_good(tmp_path / "v6.tar.bz2", db=_db_bytes(6, legacy_target=True)))
+        resp = _post(env, name, payload)
+        assert resp.status_code == 200, resp.text
+        live = env[2] / "sqlite" / "justup.db"
+        conn = sqlite3.connect(f"{live.resolve().as_uri()}?mode=ro&immutable=1", uri=True)
+        try:
+            row = conn.execute(
+                "SELECT enable_ping, enable_tcp_connect, tcp_ports, enable_udp_scan, udp_ports FROM targets"
+            ).fetchone()
+            assert row == (1, 1, "22,53", 0, "")
+            ports = conn.execute("SELECT protocol, port, source FROM target_network_ports ORDER BY port").fetchall()
+            assert ports == [("tcp", 22, "manual"), ("tcp", 53, "manual")]
+        finally:
+            conn.close()
+
+    def test_new_backup_carries_udp_configuration_and_port_metadata(self, env):
+        client, token, data_dir = env
+        live = data_dir / "sqlite" / "justup.db"
+        conn = sqlite_db.connect(live)
+        try:
+            tid = sqlite_db.create_target(
+                conn,
+                {
+                    "name": "multi",
+                    "host": "multi.example.com",
+                    "interval_seconds": 60,
+                    "retention_days": 30,
+                    "enable_ping": True,
+                    "enable_tcp_connect": True,
+                    "tcp_host": "multi.example.com",
+                    "tcp_ports": "53",
+                    "enable_udp_scan": True,
+                    "udp_ports": "53",
+                },
+            )
+            sqlite_db.sync_network_ports(conn, tid, tcp_ports=[53], udp_ports=[53])
+            sqlite_db.update_network_port_status(conn, tid, "udp", 53, "unknown", raw_state="open|filtered")
+            conn.commit()
+        finally:
+            sqlite_db.close_connection(conn)
+        headers = {"Authorization": f"Bearer {token}", "X-CSRF-Token": client.cookies.get("csrf_token")}
+        resp = client.post("/settings/backup", headers=headers)
+        assert resp.status_code == 200, resp.text
+        name = resp.headers["content-disposition"].split("filename=")[1]
+        conn = sqlite_db.connect(live)
+        try:
+            conn.execute("DELETE FROM targets")
+            conn.commit()
+        finally:
+            sqlite_db.close_connection(conn)
+        assert _post(env, name, resp.content).status_code == 200
+        conn = sqlite3.connect(f"{live.resolve().as_uri()}?mode=ro&immutable=1", uri=True)
+        try:
+            assert conn.execute("SELECT enable_udp_scan, udp_ports FROM targets").fetchone() == (1, "53")
+            rows = conn.execute(
+                "SELECT protocol, port, status, raw_state, service_identity FROM target_network_ports ORDER BY protocol"
+            ).fetchall()
+            assert rows == [("tcp", 53, None, None, "unknown"), ("udp", 53, "unknown", "open|filtered", "unknown")]
         finally:
             conn.close()
 
@@ -935,7 +1019,7 @@ class TestSnapshotAndIntegrity:
             snapshot_db.write_bytes(snapshot_bytes)
             actual_snapshot_manifest = backup_mod.create_backup_manifest(snapshot_db)
             assert manifest["format_version"] == 1
-            assert manifest["application"]["version"] == "1.0.2"
+            assert manifest["application"]["version"] == get_version()
             assert manifest["database"] == actual_snapshot_manifest["database"]
             assert manifest["created_at"].endswith("Z")
             assert not any(n.endswith(("-wal", "-shm")) for n in names)

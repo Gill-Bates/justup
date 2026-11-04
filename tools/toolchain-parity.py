@@ -24,7 +24,15 @@ import sys
 import tomllib
 from pathlib import Path
 
-REQUIRED_FIELDS = ("python", "app_version", "java_version", "libsignal_client", "signal_cli", "nmap")
+REQUIRED_FIELDS = (
+    "python",
+    "app_version",
+    "java_version",
+    "libsignal_client",
+    "signal_cli",
+    "nmap",
+    "nmap_source_sha256",
+)
 
 
 def read(path: Path) -> dict[str, str]:

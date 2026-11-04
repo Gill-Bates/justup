@@ -351,6 +351,16 @@ async function seed(browser, app) {
 	const ctx = await browser.newContext();
 	const page = await ctx.newPage();
 	const next = "Layout-Check-Pw-2026!";
+	// Every write is recorded with the CSRF token it sent and the cookie the browser attached, so a
+	// 403 names the request and the two values instead of only a status list.
+	const writes = [];
+	page.on("response", async (response) => {
+		const request = response.request();
+		if (request.method() === "GET") return;
+		const headers = await request.allHeaders().catch(() => ({}));
+		const cookie = ((headers.cookie || "").match(/csrf_token=([^;]*)/) || [])[1] || "";
+		writes.push(`${new URL(request.url()).pathname} ${response.status()} header=${(headers["x-csrf-token"] || "").slice(0, 6)} cookie=${cookie.slice(0, 6)}`);
+	});
 	await page.goto(`${app.base}/ui/login`);
 	await page.fill("#username", app.bootstrap.username);
 	await page.fill("#password", app.bootstrap.password);
@@ -390,7 +400,7 @@ async function seed(browser, app) {
 		codes.push(rr.status);
 		return { codes, fixtureTargetId, screenshotTargetId };
 	}, [targets, recipient]);
-	if (!res.codes.every((c) => c === 201) || !res.fixtureTargetId || !res.screenshotTargetId) throw new Error(`seeding failed: HTTP ${res.codes.join(",")}`);
+	if (!res.codes.every((c) => c === 201) || !res.fixtureTargetId || !res.screenshotTargetId) throw new Error(`seeding failed: HTTP ${res.codes.join(",")}; writes: ${writes.join(" | ")}`);
 	seedMeasurementFixture(app, [res.screenshotTargetId, res.fixtureTargetId]);
 	const state = await ctx.storageState();
 	await ctx.close();
