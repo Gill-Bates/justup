@@ -41,6 +41,9 @@ CHILD = textwrap.dedent(
     db, port, enqueue, seconds = Path(sys.argv[2]), int(sys.argv[3]), sys.argv[4] == "1", float(sys.argv[5])
     policy.BASE_DELAY_SECONDS = 1  # shortened so the test does not wait for real backoff
     policy.MAX_DELAY_SECONDS = 1
+    # SIGKILL can land while a row is PROCESSING; the real 600 s crash-recovery wait would then outlast
+    # the test deadline and leave that mail undelivered, so the recovery timeout is shortened as well.
+    sm.PROCESSING_TIMEOUT_SECONDS = 5
     policy.CHANNEL_POLICIES["email"] = policy.ChannelPolicy(min_interval_seconds=0.3, batch_limit=4)
     conn = sdb.connect(db)
     sdb.init_schema(conn)
