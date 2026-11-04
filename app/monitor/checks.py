@@ -127,11 +127,12 @@ NETWORK_UNREACHABLE = "network unreachable"
 
 def _sanitize_error(error: Exception | str, max_length: int = MAX_ERROR_DETAIL_LENGTH) -> str:
     """
-    Sanitize error message for safe logging/storage.
+    Normalize an error message for logging/storage.
 
-    - Truncates to max_length
-    - Removes potential sensitive info patterns
-    - Normalizes whitespace
+    - Collapses all whitespace (including newlines) to single spaces
+    - Truncates to max_length, ending in "..."
+
+    It does not remove or mask any content: secrets or hostnames inside the message stay in it.
     """
     msg = str(error)
     msg = " ".join(msg.split())
@@ -315,10 +316,12 @@ def _is_host_blocked(host: str) -> bool:
 
     Blocks:
     - Loopback addresses
-    - Private network ranges
     - Link-local addresses
     - Known local hostnames
     - Hostnames resolving to blocked IPs
+
+    RFC 1918 private ranges are allowed on purpose (``allow_private=True``, see BLOCKED_NETWORKS): the
+    monitor checks internal systems.
     """
     host_lower = host.lower().strip()
     if host_lower in BLOCKED_HOSTNAMES:

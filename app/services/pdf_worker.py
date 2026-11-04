@@ -27,6 +27,7 @@ from typing import Any
 
 from ..utils import maintenance
 from ..utils.report_metrics import fetch_metric_data, parse_tcp_ports, report_filename
+from ..utils.tcp_ports import DEFAULT_TCP_PORTS
 from ..utils.uptime_metric import select_uptime_metric
 
 _log = logging.getLogger(__name__)
@@ -108,6 +109,14 @@ def compute_worker_counts() -> tuple[int, int]:
     io = min(max(2, cores * 2), _MAX_IO_WORKERS)
 
     return cpu, io
+
+
+def _report_tcp_ports(target: dict) -> list[int]:
+    """TCP ports charted for a target: its stored list, or the shared default when none is stored.
+
+    Read tolerantly like the report metrics do: invalid entries are skipped, never replaced by the default.
+    """
+    return parse_tcp_ports(str(target.get("tcp_ports") or DEFAULT_TCP_PORTS))
 
 
 @contextlib.contextmanager
@@ -328,7 +337,7 @@ class PDFWorker:
                         if uptime_metric == "tcp_up":
                             uptime_data = _fetch("tcp_up")
                         # Per-port TCP data for the multi-port chart
-                        tcp_ports = parse_tcp_ports(str(target.get("tcp_ports") or "80"))
+                        tcp_ports = _report_tcp_ports(target)
                         if len(tcp_ports) > 1:
                             for port in tcp_ports:
                                 port_data = _fetch(f"tcp_ms_{port}", limit_metric="tcp_ms")

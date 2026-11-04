@@ -51,7 +51,7 @@ from app.utils.constants import (
 from app.utils.crypto import decrypt_secret
 from app.utils.ssrf import redact_url
 from app.utils.status_helper import cert_severity
-from app.utils.tcp_ports import parse_port_list
+from app.utils.tcp_ports import DEFAULT_TCP_PORTS, parse_port_list
 from app.utils.time import utcnow
 from app.utils.uptime_metric import enabled_availability_metrics
 
@@ -207,7 +207,7 @@ def _stored_tcp_ports(value: str | int | None) -> list[int]:
     the target as misconfigured (see ``_run_target``).
     """
     try:
-        return parse_port_list(value) or [80]
+        return parse_port_list(value) or parse_port_list(DEFAULT_TCP_PORTS)
     except ValueError:
         return []
 
@@ -354,7 +354,10 @@ ALERT_COOLDOWN_SECONDS = 300  # 5 minutes
 #   - RECOVERY alert: fires immediately when target becomes UP
 #   - Quality Gate UNKNOWN: does NOT trigger alerts (neither DOWN nor RECOVERY)
 #     If target was DOWN, then Quality Gate activates (UNKNOWN), then UP:
-#     → NO recovery alert is sent (by design, to avoid false positives)
+#     → the open alert stays open during UNKNOWN (current_alert_id is kept; only the "down since"
+#       timers of a target WITHOUT an open alert are reset), and the first full UP resolves it and
+#       sends RESOLVED through _maybe_alert (unless auto_close_alert is off: then the alert is only
+#       deactivated and no recovery notification is sent).
 # ─────────────────────────────────────────────────────────────────────────────
 FAIL_THRESHOLD = 3  # Cycles to confirm DOWN (diagnostic reference)
 RECOVERY_THRESHOLD = 2  # Cycles to confirm RECOVERY (diagnostic reference)

@@ -3083,11 +3083,13 @@ class PDFReportBuilder:
         self.elements.append(self._kv_table(rows))
 
     def _get_ssl_data(self) -> TlsScanResult | None:
-        """Fetch and cache the normalized TLS scan for the target.
+        """Run the TLS scan once per report and cache the outcome (also when it is None).
 
-        Returns cached result on subsequent calls.
-        Uses resolve_cert_target (cert_host/cert_port > http_url > http_port), like the live certificate
-        check. Without cert_host, only https targets are scanned; None means nothing was scanned.
+        The scan target comes from ``resolve_cert_target`` (cert_host/cert_port, else http_url, else
+        http_port), like the live certificate check; without an http_url the target host is used over https.
+        Returns None when nothing was scanned: the URL is not https and no cert_host is set, the target
+        cannot be resolved, or there is no host. A scan that raised yields a ``FAILED`` result with the
+        generic error "scan error" instead of None.
         """
         if self._ssl_fetched:
             return self._ssl_cache

@@ -1762,3 +1762,75 @@ def test_template_reset_write_failure_rolls_back_first_field(conn, monkeypatch, 
     )
     assert client.post(path).status_code == 500
     assert [sqlite_db.get_setting(conn, k, None) for k in keys] == ["custom", "custom"]
+
+
+# --- Notification templates: validate everything, then save in one transaction ---------------
+
+_TEMPLATE_CASES = {
+    "smtp": ("/settings/smtp/template", {"subject": "S", "html": "H"}, {"subject": "New", "html": "  "}),
+    "signal": ("/settings/signal/template", {"down": "D", "up": "U"}, {"down": "New", "up": "  "}),
+}
+_TEMPLATE_KEYS = {
+    "smtp": ("smtp_mail_template_subject", "smtp_mail_template_html"),
+    "signal": ("signal_message_template_down", "signal_message_template_up"),
+}
+
+
+def _template_state(conn, kind: str) -> list:
+    return [sqlite_db.get_setting(conn, key, "<unset>") for key in _TEMPLATE_KEYS[kind]]
+
+
+@pytest.mark.parametrize("kind", ["smtp", "signal"])
+def test_template_update_with_one_invalid_field_changes_nothing(conn, kind):
+    url, saved, mixed = _TEMPLATE_CASES[kind]
+    client = _client(conn, settings.router, user=_mk_user(conn, "adm", admin=True))
+    assert client.post(url, json=saved).status_code == 200
+    before = _template_state(conn, kind)
+    resp = client.post(url, json=mixed)  # first field valid, second empty
+    assert resp.status_code == 400
+    assert _template_state(conn, kind) == before
+
+
+@pytest.mark.parametrize("kind", ["smtp", "signal"])
+def test_template_update_is_all_or_nothing_when_a_write_fails(conn, kind, monkeypatch):
+    url, saved, _ = _TEMPLATE_CASES[kind]
+    client = _client(conn, settings.router, user=_mk_user(conn, "adm", admin=True))
+    assert client.post(url, json=saved).status_code == 200
+    before = _template_state(conn, kind)
+    real = sqlite_db.set_setting
+    calls = {"n": 0}
+
+    def failing(connection, key, value, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise sqlite3.OperationalError("disk full")
+        return real(connection, key, value, **kwargs)
+
+    monkeypatch.setattr(sqlite_db, "set_setting", failing)
+    update = {k: f"changed-{k}" for k in saved}
+    with pytest.raises(sqlite3.OperationalError):
+        client.post(url, json=update)
+    monkeypatch.setattr(sqlite_db, "set_setting", real)
+    assert _template_state(conn, kind) == before
+
+
+@pytest.mark.parametrize("kind", ["smtp", "signal"])
+def test_template_reset_is_all_or_nothing_when_a_write_fails(conn, kind, monkeypatch):
+    url, saved, _ = _TEMPLATE_CASES[kind]
+    client = _client(conn, settings.router, user=_mk_user(conn, "adm", admin=True))
+    assert client.post(url, json=saved).status_code == 200
+    before = _template_state(conn, kind)
+    real = sqlite_db.set_setting
+    calls = {"n": 0}
+
+    def failing(connection, key, value, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise sqlite3.OperationalError("disk full")
+        return real(connection, key, value, **kwargs)
+
+    monkeypatch.setattr(sqlite_db, "set_setting", failing)
+    with pytest.raises(sqlite3.OperationalError):
+        client.post(url + "/reset")
+    monkeypatch.setattr(sqlite_db, "set_setting", real)
+    assert _template_state(conn, kind) == before

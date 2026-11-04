@@ -44,7 +44,8 @@ _log = logging.getLogger(__name__)
 router = APIRouter(prefix="/recipients", tags=["recipients"])
 
 # Cache for Signal registration status: phone -> (is_registered, timestamp_monotonic)
-# Protected by _SIGNAL_CACHE_LOCK for thread-safety across FastAPI workers and ThreadPoolExecutor
+# _SIGNAL_CACHE_LOCK makes access thread-safe within one worker process (request threads and the thread
+# pool). It is not shared between processes: every worker process keeps its own cache.
 _SIGNAL_REGISTRATION_CACHE: dict[str, tuple[bool, float]] = {}
 _SIGNAL_CACHE_LOCK = Lock()
 _SIGNAL_CACHE_TTL = 86400.0

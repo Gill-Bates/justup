@@ -914,3 +914,50 @@ def test_redirect_helpers_fall_back_for_an_unsafe_target(monkeypatch):
         == "/ui/login"
     )
     assert auth_helpers.resolve_user_or_redirect(request, None, "/\\evil.example").headers["location"] == "/ui/login"
+
+
+# --- target profile preview: the https suggestion follows the effective HTTP settings ---------
+
+
+def test_website_profile_without_scheme_suggests_https_by_default():
+    from app.services.target_profiles import build_profile
+
+    target, suggested = build_profile(profile="website", address="example.com")
+    assert str(target.http_url) == "https://example.com/"
+    assert suggested is True
+
+
+def test_website_profile_with_http_override_does_not_suggest_https():
+    from app.services.target_profiles import build_profile
+
+    target, suggested = build_profile(
+        profile="website", address="example.com", overrides={"http_url": "http://example.com/"}
+    )
+    assert str(target.http_url) == "http://example.com/"
+    assert suggested is False
+
+
+def test_website_profile_with_http_check_switched_off_does_not_suggest_https():
+    from app.services.target_profiles import build_profile
+
+    _, suggested = build_profile(profile="website", address="example.com", overrides={"enable_http_check": False})
+    assert suggested is False
+
+
+def test_custom_profile_with_https_override_suggests_https():
+    from app.services.target_profiles import build_profile
+
+    target, suggested = build_profile(
+        profile="custom",
+        address="example.com",
+        overrides={"enable_http_check": True, "http_url": "https://example.com/"},
+    )
+    assert target.enable_http_check is True
+    assert suggested is True
+
+
+def test_address_with_an_explicit_scheme_never_suggests_https():
+    from app.services.target_profiles import build_profile
+
+    _, suggested = build_profile(profile="website", address="https://example.com")
+    assert suggested is False

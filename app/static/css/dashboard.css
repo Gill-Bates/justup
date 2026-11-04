@@ -46,12 +46,6 @@
 	gap: var(--ui-stat-gap);
 }
 
-.dashboard-grid .dashboard-hero-metric {
-	justify-content: space-between !important;
-	flex-direction: row-reverse;
-	gap: var(--ui-space-tile-compact);
-}
-
 .dashboard-grid .dashboard-widget-label {
 	font-size: var(--ju-dashboard-caption-size) !important;
 	font-weight: 600;

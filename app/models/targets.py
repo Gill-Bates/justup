@@ -32,11 +32,10 @@ from ..utils.constants import (
     TARGET_RETENTION_DAYS_MIN,
 )
 from ..utils.http_status import DEFAULT_HTTP_SUCCESS_CODES, parse_status_code_spec
-from ..utils.tcp_ports import parse_port_list
+from ..utils.tcp_ports import DEFAULT_TCP_PORTS, parse_port_list
 
 # ─── Constants ────────────────────────────────────────────────────────────────
-# Default TCP port for new targets (HTTP). Users should explicitly set 443 for HTTPS-only.
-DEFAULT_TCP_PORTS = "80"
+# DEFAULT_TCP_PORTS (port 80) lives in utils/tcp_ports.py; set 443 explicitly for HTTPS-only targets.
 
 
 # ─── Helper Functions ─────────────────────────────────────────────────────────

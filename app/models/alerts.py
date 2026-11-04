@@ -22,7 +22,13 @@ class AlertBase(BaseModel):
 
     target_id: int
     target_name: str
-    failed_service: str = Field(description="Which service failed: http, ping, tcp, cert")
+    failed_service: str = Field(
+        description=(
+            "Comma-separated, sorted names of what failed: the service (http, ping, tcp, udp, cert), or for "
+            "TCP and UDP the failing endpoints as port tokens such as tcp:25, udp:53 when ports are known. "
+            "'unknown' is used when no service name is recorded."
+        )
+    )
     started_at: datetime
     ended_at: datetime | None = None
     recipients_notified: list[str] = Field(default_factory=list)

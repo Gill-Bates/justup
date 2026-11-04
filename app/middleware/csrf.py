@@ -56,7 +56,7 @@ class CSRFMiddleware(BaseHTTPMiddleware):
 
     def _check_origin(self, request: Request, *, required: bool = False) -> bool:
         """
-        Validate Origin header matches Host (hardened against spoofing).
+        Validate that the Origin header matches the Host header (Host itself is client-controlled, see below).
 
         Returns True if valid or no Origin header present.
         Note: Only uses Host header (not X-Forwarded-Host) to prevent
@@ -67,7 +67,9 @@ class CSRFMiddleware(BaseHTTPMiddleware):
         if not origin:
             return not required
 
-        # Use only Host header (set by server, not spoofable by client)
+        # The Host header is set by the client and can be forged; this comparison only ties Origin to
+        # whatever Host the request carries. It is a defence in depth on top of the CSRF token. It relies on
+        # the deployment to validate Host (a reverse proxy with a fixed server name or trusted-host rules).
         host = request.headers.get("Host", "")
 
         try:

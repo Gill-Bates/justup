@@ -997,8 +997,8 @@ def update_email_template(payload: EmailTemplateUpdate, conn=Depends(get_conn), 
 def reset_email_template(conn=Depends(get_conn), _admin=Depends(require_admin)):
     """Reset email template to defaults by clearing custom values.
 
-    Sets template values to NULL so defaults are used on read.
-    This allows distinguishing between 'user accepted default' and 'never changed'.
+    Sets template values to NULL so defaults are used on read. A reset template reads like one that was
+    never changed: the NULL does not record whether the user once accepted the default.
     """
     with sqlite_db.transaction(conn):
         sqlite_db.set_setting(conn, "smtp_mail_template_subject", None, auto_commit=False)

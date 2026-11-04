@@ -52,6 +52,10 @@ def _is_whole(number: float | Decimal | Fraction) -> bool:
     return number.is_integer()  # False for nan and inf
 
 
+# The one default TCP port: new targets, the check scheduler (empty value) and the PDF report all use it.
+DEFAULT_TCP_PORTS = "80"
+
+
 def parse_port_list(value: Any) -> list[int]:
     """Parse ports from an int, a list or a comma/space separated string.
 

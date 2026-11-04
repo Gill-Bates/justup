@@ -38,7 +38,6 @@ def build_profile(
     if not address:
         raise ValueError("Address is required")
     is_http = profile in {"website", "api"} or (profile == "custom" and "://" in address)
-    suggested_https = is_http and "://" not in address
     values: dict = {
         "name": name or address,
         "group": group,
@@ -85,6 +84,13 @@ def build_profile(
         if unknown:
             raise ValueError(f"Unknown settings: {', '.join(sorted(unknown))}")
         values.update(overrides)
+    # The address carried no scheme and the effective settings check HTTPS: the UI offers to confirm it.
+    # Derived after the overrides, so a profile or override that ends up without HTTP or with http:// differs.
+    suggested_https = (
+        "://" not in address
+        and bool(values.get("enable_http_check"))
+        and urlsplit(str(values.get("http_url") or "")).scheme.lower() == "https"
+    )
     if values.get("enable_tcp_connect"):
         selected_ports = values.get("tcp_ports") or tcp_ports
         if not selected_ports or not str(selected_ports).strip():

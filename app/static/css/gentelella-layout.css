@@ -703,62 +703,17 @@ html {
 	letter-spacing: -0.025em;
 }
 
-/* Status hero: icon on a tile tinted with the status color. */
+/* Status heroes keep icon, value, and label centered within the existing card. */
 .dashboard-hero {
-	--ju-hero-accent: var(--bs-primary);
-
 	align-items: stretch;
 	justify-content: center;
 	min-height: 5.5rem;
-	text-align: left !important;
-}
-
-.dashboard-hero[data-status="online"] {
-	--ju-hero-accent: var(--ju-st-online);
-}
-
-.dashboard-hero[data-status="offline"] {
-	--ju-hero-accent: var(--ju-st-offline);
-}
-
-.dashboard-hero[data-status="disabled"] {
-	--ju-hero-accent: var(--ju-st-disabled);
-}
-
-.dashboard-hero>.d-flex {
-	justify-content: space-between !important;
-	flex-direction: row-reverse;
+	text-align: center;
 }
 
 .dashboard-hero .small {
-	order: -1;
 	font-weight: 600;
 	letter-spacing: 0.04em;
-}
-
-.dashboard-hero .material-icons {
-	display: grid;
-	place-items: center;
-	width: 2.5rem;
-	height: 2.5rem;
-	border-radius: var(--bs-border-radius);
-	background: color-mix(in srgb, var(--ju-hero-accent) 12%, transparent);
-}
-
-.dashboard-hero[data-status="online"] .small {
-	color: var(--ju-st-online) !important;
-}
-
-.dashboard-hero[data-status="offline"] .small {
-	color: var(--ju-st-offline) !important;
-}
-
-.dashboard-hero[data-status="disabled"] .small {
-	color: var(--ju-st-disabled) !important;
-}
-
-.dashboard-hero[data-status="total"] .small {
-	color: var(--bs-link-color) !important;
 }
 
 .dashboard-hero .fs-3 {
