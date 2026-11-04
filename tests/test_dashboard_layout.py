@@ -193,6 +193,7 @@ def test_admin_widget_is_rejected_and_filtered_after_role_change(env):
         {"version": 2, "widgets": [{**_STATUS, "y": 999, "h": 2}]},  # y + h > 1000
         {"version": 2, "widgets": [{**_STATUS, "x": -1}]},
         {"version": 2, "widgets": [{**_STATUS, "w": 0}]},
+        {"version": 2, "widgets": [{**_STATUS, "w": 1}]},
         {"version": 2, "widgets": [{**_STATUS, "h": 1}]},
         {"version": 2, "widgets": [{**_STATUS, "height_mode": "invalid"}]},
         {"version": 2, "widgets": [{key: value for key, value in _STATUS.items() if key != "height_mode"}]},

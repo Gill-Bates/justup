@@ -16,10 +16,10 @@
 
 	window.JuDashboardRegistry = Object.freeze({
 		registry: Object.freeze([
-			def('status-online', 'Online', 0, 0, 3, 2, 1, 2),
-			def('status-offline', 'Offline', 3, 0, 3, 2, 1, 2),
-			def('status-disabled', 'Disabled', 6, 0, 3, 2, 1, 2),
-			def('status-total', 'Total', 9, 0, 3, 2, 1, 2),
+			def('status-online', 'Online', 0, 0, 3, 2, 2, 2),
+			def('status-offline', 'Offline', 3, 0, 3, 2, 2, 2),
+			def('status-disabled', 'Disabled', 6, 0, 3, 2, 2, 2),
+			def('status-total', 'Total', 9, 0, 3, 2, 2, 2),
 			def('quality', 'Monitor quality', 0, 2, 3, 3, 2, 3),
 			def('downtime', 'Downtime overview (24h)', 3, 2, 6, 4, 3, 3),
 			def('alerts-open', 'Alerts', 9, 2, 3, 4, 3, 3),

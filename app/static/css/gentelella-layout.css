@@ -266,13 +266,35 @@ h6,
 	--bs-card-bg: var(--ju-panel-bg);
 	--bs-card-border-color: var(--ju-panel-line);
 	--bs-card-border-radius: var(--bs-border-radius-lg);
-	--bs-card-inner-border-radius: var(--ju-radius-tile);
+
+	/* Inner edge of the frame: what a header, body or table at a corner has to follow. */
+	--bs-card-inner-border-radius: calc(var(--bs-card-border-radius) - var(--bs-card-border-width, 1px));
 	--bs-card-cap-bg: transparent;
 
 	background-color: var(--ju-panel-bg);
 	border: 1px solid var(--ju-panel-line);
-	border-radius: var(--bs-border-radius-lg);
+	border-radius: var(--bs-card-border-radius);
 	box-shadow: var(--ju-shadow);
+}
+
+/* The card does not clip (menus, suggestions and tooltips may leave it); whatever touches a corner is
+   rounded with the inner radius instead, so no square background paints over the curved border. */
+.card > :is(.card-header, .card-body, .card-footer, .ju-table-viewport):first-child,
+.x_panel > .x_title:first-child {
+	border-top-left-radius: var(--bs-card-inner-border-radius);
+	border-top-right-radius: var(--bs-card-inner-border-radius);
+}
+
+.card > :is(.card-header, .card-body, .card-footer, .ju-table-viewport):last-child,
+.x_panel > :last-child {
+	border-bottom-right-radius: var(--bs-card-inner-border-radius);
+	border-bottom-left-radius: var(--bs-card-inner-border-radius);
+}
+
+/* A header with nothing below it (collapsed card) has no divider line: the card frame closes it. */
+.card > .card-header:last-child,
+.x_panel > .x_title:last-child {
+	border-bottom-width: 0;
 }
 
 .card-header,

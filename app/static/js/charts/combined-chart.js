@@ -1110,17 +1110,23 @@ function buildCombinedChart(canvasId, input) {
   chart._renderText();
   var noteEl = document.getElementById("combined-status-note");
   if (noteEl) {
-    noteEl.textContent = !input.statusEnabled
-      ? "No HTTP status codes: the HTTP check is not enabled."
-      : input.statusError
-        ? "HTTP status codes could not be loaded."
-        : !statusBuckets.length
-          ? "No HTTP status codes recorded in this range."
-          : "";
-    if (input.upError)
-      noteEl.textContent += " Downtime bands could not be loaded.";
+    noteEl.textContent = _statusNoteText(input, statusBuckets);
     chart._statusNoteBase = noteEl.textContent;
   }
+}
+
+// Note under the chart. A target without an HTTP check says nothing (the missing series is no news);
+// the empty note is hidden by CSS (.combined-note:empty), so it takes no space.
+function _statusNoteText(input, statusBuckets) {
+  var text = !input.statusEnabled
+    ? ""
+    : input.statusError
+      ? "HTTP status codes could not be loaded."
+      : !statusBuckets.length
+        ? "No HTTP status codes recorded in this range."
+        : "";
+  if (input.upError) text += " Downtime bands could not be loaded.";
+  return text;
 }
 
 window.buildCombinedChart = buildCombinedChart;

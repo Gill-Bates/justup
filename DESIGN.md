@@ -213,7 +213,7 @@ The notification layout adapts at narrow widths and 200% effective zoom: title, 
 
 Every dashboard tile has a consistent outer card, a reserved header, and a flexible content body. The header aligns the title, status, and edit controls without overlap. The body owns the widget-specific content and its loading, ready, empty, and error states. Widgets may use different internal content layouts, but shared shell behavior, typography roles, spacing, status treatment, borders, and focus styles come from the dashboard component rules and shared tokens.
 
-The Online, Offline, Disabled, and Total status heroes use one centered composition: a simple, unboxed status icon immediately before the large value in the same row, with the uppercase label centered directly beneath them. The icon and value form one centered group; neither sits at a separate card edge or in a filled icon tile. Keep each hero's existing tile dimensions and grid placement.
+The Online, Offline, Disabled, and Total status heroes use one centered composition: a simple, unboxed status icon immediately before the large value in the same row, with the uppercase label centered directly beneath them. The icon and value form one centered group; neither sits at a separate card edge or in a filled icon tile. Each visual hero card is 5.625rem (about 90 CSS px at the standard root size) high and centered within its two-row GridStack frame. The default width and placement stay the same; the minimum width is two grid columns so the icon and value remain unclipped.
 
 The move handle occupies a reserved header region while edit mode is active. It must not cover the title, status, values, or resize controls. Dragging and resizing remain keyboard accessible; the focused handle announces movement and size changes. Pointer targets meet the applicable minimum size, and visual states use shape or text as well as color.
 
@@ -263,7 +263,7 @@ Widget minimum sizes have two owners that must agree: the widget registry (`dash
 
 1. GridStack is the only authority for widget coordinates and sizes. Nothing else computes a position, a row or a column.
 2. Widget frames (`.grid-stack-item-content`), the empty-cell slots painted in edit mode, the drag placeholder and the resize feedback all occupy the rectangle of the GridStack cell, inset by the gutter. The slot layer takes its cell count from `grid.getRow()` and its cell size from the GridStack CSS variables.
-3. Edit mode changes neither the outer position nor the size of any widget. The card fills the whole frame in both modes; the row count of a tile is the same in both modes.
+3. Edit mode changes neither the outer position nor the size of any widget. Cards fill their frames in both modes except the status heroes: each compact visual card remains centered within its two-row frame in both modes. The row count of a tile is the same in both modes.
 4. The drag handle takes space inside the frame: it shares the frame's single grid area and the card reserves the band as top padding (`--ju-dash-handle-height`) while editing. The handle never shifts the card, never overlaps text and no widget has its own handle position.
 5. The dashboard tokens in `dashboard.css` are the single source for gutter (`--ju-dash-gap`, `--ju-dash-gutter`), cell height (`--ju-dash-cell-height`), radius (`--ju-dash-radius`) and handle band (`--ju-dash-handle-height`). `dashboard-grid.js` reads them for GridStack and holds only initialization-failure fallbacks that equal the token defaults. Empty cells use the semantic surface tokens `--bs-tertiary-bg` and `--bs-body-bg` for a subtle gradient with a dashed border, so light and dark mode follow the theme and forced colors keep the border.
 6. Layout changes stay compatible with the V2 persistence contract: stored coordinates and `height_mode` are never altered to compensate for CSS.
@@ -274,7 +274,7 @@ Widget minimum sizes have two owners that must agree: the widget registry (`dash
 
 - At each widget's minimum, default, and expanded dimensions, header controls and content remain inside the card without collisions or clipped essential information.
 - Hero-sized metric values, unchanged supporting labels, and the existing tile dimensions remain readable without overlap, clipping, or body scrolling at minimum, default, and expanded widget sizes.
-- In every status hero, the icon precedes the number on one centered row and the uppercase label is centered beneath; the icon has no separate background tile and the card retains its current dimensions.
+- In every status hero, the icon precedes the number on one centered row and the uppercase label is centered beneath; the icon has no separate background tile and the approximately 90 px card stays centered in its two-row frame without clipping or covering the edit handle.
 - Across KPI, quality, and data widgets, computed title size, weight, line height, header padding, and title/status alignment follow the same shell rules. Long titles wrap without colliding with status or edit controls at minimum width and increased text size.
 - Automatic widgets grow and shrink after content changes. Manual heights survive polling, save, reload, and responsive reflow.
 - V2 positions, widths, visibility, and height modes restore correctly; reset returns to current defaults.

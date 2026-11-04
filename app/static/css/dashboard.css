@@ -152,6 +152,16 @@
 	padding-block-start: var(--ju-dash-handle-height);
 }
 
+/* The shared auto height beats Bootstrap; status heroes keep their compact visual card. */
+.dashboard-grid .dashboard-hero {
+	height: 5.625rem !important;
+	align-self: center;
+}
+
+.dashboard-grid--editing .dashboard-hero {
+	padding-block-start: 0;
+}
+
 .dashboard-widget-header {
 	flex: 0 0 auto;
 	z-index: 2;

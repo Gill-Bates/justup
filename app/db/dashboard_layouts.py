@@ -22,10 +22,10 @@ from .sqlite import transaction
 DASHBOARD_MAX_Y = 1000
 LAYOUT_VERSION = 2
 DASHBOARD_WIDGET_MIN_SIZES = {
-    "status-online": (1, 2),
-    "status-offline": (1, 2),
-    "status-disabled": (1, 2),
-    "status-total": (1, 2),
+    "status-online": (2, 2),
+    "status-offline": (2, 2),
+    "status-disabled": (2, 2),
+    "status-total": (2, 2),
     "quality": (2, 3),
     "downtime": (3, 3),
     "alerts-open": (3, 3),

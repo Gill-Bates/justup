@@ -409,6 +409,16 @@ async function seed(browser, app) {
 
 async function auditDashboardGrid(browser, app, adminState, browserName, phase) {
 	if (!new Set(["roles", "legacy", "sizes"]).has(phase)) throw new Error(`Unknown GridStack audit phase: ${phase}`);
+	const compactHeroCard = (card, frame, label, tol = 2) => {
+		const height = card.bottom - card.top;
+		const topInset = card.top - frame.top;
+		const bottomInset = frame.bottom - card.bottom;
+		assert.ok(Math.abs(card.left - frame.left) <= tol && Math.abs(card.right - frame.right) <= tol,
+			`${label}: hero card does not fill its frame width`);
+		assert.ok(Math.abs(height - 90) <= tol, `${label}: hero card is ${height}px high, expected about 90px`);
+		assert.ok(topInset >= -tol && bottomInset >= -tol && Math.abs(topInset - bottomInset) <= tol,
+			`${label}: hero card is not centered in its frame ${JSON.stringify({ topInset, bottomInset })}`);
+	};
 	const password = "Grid-Layout-2026!";
 	const username = `grid-${browserName}-${phase}`;
 	const request = (page, endpoint, method = "GET", body) => page.evaluate(async ({ endpoint, method, body }) => {
@@ -456,7 +466,8 @@ async function auditDashboardGrid(browser, app, adminState, browserName, phase) 
 				const expectedTop = widget.top;
 				assert.ok(Math.abs(widget.card.left - widget.left) <= 2 && Math.abs(widget.card.right - widget.right) <= 2,
 					`widget card does not fill its grid cell width: ${widget.id} ` + JSON.stringify({ cell: [widget.left, widget.right], card: widget.card }));
-				assert.ok(Math.abs(widget.card.top - expectedTop) <= 2 && Math.abs(widget.card.bottom - widget.bottom) <= 2,
+				if (widget.id.startsWith("status-")) compactHeroCard(widget.card, widget, widget.id);
+				else assert.ok(Math.abs(widget.card.top - expectedTop) <= 2 && Math.abs(widget.card.bottom - widget.bottom) <= 2,
 					`widget card does not fill its reserved grid cell: ${widget.id} ` + JSON.stringify({ cell: [widget.top, widget.bottom], handle: widget.handle, card: [widget.card.top, widget.card.bottom] }));
 			}
 			for (const other of snapshot.widgets) {
@@ -532,7 +543,10 @@ async function auditDashboardGrid(browser, app, adminState, browserName, phase) 
 		for (const widget of snap.widgets.filter((entry) => !entry.moving)) {
 			const expected = cellRect(widget.node);
 			near(widget.frame, expected, `${widget.id} frame (grid ${JSON.stringify(widget.node)})`);
-			if (widget.card) near(widget.card, widget.frame, `${widget.id} card vs frame`);
+			if (widget.card) {
+				if (widget.id.startsWith("status-")) compactHeroCard(widget.card, widget.frame, `${widget.id} card vs frame`, tol);
+				else near(widget.card, widget.frame, `${widget.id} card vs frame`);
+			}
 			if (editing) {
 				const { x, y, w, h } = widget.node;
 				const first = tile(y * snap.columns + x);
@@ -1288,7 +1302,7 @@ async function auditDashboardGrid(browser, app, adminState, browserName, phase) 
 			await setupContext.close();
 		}
 		const rows = [
-			["status-online", 0, 0, 3, 2, 1], ["status-offline", 3, 0, 3, 2, 1], ["status-disabled", 6, 0, 3, 2, 1], ["status-total", 9, 0, 3, 2, 1],
+			["status-online", 0, 0, 1, 2, 1], ["status-offline", 3, 0, 3, 2, 1], ["status-disabled", 6, 0, 3, 2, 1], ["status-total", 9, 0, 3, 2, 1],
 			["quality", 0, 2, 3, 2, hidden ? 0 : 1], ["downtime", 3, 2, 6, 4, 1], ["alerts-open", 0, 4, 3, 3, 1],
 		];
 		const stored = spawnSync(app.python, ["-c", `import json, sqlite3, sys
@@ -1310,6 +1324,7 @@ db.commit()
 			await page.waitForURL((url) => !/login|change-password/.test(url.pathname), { timeout: 10000 });
 			await page.goto(app.base + "/");
 			await ready(page);
+			assert.equal((await node(page.locator('[data-widget-id="status-online"]'))).w, 2, `${label}: narrow saved hero was not raised to its minimum width`);
 			const quality = page.locator('[data-widget-id="quality"]');
 			if (!hidden) {
 				assert.ok((await node(quality)).h >= 3, `${label}: height was not raised to the minimum`);
@@ -1331,6 +1346,7 @@ db.commit()
 			const savedQuality = layout.widgets.find((widget) => widget.id === "quality");
 			assert.ok(savedQuality.h >= 3, `${label}: stored height is still below the minimum`);
 			assert.equal(savedQuality.visible, !hidden);
+			assert.equal(layout.widgets.find((widget) => widget.id === "status-online").w, 2, `${label}: raised hero width was not saved`);
 			const visibleBoxes = layout.widgets.filter((widget) => widget.visible);
 			for (const a of visibleBoxes) for (const b of visibleBoxes) {
 				if (a.id < b.id) assert.ok(a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y, `${label}: ${a.id} overlaps ${b.id}`);

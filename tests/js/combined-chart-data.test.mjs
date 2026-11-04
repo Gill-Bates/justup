@@ -696,3 +696,17 @@ test("normalizeHttpStatusCode rounds and accepts only 100-599", () => {
     assert.equal(D.normalizeHttpStatusCode(input), expected, String(input));
   }
 });
+
+test("a target without an HTTP check shows no status note under the chart", () => {
+  const chartSource = readFileSync(new URL("../../app/static/js/charts/combined-chart.js", import.meta.url), "utf8");
+  const context = { window: {}, document: {}, console, appState: { charts: new Map() }, CombinedChartData: D, withAlpha: (c) => c };
+  vm.runInNewContext(chartSource, context);
+  const note = context._statusNoteText;
+  assert.equal(note({ statusEnabled: false }, []), "", "TCP-only target: no note at all");
+  assert.doesNotMatch(note({ statusEnabled: false, upError: false }, []), /HTTP|not enabled/i);
+  // The other states keep their own wording; a failed downtime load is added in every state.
+  assert.equal(note({ statusEnabled: true, statusError: true }, []), "HTTP status codes could not be loaded.");
+  assert.equal(note({ statusEnabled: true }, []), "No HTTP status codes recorded in this range.");
+  assert.equal(note({ statusEnabled: true }, [{}]), "");
+  assert.equal(note({ statusEnabled: false, upError: true }, []).trim(), "Downtime bands could not be loaded.");
+});
