@@ -28,7 +28,7 @@
 (function (root) {
   "use strict";
   const TTL_MS = 86_400_000;
-  const SCHEMA_VERSION = 2;
+  const SCHEMA_VERSION = 3;
   const KEY_PREFIX = "justup.traceroute.v1.";
   const ENTRY_PREFIX = `${KEY_PREFIX}e.`;
   const LEASE_PREFIX = `${KEY_PREFIX}l.`;

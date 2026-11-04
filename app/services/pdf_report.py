@@ -57,7 +57,6 @@ from reportlab.rl_config import defaultPageSize  # noqa: F401 - ensure config is
 
 from app.services import geo_resolver as gr
 from app.services.flag_images import load_flags, normalize_country_code
-from app.services.mtr_run import analyze_route, resolve_target_ip, run_mtr
 from app.services.pdf_logo import LogoFlowable, draw_logo, logo_aspect
 from app.services.pdf_route_map import (
     DESTINATION_COLOR,
@@ -82,7 +81,12 @@ from app.services.route_timeline import (
 from app.services.traceroute_geo import (
     geolocate_with_hostname_hint,
     location_view,
-    mtr_hops_to_geo_points,
+    route_hops_to_geo_points,
+)
+from app.services.traceroute_service import (
+    TRACE_HOP_LIMIT,
+    analyze_route,
+    trace_sync,
 )
 from app.utils.availability_rules import MIN_DOWNTIME_SECONDS, effective_interval_seconds, measured_outages
 from app.utils.cert_target import resolve_cert_target
@@ -211,31 +215,24 @@ PDF_DPI = 600
 
 
 # ---------------------------------------------------------------------------
-# MTR route data
+# Traceroute route data
 # ---------------------------------------------------------------------------
 
 
-def _run_mtr_with_interpolation(
+def _run_traceroute_with_interpolation(
     host: str,
-    max_hops: int = 20,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], bool]:
-    """Run MTR with route interpolation for ICMP-blocked segments.
+    """Trace through the shared service and interpolate silent segments.
 
     Returns:
         Tuple of (display_hops, geo_points, has_interpolation)
     """
-    # Resolve target IP for destination matching
-    target_ip = resolve_target_ip(host)
-
-    force_ipv6 = None
-    if target_ip:
-        force_ipv6 = ":" in target_ip
-    elif host and ":" in host:
-        force_ipv6 = True
-    # Measure the resolved address, as the web UI does, so both judge the same path.
-    hops = run_mtr(target_ip or host, count=3, max_hops=max_hops, force_ipv6=force_ipv6)
-    if not hops:
+    # The shared service resolves and traces ONE address; a failure is a controlled empty route.
+    outcome = trace_sync(host)
+    if not outcome.ok:
         return [], [], False
+    target_ip = outcome.target_ip
+    hops = outcome.hops
 
     # Analyze route for ICMP blocking patterns
     route_analysis = analyze_route(hops, target_ip)
@@ -261,9 +258,7 @@ def _run_mtr_with_interpolation(
         if route_analysis["last_responding_hop"] > 0:
             for h in hops:
                 if h.get("hop") == route_analysis["last_responding_hop"]:
-                    lat = h.get("latency_ms")
-                    if lat and isinstance(lat, dict):
-                        final_latency = lat.get("avg")
+                    final_latency = h.get("rtt_ms")
                     break
 
         interpolated_hops = ensure_destination_hop(
@@ -271,10 +266,10 @@ def _run_mtr_with_interpolation(
             destination_ip=target_ip,
             destination_hostname=host,
             destination_geo=destination_geo,
-            final_latency_ms=final_latency,
+            final_rtt_hint_ms=final_latency,
         )
 
-    geo_points = mtr_hops_to_geo_points(
+    geo_points = route_hops_to_geo_points(
         interpolated_hops,
         destination_ip=target_ip,
         destination_geo=destination_geo,
@@ -1837,15 +1832,15 @@ def _pdf_status_badge_colors(kind: str):
     return colors.HexColor(palette.background), colors.HexColor(palette.foreground)
 
 
-# Highest hop count requested from MTR; a route reaching it may be cut off.
-_MTR_MAX_HOPS = 20
+# Highest TTL the worker probes; a route reaching it may be cut off.
+_ROUTE_MAX_HOPS = TRACE_HOP_LIMIT
 
 # Chart reference lines when SLA is enabled without an own threshold (not an agreed SLA)
 _DEFAULT_RESPONSE_MS = 500
 _DEFAULT_PING_MS = 100
 
 
-ROUTE_INCOMPLETE = f"Route incomplete – {_MTR_MAX_HOPS}-hop limit reached"
+ROUTE_INCOMPLETE = f"Route incomplete – {_ROUTE_MAX_HOPS}-hop limit reached"
 
 
 _ROUTE_FONT_BODY = 8.5  # pt; smallest text in the route diagram, readable on a printed A4 page
@@ -1872,8 +1867,8 @@ def _hop_number(hop: dict[str, Any]) -> int | None:
 
 
 def _hop_latency(hop: dict[str, Any] | None) -> float | None:
-    latency = (hop or {}).get("latency_ms")
-    value = latency.get("avg") if isinstance(latency, dict) else None
+    """The single measured RTT of an answering hop, or None."""
+    value = (hop or {}).get("rtt_ms")
     return float(value) if isinstance(value, int | float) and value else None
 
 
@@ -2277,10 +2272,10 @@ class PDFReportBuilder:
         self.chapter_pages: dict[str, int] = {}
         self.page_count = 0
         self.content_pages: set[int] = set()
-        # MTR cache: stores (display_hops, geo_points, has_interpolation)
-        self._mtr_cache: dict[tuple[str, int], tuple[list, list, bool]] = {}
+        # Route cache: stores (display_hops, geo_points, has_interpolation)
+        self._route_cache: dict[tuple[str, int], tuple[list, list, bool]] = {}
         # True when the trace ended in silent hops at the hop limit (destination never confirmed)
-        self._mtr_silent_at_limit = False
+        self._route_silent_at_limit = False
         # WhatWeb cache: stores the tech stack dict
         self._whatweb_cache: dict | None = None
         self._whatweb_fetched: bool = False
@@ -2292,14 +2287,14 @@ class PDFReportBuilder:
         self._flags: dict[str, ImageReader] = {}
 
     def prefetch_external_data(self) -> None:
-        """Fetch WhatWeb, TLS scan, MTR and provider data (blocking I/O, call before build).
+        """Fetch WhatWeb, TLS scan, traceroute and provider data (blocking I/O, call before build).
 
         This method should be called before acquiring the PDF generation lock
         to avoid blocking other PDF requests on slow external scans.
         """
         self._get_whatweb_data()
         self._get_ssl_data()
-        display_hops, _geo, _interp = self._get_mtr_data()
+        display_hops, _geo, _interp = self._get_route_data()
         self._provider_info()
         self._prefetch_flags(display_hops)
 
@@ -3399,12 +3394,12 @@ class PDFReportBuilder:
     def _route_incomplete(self, info: dict[str, Any]) -> bool:
         """True when the destination was not confirmed and the trace stopped at the hop limit."""
         if info["synthetic"]:
-            return info["last_hop_num"] >= _MTR_MAX_HOPS
-        return self._mtr_silent_at_limit
+            return info["last_hop_num"] >= _ROUTE_MAX_HOPS
+        return self._route_silent_at_limit
 
     def _build_network_path_page(self):
         """Build the Network Path chapter with the hop table."""
-        display_hops, geo_points, _has_interpolation = self._get_mtr_data(max_hops=_MTR_MAX_HOPS)
+        display_hops, geo_points, _has_interpolation = self._get_route_data(max_hops=_ROUTE_MAX_HOPS)
         host = self._get_traceroute_host()
         if not display_hops:
             self._chapter_header("Network Path", "No traceroute data is available for this report.")
@@ -3421,9 +3416,9 @@ class PDFReportBuilder:
             parts.append(ROUTE_INCOMPLETE)
         parts.append(f"{info['responding']} responding")
         reply = info["last_reply"]
-        latency = ((reply or {}).get("latency_ms") or {}).get("avg")
+        latency = _hop_latency(reply)
         if reply and latency:
-            parts.append(f"latency at last responding hop {latency:.1f} ms")
+            parts.append(f"RTT at last responding hop {latency:.1f} ms")
         self._chapter_header("Network Path", " · ".join(parts))
         self._add_route_map(display_hops, geo_points)
         self._add_route_schematic(display_hops)
@@ -3494,7 +3489,7 @@ class PDFReportBuilder:
     ):
         """Add the hop table; the header repeats on every page."""
         if display_hops is None:
-            display_hops, _geo, _interp = self._get_mtr_data(max_hops=_MTR_MAX_HOPS)
+            display_hops, _geo, _interp = self._get_route_data(max_hops=_ROUTE_MAX_HOPS)
         if not display_hops:
             return
         info = info or self._route_summary(display_hops)
@@ -3507,8 +3502,7 @@ class PDFReportBuilder:
                 Paragraph("Hop", st["th"]),
                 Paragraph("Host / Address", st["th"]),
                 Paragraph("Location", st["th"]),
-                Paragraph("Latency", st["th_right"]),
-                Paragraph("Loss", st["th_right"]),
+                Paragraph("RTT", st["th_right"]),
                 Paragraph("Status", st["th"]),
             ]
         ]
@@ -3546,7 +3540,7 @@ class PDFReportBuilder:
             if approx_destination:
                 location = dest_place.split(" · ")[0] + " (approx.)"
             elif silent:
-                location = "—"  # no reply: nothing to locate, same dash as host and loss
+                location = "—"  # no reply: nothing to locate, same dash as host
             elif not (city or country):
                 location = LOCATION_UNKNOWN
             else:
@@ -3554,8 +3548,6 @@ class PDFReportBuilder:
 
             lat = _hop_latency(hop)
             latency = f"{lat:.1f} ms" if lat and not silent else "—"  # interpolated values are not measurements
-            loss_pct = hop.get("loss_pct")
-            loss = f"{loss_pct:.0f}%" if loss_pct is not None and not silent else "—"
 
             if synthetic:
                 badge = self._status_badge(STATE_NOT_REACHED, "blocked")
@@ -3577,20 +3569,19 @@ class PDFReportBuilder:
                     path,
                     location_cell,
                     Paragraph(latency, td_right),
-                    Paragraph(loss, td_right),
                     badge,
                 ]
             )
 
         note = GEOIP_FOOTNOTE
         if any(timeline_measurement(h) != "measured" for h in hops):
-            note += f" {STATE_NO_REPLY}: no answer to the probes, so latency, loss and location are not available."
+            note += f" {STATE_NO_REPLY}: no answer to the probes, so RTT and location are not available."
         last_hop_row = len(rows) - 1
         # The note is a table row bound to the last hop row, so it never ends up alone on a page.
-        rows.append([Paragraph(_esc(note), st["note"]), *[""] * 5])
+        rows.append([Paragraph(_esc(note), st["note"]), *[""] * 4])
 
         w = self.content_width
-        fixed = [11 * mm, 38 * mm, 17 * mm, 13 * mm, 25 * mm]
+        fixed = [11 * mm, 38 * mm, 17 * mm, 25 * mm]
         col_widths = [fixed[0], w - sum(fixed), *fixed[1:]]
         table = LongTable(rows, colWidths=col_widths, repeatRows=1, splitByRow=1)
         style = [
@@ -3620,7 +3611,7 @@ class PDFReportBuilder:
         if self._route_incomplete(info):
             self.elements.append(
                 Paragraph(
-                    f"<b>{ROUTE_INCOMPLETE}.</b> The destination was not reached within {_MTR_MAX_HOPS} hops; "
+                    f"<b>{ROUTE_INCOMPLETE}.</b> The destination was not reached within {_ROUTE_MAX_HOPS} hops; "
                     "the route may continue beyond this limit and is not shown completely.",
                     _paragraph_style(
                         "RouteIncomplete",
@@ -3647,8 +3638,8 @@ class PDFReportBuilder:
 
         return target.get("ping_host") or target.get("host") or target.get("cert_host")
 
-    def _get_mtr_data(self, *, max_hops: int = _MTR_MAX_HOPS) -> tuple[list[dict[str, Any]], list[dict], bool]:
-        """Run MTR once per report build and cache the result.
+    def _get_route_data(self, *, max_hops: int = _ROUTE_MAX_HOPS) -> tuple[list[dict[str, Any]], list[dict], bool]:
+        """Trace once per report build and cache the result.
 
         Returns:
             Tuple of (display_hops, geo_points, has_interpolation)
@@ -3658,21 +3649,21 @@ class PDFReportBuilder:
             return [], [], False
 
         cache_key = (host, max_hops)
-        if cache_key in self._mtr_cache:
-            return self._mtr_cache[cache_key]
+        if cache_key in self._route_cache:
+            return self._route_cache[cache_key]
 
-        display_hops, geo_points, has_interpolation = _run_mtr_with_interpolation(host, max_hops=max_hops)
+        display_hops, geo_points, has_interpolation = _run_traceroute_with_interpolation(host)
 
         tail = display_hops[-1] if display_hops else {}
-        self._mtr_silent_at_limit = (
+        self._route_silent_at_limit = (
             tail.get("status") == "timeout"
             and not tail.get("_interpolated")
             and self._route_summary(display_hops)["last_hop_num"] >= max_hops
         )
 
-        # An empty route is cached too, so a silent target does not rerun MTR under the PDF lock.
+        # An empty route is cached too, so a silent target does not rerun the trace under the PDF lock.
         result = (display_hops, geo_points, has_interpolation) if display_hops else ([], [], False)
-        self._mtr_cache[cache_key] = result
+        self._route_cache[cache_key] = result
         return result
 
     # ─── Availability & Performance ──────────────────────────────────────────

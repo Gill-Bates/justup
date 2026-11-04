@@ -32,7 +32,7 @@ from app.services.traceroute_geo import (
     RM_MAPPABLE,
     RM_SYNTHETIC,
     build_route_model,
-    mtr_hops_to_geo_points,
+    route_hops_to_geo_points,
 )
 from app.utils.constants import GeoAccuracy, GeoSource
 from tests import _support  # noqa: F401 - imported for its sys.path side effect
@@ -67,7 +67,7 @@ def test_missing_or_unknown_hop_status_is_inferred_from_the_ip_in_both_views(
     hops = [{"hop": 1, "ip": "10.0.0.1", "status": status}, {"hop": 2, "ip": "*", "status": status}]
     nodes = build_route_model(hops)
     assert [n["status"] for n in nodes] == [traceroute_geo.STATUS_OK, traceroute_geo.STATUS_TIMEOUT]
-    assert [p["hop"] for p in mtr_hops_to_geo_points(hops)] == [1]
+    assert [p["hop"] for p in route_hops_to_geo_points(hops)] == [1]
 
 
 # --- The four geolocation states, verified through the public route model -----
@@ -87,7 +87,7 @@ def test_large_geoip_radius_is_not_mappable_even_with_city(monkeypatch: pytest.M
     assert node[RM_GEO_SOURCE] == GeoSource.GEOIP_COARSE
     assert node[RM_ACCURACY] == GeoAccuracy.APPROXIMATE
     assert node[RM_MAPPABLE] is False
-    assert mtr_hops_to_geo_points([{"hop": 1, "ip": "10.0.0.1", "status": "ok"}]) == []
+    assert route_hops_to_geo_points([{"hop": 1, "ip": "10.0.0.1", "status": "ok"}]) == []
 
 
 def test_online_city_without_accuracy_radius_is_not_mappable(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -97,7 +97,7 @@ def test_online_city_without_accuracy_radius_is_not_mappable(monkeypatch: pytest
     assert node[RM_GEO_SOURCE] == GeoSource.ONLINE
     assert node[RM_ACCURACY] == GeoAccuracy.APPROXIMATE
     assert node[RM_MAPPABLE] is False
-    assert mtr_hops_to_geo_points([{"hop": 1, "ip": "10.0.0.1", "status": "ok"}]) == []
+    assert route_hops_to_geo_points([{"hop": 1, "ip": "10.0.0.1", "status": "ok"}]) == []
 
 
 def test_coarse_geoip_still_queries_online_but_keeps_evidenced_local_location(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -219,7 +219,7 @@ def test_route_model_synthetic_destination_marked(monkeypatch: pytest.MonkeyPatc
     assert dest[RM_HOP] == 2  # last_hop + 1, number preserved/extended
 
 
-# --- mtr_hops_to_geo_points: the two correctness fixes ------------------------
+# --- route_hops_to_geo_points: the two correctness fixes ------------------------
 
 
 def test_unknown_hop_not_placed_at_previous_coordinate(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -238,7 +238,7 @@ def test_unknown_hop_not_placed_at_previous_coordinate(monkeypatch: pytest.Monke
         {"hop": 2, "ip": "192.168.0.1", "status": "ok"},
         {"hop": 3, "ip": "10.0.0.3", "status": "ok"},
     ]
-    points = mtr_hops_to_geo_points(hops)
+    points = route_hops_to_geo_points(hops)
     hop_nums = [p["hop"] for p in points]
     assert 2 not in hop_nums  # unknown hop produces no map point
     # No two points share hop 1's coordinate (no forward-fill duplicate).
@@ -256,7 +256,7 @@ def test_destination_without_geo_is_not_synthesized_on_map(monkeypatch: pytest.M
         {"hop": 1, "ip": "10.0.0.1", "status": "ok"},
         {"hop": 2, "ip": "203.0.113.9", "status": "ok"},  # dest, no geo
     ]
-    points = mtr_hops_to_geo_points(hops, destination_ip="203.0.113.9", destination_geo=None)
+    points = route_hops_to_geo_points(hops, destination_ip="203.0.113.9", destination_geo=None)
     # Only the one located hop is on the map; nothing fabricated at its coordinate.
     coords = [(round(p["lat"], 4), round(p["lon"], 4)) for p in points]
     assert coords == [(51.5, 7.4)]
@@ -267,7 +267,7 @@ def test_destination_with_real_geo_still_placed(monkeypatch: pytest.MonkeyPatch)
     _patch_geo(monkeypatch, {"10.0.0.1": _geo(51.5, 7.4, "Dortmund", "DE", traceroute_geo.CONFIDENCE_GEOIP)})
     dest_geo = {"lat": 48.1, "lon": 11.6, "city": "Munich", "country": "DE", "accuracy_radius_km": 10}
     hops = [{"hop": 1, "ip": "10.0.0.1", "status": "ok"}]
-    points = mtr_hops_to_geo_points(hops, destination_ip="203.0.113.9", destination_geo=dest_geo)
+    points = route_hops_to_geo_points(hops, destination_ip="203.0.113.9", destination_geo=dest_geo)
     dest = next(p for p in points if p.get("ip") == "203.0.113.9")
     assert (dest["lat"], dest["lon"]) == (48.1, 11.6)
     assert dest.get(traceroute_geo.META_DESTINATION) is True
@@ -286,7 +286,7 @@ def test_approximate_city_destination_is_plotted_with_uncertainty(monkeypatch: p
     }
     hops = [{"hop": 1, "ip": "10.0.0.1", "status": "ok"}]
 
-    points = mtr_hops_to_geo_points(hops, destination_ip="203.0.113.9", destination_geo=dest_geo)
+    points = route_hops_to_geo_points(hops, destination_ip="203.0.113.9", destination_geo=dest_geo)
 
     dest = next(p for p in points if p.get("ip") == "203.0.113.9")
     assert (dest["city"], dest["loc_precision"], dest["_approximate"]) == ("Munich", "approximate", True)
@@ -348,7 +348,7 @@ def test_country_only_location_has_the_same_estimate_role_in_route_model_and_map
     hops = [{"hop": 1, "ip": "8.8.8.8", "status": "ok"}]
 
     node = build_route_model(hops)[0]
-    point = mtr_hops_to_geo_points(hops)[0]
+    point = route_hops_to_geo_points(hops)[0]
 
     assert node["map_role"] == point["map_role"] == traceroute_geo.MAP_ROLE_ESTIMATE
     assert point["_country_center"] is True
@@ -362,7 +362,7 @@ def test_private_country_only_location_does_not_get_a_synthetic_map_center(monke
     node = build_route_model(hops)[0]
 
     assert node["map_role"] == traceroute_geo.MAP_ROLE_NONE
-    assert mtr_hops_to_geo_points(hops) == []
+    assert route_hops_to_geo_points(hops) == []
 
 
 def test_zero_geolocated_hops_yields_no_points(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -371,7 +371,7 @@ def test_zero_geolocated_hops_yields_no_points(monkeypatch: pytest.MonkeyPatch) 
         {"hop": 1, "ip": "192.168.0.1", "status": "ok"},
         {"hop": 2, "ip": "192.168.0.2", "status": "ok"},
     ]
-    assert mtr_hops_to_geo_points(hops) == []
+    assert route_hops_to_geo_points(hops) == []
 
 
 def test_model_and_geo_points_agree_on_destination_hop_number(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -381,7 +381,7 @@ def test_model_and_geo_points_agree_on_destination_hop_number(monkeypatch: pytes
     dest_geo = {"lat": 48.1, "lon": 11.6, "city": "Munich", "country": "DE", "accuracy_radius_km": 10}
     hops = [{"hop": 7, "ip": "10.0.0.1", "status": "ok"}]
     model = build_route_model(hops, destination_ip="203.0.113.9", destination_geo=dest_geo)
-    points = mtr_hops_to_geo_points(hops, destination_ip="203.0.113.9", destination_geo=dest_geo)
+    points = route_hops_to_geo_points(hops, destination_ip="203.0.113.9", destination_geo=dest_geo)
     model_dest = next(n for n in model if n[RM_DESTINATION])
     point_dest = next(p for p in points if p.get("ip") == "203.0.113.9")
     assert model_dest[RM_HOP] == point_dest["hop"] == 8
@@ -393,7 +393,7 @@ def test_model_and_geo_points_agree_destination_reached(monkeypatch: pytest.Monk
     _patch_geo(monkeypatch, {"203.0.113.9": _geo(48.1, 11.6, "Munich", "DE", traceroute_geo.CONFIDENCE_GEOIP)})
     hops = [{"hop": 1, "ip": "203.0.113.9", "status": "ok"}]
     model = build_route_model(hops, destination_ip="203.0.113.9")
-    points = mtr_hops_to_geo_points(hops, destination_ip="203.0.113.9")
+    points = route_hops_to_geo_points(hops, destination_ip="203.0.113.9")
     assert sum(1 for n in model if n[RM_DESTINATION]) == 1
     assert [n[RM_HOP] for n in model if n[RM_DESTINATION]] == [1]
     assert [p["hop"] for p in points if p.get(traceroute_geo.META_DESTINATION)] == [1]
@@ -458,7 +458,7 @@ def _owner_route(monkeypatch: pytest.MonkeyPatch) -> tuple[list[dict], dict, lis
     }
     _patch_geo(monkeypatch, table)
     hops = _hops((7, "a7"), (8, "a8"), (9, None), (10, "a10"), (11, "a11"), (12, None), (13, "a13"))
-    return hops, ratingen, mtr_hops_to_geo_points(hops, destination_ip="a13", destination_geo=ratingen)
+    return hops, ratingen, route_hops_to_geo_points(hops, destination_ip="a13", destination_geo=ratingen)
 
 
 def test_approximate_hop_is_a_chain_node_with_dashed_links(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -523,7 +523,7 @@ def test_a_real_geographic_back_jump_between_reliable_hops_stays_on_the_line(mon
             "a4": _place(WUPPERTAL, "Wuppertal", "precise"),
         },
     )
-    points = mtr_hops_to_geo_points(_hops((1, "a1"), (2, "a2"), (3, "a3"), (4, "a4")))
+    points = route_hops_to_geo_points(_hops((1, "a1"), (2, "a2"), (3, "a3"), (4, "a4")))
     assert [(p["city"], p[ROLE]) for p in points] == [
         ("Frankfurt", "route"),
         ("Amsterdam", "route"),
@@ -544,7 +544,7 @@ def test_silent_hop_between_reliable_hops_makes_the_link_unknown(monkeypatch: py
     )
     hops = _hops((1, "a1"), (2, None), (3, None), (4, "a4"), (5, "a5"))
     hops[2]["status"] = traceroute_geo.STATUS_INTERPOLATED  # an already interpolated gap behaves the same
-    points = mtr_hops_to_geo_points(hops)
+    points = route_hops_to_geo_points(hops)
     assert _segments(points) == [(1, 4, "dashed"), (4, 5, "solid")]
 
 
@@ -558,7 +558,7 @@ def test_missing_hop_number_and_unlocated_hop_leave_the_link_unknown(monkeypatch
             "a5": _place(AMSTERDAM, "Amsterdam", "precise"),
         },
     )
-    points = mtr_hops_to_geo_points(_hops((1, "a1"), (2, "a2"), (3, "a3"), (5, "a5")))  # hop 4 absent
+    points = route_hops_to_geo_points(_hops((1, "a1"), (2, "a2"), (3, "a3"), (5, "a5")))  # hop 4 absent
     assert [p["hop"] for p in points] == [1, 3, 5]
     assert _segments(points) == [(1, 3, "dashed"), (3, 5, "dashed")]
 
@@ -573,7 +573,7 @@ def test_consecutive_approximate_hops_are_chained_with_dashed_links(monkeypatch:
             "a4": _place(WUPPERTAL, "Wuppertal", "precise"),
         },
     )
-    points = mtr_hops_to_geo_points(_hops((1, "a1"), (2, "a2"), (3, "a3"), (4, "a4")))
+    points = route_hops_to_geo_points(_hops((1, "a1"), (2, "a2"), (3, "a3"), (4, "a4")))
     assert [(p["hop"], p[ROLE]) for p in points] == [(1, "route"), (2, "estimate"), (3, "estimate"), (4, "route")]
     assert _segments(points) == [(1, 2, "dashed"), (2, 3, "dashed"), (3, 4, "dashed")]
     assert "online lookup" in points[2][traceroute_geo.META_LOC_NOTE]
@@ -592,7 +592,7 @@ def test_colocated_consecutive_reliable_hops_merge_but_an_estimate_keeps_its_own
             "a5": _place(AMSTERDAM, "Amsterdam", "precise"),
         },
     )
-    points = mtr_hops_to_geo_points(_hops((1, "a1"), (2, "a2"), (3, "a3"), (4, "a4"), (5, "a5")))
+    points = route_hops_to_geo_points(_hops((1, "a1"), (2, "a2"), (3, "a3"), (4, "a4"), (5, "a5")))
     assert [(p["hop"], p.get(traceroute_geo.META_HOP_RANGE), p[ROLE]) for p in points] == [
         (1, "1-2", "route"),
         (3, None, "estimate"),

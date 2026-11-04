@@ -896,7 +896,7 @@ def _destination_disposition(hops: list[dict], destination_ip: str | None) -> tu
 
     Returns ``(last_hop_number, reached)`` where ``reached`` is True when the last
     responding hop's IP equals the destination. Both ``build_route_model`` and
-    ``mtr_hops_to_geo_points`` use this so the web UI and PDF cannot disagree on
+    ``route_hops_to_geo_points`` use this so the web UI and PDF cannot disagree on
     whether a destination was reached.
     """
     last_hop = max((h.get("hop", 0) for h in hops), default=0)
@@ -913,20 +913,20 @@ def build_route_model(
 ) -> list[dict[str, Any]]:
     """Build the shared business route model consumed by the web UI and the PDF.
 
-    One node per traced hop, in MTR order, with original hop numbers preserved.
+    One node per traced hop, in traceroute order, with original hop numbers preserved.
     Each node distinguishes real geolocation, hostname/POP inference, coarse
     country/region GeoIP, and a missing location (see ``_classify_location``).
     Unknown and approximate nodes carry no coordinates and are never mappable, so
     no renderer can place them or bridge a fabricated precise link across them.
 
-    This model and ``mtr_hops_to_geo_points`` share the destination reached/
+    This model and ``route_hops_to_geo_points`` share the destination reached/
     synthetic decision via ``_destination_disposition`` so the sequence/PDF view
-    and the map view cannot disagree. This function changes no MTR measurement,
+    and the map view cannot disagree. This function changes no measurement,
     hop status, or IP info; it is a read-only projection of the hops.
 
     Integration status: this is the explicit shared surface for the four-state
     geo classification (``GeoSource``/``GeoAccuracy``). The shipped web UI and PDF
-    render from ``mtr_hops_to_geo_points`` and the enriched hops; both take the
+    render from ``route_hops_to_geo_points`` and the enriched hops; both take the
     drawing role of a hop from ``map_role`` (``RM_MAP_ROLE`` here, ``map_role`` on
     the geo points), so a hop's role cannot differ between the two views.
     """
@@ -959,7 +959,7 @@ def build_route_model(
         nodes.append(_route_node(hop_num, ip, hostname, status, loc, is_destination=is_dest))
 
     # Destination handling shares the reached/synthetic decision with
-    # mtr_hops_to_geo_points via _destination_disposition.
+    # route_hops_to_geo_points via _destination_disposition.
     has_destination = any(n[RM_DESTINATION] for n in nodes)
     if destination_ip and not has_destination:
         last_hop, reached = _destination_disposition(hops, destination_ip)
@@ -1004,13 +1004,13 @@ def _link(tail: dict, gap: bool, next_approximate: bool, skipped: list[int]) -> 
 
 
 @_batched_online
-def mtr_hops_to_geo_points(
+def route_hops_to_geo_points(
     hops: list[dict],
     destination_ip: str | None = None,
     destination_geo: dict | None = None,
 ) -> list[dict]:
     """
-    Convert MTR hops to the geo points both the web map and the PDF draw.
+    Convert traceroute hops to the geo points both the web map and the PDF draw.
 
     The points are the nodes of ONE chain from the first mappable hop to the destination, in hop
     order. Every point carries a ``map_role`` (``route`` = reliable, ``estimate`` = approximate, drawn
@@ -1020,7 +1020,7 @@ def mtr_hops_to_geo_points(
     A real geographic back-jump stays visible; no coordinate is invented for a skipped hop.
 
     Args:
-        hops: List of MTR hop dicts (with status: ok/partial/timeout/interpolated)
+        hops: List of traceroute hop dicts (with status: ok/partial/timeout/interpolated)
         destination_ip: Target IP for destination matching
         destination_geo: Pre-resolved geo data for destination
 
@@ -1050,7 +1050,7 @@ def mtr_hops_to_geo_points(
     for h in hops:
         status = h.get("status") or ""
         ip = h.get("ip", "*")
-        hostname = h.get("hostname")  # rDNS hostname from MTR
+        hostname = h.get("hostname")  # rDNS hostname
         hop_num = h.get("hop", 0)
 
         normalized = _normalize_hop_status(ip, status)

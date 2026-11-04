@@ -12,8 +12,8 @@ import logging
 
 from app.services import geo_resolver as gr
 from app.services.ip_lookup import lookup_public_ip
-from app.services.mtr_run import resolve_target_ip
 from app.services.traceroute_geo import resolve_location
+from app.services.traceroute_service import resolve_target_ip
 from app.utils.constants import (
     PROVIDER_LOOKUP_CACHE_TTL_DEFAULT,
     PROVIDER_LOOKUP_CACHE_TTL_MAX,

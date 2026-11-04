@@ -33,12 +33,12 @@ class CheckStatus(StrEnum):
     DISABLED = "disabled"  # Target/check explicitly disabled
 
 
-# --- MTR/Traceroute Hop Status (per-hop level) ---
+# --- Traceroute Hop Status (per-hop level) ---
 class HopStatus(StrEnum):
     """
     Status values for individual traceroute hops.
 
-    Use for: MTR hop results, traceroute visualization.
+    Use for: traceroute hop results, traceroute visualization.
     Note: No PARTIAL here - that's an aggregate concept (CheckStatus).
     """
 

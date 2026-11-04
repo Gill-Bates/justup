@@ -117,7 +117,9 @@ def format_range(start: datetime, end: datetime | None, *, now: datetime) -> str
 def _exact(seconds: int) -> str:
     hours, rest = divmod(seconds, 3600)
     minutes, secs = divmod(rest, 60)
-    return " ".join(f"{value}{unit}" for value, unit in ((hours, "h"), (minutes, "m"), (secs, "s")) if value or unit == "s")
+    return " ".join(
+        f"{value}{unit}" for value, unit in ((hours, "h"), (minutes, "m"), (secs, "s")) if value or unit == "s"
+    )
 
 
 def _precise(moment: datetime) -> str:

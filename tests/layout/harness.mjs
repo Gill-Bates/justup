@@ -175,7 +175,7 @@ async function inspectTargetDashboard(page) {
 			combinedChart: chart("chart-combined"), availabilityCard: rect(node("#availability-card")),
 			availabilityPlot: rect(node("#availability-plot")), availabilityChart: chart("chart-uptime"),
 			downtimeCard: rect(node("#downtime-history-card")), downtimeBody: rect(downtimeBody), downtimeBodyScroll: scroll(downtimeBody),
-			downtimeFragment: rect(node("#downtime-history-body")), downtimeState: rect(node("#downtime-history-body .target-empty-state, #downtime-history-body .downtime-scroll")),
+			downtimeFragment: rect(node("#downtime-history-body")), downtimeState: rect(node("#downtime-history-body .downtime-empty, #downtime-history-body .downtime-scroll")),
 		};
 	});
 }

@@ -286,7 +286,7 @@ def test_route_model_and_geo_points_agree_for_identical_input(env: _Env) -> None
     env.online = {"ipwho.is": _info()}
     hops = [{"hop": 1, "ip": "8.8.8.8", "status": "ok"}]
     node = traceroute_geo.build_route_model(hops)[0]
-    points = traceroute_geo.mtr_hops_to_geo_points(hops)
+    points = traceroute_geo.route_hops_to_geo_points(hops)
     assert node["mappable"] is True and len(points) == 1
     assert (node["location"]["lat"], node["location"]["city"]) == (points[0]["lat"], points[0]["city"])
 

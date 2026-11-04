@@ -949,7 +949,7 @@ def test_traceroute_hop_geolocation_runs_off_event_loop(monkeypatch):
     monkeypatch.setattr(route_interpolator, "collapse_interpolated_hops", lambda hops, *a, **k: hops)
     monkeypatch.setattr(route_interpolator, "ensure_destination_hop", lambda hops, **k: hops)
     monkeypatch.setattr(traceroute_geo, "geolocate_with_hostname_hint", fake_geo)
-    monkeypatch.setattr(traceroute_geo, "mtr_hops_to_geo_points", lambda *a, **k: [])
+    monkeypatch.setattr(traceroute_geo, "route_hops_to_geo_points", lambda *a, **k: [])
     loop_thread = threading.get_ident()
     with pytest.raises(RuntimeError, match="stop"):
         asyncio.run(frontend._run_traceroute_fragment(SimpleNamespace(), 1, "h.example", "ns"))
@@ -1070,8 +1070,8 @@ def _downtime_fragment(conn, monkeypatch, tid: int, since: datetime) -> str:
 def test_downtime_history_empty_state_without_measurements(conn, monkeypatch):
     tid = _target(conn, "nodata")
     html = _downtime_fragment(conn, monkeypatch, tid, datetime.now(UTC) - timedelta(days=1))
-    assert "No measurement data in selected range" in html
-    assert "stayed up" not in html
+    assert "No measurement data" in html
+    assert "No outages" not in html
 
 
 def test_downtime_history_empty_state_all_up(conn, monkeypatch):
@@ -1081,7 +1081,7 @@ def test_downtime_history_empty_state_all_up(conn, monkeypatch):
     start = datetime.now(UTC) - timedelta(hours=2)
     _seed_http_up(Path(conn.execute("PRAGMA database_list").fetchone()[2]).parent, tid, [1] * 5, start)
     html = _downtime_fragment(conn, monkeypatch, tid, start - timedelta(hours=1))
-    assert "No downtimes in selected range" in html
+    assert "No outages in selected range" in html
     assert "No measurement data" not in html
 
 
@@ -1092,8 +1092,9 @@ def test_downtime_history_lists_periods_when_down(conn, monkeypatch):
     start = datetime.now(UTC) - timedelta(hours=2)
     _seed_http_up(Path(conn.execute("PRAGMA database_list").fetchone()[2]).parent, tid, [1, 0] + [0] * 200 + [1], start)
     html = _downtime_fragment(conn, monkeypatch, tid, start - timedelta(hours=1))
-    assert "No downtimes in selected range" not in html
+    assert "No outages in selected range" not in html
     assert "No measurement data" not in html
+    assert "downtime-item--down" in html
 
 
 # --- reports: _cap_points keeps first/last and never divides by zero ----------------------------
@@ -1660,7 +1661,7 @@ def test_downtime_history_ignores_data_of_disabled_checks(conn, monkeypatch):
     start = datetime.now(UTC) - timedelta(hours=2)
     _seed_http_up(Path(conn.execute("PRAGMA database_list").fetchone()[2]).parent, tid, [1] * 5, start)
     html = _downtime_fragment(conn, monkeypatch, tid, datetime.now(UTC) - timedelta(days=1))
-    assert "No measurement data in selected range" in html
+    assert "No measurement data" in html
 
 
 def test_downtime_has_data_false_without_enabled_checks(tmp_path):

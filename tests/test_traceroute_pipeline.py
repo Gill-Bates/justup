@@ -261,7 +261,7 @@ def test_country_centers_and_unlocated_hops_match_in_web_and_pdf(monkeypatch: py
 
     monkeypatch.setattr(pdf_report, "geolocate_with_hostname_hint", traceroute_geo.geolocate_with_hostname_hint)
     destination_geo = traceroute_geo.geolocate_with_hostname_hint(destination, HOST)
-    web_points = traceroute_geo.mtr_hops_to_geo_points(
+    web_points = traceroute_geo.route_hops_to_geo_points(
         route, destination_ip=destination, destination_geo=destination_geo
     )
     pdf_hops, pdf_points, _interpolated = pdf_report._run_mtr_with_interpolation(HOST)
@@ -341,7 +341,7 @@ def test_destination_ip_has_one_location_decision_even_when_the_last_hop_resolve
     other = {"lat": 50.0, "lon": 8.0, "city": "Elsewhere", "country": "DE", "_confidence": "geoip"}
     monkeypatch.setattr(traceroute_geo, "geolocate_with_hostname_hint", lambda *_a: other)
     monkeypatch.setattr(traceroute_geo, "_classify_location", lambda _loc: (None, traceroute_geo.GeoAccuracy.PRECISE))
-    points = traceroute_geo.mtr_hops_to_geo_points(hops, destination_ip=TARGET_IP, destination_geo=resolved)
+    points = traceroute_geo.route_hops_to_geo_points(hops, destination_ip=TARGET_IP, destination_geo=resolved)
     dest = next(p for p in points if p.get("_destination"))
     assert (dest["city"], dest["lat"], dest["lon"]) == ("Ratingen", 51.3, 6.85)
 

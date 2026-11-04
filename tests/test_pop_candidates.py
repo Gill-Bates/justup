@@ -247,8 +247,8 @@ def test_route_capture_is_inert_and_candidate_failures_do_not_break_monitoring(t
         },
     )
     hop = [{"hop": 1, "ip": "8.8.8.8", "hostname": "core.xyz.example.net", "status": "ok"}]
-    assert traceroute_geo.mtr_hops_to_geo_points(hop) == []
-    assert traceroute_geo.mtr_hops_to_geo_points(hop) == []
+    assert traceroute_geo.route_hops_to_geo_points(hop) == []
+    assert traceroute_geo.route_hops_to_geo_points(hop) == []
     db = sqlite_db.connect(path)
     assert db.execute("SELECT seen_count FROM pop_alias_candidates WHERE alias_code='xyz'").fetchone()[0] == 1
     assert tuple(
@@ -261,7 +261,7 @@ def test_route_capture_is_inert_and_candidate_failures_do_not_break_monitoring(t
     monkeypatch.setattr(
         traceroute_geo, "observe_unknown_pop", lambda *_args: (_ for _ in ()).throw(sqlite3.Error("disk"))
     )
-    assert traceroute_geo.mtr_hops_to_geo_points(hop) == []
+    assert traceroute_geo.route_hops_to_geo_points(hop) == []
 
 
 def test_import_cannot_overwrite_approved_learned_row_but_may_after_revocation(conn) -> None:

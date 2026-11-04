@@ -31,7 +31,7 @@ from app.services.route_model import Route
 _log = logging.getLogger(__name__)
 
 # Highest TTL the worker probes; a route that ends here without the destination may be cut off.
-MAX_HOPS = 30
+TRACE_HOP_LIMIT = 30
 DEFAULT_TIMEOUT_S = 30
 
 HOSTNAME_DISPLAY_MAX_LENGTH = 50

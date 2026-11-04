@@ -1,4 +1,4 @@
-{# MTR network diagnostics fragment: route overview, KPI row, hop table and Leaflet route map. #}
+{# Network path (traceroute) fragment: route overview, KPI row, hop table and Leaflet route map. #}
 {# All values are rendered through Jinja autoescape; nothing here is marked |safe. #}
 {% macro country_flag(country_code, title_text='') %}
 {% if country_code and country_code|length == 2 %}
@@ -116,14 +116,8 @@
         </div>
         <div class="tr-kpi" data-known="{{ 'true' if kpis.latency_display else 'false' }}">
             <span class="material-icons tr-kpi-icon" aria-hidden="true">speed</span>
-            <dt class="tr-kpi-label">average latency to destination{% if not kpis.latency_display %} (not measured){% endif %}</dt>
+            <dt class="tr-kpi-label">round-trip time to destination (single probe){% if not kpis.latency_display %} (not measured){% endif %}</dt>
             <dd class="tr-kpi-value">{{ kpis.latency_display or '—' }}</dd>
-        </div>
-        <div class="tr-kpi" data-known="{{ 'true' if kpis.loss_display else 'false' }}"
-            data-loss="{{ 'some' if kpis.loss_pct else 'none' }}">
-            <span class="material-icons tr-kpi-icon" aria-hidden="true">swap_vert</span>
-            <dt class="tr-kpi-label">packet loss at destination{% if not kpis.loss_display %} (not measured){% endif %}</dt>
-            <dd class="tr-kpi-value">{{ kpis.loss_display or '—' }}</dd>
         </div>
         <div class="tr-kpi">
             <span class="material-icons tr-kpi-icon" aria-hidden="true">place</span>
@@ -153,8 +147,7 @@
                             <th scope="col">IP address</th>
                             <th scope="col">Hostname</th>
                             <th scope="col">Location</th>
-                            <th scope="col" class="text-end">Latency</th>
-                            <th scope="col" class="text-end">Loss</th>
+                            <th scope="col" class="text-end">RTT</th>
                             <th scope="col" class="text-end">Status</th>
                         </tr>
                     </thead>
@@ -194,13 +187,15 @@
                             </td>
                             {% endif %}
                             <td class="text-end tr-num">{{ (h.latency_display or '–') if not blocked else '–' }}</td>
-                            <td class="text-end tr-num">{{ (h.loss_display or '–') if not blocked else '–' }}</td>
                             <td class="text-end">{{ status_badge(h) }}</td>
                         </tr>
                         {% endfor %}
                     </tbody>
                 </table>
             </div>
+            {% if route_limit_note %}
+            <p class="tr-panel-note"><span class="material-icons" aria-hidden="true">info</span> {{ route_limit_note }}</p>
+            {% endif %}
             {% if geo_unavailable_reason %}
             <p class="tr-panel-note">
                 <span class="material-icons" aria-hidden="true">info</span>

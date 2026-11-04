@@ -65,7 +65,7 @@ _HOST_LABEL_RE = re.compile(r"^(?!-)[A-Za-z0-9-]{1,63}(?<!-)$")
 def validate_host(value: str | None) -> str | None:
     """Validate a hostname (RFC 1123) or IP literal; return the stripped value.
 
-    Free text is rejected so a host can never be read as an option by ping/mtr.
+    Free text is rejected so a host can never be read as an option by ping or traceroute.
     """
     if value is None:
         return None

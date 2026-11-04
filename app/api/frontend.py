@@ -13,8 +13,8 @@ Auth Strategy:
 
 Async/Sync Strategy:
 - Most UI endpoints are SYNC: Simple DB reads, template rendering (SQLite is fast)
-- ASYNC endpoints: Expensive I/O operations only (MTR, external API calls)
-  - fragment_traceroute: MTR subprocess + geolocation
+- ASYNC endpoints: Expensive I/O operations only (traceroute, external API calls)
+  - fragment_traceroute: Nmap worker traceroute + geolocation
   - fragment_downtime_history: TSDB range queries
   - fragment_signal_* are sync def: FastAPI runs their Signal calls in the threadpool
 - Rationale: Sync is simpler, async overhead not justified for <10ms DB queries
@@ -71,7 +71,6 @@ from ..utils.auth_helpers import (
     resolve_user_or_htmx_redirect,
 )
 from ..utils.availability_rules import downtime_series
-from ..utils.downtime_view import build_history
 from ..utils.constants import (
     DATE_FORMAT_ISO,
     DEFAULT_GEOIP_AUTO_UPDATE,
@@ -89,6 +88,7 @@ from ..utils.constants import (
     SettingKeys,
 )
 from ..utils.deps import get_conn, get_tsdb_dir
+from ..utils.downtime_view import build_history
 from ..utils.endpoint_view import build_endpoint_views
 from ..utils.formatters import format_compact_count, format_percent, row_to_alert_dict
 from ..utils.public_url import get_public_hostname
@@ -126,6 +126,11 @@ _TRACEROUTE_MEASURED_AT_HEADER = "X-Measured-At"
 # (monotonic expiry, rendered fragment, measurement time in epoch ms)
 _traceroute_fragment_cache: OrderedDict[tuple[str, int, str], tuple[float, bytes, int]] = OrderedDict()
 _traceroute_fragment_cache_lock = threading.Lock()
+# Cache namespace version: bump when the rendered fragment shape changes so old entries are never served.
+_TRACEROUTE_CACHE_VERSION = "nmap1"
+# Last successfully rendered fragment per key (no expiry); shown again when a new measurement fails.
+_traceroute_last_good: OrderedDict[tuple[str, int, str], tuple[bytes, int]] = OrderedDict()
+_TRACEROUTE_REFRESH_FAILED_HEADER = "X-Traceroute-Refresh-Failed"
 
 
 def _get_cached_traceroute_fragment(cache_namespace: str, target_id: int, host: str) -> tuple[bytes, int] | None:
@@ -157,6 +162,15 @@ def _cache_traceroute_fragment(
         _traceroute_fragment_cache.move_to_end(key)
         while len(_traceroute_fragment_cache) > _TRACEROUTE_CACHE_MAX_ENTRIES:
             _traceroute_fragment_cache.popitem(last=False)
+        _traceroute_last_good[key] = (body, measured_at_ms)
+        _traceroute_last_good.move_to_end(key)
+        while len(_traceroute_last_good) > _TRACEROUTE_CACHE_MAX_ENTRIES:
+            _traceroute_last_good.popitem(last=False)
+
+
+def _get_last_good_traceroute_fragment(cache_namespace: str, target_id: int, host: str) -> tuple[bytes, int] | None:
+    with _traceroute_fragment_cache_lock:
+        return _traceroute_last_good.get((cache_namespace, target_id, host))
 
 
 # Explicit "Run again": one measurement per key at a time, plus a short cooldown after it.
@@ -192,20 +206,16 @@ def _end_traceroute_refresh(key: tuple[str, int, str]) -> None:
 _logical_hop_count = logical_hop_count
 
 
-def _format_percent_value(value: float) -> str:
-    return f"{round(value, 1):g}%"
-
-
 def _destination_kpis(
     display_hops: list[dict],
     target_ip: str | None,
     destination_geo_point: dict | None,
     destination_reached: bool | None = None,
 ) -> dict:
-    """Derive the KPI row from measured data only; unknown values stay ``None`` (never 0).
+    """Derive the KPI row from measured data only; unknown values stay ``None`` (never 0). The RTT is one probe.
 
     ``destination_reached`` is the single verdict of ``analyze_route``; without it the flags of the
-    hops decide (callers outside the fragment). A synthetic destination never supplies latency or loss.
+    hops decide (callers outside the fragment). A synthetic destination never supplies an RTT.
     """
     destination = next(
         (
@@ -225,15 +235,10 @@ def _destination_kpis(
         measured = None
 
     latency_ms = None
-    loss_pct = None
     if measured is not None:
-        latency = measured.get("latency_ms")
-        raw_latency = latency.get("avg") if isinstance(latency, dict) else latency
+        raw_latency = measured.get("rtt_ms")
         if isinstance(raw_latency, (int, float)) and not isinstance(raw_latency, bool):
             latency_ms = float(raw_latency)
-        raw_loss = measured.get("loss_pct")
-        if isinstance(raw_loss, (int, float)) and not isinstance(raw_loss, bool):
-            loss_pct = float(raw_loss)
 
     place = destination_geo_point or destination or {}
     city = place.get("city") or (destination or {}).get("city")
@@ -243,8 +248,6 @@ def _destination_kpis(
         "destination_found": destination is not None,
         "destination_reached": measured is not None if destination_reached is None else destination_reached,
         "latency_display": f"{latency_ms:.1f} ms" if latency_ms is not None else None,
-        "loss_display": _format_percent_value(loss_pct) if loss_pct is not None else None,
-        "loss_pct": loss_pct,
         "city": city or None,
         "country": country or None,
     }
@@ -371,7 +374,7 @@ TRACEROUTE_FRAGMENT_REVISION = 2
 def _traceroute_cache_scope(user: dict, row) -> dict[str, str]:
     """Non-secret scope keys the browser's traceroute cache is separated by.
 
-    Hashes keep the keys opaque and stable. The target key changes with the MTR destination
+    Hashes keep the keys opaque and stable. The target key changes with the traceroute destination
     and with a re-created target, so a re-used id or an edited host never shows a stale route.
     """
 
@@ -1674,11 +1677,11 @@ async def fragment_traceroute(
     conn=Depends(get_conn),
 ):
     """
-    HTMX fragment: On-demand MTR network path visualization.
+    HTMX fragment: On-demand network path (traceroute) visualization.
 
-    Runs MTR, geolocates hops, handles route interpolation for ICMP-blocked
+    Traces through the Nmap worker, geolocates hops, handles route interpolation for silent
     segments, and returns data for Leaflet map with dashed lines. Successful
-    results are cached in memory for five minutes to avoid repeating MTR on reload
+    results are cached in memory for five minutes to avoid repeating the trace on reload
     and carry the time of the real measurement in ``X-Measured-At`` (epoch ms, also
     on a cache hit); only those responses may be kept by the browser's 24 h cache.
     ``refresh=1`` (only honoured on an HX-Request, so it cannot be triggered by a
@@ -1705,7 +1708,7 @@ async def fragment_traceroute(
             },
         )
 
-    # Determine host for MTR (DRY: use shared helper)
+    # Determine host for the traceroute (DRY: use shared helper)
     lookup_host = _resolve_target_host(row)
 
     if not lookup_host:
@@ -1718,11 +1721,11 @@ async def fragment_traceroute(
                 "hops": [],
                 "has_interpolation": False,
                 "geo_unavailable_reason": None,
-                "unavailable_reason": "No host configured for MTR",
+                "unavailable_reason": "No host configured for traceroute",
             },
         )
 
-    cache_namespace = str(request.app.state.db_path)
+    cache_namespace = f"{_TRACEROUTE_CACHE_VERSION}:{request.app.state.db_path}"
     force_refresh = refresh and request.headers.get("HX-Request") == "true"
     if not force_refresh:
         cached_fragment = _get_cached_traceroute_fragment(cache_namespace, target_id, lookup_host)
@@ -1756,7 +1759,7 @@ _traceroute_inflight: dict[tuple[str, int, str], asyncio.Task] = {}
 
 
 async def _single_flight_traceroute(request: Request, target_id: int, lookup_host: str, cache_namespace: str):
-    """Run at most one MTR per key; concurrent cache misses wait for it and get its body."""
+    """Run at most one traceroute per key; concurrent cache misses wait for it and get its body."""
     key = (cache_namespace, target_id, lookup_host)
     task = _traceroute_inflight.get(key)
     leader = task is None
@@ -1776,10 +1779,9 @@ async def _single_flight_traceroute(request: Request, target_id: int, lookup_hos
 
 
 async def _run_traceroute_fragment(request: Request, target_id: int, lookup_host: str, cache_namespace: str):
-    """Run MTR for ``lookup_host``, render the fragment and store it in the cache."""
-    # MTR utilities (imports at function level for lazy loading)
+    """Trace ``lookup_host``, render the fragment and store it in the cache."""
+    # Traceroute utilities (imports at function level for lazy loading)
     from ..services import route_map_rules
-    from ..services.mtr_run import analyze_route, resolve_target_ip, run_mtr
     from ..services.route_interpolator import (
         collapse_interpolated_hops,
         ensure_destination_hop,
@@ -1789,27 +1791,27 @@ async def _run_traceroute_fragment(request: Request, target_id: int, lookup_host
         geolocate_with_hostname_hint,
         is_ipv6_address,
         location_view,
-        mtr_hops_to_geo_points,
+        route_hops_to_geo_points,
         route_map_features,
         shorten_ipv6_for_display,
     )
+    from ..services.traceroute_service import TRACE_HOP_LIMIT, analyze_route, trace
 
-    target_ip = await run_in_threadpool(resolve_target_ip, lookup_host)
-
-    # Keep MTR address family consistent with destination resolution (IPv4 vs IPv6)
-    force_ipv6 = None
-    if target_ip:
-        force_ipv6 = ":" in target_ip
-    elif lookup_host and ":" in lookup_host:
-        force_ipv6 = True
-
-    # Use 20 hops for international routes
-    # Measure the address that was resolved: a host with several A/AAAA records must not be traced to
-    # one IP while the result is judged and geolocated against another. The host stays display-only.
-    hops = await run_in_threadpool(run_mtr, target_ip or lookup_host, count=3, max_hops=20, force_ipv6=force_ipv6)
-    measured_at_ms = time.time_ns() // 1_000_000
-
-    if not hops:
+    # The service resolves ONE address and traces exactly that address; scan and evaluation share it.
+    outcome = await trace(lookup_host)
+    target_ip = outcome.target_ip
+    if not outcome.ok:
+        previous = _get_last_good_traceroute_fragment(cache_namespace, target_id, lookup_host)
+        if previous is not None:
+            body, previous_ms = previous
+            return HTMLResponse(
+                body,
+                headers={
+                    "Cache-Control": "private, no-store",
+                    _TRACEROUTE_MEASURED_AT_HEADER: str(previous_ms),
+                    _TRACEROUTE_REFRESH_FAILED_HEADER: outcome.error_code or "failed",
+                },
+            )
         return templates.TemplateResponse(
             request,
             "fragments/traceroute_map.html",
@@ -1819,9 +1821,14 @@ async def _run_traceroute_fragment(request: Request, target_id: int, lookup_host
                 "geo_summary": None,
                 "has_interpolation": False,
                 "geo_unavailable_reason": None,
-                "unavailable_reason": "MTR returned no hops",
+                "unavailable_reason": outcome.error_message,
+                "error_code": outcome.error_code,
             },
+            headers={"Cache-Control": "private, no-store"},
         )
+    hops = outcome.hops
+    route = outcome.route
+    measured_at_ms = int(route.completed_at.timestamp() * 1000)
 
     route_analysis = analyze_route(hops, target_ip)
 
@@ -1844,9 +1851,7 @@ async def _run_traceroute_fragment(request: Request, target_id: int, lookup_host
         if route_analysis["last_responding_hop"] > 0:
             for h in hops:
                 if h.get("hop") == route_analysis["last_responding_hop"]:
-                    lat = h.get("latency_ms")
-                    if lat and isinstance(lat, dict):
-                        final_latency = lat.get("avg")
+                    final_latency = h.get("rtt_ms")
                     break
 
         interpolated_hops = ensure_destination_hop(
@@ -1854,10 +1859,10 @@ async def _run_traceroute_fragment(request: Request, target_id: int, lookup_host
             destination_ip=target_ip,
             destination_hostname=lookup_host,
             destination_geo=destination_geo,
-            final_latency_ms=final_latency,
+            final_rtt_hint_ms=final_latency,
         )
 
-    geo_points = mtr_hops_to_geo_points(
+    geo_points = route_hops_to_geo_points(
         interpolated_hops,
         destination_ip=target_ip,
         destination_geo=destination_geo,
@@ -1898,23 +1903,8 @@ async def _run_traceroute_fragment(request: Request, target_id: int, lookup_host
         silent = timeline_measurement(hop_data) == "timeout"
         hop_data["status_display"] = "timeout" if silent else hop_data.get("status", "timeout")
 
-        lat = hop_data.get("latency_ms")
-        if lat:
-            if isinstance(lat, dict):
-                avg = lat.get("avg")
-                hop_data["latency_display"] = f"{avg:.1f} ms" if avg is not None else "–"
-            elif isinstance(lat, (int, float)):
-                hop_data["latency_display"] = f"{lat:.1f} ms"
-            else:
-                hop_data["latency_display"] = "–"
-        else:
-            hop_data["latency_display"] = "–"
-
-        loss = hop_data.get("loss_pct")
-        if loss is not None and loss < 100:
-            hop_data["loss_display"] = f"{loss:.0f}%"
-        else:
-            hop_data["loss_display"] = "–"
+        rtt = hop_data.get("rtt_ms")
+        hop_data["latency_display"] = f"{rtt:.1f} ms" if isinstance(rtt, (int, float)) and not silent else "–"
 
         enriched_hops.append(hop_data)
 
@@ -1985,6 +1975,11 @@ async def _run_traceroute_fragment(request: Request, target_id: int, lookup_host
             "mapped_hop_count": len(mapped_hops),
             "destination_on_map": destination_geo_point is not None,
             "labels": STATE_LABELS,
+            "route_limit_note": (
+                f"The destination did not answer within the {TRACE_HOP_LIMIT}-hop trace limit."
+                if not route.destination_reached
+                else None
+            ),
         },
     )
     _cache_traceroute_fragment(cache_namespace, target_id, lookup_host, response.body, measured_at_ms)

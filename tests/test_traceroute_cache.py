@@ -99,7 +99,7 @@ def test_traceroute_fragment_reuses_authorized_recent_result(tmp_path: Path, mon
         "geolocate_with_hostname_hint",
         lambda ip, _hint=None: next((point for point in geo_points if point["ip"] == ip), None),
     )
-    monkeypatch.setattr(traceroute_geo, "mtr_hops_to_geo_points", lambda *_args, **_kwargs: geo_points)
+    monkeypatch.setattr(traceroute_geo, "route_hops_to_geo_points", lambda *_args, **_kwargs: geo_points)
 
     client = TestClient(app)
     client.get("/ui/login")
@@ -200,7 +200,7 @@ def _diagnostics_client(tmp_path: Path, monkeypatch, hops: list[dict], *, target
         "geolocate_with_hostname_hint",
         lambda ip, _hint=None: next((p for p in geo_points if p["ip"] == ip), None),
     )
-    monkeypatch.setattr(traceroute_geo, "mtr_hops_to_geo_points", lambda *_args, **_kwargs: geo_points)
+    monkeypatch.setattr(traceroute_geo, "route_hops_to_geo_points", lambda *_args, **_kwargs: geo_points)
 
     client = TestClient(app)
     client.get("/ui/login")

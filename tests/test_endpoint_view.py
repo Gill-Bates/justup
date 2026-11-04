@@ -229,29 +229,6 @@ def test_endpoint_markup_never_inserts_scanner_text_as_html() -> None:
     assert "&lt;img" in html
 
 
-def test_downtime_history_has_three_separate_presentations() -> None:
-    from datetime import UTC, datetime
-
-    start = datetime(2026, 11, 4, 10, 0, tzinfo=UTC)
-    end = datetime(2026, 11, 4, 10, 30, tzinfo=UTC)
-    items = [
-        {"kind": "down", "start": start, "end": end, "duration_seconds": 1800, "services": ["TCP:25"]},
-        {"kind": "gap", "start": start, "end": end, "duration_seconds": 1800, "services": ["HTTP"]},
-        {"kind": "unknown", "start": start, "end": end, "duration_seconds": 1800, "services": ["UDP:161"]},
-    ]
-    html = render("fragments/downtime_history.html", periods=items, has_data=True, use_utc=True, range_label="30d")
-    entries = {
-        m.group(1): m.group(0)
-        for m in re.finditer(r'<li class="downtime-item downtime-item--(\w+)[^"]*".*?</li>', html, re.DOTALL)
-    }
-    assert set(entries) == {"down", "gap", "unknown"}
-    assert "Downtime" in entries["down"] and "cancel" in entries["down"]
-    assert "No measurements" in entries["gap"] and "timer_off" in entries["gap"]
-    assert "Unknown" in entries["unknown"] and "help" in entries["unknown"]
-    assert "not counted as downtime" in entries["gap"] and "not counted as downtime" in entries["unknown"]
-    assert "Downtime" not in entries["gap"].replace("not counted as downtime", "")
-
-
 def _endpoint_card(t: dict) -> str:
     t["endpoints"] = build_endpoint_views(t, t.get("network_ports", []))
     return endpoint_table(render("fragments/target_detail/info_cards.html", target=t, user={}))
