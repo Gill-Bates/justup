@@ -17,8 +17,7 @@ from tests import _support  # noqa: F401 - imported for its sys.path side effect
 
 
 def _hop(n: int, status: str = "ok", avg: float | None = 10.0) -> dict:
-    lat = {"avg": avg} if avg is not None else None
-    return {"hop": n, "ip": f"10.0.0.{n}", "status": status, "latency_ms": lat}
+    return {"hop": n, "ip": f"10.0.0.{n}", "status": status, "rtt_ms": avg}
 
 
 def _timeout(n: int) -> dict:
@@ -28,7 +27,7 @@ def _timeout(n: int) -> dict:
 def test_trailing_timeouts_are_not_interpolated() -> None:
     out = interpolate_route([_hop(1), _hop(2, avg=20.0), _timeout(3), _timeout(4)])
     assert [h["status"] for h in out] == ["ok", "ok", "timeout", "timeout"]
-    assert out[2]["latency_ms"] is None
+    assert out[2]["rtt_ms"] is None
     assert not out[2].get("_interpolated")
 
 
@@ -37,7 +36,7 @@ def test_timeout_between_responding_hops_is_still_interpolated() -> None:
     out = interpolate_route(hops)
     assert out[1]["status"] == "interpolated"
     assert out[1]["_interpolated"] is True
-    assert out[1]["latency_ms"]["avg"] == 20.0
+    assert out[1]["rtt_ms"] is None  # an estimated hop carries no measured RTT
     assert hops[1]["status"] == "timeout"  # input is not mutated
 
 
@@ -46,15 +45,15 @@ def test_middle_block_interpolated_and_trailing_block_left_alone() -> None:
     assert [h["status"] for h in out] == ["ok", "interpolated", "ok", "timeout"]
 
 
-def test_latency_is_linear_across_a_multi_hop_block() -> None:
+def test_interpolated_hops_never_carry_an_rtt_or_loss() -> None:
     out = interpolate_route([_hop(1, avg=10.0), _timeout(2), _timeout(3), _hop(4, avg=40.0)])
-    assert [h["latency_ms"]["avg"] for h in out[1:3]] == [20.0, 30.0]
+    assert [(h["status"], h["rtt_ms"]) for h in out[1:3]] == [("interpolated", None)] * 2
+    assert all("loss_pct" not in h and "latency_ms" not in h for h in out)
 
 
-def test_leading_block_starts_from_zero_latency() -> None:
+def test_leading_silent_hops_before_the_first_answer_are_estimated_without_rtt() -> None:
     out = interpolate_route([_timeout(1), _hop(2, avg=20.0)])
-    assert out[0]["status"] == "interpolated"
-    assert out[0]["latency_ms"]["avg"] == 10.0
+    assert out[0]["status"] == "interpolated" and out[0]["rtt_ms"] is None
 
 
 def test_route_without_timeouts_is_returned_unchanged() -> None:
@@ -77,12 +76,12 @@ def test_ensure_destination_hop_appends_a_synthetic_partial_hop() -> None:
         destination_ip="198.51.100.9",
         destination_hostname="dest.example",
         destination_geo=geo,
-        final_latency_ms=12.0,
+        final_rtt_hint_ms=12.0,
     )
     dest = out[-1]
     assert (dest["hop"], dest["ip"], dest["status"]) == (3, "198.51.100.9", "partial")
     assert dest["_synthetic_destination"] is True
-    assert dest["latency_ms"] is None
+    assert dest["rtt_ms"] is None
     assert dest["_estimated_latency_ms"] == 12.0
     assert (dest["city"], dest["country"]) == ("X", "DE")
 

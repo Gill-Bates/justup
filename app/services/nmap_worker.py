@@ -22,6 +22,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.services.nmap_scanner import MAX_PORTS, NmapScannerError, discover_ports, scan_selected_ports, trace_route
+from app.services.route_model import RequestedProbeProtocol
 from app.utils.tcp_ports import parse_port_list
 
 _log = logging.getLogger(__name__)
@@ -61,7 +62,7 @@ class TracerouteRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     kind: Literal["traceroute"]
     host: str = Field(min_length=1, max_length=255)
-    probe_protocol: Literal["tcp", "udp"] | None = None
+    probe_protocol: RequestedProbeProtocol | None = None
     probe_port: int | None = Field(default=None, ge=1, le=65535)
     timeout: float = Field(default=30, ge=5, le=120)
 

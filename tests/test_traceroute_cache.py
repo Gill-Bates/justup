@@ -247,11 +247,9 @@ def test_destination_kpis_use_measured_values_and_never_default_to_zero() -> Non
 
     # Without a destination hop or a loss value nothing is invented.
     unknown = frontend_api._destination_kpis([{"hop": 1, "ip": "10.0.0.1"}], None, None)
-    assert unknown["latency_display"] is None and unknown["loss_display"] is None and unknown["city"] is None
-    no_loss = frontend_api._destination_kpis(
-        [{"hop": 1, "ip": "203.0.113.9", "latency_ms": {"avg": 2.0}}], "203.0.113.9", None
-    )
-    assert no_loss["loss_display"] is None
+    assert unknown["latency_display"] is None and unknown["city"] is None
+    single = frontend_api._destination_kpis([{"hop": 1, "ip": "203.0.113.9", "rtt_ms": 2.0}], "203.0.113.9", None)
+    assert single["latency_display"] == "2.0 ms" and "loss_display" not in single
 
 
 def test_fragment_counts_collapsed_hops_and_renders_panels(tmp_path: Path, monkeypatch) -> None:
@@ -577,11 +575,11 @@ def test_fragment_renders_single_timeline(tmp_path: Path, monkeypatch) -> None:
         _ok_hop(4, "10.0.0.4", 3.0),
         _ok_hop(5, "10.0.0.5", 4.0),
         _ok_hop(6, "10.0.0.6", 5.0),
-        _ok_hop(7, "2001:db8:0:0:0:0:0:99", 6.0),
+        _ok_hop(7, "2001:db8::99", 6.0),
     ]
     geo = [{"ip": "10.0.0.5", "lat": 51.5, "lon": 7.4, "city": "Dortmund", "country": "DE", "hop": 5}]
     client, url, _calls, _app, _tid = _diagnostics_client(
-        tmp_path, monkeypatch, hops, target_ip="2001:db8:0:0:0:0:0:99", geo_points=geo
+        tmp_path, monkeypatch, hops, target_ip="2001:db8::99", geo_points=geo
     )
     text = client.get(url, headers=_HX).text
     client.close()
@@ -595,7 +593,7 @@ def test_fragment_renders_single_timeline(tmp_path: Path, monkeypatch) -> None:
     assert 'aria-controls="tr-group-2-3"' not in text  # 2 hops are below the group threshold
     assert 'class="tr-route-legend"' in text and "No map location" in text
     assert "Hop 1–7" in text and "7 hops" in text
-    assert 'title="2001:db8:0:0:0:0:0:99"' in text  # full IPv6 stays available
+    assert 'title="2001:db8::99"' in text  # full IPv6 stays available
 
 
 def test_timeline_groups_no_reply_runs_and_keeps_single_timeouts_separate() -> None:

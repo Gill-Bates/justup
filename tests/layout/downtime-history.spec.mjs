@@ -21,10 +21,10 @@ const VIEWPORTS = [
 ];
 const PORTS = Array.from({ length: 12 }, (_, i) => 8001 + i).join(",");
 const BODIES = {
-	many: { name: "Downtime Many", host: "dt.example.net", is_enabled: false, enable_tcp_connect: true, tcp_host: "dt.example.net", tcp_ports: `25,${PORTS}` },
-	few: { name: "Downtime Few", host: "dt.example.net", is_enabled: false, enable_tcp_connect: true, tcp_host: "dt.example.net", tcp_ports: "25" },
-	gaps: { name: "Downtime Gaps", host: "dt.example.net", is_enabled: false, enable_tcp_connect: true, tcp_host: "dt.example.net", tcp_ports: "25" },
-	nodata: { name: "Downtime NoData", host: "dt.example.net", is_enabled: false, enable_tcp_connect: true, tcp_host: "dt.example.net", tcp_ports: "25" },
+	many: { name: "Downtime Many", host: "many.dt.example.net", is_enabled: false, enable_tcp_connect: true, tcp_host: "many.dt.example.net", tcp_ports: `25,${PORTS}` },
+	few: { name: "Downtime Few", host: "few.dt.example.net", is_enabled: false, enable_tcp_connect: true, tcp_host: "few.dt.example.net", tcp_ports: "25" },
+	gaps: { name: "Downtime Gaps", host: "gaps.dt.example.net", is_enabled: false, enable_tcp_connect: true, tcp_host: "gaps.dt.example.net", tcp_ports: "25" },
+	nodata: { name: "Downtime NoData", host: "nodata.dt.example.net", is_enabled: false, enable_tcp_connect: true, tcp_host: "nodata.dt.example.net", tcp_ports: "25" },
 };
 test.describe.configure({ mode: "serial" });
 const ids = {};
@@ -137,15 +137,10 @@ test("downtime card: gaps only claim no success, no data is neutral, range swap 
 		assert.match(text, /0\s+Downtimes/);
 		assert.match(text, /No measurements/);
 		assert.doesNotMatch(text, /No outages/);
-		const label = await gaps.page.locator("#downtime-header-label").innerText();
-		await gaps.page.evaluate(async (id) => {
-			const since = new Date(Date.now() - 3600_000).toISOString();
-			await window.htmx.ajax("GET", `/ui/fragments/downtime-history/${id}?since=${since}&until=${new Date().toISOString()}`, { target: "#downtime-history-body", swap: "innerHTML" });
-		}, ids.gaps);
-		await gaps.page.locator("#downtime-history-body .downtime-empty").waitFor({ timeout: 10000 });
-		assert.match(await gaps.page.locator("#downtime-history-body").innerText(), /No measurement data|No outages/);
-		assert.notEqual(await gaps.page.locator("#downtime-header-label").innerText(), "");
-		assert.ok(label.length > 0);
+		await gaps.page.locator("#quick-range").selectOption("1h");
+		await gaps.page.locator("#downtime-history-body .downtime-empty--nodata").waitFor({ timeout: 15000 });
+		assert.doesNotMatch(await gaps.page.locator("#downtime-history-body").innerText(), /0\s+Downtimes/);
+		assert.equal(await gaps.page.locator("#downtime-header-label").innerText(), "Selected Range");
 	} finally {
 		await gaps.context.close();
 	}

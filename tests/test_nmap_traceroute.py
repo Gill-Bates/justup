@@ -290,7 +290,7 @@ class TestProbeChoiceAndDeadline:
     def test_timeout_of_discovery_falls_back_once_within_one_deadline(self, sock_dir, monkeypatch):
         log = _trace_for(sock_dir, monkeypatch, f"if '-sn' in sys.argv:\n    time.sleep(60)\nelse:\n    {XML_TRACE}")
         started = time.monotonic()
-        route = asyncio.run(nmap_scanner.trace_route("10.0.0.5", timeout=12, probe_port=443, probe_protocol=None))
+        route = asyncio.run(nmap_scanner.trace_route("10.0.0.5", timeout=12))
         calls = _calls(log)
         assert route.destination_reached and len(calls) == 2
         assert "-sn" in calls[0].split() and "-sS" in calls[1].split()
@@ -327,12 +327,17 @@ class TestProbeChoiceAndDeadline:
 
 class TestDnsBound:
     def test_slow_dns_is_bounded_and_reported_as_timeout(self, monkeypatch):
-        monkeypatch.setattr(nmap_scanner, "resolve_validated", lambda *a, **k: time.sleep(2) or [])
+        monkeypatch.setattr(nmap_scanner, "resolve_validated", lambda *_a, **_k: time.sleep(2) or [])
         monkeypatch.setattr(nmap_scanner, "DNS_TIMEOUT", 0.3, raising=False)
-        started = time.monotonic()
-        with pytest.raises(NmapScannerError) as exc:
-            asyncio.run(nmap_scanner.trace_route("slow.example.net", timeout=10))
-        assert exc.value.error.code == "timeout" and time.monotonic() - started < 1.9
+
+        async def scenario():
+            started = time.monotonic()
+            with pytest.raises(NmapScannerError) as exc:
+                await nmap_scanner.trace_route("slow.example.net", timeout=10)
+            return exc.value.error.code, time.monotonic() - started
+
+        code, elapsed = asyncio.run(scenario())
+        assert code == "timeout" and elapsed < 1.5
 
     def test_concurrent_resolutions_are_capped_even_after_a_caller_gave_up(self, monkeypatch):
         state = {"now": 0, "peak": 0}
@@ -348,7 +353,7 @@ class TestDnsBound:
         monkeypatch.setattr(nmap_scanner, "DNS_TIMEOUT", 0.1, raising=False)
 
         async def scenario():
-            monkeypatch.setattr(nmap_scanner, "_resolve_slots", asyncio.Semaphore(2), raising=False)
+            monkeypatch.setattr(nmap_scanner, "_resolve_gate", None)
             monkeypatch.setattr(nmap_scanner, "MAX_CONCURRENT_RESOLUTIONS", 2, raising=False)
             await asyncio.gather(
                 *(nmap_scanner._resolve(f"h{n}.example.net") for n in range(6)), return_exceptions=True
@@ -439,16 +444,16 @@ class TestRequestType:
         import typing
 
         def args(func_or_model, name):
-            hints = typing.get_type_hints(func_or_model)
-            return set(typing.get_args(hints[name]) or ()) - {type(None)}
+            found: set[str] = set()
+            for arg in typing.get_args(typing.get_type_hints(func_or_model)[name]):
+                found.update(typing.get_args(arg) or ())
+            return found
 
         client = args(nmap_client.request_traceroute, "probe_protocol")
         scanner = args(nmap_scanner.trace_route, "probe_protocol")
-        worker = {
-            arg
-            for arg in typing.get_args(nmap_worker.TracerouteRequest.model_fields["probe_protocol"].annotation)
-            if arg is not type(None)
-        }
+        worker = set()
+        for arg in typing.get_args(nmap_worker.TracerouteRequest.model_fields["probe_protocol"].annotation):
+            worker.update(typing.get_args(arg) or ())
         assert client == scanner == worker == {"tcp", "udp"}
 
     def test_route_result_may_still_report_an_icmp_probe(self):

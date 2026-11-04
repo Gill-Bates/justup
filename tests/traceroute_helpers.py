@@ -1,3 +1,9 @@
+#!/usr/bin/env python3
+#
+# tests/traceroute_helpers.py
+# Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
+#
+
 """Test helpers: feed hop fixtures through the real traceroute service via a fake Nmap client."""
 
 from __future__ import annotations

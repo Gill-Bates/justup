@@ -15,7 +15,7 @@ from contextlib import suppress
 from pathlib import Path
 
 from app.services.nmap_scanner import NmapScannerError, NmapScanResult
-from app.services.route_model import ProbeProtocol, Route
+from app.services.route_model import RequestedProbeProtocol, Route
 
 SOCKET_PATH = os.environ.get("JUSTUP_NMAP_SOCKET", "/run/justup/nmap.sock")
 MAX_RESPONSE_BYTES = 1_100_000
@@ -133,7 +133,7 @@ async def request_scan(
 async def request_traceroute(
     host: str,
     *,
-    probe_protocol: ProbeProtocol | None = None,
+    probe_protocol: RequestedProbeProtocol | None = None,
     probe_port: int | None = None,
     timeout: float = 30,
 ) -> Route:

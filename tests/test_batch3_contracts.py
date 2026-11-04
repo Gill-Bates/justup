@@ -167,13 +167,12 @@ def test_collect_resolved_empty_and_failing() -> None:
 def test_synthetic_destination_hop_does_not_claim_reached_target() -> None:
     from app.services.route_interpolator import ensure_destination_hop
 
-    hops = [{"hop": 1, "ip": "10.0.0.1", "status": "ok", "latency_ms": {"avg": 5.0}, "loss_pct": 0.0}]
-    out = ensure_destination_hop(hops, destination_ip="203.0.113.9", final_latency_ms=5.0)
+    hops = [{"hop": 1, "ip": "10.0.0.1", "status": "ok", "rtt_ms": 5.0}]
+    out = ensure_destination_hop(hops, destination_ip="203.0.113.9", final_rtt_hint_ms=5.0)
     dest = out[-1]
     assert dest["_synthetic_destination"] is True
     assert dest["status"] == "partial"
-    assert dest["latency_ms"] is None
-    assert dest["loss_pct"] is None
+    assert dest["rtt_ms"] is None
     assert dest["_estimated_latency_ms"] == 5.0
 
 

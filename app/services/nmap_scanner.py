@@ -16,6 +16,7 @@ import shutil
 import signal
 from contextlib import suppress
 from datetime import datetime
+from functools import partial
 from typing import Literal
 
 from defusedxml import ElementTree
@@ -23,7 +24,7 @@ from defusedxml.common import DefusedXmlException
 from pydantic import BaseModel, Field
 
 from app.models.targets import validate_host
-from app.services.route_model import MAX_HOPS, ProbeProtocol, Route, RouteHop
+from app.services.route_model import MAX_HOPS, RequestedProbeProtocol, Route, RouteHop
 from app.utils.ssrf import resolve_validated
 from app.utils.tcp_ports import parse_port_list
 from app.utils.time import utcnow
@@ -38,6 +39,10 @@ EXTENDED_UDP_PORTS = (*QUICK_UDP_PORTS, 69, 137, 138, 389, 4500, 5353)
 MAX_PORTS = 128
 MAX_OUTPUT_BYTES = 1_000_000
 MAX_CONCURRENT_SCANS = 2
+# One cap for every Nmap process. It is below scans + traces, so neither kind can occupy all slots.
+MAX_CONCURRENT_NMAP = 3
+DNS_TIMEOUT = 5.0
+MAX_CONCURRENT_RESOLUTIONS = 4
 DEFAULT_NMAP_BINARY = "/usr/bin/nmap"
 
 
@@ -51,6 +56,8 @@ def locate_binary() -> str | None:
 NMAP_BINARY = locate_binary() or DEFAULT_NMAP_BINARY
 
 _scan_slots = asyncio.Semaphore(MAX_CONCURRENT_SCANS)
+_nmap_slots = asyncio.Semaphore(MAX_CONCURRENT_NMAP)
+_resolve_gate: tuple[asyncio.AbstractEventLoop, asyncio.Semaphore] | None = None
 _target_locks: dict[str, asyncio.Lock] = {}
 
 
@@ -190,14 +197,48 @@ def _port_argument(tcp_ports: list[int], udp_ports: list[int]) -> str:
     return ",".join(parts)
 
 
-async def _resolve(host: str) -> str:
+def _resolve_slots() -> asyncio.Semaphore:
+    """Return the resolution limiter of the running loop (created lazily: a semaphore binds to one loop)."""
+    global _resolve_gate  # noqa: PLW0603
+    loop = asyncio.get_running_loop()
+    if _resolve_gate is None or _resolve_gate[0] is not loop:
+        _resolve_gate = (loop, asyncio.Semaphore(MAX_CONCURRENT_RESOLUTIONS))
+    return _resolve_gate[1]
+
+
+def _release_when_done(slots: asyncio.Semaphore, future: asyncio.Future) -> None:
+    """Free the slot only when the lookup thread ends: an abandoned lookup still occupies its thread."""
+    if not future.cancelled():
+        future.exception()  # mark retrieved
+    slots.release()
+
+
+async def _lookup(host: str, limit: float) -> list:
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + limit
+    slots = _resolve_slots()
+    try:
+        async with asyncio.timeout(limit):
+            await slots.acquire()
+    except TimeoutError as exc:
+        raise NmapScannerError("timeout", "Name resolution timed out") from exc
+    future = loop.run_in_executor(None, partial(resolve_validated, host, allow_private=True))
+    future.add_done_callback(partial(_release_when_done, slots))
+    done, _ = await asyncio.wait({future}, timeout=max(0.0, deadline - loop.time()))
+    if not done:
+        raise NmapScannerError("timeout", "Name resolution timed out")
+    return future.result()
+
+
+async def _resolve(host: str, *, timeout: float | None = None) -> str:
+    """Resolve a validated host within DNS_TIMEOUT (or the smaller caller budget)."""
     try:
         validated = validate_host(host)
     except ValueError as exc:
         raise NmapScannerError("invalid_host", "Invalid target host") from exc
     if not validated:
         raise NmapScannerError("invalid_host", "Target host is required")
-    addresses = await asyncio.to_thread(resolve_validated, validated, allow_private=True)
+    addresses = await _lookup(validated, DNS_TIMEOUT if timeout is None else min(DNS_TIMEOUT, timeout))
     if not addresses:
         raise NmapScannerError("invalid_host", "Target host has no permitted address")
     return str(addresses[0])
@@ -279,7 +320,7 @@ async def scan_selected_ports(
 
 
 async def _run_locked(command: list[str], timeout: float) -> NmapScanResult:
-    async with _scan_slots:
+    async with _scan_slots, _nmap_slots:
         started = utcnow()
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -327,10 +368,15 @@ async def discover_ports(host: str, protocols: set[str], *, timeout: float, prof
 # --- Traceroute -----------------------------------------------------------------------------------
 # `--traceroute` cannot be combined with `-sT` (a connect scan sends no raw probes), so a trace never
 # reuses the port-scan command. Attempt 1 is host discovery only (`-sn`: nothing is port-scanned);
-# attempt 2 runs only when attempt 1 produced no trace, as one bounded SYN (or UDP) probe port.
+# attempt 2 runs only when attempt 1 produced no trace or timed out, as one bounded SYN (or UDP) probe port.
+# A probe requested by the caller is the caller's decision: it runs first, alone and with the whole budget.
+# DNS and all attempts share one monotonic deadline; permission, input and internal errors never retry.
 MAX_CONCURRENT_TRACEROUTES = 2
 DEFAULT_PROBE_PORT = 443
 MAX_RTT_MS = 60_000.0
+MIN_ATTEMPT_SECONDS = 3
+KILL_GRACE_SECONDS = 2  # _run_trace stops the process this long after Nmap's own --host-timeout
+FALLBACK_ERRORS = frozenset({"no_trace", "timeout"})
 _trace_slots = asyncio.Semaphore(MAX_CONCURRENT_TRACEROUTES)
 _trace_locks: dict[str, asyncio.Lock] = {}
 
@@ -400,8 +446,12 @@ def parse_traceroute_xml(data: bytes, *, destination_ip: str, started_at: dateti
     if not hops:
         raise NmapScannerError("no_trace", "Nmap returned no route data for the destination")
     port_raw = trace.get("port", "")
-    port = int(port_raw) if port_raw.isascii() and port_raw.isdigit() and 1 <= int(port_raw) <= 65535 else None
     proto = trace.get("proto")
+    port = (
+        int(port_raw)
+        if proto in {"tcp", "udp"} and port_raw.isascii() and port_raw.isdigit() and 1 <= int(port_raw) <= 65535
+        else None
+    )
     finished = root.find("./runstats/finished")
     return Route(
         destination_ip=str(destination),
@@ -417,7 +467,7 @@ def parse_traceroute_xml(data: bytes, *, destination_ip: str, started_at: dateti
     )
 
 
-def _trace_command(address: str, *, budget: int, probe: tuple[ProbeProtocol, int] | None) -> list[str]:
+def _trace_command(address: str, *, budget: int, probe: tuple[RequestedProbeProtocol, int] | None) -> list[str]:
     """Build the fixed trace command line; ``probe`` selects the bounded port variant instead of discovery."""
     command = [NMAP_BINARY, "--privileged", "-n", "--max-retries", "1", "--host-timeout", f"{budget}s", "-oX", "-"]
     if probe is None:
@@ -463,34 +513,62 @@ async def _run_trace(command: list[str], address: str, timeout: float) -> Route:
     return route
 
 
+def _attempt_budget(remaining: float, *, share: float | None) -> int | None:
+    """Nmap host-timeout for one attempt, or None when the deadline leaves no sensible attempt."""
+    if remaining < MIN_ATTEMPT_SECONDS:
+        return None
+    if share is not None:
+        return max(MIN_ATTEMPT_SECONDS, int(remaining * share))
+    budget = int(remaining) - KILL_GRACE_SECONDS
+    return budget if budget >= MIN_ATTEMPT_SECONDS else None
+
+
 async def trace_route(
-    host: str, *, timeout: float, probe_protocol: ProbeProtocol | None = None, probe_port: int | None = None
+    host: str,
+    *,
+    timeout: float,
+    probe_protocol: RequestedProbeProtocol | None = None,
+    probe_port: int | None = None,
 ) -> Route:
-    """Trace the path to the resolved address of a validated host with at most two bounded Nmap runs."""
+    """Trace the path to the resolved address of a validated host within one deadline of ``timeout`` seconds.
+
+    A requested probe runs once with the whole budget. Without one, host discovery gets 40 % and a single
+    TCP/443 SYN probe the rest, but only after "no trace" or a timeout and only if enough time is left.
+    """
     if not 5 <= timeout <= 120:
         raise ValueError("Traceroute timeout must be between 5 and 120 seconds")
-    if (probe_protocol is None) != (probe_port is None) or probe_protocol == "icmp":
+    if (probe_protocol is None) != (probe_port is None) or probe_protocol not in {None, "tcp", "udp"}:
         raise NmapScannerError("invalid_ports", "Specify a TCP or UDP probe port together with its protocol")
     if probe_port is not None and not 1 <= probe_port <= 65535:
         raise NmapScannerError("invalid_ports", "Probe port must be between 1 and 65535")
-    address = await _resolve(host)
-    fallback: tuple[ProbeProtocol, int] = (probe_protocol or "tcp", probe_port or DEFAULT_PROBE_PORT)
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    address = await _resolve(host, timeout=timeout)
+    first: tuple[RequestedProbeProtocol, int] | None = None
+    fallback: tuple[RequestedProbeProtocol, int] | None = None
+    if probe_protocol is not None and probe_port is not None:
+        first = (probe_protocol, probe_port)
+    else:
+        fallback = ("tcp", DEFAULT_PROBE_PORT)
     lock = _trace_locks.setdefault(address, asyncio.Lock())
-    if lock.locked() or _trace_slots.locked():
+    if lock.locked() or _trace_slots.locked() or _nmap_slots.locked():
         raise NmapScannerError("busy", "A traceroute is already running for this target or the worker is busy")
     await lock.acquire()
     try:
-        async with _trace_slots:
-            first_budget = max(3, int(timeout * 0.4))
+        async with _trace_slots, _nmap_slots:
+            budget = _attempt_budget(deadline - loop.time(), share=0.4 if fallback else None)
+            if budget is None:
+                raise NmapScannerError("timeout", "No time left for a traceroute")
             try:
-                return await _run_trace(_trace_command(address, budget=first_budget, probe=None), address, first_budget)
+                return await _run_trace(_trace_command(address, budget=budget, probe=first), address, budget)
             except NmapScannerError as exc:
-                if exc.error.code != "no_trace":
+                if fallback is None or exc.error.code not in FALLBACK_ERRORS:
                     raise
-            second_budget = max(3, int(timeout) - first_budget)
-            return await _run_trace(
-                _trace_command(address, budget=second_budget, probe=fallback), address, second_budget
-            )
+                first_error = exc
+            budget = _attempt_budget(deadline - loop.time(), share=None)
+            if budget is None:
+                raise first_error
+            return await _run_trace(_trace_command(address, budget=budget, probe=fallback), address, budget)
     finally:
         lock.release()
         if _trace_locks.get(address) is lock:
