@@ -194,7 +194,17 @@ const PAGES = [
 				const badge = tile?.querySelector(".dashboard-monitor-status");
 				return tile && !tile.classList.contains("d-none") && badge && badge.textContent.trim() !== "Loading";
 			}, null, { timeout: 10000 });
-			const queueScroll = await page.locator('[data-widget-id="delivery-queue"] .dashboard-monitor-body').evaluate((body) => ({ scrollHeight: body.scrollHeight, clientHeight: body.clientHeight }));
+			// The tile height follows its content one animation frame after the status text lands
+			// (dashboard-grid.js scheduleFit), so the contract is checked on the settled tile: the
+			// body must stop overflowing within the timeout, a permanent ghost scroll still fails.
+			const queueBody = page.locator('[data-widget-id="delivery-queue"] .dashboard-monitor-body');
+			const measureQueue = () => queueBody.evaluate((body) => ({ scrollHeight: body.scrollHeight, clientHeight: body.clientHeight }));
+			const deadline = Date.now() + 5000;
+			let queueScroll = await measureQueue();
+			while (queueScroll.scrollHeight > queueScroll.clientHeight + 2 && Date.now() < deadline) {
+				await page.waitForTimeout(100);
+				queueScroll = await measureQueue();
+			}
 			assert.ok(queueScroll.scrollHeight <= queueScroll.clientHeight + 2, `delivery queue body has ghost scroll: ${queueScroll.scrollHeight}px > ${queueScroll.clientHeight}px`);
 		},
 	},
