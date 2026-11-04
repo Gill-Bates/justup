@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import math
 import os
 import shutil
 import signal
@@ -22,6 +23,7 @@ from defusedxml.common import DefusedXmlException
 from pydantic import BaseModel, Field
 
 from app.models.targets import validate_host
+from app.services.route_model import MAX_HOPS, ProbeProtocol, Route, RouteHop
 from app.utils.ssrf import resolve_validated
 from app.utils.tcp_ports import parse_port_list
 from app.utils.time import utcnow
@@ -320,3 +322,176 @@ async def discover_ports(host: str, protocols: set[str], *, timeout: float, prof
     tcp = (QUICK_TCP_PORTS if profile == "quick" else EXTENDED_TCP_PORTS) if "tcp" in protocols else ()
     udp = (QUICK_UDP_PORTS if profile == "quick" else EXTENDED_UDP_PORTS) if "udp" in protocols else ()
     return await scan_selected_ports(host, list(tcp), list(udp), timeout=timeout, detect_services=True)
+
+
+# --- Traceroute -----------------------------------------------------------------------------------
+# `--traceroute` cannot be combined with `-sT` (a connect scan sends no raw probes), so a trace never
+# reuses the port-scan command. Attempt 1 is host discovery only (`-sn`: nothing is port-scanned);
+# attempt 2 runs only when attempt 1 produced no trace, as one bounded SYN (or UDP) probe port.
+MAX_CONCURRENT_TRACEROUTES = 2
+DEFAULT_PROBE_PORT = 443
+MAX_RTT_MS = 60_000.0
+_trace_slots = asyncio.Semaphore(MAX_CONCURRENT_TRACEROUTES)
+_trace_locks: dict[str, asyncio.Lock] = {}
+
+
+def _parse_root(data: bytes):
+    if len(data) > MAX_OUTPUT_BYTES or b"\x00" in data:
+        raise NmapScannerError("invalid_xml", "Nmap returned an invalid or oversized XML document")
+    try:
+        root = ElementTree.fromstring(
+            data.decode("utf-8"), forbid_dtd=False, forbid_entities=True, forbid_external=True
+        )
+    except (UnicodeError, ElementTree.ParseError, DefusedXmlException) as exc:
+        raise NmapScannerError("invalid_xml", "Nmap returned invalid XML") from exc
+    if root.tag != "nmaprun":
+        raise NmapScannerError("invalid_xml", "Nmap returned an unexpected XML document")
+    return root
+
+
+def _parse_rtt(value: str | None) -> float | None:
+    try:
+        rtt = float(value) if value is not None else math.nan
+    except ValueError:
+        return None
+    return rtt if math.isfinite(rtt) and 0 <= rtt <= MAX_RTT_MS else None
+
+
+def parse_traceroute_xml(data: bytes, *, destination_ip: str, started_at: datetime, completed_at: datetime) -> Route:
+    """Parse Nmap trace XML into a Route; silent TTLs between answers become explicit ``no_reply`` hops."""
+    destination = ipaddress.ip_address(destination_ip)
+    root = _parse_root(data)
+    host = None
+    for candidate in root.findall("host"):
+        for node in candidate.findall("address"):
+            try:
+                if ipaddress.ip_address(node.get("addr", "")) == destination:
+                    host = candidate
+            except ValueError:
+                continue
+    trace = host.find("trace") if host is not None else None
+    if host is None or trace is None:
+        raise NmapScannerError("no_trace", "Nmap returned no route data for the destination")
+    hops: list[RouteHop] = []
+    expected = 1
+    for node in trace.findall("hop"):
+        ttl_raw = node.get("ttl", "")
+        if not ttl_raw.isascii() or not ttl_raw.isdigit() or not expected <= int(ttl_raw) <= MAX_HOPS:
+            raise NmapScannerError("invalid_xml", "Nmap returned an invalid hop number")
+        ttl = int(ttl_raw)
+        try:
+            address = ipaddress.ip_address(node.get("ipaddr", ""))
+        except ValueError as exc:
+            raise NmapScannerError("invalid_xml", "Nmap returned an invalid hop address") from exc
+        if address.version != destination.version:
+            raise NmapScannerError("invalid_xml", "Nmap returned a hop of the wrong address family")
+        hops.extend(RouteHop(hop_number=number, status="no_reply") for number in range(expected, ttl))
+        name = (node.get("host") or "").strip()
+        hops.append(
+            RouteHop(
+                hop_number=ttl,
+                ip=str(address),
+                hostname=name if name and len(name) <= 255 and name.isprintable() else None,
+                rtt_ms=_parse_rtt(node.get("rtt")),
+                status="ok",
+            )
+        )
+        expected = ttl + 1
+    if not hops:
+        raise NmapScannerError("no_trace", "Nmap returned no route data for the destination")
+    port_raw = trace.get("port", "")
+    port = int(port_raw) if port_raw.isascii() and port_raw.isdigit() and 1 <= int(port_raw) <= 65535 else None
+    proto = trace.get("proto")
+    finished = root.find("./runstats/finished")
+    return Route(
+        destination_ip=str(destination),
+        address_family="ipv6" if destination.version == 6 else "ipv4",
+        probe_protocol=proto if proto in {"icmp", "tcp", "udp"} else None,
+        probe_port=port,
+        started_at=started_at,
+        completed_at=completed_at,
+        duration_ms=max(0, int((completed_at - started_at).total_seconds() * 1000)),
+        destination_reached=hops[-1].ip == str(destination),
+        complete=finished is not None and finished.get("exit") == "success",
+        hops=hops,
+    )
+
+
+def _trace_command(address: str, *, budget: int, probe: tuple[ProbeProtocol, int] | None) -> list[str]:
+    """Build the fixed trace command line; ``probe`` selects the bounded port variant instead of discovery."""
+    command = [NMAP_BINARY, "--privileged", "-n", "--max-retries", "1", "--host-timeout", f"{budget}s", "-oX", "-"]
+    if probe is None:
+        command.append("-sn")
+    else:
+        protocol, port = probe
+        command.extend(("-Pn", "-sS" if protocol == "tcp" else "-sU", "-p", str(port)))
+    command.append("--traceroute")
+    if ipaddress.ip_address(address).version == 6:
+        command.append("-6")
+    command.append(address)
+    return command
+
+
+async def _run_trace(command: list[str], address: str, timeout: float) -> Route:
+    started = utcnow()
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=True
+        )
+    except FileNotFoundError as exc:
+        raise NmapScannerError("unavailable", "Nmap is not installed") from exc
+    except PermissionError as exc:
+        raise NmapScannerError("permission_denied", "Nmap is not executable") from exc
+    try:
+        async with asyncio.timeout(timeout + 2):
+            stdout, stderr = await asyncio.gather(_read_bounded(proc.stdout), _read_bounded(proc.stderr))
+            await proc.wait()
+    except TimeoutError as exc:
+        await _stop_process(proc)
+        raise NmapScannerError("timeout", "Nmap traceroute timed out") from exc
+    except BaseException:
+        await _stop_process(proc)
+        raise
+    if proc.returncode != 0:
+        lowered = stderr.lower()
+        if b"root" in lowered or b"permission denied" in lowered:
+            raise NmapScannerError("permission_denied", "Nmap lacks the privileges for a traceroute")
+        raise NmapScannerError("process_failed", "Nmap could not complete the traceroute")
+    route = parse_traceroute_xml(stdout, destination_ip=address, started_at=started, completed_at=utcnow())
+    if not route.complete:
+        raise NmapScannerError("process_failed", "Nmap reported an incomplete traceroute")
+    return route
+
+
+async def trace_route(
+    host: str, *, timeout: float, probe_protocol: ProbeProtocol | None = None, probe_port: int | None = None
+) -> Route:
+    """Trace the path to the resolved address of a validated host with at most two bounded Nmap runs."""
+    if not 5 <= timeout <= 120:
+        raise ValueError("Traceroute timeout must be between 5 and 120 seconds")
+    if (probe_protocol is None) != (probe_port is None) or probe_protocol == "icmp":
+        raise NmapScannerError("invalid_ports", "Specify a TCP or UDP probe port together with its protocol")
+    if probe_port is not None and not 1 <= probe_port <= 65535:
+        raise NmapScannerError("invalid_ports", "Probe port must be between 1 and 65535")
+    address = await _resolve(host)
+    fallback: tuple[ProbeProtocol, int] = (probe_protocol or "tcp", probe_port or DEFAULT_PROBE_PORT)
+    lock = _trace_locks.setdefault(address, asyncio.Lock())
+    if lock.locked() or _trace_slots.locked():
+        raise NmapScannerError("busy", "A traceroute is already running for this target or the worker is busy")
+    await lock.acquire()
+    try:
+        async with _trace_slots:
+            first_budget = max(3, int(timeout * 0.4))
+            try:
+                return await _run_trace(_trace_command(address, budget=first_budget, probe=None), address, first_budget)
+            except NmapScannerError as exc:
+                if exc.error.code != "no_trace":
+                    raise
+            second_budget = max(3, int(timeout) - first_budget)
+            return await _run_trace(
+                _trace_command(address, budget=second_budget, probe=fallback), address, second_budget
+            )
+    finally:
+        lock.release()
+        if _trace_locks.get(address) is lock:
+            del _trace_locks[address]

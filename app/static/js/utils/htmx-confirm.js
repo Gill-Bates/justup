@@ -5,7 +5,7 @@
 
 /**
  * Confirmation of htmx actions through the shared design-contract dialog (utils/confirm-dialog.js),
- * instead of the native confirm() that hx-confirm opens.
+ * instead of the native browser dialog that hx-confirm opens.
  *
  * A button opts in with data attributes (no inline script, so it survives every htmx swap):
  *   data-ju-confirm  data-confirm-title  data-confirm-message  data-confirm-label

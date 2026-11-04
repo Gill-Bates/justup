@@ -247,6 +247,9 @@ function buildAvailabilitySeriesChart(canvasId, data) {
       tension: 0,
       stepped: "before",
       fill: false,
+      // Series are clipped to the plot area: a step segment that starts or ends outside the zoom window
+      // must not run over the axes or the card edge (the shared line config turns clipping off).
+      clip: 0,
       segment: {
         // Red segments when service is down
         borderColor: function (segCtx) {

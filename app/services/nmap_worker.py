@@ -17,10 +17,11 @@ import socket
 import stat
 from contextlib import suppress
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.services.nmap_scanner import MAX_PORTS, NmapScannerError, discover_ports, scan_selected_ports
+from app.services.nmap_scanner import MAX_PORTS, NmapScannerError, discover_ports, scan_selected_ports, trace_route
 from app.utils.tcp_ports import parse_port_list
 
 _log = logging.getLogger(__name__)
@@ -54,6 +55,23 @@ class WorkerRequest(BaseModel):
         return self
 
 
+class TracerouteRequest(BaseModel):
+    """Typed traceroute request: a host and an optional TCP/UDP probe port, never free Nmap arguments."""
+
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["traceroute"]
+    host: str = Field(min_length=1, max_length=255)
+    probe_protocol: Literal["tcp", "udp"] | None = None
+    probe_port: int | None = Field(default=None, ge=1, le=65535)
+    timeout: float = Field(default=30, ge=5, le=120)
+
+    @model_validator(mode="after")
+    def validate_probe(self):
+        if (self.probe_protocol is None) != (self.probe_port is None):
+            raise ValueError("Probe protocol and port belong together")
+        return self
+
+
 class _NoReplyError(Exception):
     """Leave the request handler without an answer; the connection is still closed by its `finally`."""
 
@@ -68,8 +86,20 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) ->
             raise _NoReplyError
         if len(raw) > MAX_REQUEST_BYTES:
             raise ValueError("Invalid request size")
-        request = WorkerRequest.model_validate_json(raw)
-        if request.protocols is not None:
+        payload = json.loads(raw)
+        if isinstance(payload, dict) and payload.get("kind") == "traceroute":
+            trace = TracerouteRequest.model_validate(payload)
+            request = None
+            scan_task = asyncio.create_task(
+                trace_route(
+                    trace.host, timeout=trace.timeout, probe_protocol=trace.probe_protocol, probe_port=trace.probe_port
+                )
+            )
+        else:
+            request = WorkerRequest.model_validate_json(raw)
+        if request is None:
+            pass
+        elif request.protocols is not None:
             scan_task = asyncio.create_task(
                 discover_ports(request.host, request.protocols, timeout=request.timeout, profile=request.profile)
             )
