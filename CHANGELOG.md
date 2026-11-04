@@ -4,6 +4,8 @@
 - `Fix` The plain-text part of alert mails shows the URL of a link instead of dropping it.
 
 ## [Unreleased]
+- `Fix` "Insert link" in the mail template editor no longer opens a browser popup: the address is typed into a field of the editor, and a blocked address (for example `javascript:`) is shown as an error at that field.
+- `Fix` "Reset metrics" and "Delete target" ask in the application's own dialog (naming the target and the consequence) instead of the browser's native popup.
 - `Fix` The target preview suggests HTTPS only when the final settings really check an https:// URL; an `http://` override or a switched-off HTTP check no longer gets the suggestion.
 - `Fix` The target page lists the configured TCP and UDP endpoints in "Network endpoints" ("Waiting for first measurement" until the first result) instead of "No port measurements yet", and the empty band between that card and the toolbar is gone.
 - `Fix` The Delivery Queue Log shows one card per entry on narrow screens (with the channel name next to its icon) instead of a sideways-scrolling table.

@@ -146,6 +146,16 @@
 								<option value="p">Paragraph</option>
 							</select>
 						</div>
+						{# Link address: replaces the native prompt(); errors use the shared field error (DESIGN.md). #}
+						<div class="border-bottom bg-body-tertiary p-2" id="wysiwyg-link-row" hidden>
+							<label for="wysiwyg-link-url" class="form-label small mb-1">Link address</label>
+							<div class="d-flex flex-wrap gap-2">
+								<input type="url" class="form-control form-control-sm flex-grow-1 w-auto" id="wysiwyg-link-url"
+									value="https://" autocomplete="off" spellcheck="false" inputmode="url">
+								<button type="button" class="btn btn-sm btn-primary" id="wysiwyg-link-apply">Insert link</button>
+								<button type="button" class="btn btn-sm btn-outline-secondary" id="wysiwyg-link-cancel">Cancel</button>
+							</div>
+						</div>
 						<iframe id="wysiwyg_frame" class="w-100 bg-white smtp-editor-frame"
 							sandbox="allow-same-origin"
 							srcdoc="<!DOCTYPE html><html><head></head><body></body></html>"

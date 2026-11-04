@@ -78,35 +78,36 @@ for (const viewport of VIEWPORTS) {
 					return values.length === 4 && values.every((value) => value.textContent.trim() !== "–");
 				}, null, { timeout: 10000 });
 				const heroes = await page.evaluate(() => ["online", "offline", "disabled", "total"].map((id) => {
-				const card = document.getElementById(`dashboard-status-${id}`);
-				const tile = card.closest(".grid-stack-item");
-				const frame = tile.querySelector(".grid-stack-item-content");
-				const metric = card.querySelector(".dashboard-hero-metric");
-				const icon = metric.querySelector(".material-icons");
-				const value = metric.querySelector(".dashboard-widget-value");
-				const label = card.querySelector(".dashboard-widget-label");
-				const cardRect = card.getBoundingClientRect();
-				const iconRect = icon.getBoundingClientRect();
-				const valueRect = value.getBoundingClientRect();
-				const metricRect = metric.getBoundingClientRect();
-				const labelRect = label.getBoundingClientRect();
-				const iconStyle = getComputedStyle(icon);
-				return {
-					id,
-					label: label.textContent.trim(),
-					labelAlign: getComputedStyle(label).textAlign,
-					labelTransform: getComputedStyle(label).textTransform,
-					iconBackground: iconStyle.backgroundColor,
-					iconBackgroundImage: iconStyle.backgroundImage,
-					iconBeforeValue: iconRect.right <= valueRect.left,
-					iconValueCenterOffset: Math.abs((iconRect.left + valueRect.right) / 2 - (cardRect.left + cardRect.right) / 2),
-					iconValueVerticalOffset: Math.abs((iconRect.top + iconRect.bottom) / 2 - (valueRect.top + valueRect.bottom) / 2),
-					labelBelowValue: labelRect.top >= metricRect.bottom - 2,
-					cardHeight: cardRect.height,
-					frameHeight: frame.getBoundingClientRect().height,
-					rows: tile.getAttribute("gs-h"),
-					bodyOverflow: card.querySelector(".dashboard-hero-body").scrollHeight - card.querySelector(".dashboard-hero-body").clientHeight,
-				};
+					const card = document.getElementById(`dashboard-status-${id}`);
+					const tile = card.closest(".grid-stack-item");
+					const frame = tile.querySelector(".grid-stack-item-content");
+					const metric = card.querySelector(".dashboard-hero-metric");
+					const icon = metric.querySelector(".material-icons");
+					const value = metric.querySelector(".dashboard-widget-value");
+					const label = card.querySelector(".dashboard-widget-label");
+					const body = card.querySelector(".dashboard-hero-body");
+					const cardRect = card.getBoundingClientRect();
+					const iconRect = icon.getBoundingClientRect();
+					const valueRect = value.getBoundingClientRect();
+					const metricRect = metric.getBoundingClientRect();
+					const labelRect = label.getBoundingClientRect();
+					const iconStyle = getComputedStyle(icon);
+					return {
+						id,
+						label: label.textContent.trim(),
+						labelAlign: getComputedStyle(label).textAlign,
+						labelTransform: getComputedStyle(label).textTransform,
+						iconBackground: iconStyle.backgroundColor,
+						iconBackgroundImage: iconStyle.backgroundImage,
+						iconBeforeValue: iconRect.right <= valueRect.left,
+						iconValueCenterOffset: Math.abs((iconRect.left + valueRect.right) / 2 - (cardRect.left + cardRect.right) / 2),
+						iconValueVerticalOffset: Math.abs((iconRect.top + iconRect.bottom) / 2 - (valueRect.top + valueRect.bottom) / 2),
+						labelBelowValue: labelRect.top >= metricRect.bottom - 2,
+						cardHeight: cardRect.height,
+						frameHeight: frame.getBoundingClientRect().height,
+						rows: tile.getAttribute("gs-h"),
+						bodyOverflow: body.scrollHeight - body.clientHeight,
+					};
 				}));
 				for (const hero of heroes) {
 					assert.equal(hero.label.toLowerCase(), hero.id);

@@ -94,7 +94,7 @@ for (const viewport of VIEWPORTS) {
 			}
 		});
 
-		test(`target detail: reset and delete ask in the shared dialog at ${viewport.name} ${theme} @reset-confirm`, async ({ browser, app, adminState }) => {
+		test(`target detail: reset asks in the shared dialog at ${viewport.name} ${theme} @reset-confirm`, async ({ browser, app, adminState }) => {
 			const { context, page, state } = await open(browser, app, adminState, viewport, theme, "/ui/targets/2");
 			try {
 				const phone = viewport.width < 576;
