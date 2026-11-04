@@ -3,20 +3,21 @@
 // Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 //
 
-// Dashboard status widgets (Alerts, Delivery queue): title, status badge, three equal metrics with the
-// number above its label, and labels that wrap between words, never inside one (DESIGN.md, dashboard widgets).
+// Dashboard metrics keep numbers above whole-word labels; status heroes center the icon and number
+// above their label within the existing tile (DESIGN.md, dashboard widgets).
 import assert from "node:assert/strict";
 import { test } from "./fixtures.mjs";
 
 const VIEWPORTS = [
 	{ name: "1280x720", width: 1280, height: 720 },
+	{ name: "1024x768", width: 1024, height: 768 },
 	{ name: "390x844", width: 390, height: 844 },
 	{ name: "320x640", width: 320, height: 640 },
 ];
 
 for (const viewport of VIEWPORTS) {
 	for (const theme of ["light", "dark"]) {
-		test(`alerts and queue widgets keep whole words in their labels at ${viewport.name} ${theme} @dashboard-metrics`, async ({ browser, app, adminState }) => {
+		test(`dashboard metrics and status heroes at ${viewport.name} ${theme} @dashboard-metrics`, async ({ browser, app, adminState }) => {
 			const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height }, storageState: adminState });
 			const page = await context.newPage();
 			const errors = [];
@@ -71,6 +72,55 @@ for (const viewport of VIEWPORTS) {
 					assert.deepEqual(tile.brokenWords, [], `${id}: a label word is broken inside the word`);
 					assert.ok(tile.bodyOverflowX <= 1, `${id}: horizontal overflow ${tile.bodyOverflowX}px`);
 					assert.ok(tile.bodyOverflowY <= 2, `${id}: ghost scroll ${tile.bodyOverflowY}px`);
+				}
+				await page.waitForFunction(() => {
+					const values = [...document.querySelectorAll(".dashboard-hero .dashboard-widget-value")];
+					return values.length === 4 && values.every((value) => value.textContent.trim() !== "–");
+				}, null, { timeout: 10000 });
+				const heroes = await page.evaluate(() => ["online", "offline", "disabled", "total"].map((id) => {
+				const card = document.getElementById(`dashboard-status-${id}`);
+				const tile = card.closest(".grid-stack-item");
+				const frame = tile.querySelector(".grid-stack-item-content");
+				const metric = card.querySelector(".dashboard-hero-metric");
+				const icon = metric.querySelector(".material-icons");
+				const value = metric.querySelector(".dashboard-widget-value");
+				const label = card.querySelector(".dashboard-widget-label");
+				const cardRect = card.getBoundingClientRect();
+				const iconRect = icon.getBoundingClientRect();
+				const valueRect = value.getBoundingClientRect();
+				const metricRect = metric.getBoundingClientRect();
+				const labelRect = label.getBoundingClientRect();
+				const iconStyle = getComputedStyle(icon);
+				return {
+					id,
+					label: label.textContent.trim(),
+					labelAlign: getComputedStyle(label).textAlign,
+					labelTransform: getComputedStyle(label).textTransform,
+					iconBackground: iconStyle.backgroundColor,
+					iconBackgroundImage: iconStyle.backgroundImage,
+					iconBeforeValue: iconRect.right <= valueRect.left,
+					iconValueCenterOffset: Math.abs((iconRect.left + valueRect.right) / 2 - (cardRect.left + cardRect.right) / 2),
+					iconValueVerticalOffset: Math.abs((iconRect.top + iconRect.bottom) / 2 - (valueRect.top + valueRect.bottom) / 2),
+					labelBelowValue: labelRect.top >= metricRect.bottom - 2,
+					cardHeight: cardRect.height,
+					frameHeight: frame.getBoundingClientRect().height,
+					rows: tile.getAttribute("gs-h"),
+					bodyOverflow: card.querySelector(".dashboard-hero-body").scrollHeight - card.querySelector(".dashboard-hero-body").clientHeight,
+				};
+				}));
+				for (const hero of heroes) {
+					assert.equal(hero.label.toLowerCase(), hero.id);
+					assert.equal(hero.labelAlign, "center", `${hero.id}: label is not centered`);
+					assert.equal(hero.labelTransform, "uppercase", `${hero.id}: label is not uppercase`);
+					assert.match(hero.iconBackground, /^(?:transparent|rgba\([^)]*,\s*0\))$/, `${hero.id}: icon has a background tile`);
+					assert.equal(hero.iconBackgroundImage, "none", `${hero.id}: icon has a background image`);
+					assert.equal(hero.iconBeforeValue, true, `${hero.id}: icon must precede the value`);
+					assert.ok(hero.iconValueCenterOffset <= 2, `${hero.id}: icon and value are ${hero.iconValueCenterOffset}px off center`);
+					assert.ok(hero.iconValueVerticalOffset <= 2, `${hero.id}: icon and value are not vertically centered`);
+					assert.equal(hero.labelBelowValue, true, `${hero.id}: label must sit below the value`);
+					assert.ok(hero.cardHeight <= hero.frameHeight + 2, `${hero.id}: card grew beyond its frame`);
+					assert.ok(hero.bodyOverflow <= 2, `${hero.id}: hero body scrolls`);
+					if (viewport.width >= 992) assert.equal(hero.rows, "2", `${hero.id}: hero tile grew beyond two rows`);
 				}
 				assert.deepEqual(errors, []);
 			} finally {

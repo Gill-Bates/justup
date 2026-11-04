@@ -85,7 +85,8 @@
 											</a>
 											<button type="button" class="btn btn-sm btn-icon btn-outline-secondary" title="Reset Metrics" aria-label="Reset Metrics"
 												hx-post="/targets/{{ t.id }}/reset"
-												hx-confirm="Reset all metrics for {{ t.name }}?"
+												data-ju-confirm data-confirm-title="Reset metrics" data-confirm-label="Reset metrics"
+												data-confirm-message="All metrics of '{{ t.name }}' are deleted permanently. The target itself stays."
 												hx-swap="none"
 												hx-disabled-elt="this"
 												data-success-toast="Metrics reset"
@@ -95,7 +96,8 @@
 											</button>
 											<button type="button" class="btn btn-sm btn-icon btn-outline-danger" title="Delete" aria-label="Delete"
 												hx-delete="/targets/{{ t.id }}"
-												hx-confirm="Really delete this target?"
+												data-ju-confirm data-confirm-title="Delete target" data-confirm-label="Delete target"
+												data-confirm-message="'{{ t.name }}' and all its metrics are deleted permanently."
 												hx-swap="none"
 												hx-disabled-elt="this"
 												data-success-toast="Target deleted"

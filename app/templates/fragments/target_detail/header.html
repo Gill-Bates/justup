@@ -67,7 +67,8 @@
 				<ul class="dropdown-menu dropdown-menu-end target-detail-more-menu" aria-labelledby="target-more-toggle">
 					<li>
 						<button type="button" class="dropdown-item target-detail-more-item target-detail-more-item--warning" hx-post="/targets/{{ target.id }}/reset"
-							hx-confirm="Reset all metrics for {{ target.name }}?"
+							data-ju-confirm data-confirm-title="Reset metrics" data-confirm-label="Reset metrics"
+							data-confirm-message="All metrics of '{{ target.name }}' are deleted permanently. The target itself stays."
 							hx-swap="none"
 							data-success-toast="Metrics reset"
 							data-success-reload="1"
@@ -79,7 +80,8 @@
 					<li><hr class="dropdown-divider"></li>
 					<li>
 						<button type="button" class="dropdown-item target-detail-more-item target-detail-more-item--danger" hx-delete="/targets/{{ target.id }}"
-							hx-confirm="Really delete this target? All metrics will be removed." hx-swap="none"
+							data-ju-confirm data-confirm-title="Delete target" data-confirm-label="Delete target"
+							data-confirm-message="'{{ target.name }}' and all its metrics are deleted permanently." hx-swap="none"
 							data-success-toast="Target deleted"
 							data-success-redirect="/ui/targets"
 							data-success-delay="500"
