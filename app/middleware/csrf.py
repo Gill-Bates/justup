@@ -112,12 +112,21 @@ class CSRFMiddleware(BaseHTTPMiddleware):
             if not submitted_token or not secrets.compare_digest(submitted_token, csrf_token):
                 return JSONResponse(content={"detail": "CSRF Token mismatch or missing"}, status_code=403)
 
-            # Token rotation after successful validation (prevents replay attacks)
+        response = await call_next(request)
+
+        if (
+            request.method not in SAFE_METHODS
+            and request.url.path
+            in {
+                "/login",
+                "/me/complete-required-change",
+                "/logout",
+            }
+            and response.status_code < 400
+        ):
             csrf_token = secrets.token_urlsafe(32)
             new_token = True
             request.state.csrf_token = csrf_token
-
-        response = await call_next(request)
 
         if new_token:
             # HttpOnly=False so JS/HTMX can read it to set the header

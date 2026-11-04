@@ -5,7 +5,7 @@
 
 /**
  * Classic script exposing getCsrfToken(). The token is read from the cookie on every call because
- * the server rotates it after each validated state-changing request.
+ * the server rotates it after successful authentication transitions.
  */
 (function (root) {
 	'use strict';

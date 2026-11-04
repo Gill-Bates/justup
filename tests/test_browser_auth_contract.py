@@ -120,7 +120,7 @@ def test_invalid_bearer_never_falls_back_to_a_valid_session_cookie(env):
     assert resp.status_code == 401
 
 
-def test_cookie_reads_need_no_csrf_and_the_token_rotates_after_a_write(env):
+def test_cookie_reads_need_no_csrf_and_writes_keep_the_token_stable(env):
     app, token = env
     client = _browser(app, token)
     assert client.get("/me").status_code == 200
@@ -128,7 +128,9 @@ def test_cookie_reads_need_no_csrf_and_the_token_rotates_after_a_write(env):
     assert client.get("/ui/events/session").status_code == 200
     before = client.cookies.get("csrf_token")
     assert _send(client, "PATCH", "/me/theme", {"theme": "light"}).status_code == 200
-    assert client.cookies.get("csrf_token") != before
+    assert client.cookies.get("csrf_token") == before
+    assert _send(client, "PATCH", "/me/theme", {"theme": "dark"}).status_code == 200
+    assert client.cookies.get("csrf_token") == before
 
 
 def test_login_requires_csrf_but_not_a_session(env):
