@@ -475,7 +475,8 @@ def _old_facility_import(c: sqlite3.Connection, *, days: int = 1) -> None:
     """The state of an installation before the IXP tables existed: a successful PeeringDB run, no snapshot."""
     stamp = (utcnow() - timedelta(days=days)).isoformat()
     c.execute(
-        "INSERT INTO pop_import_runs (run_id, source, started_at, finished_at, status) VALUES (?, 'peeringdb', ?, ?, 'completed')",
+        "INSERT INTO pop_import_runs (run_id, source, started_at, finished_at, status)"
+        " VALUES (?, 'peeringdb', ?, ?, 'completed')",
         ("old-facility-run", stamp, stamp),
     )
     c.commit()
@@ -521,7 +522,8 @@ def test_ixp_failure_after_the_upgrade_backs_off_and_keeps_the_facility_import(r
     result = pop_refresh.refresh_external_sources(lambda: c)[0]
     assert result.error and "phase=fetch_ixp" in result.error
     assert ixp_prefixes.snapshot_status(c) is None
-    assert c.execute("SELECT COUNT(*) FROM pop_city_evidence").fetchone()[0] == 1  # facility import still applied
+    # facility import still applied: the fixture has facilities in two cities (Frankfurt, Amsterdam)
+    assert c.execute("SELECT COUNT(*) FROM pop_city_evidence").fetchone()[0] == 2
 
     plan = pop_refresh.plan_next_refresh(c, include_jitter=False)
     assert "backoff" in plan.reason

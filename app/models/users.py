@@ -19,7 +19,6 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.utils.crypto import get_primary_key
 
-
 # Single source for the password length limits; templates render them as minlength/maxlength.
 PASSWORD_MIN_LENGTH = 8
 PASSWORD_MAX_LENGTH = 256

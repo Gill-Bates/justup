@@ -37,6 +37,11 @@ a target under a reused id starts a new entry. Entries are kept as rendered
 fragment HTML in `localStorage` (at most 12 entries of 256 KiB; expired ones are
 dropped after 7 days) and inserted like a live response. Without usable storage
 the page works as before and keeps the result in memory only.
+- **Changed IXP data.** The page carries a key for the active IXP data. An entry
+  stored under another key is dropped and the next view asks the server, which
+  renders its stored route again with the current locations; no new scan runs. This
+  needs the route in the server's memory (kept for 24 hours, lost on restart). After
+  a restart the next view measures once. An unchanged re-import keeps the key.
 
 !!! note "Privacy"
     A stored route can contain internal IP addresses and host names. It stays in
@@ -174,6 +179,12 @@ only a fallback (see [Online fallback](#online-fallback)). Sources:
   and a country only when all facilities lie in one country; the administrative
   country of the exchange record is never used. A refresh whose facility data is
   incomplete does not replace the last complete snapshot.
+  After an update that adds the IXP data, the first import does not wait for the
+  30-day freshness window of the facility import: it starts a few minutes after
+  start (`IXP snapshot missing` in `auto_refresh.next_attempt_reason`). A failed
+  attempt, including HTTP 429, keeps the data in place and waits with the normal
+  backoff (15 minutes, doubling, at most 24 hours). `GET /api/admin/pop/status`
+  shows the active snapshot as `ixp_snapshot` (`null` until the first import).
 - **ipwho.is** and, with a key, **ip-api Pro** (online fallback only). Their
   coordinates have no published accuracy and are never plotted as precise points.
 

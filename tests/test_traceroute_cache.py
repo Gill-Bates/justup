@@ -648,6 +648,10 @@ def test_timeline_groups_no_reply_runs_and_keeps_single_timeouts_separate() -> N
 # ── Changed IXP data: rendered geo results are replaced from the stored route, never by a new scan ──
 
 
+_IL_CELL = 'Tel Aviv <span class="tr-muted">IL</span>'  # location cell of the hop table
+_DE_CELL = 'Frankfurt <span class="tr-muted">DE</span>'
+
+
 def _ixp_route_hops() -> list[dict]:
     return [
         _ok_hop(1, "192.168.0.1", 1.0),
@@ -702,7 +706,7 @@ def test_ixp_update_replaces_a_cached_il_hop_without_a_new_scan(tmp_path: Path, 
         tmp_path, monkeypatch, _ixp_route_hops(), target_ip="203.0.113.9", geo_points=[], stub_geo=False
     )
     first = client.get(url, headers=_HX)
-    assert "Tel Aviv" in first.text and "Frankfurt" not in first.text
+    assert _IL_CELL in first.text and "Frankfurt" not in first.text
     measured_at = first.headers["x-measured-at"]
 
     lookups_before = len(israeli_geoip)
@@ -715,8 +719,8 @@ def test_ixp_update_replaces_a_cached_il_hop_without_a_new_scan(tmp_path: Path, 
 
     updated = client.get(url, headers=_HX)
     assert updated.status_code == 200
-    assert "Frankfurt" in updated.text and "DE-CIX Frankfurt" in updated.text
-    assert "Tel Aviv" not in updated.text
+    assert _DE_CELL in updated.text and "DE-CIX Frankfurt" in updated.text
+    assert _IL_CELL not in updated.text  # the table no longer names Tel Aviv for the exchange hop
     assert len(calls) == 1  # the stored route was re-rendered; Nmap was not asked again
     assert updated.headers["x-measured-at"] == measured_at  # still the original measurement time
 
@@ -729,9 +733,8 @@ def test_ixp_update_replaces_a_cached_il_hop_without_a_new_scan(tmp_path: Path, 
     client.close()
 
 
-def test_rerender_after_an_ixp_update_works_when_the_fragment_cache_entry_expired(
-    tmp_path: Path, monkeypatch, israeli_geoip
-) -> None:
+@pytest.mark.usefixtures("israeli_geoip")
+def test_rerender_after_an_ixp_update_works_when_the_fragment_cache_entry_expired(tmp_path: Path, monkeypatch) -> None:
     from app.services import ixp_index
 
     client, url, calls, app, target_id = _diagnostics_client(
@@ -744,12 +747,13 @@ def test_rerender_after_an_ixp_update_works_when_the_fragment_cache_entry_expire
         frontend_api._traceroute_fragment_cache[key] = (time.monotonic() - 1, body, measured)
     ixp_index.install(_decix_index())
     updated = client.get(url, headers=_HX)
-    assert "Frankfurt" in updated.text and "Tel Aviv" not in updated.text
+    assert _DE_CELL in updated.text and _IL_CELL not in updated.text
     assert len(calls) == 1
     client.close()
 
 
-def test_expired_fragment_without_new_ixp_data_still_measures_again(tmp_path: Path, monkeypatch, israeli_geoip) -> None:
+@pytest.mark.usefixtures("israeli_geoip")
+def test_expired_fragment_without_new_ixp_data_still_measures_again(tmp_path: Path, monkeypatch) -> None:
     client, url, calls, app, target_id = _diagnostics_client(
         tmp_path, monkeypatch, _ixp_route_hops(), target_ip="203.0.113.9", geo_points=[], stub_geo=False
     )
@@ -763,7 +767,8 @@ def test_expired_fragment_without_new_ixp_data_still_measures_again(tmp_path: Pa
     client.close()
 
 
-def test_cache_scope_carries_the_geo_version_of_the_ixp_data(israeli_geoip) -> None:
+@pytest.mark.usefixtures("israeli_geoip")
+def test_cache_scope_carries_the_geo_version_of_the_ixp_data() -> None:
     from app.services import ixp_index
 
     user = {"id": 1, "created_at": "2026-01-01 10:00:00"}
@@ -779,7 +784,8 @@ def test_cache_scope_carries_the_geo_version_of_the_ixp_data(israeli_geoip) -> N
     assert frontend_api._traceroute_cache_scope(user, row)["geo"] == with_ixp["geo"]
 
 
-def test_target_page_renders_the_geo_scope_key(tmp_path: Path, monkeypatch, israeli_geoip) -> None:
+@pytest.mark.usefixtures("israeli_geoip")
+def test_target_page_renders_the_geo_scope_key(tmp_path: Path, monkeypatch) -> None:
     client, _url, _calls, _app, target_id = _diagnostics_client(
         tmp_path, monkeypatch, [], target_ip="203.0.113.9", geo_points=[]
     )

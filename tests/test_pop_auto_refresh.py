@@ -287,6 +287,7 @@ def test_plan_from_db_old_success_is_due(conn):
     """Scenario 4: an expired completed run makes the refresh due now."""
     now = utcnow()
     _insert_run(conn, status="completed", started=now - timedelta(days=40), finished=now - timedelta(days=40))
+    _insert_ixp_snapshot(conn)  # an existing snapshot isolates the freshness-window expiry
     plan = pop_refresh.plan_next_refresh(conn, rng=_seeded_rng())
     assert plan.delay_seconds == 0
 

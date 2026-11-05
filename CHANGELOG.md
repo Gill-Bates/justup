@@ -21,6 +21,7 @@
 - `Fix` "Reset metrics", "Delete target" and "Insert link" use the application's own dialogs instead of browser popups.
 - `Fix` The Delivery Queue Log shows one card per entry on narrow screens, and the status `sent` reads "Sent".
 - `Fix` The PoP data refresh waits with a normal backoff on HTTP 429 and skips locations with invalid coordinates.
+- `Fix` IXP hops are located by their exchange shortly after an update; the first import no longer waits for the 30-day refresh interval, and cached traceroute results are rendered again with the new data without a new scan.
 - `Security` Nmap scans run in a separate worker with only the `NET_RAW` capability; the web process gets no raw-socket rights and scans are admin-only.
 - `Security` The bundled Nmap is built from PGP-verified source and uses the Debian PCRE2 and zlib packages, so the image scan covers them; the release build fails otherwise.
 
