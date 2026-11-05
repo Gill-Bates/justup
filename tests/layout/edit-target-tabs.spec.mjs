@@ -9,9 +9,9 @@
 // Measured per scrollbar mode (classic, thin, hidden; hidden is layout-equivalent to overlay), desktop, tablet, phone and browser zoom (a W x H window
 // at zoom Z is a (W/Z) x (H/Z) CSS viewport at device scale factor Z).
 import assert from "node:assert/strict";
-import { chromium, devices } from "@playwright/test";
+import { devices } from "@playwright/test";
 import { test } from "./fixtures.mjs";
-import { launchWithScrollbars, probeScrollbar, SCROLLBAR_MODES, waitForVisualStability } from "./harness.mjs";
+import { applyScrollbarMode, probeScrollbar, SCROLLBAR_MODES, waitForVisualStability } from "./harness.mjs";
 
 const plain = (w, h, extra = {}) => ({ name: `${w}x${h}`, width: w, height: h, dsf: 1, ...extra });
 const zoom = (w, h, z) => ({ name: `${w}x${h}@${z * 100}%`, width: Math.round(w / z), height: Math.round(h / z), dsf: z });
@@ -59,19 +59,17 @@ for (const viewport of VIEWPORTS) {
 	for (const theme of ["light", "dark"]) {
 		test(`edit target keeps the viewport contract in every tab at ${viewport.name} ${theme} @edit-target-tabs`, async ({ browser, browserName, app, adminState }) => {
 			for (const mode of SCROLLBAR_MODES[browserName]) {
-				// The fixture browser is Chromium with classic bars (headless default stripped in the config); "hidden" needs its own.
-				const own = browserName === "chromium" && mode === "hidden" ? await launchWithScrollbars(chromium, mode) : null;
 				const descriptor = { ...(viewport.descriptor || {}) };
-				const context = await (own || browser).newContext({
+				const context = await browser.newContext({
 					...descriptor, viewport: { width: viewport.width, height: viewport.height }, deviceScaleFactor: viewport.dsf, storageState: adminState,
 				});
 				const page = await context.newPage();
 				try {
+					await applyScrollbarMode(page, mode);
 					await page.goto(app.base + "/ui/targets/1/edit", { waitUntil: "load" });
 					await page.evaluate((mode) => document.documentElement.setAttribute("data-bs-theme", mode), theme);
-					if (mode === "thin") await page.addStyleTag({ content: "* { scrollbar-width: thin; }" });
 					const bars = await probeScrollbar(page);
-					if (browserName === "chromium") assert.equal(bars > 0, mode !== "hidden", `${mode}: the emulated scrollbar mode is not in effect (scrollbar layout width ${bars}px)`);
+					if (browserName === "chromium") assert.equal(bars > 0, mode !== "hidden" && !descriptor.isMobile, `${mode}: the emulated scrollbar mode is not in effect (scrollbar layout width ${bars}px)`);
 					for (const tab of TABS) {
 						await page.click(`#target-${tab}-tab`);
 						await page.waitForSelector(`#target-${tab}-pane.show.active`);
@@ -100,7 +98,6 @@ for (const viewport of VIEWPORTS) {
 					}
 				} finally {
 					await context.close();
-					await own?.close();
 				}
 			}
 		});

@@ -72,7 +72,12 @@ async function open(browser, app, adminState, viewport, theme, key) {
 	const page = await context.newPage();
 	await page.goto(`${app.base}/ui/targets/${ids[key]}`, { waitUntil: "load" });
 	await page.evaluate((mode) => document.documentElement.setAttribute("data-bs-theme", mode), theme);
-	await page.locator("#downtime-history-body .downtime-panel").waitFor({ state: "attached", timeout: 20000 });
+	// The page fetches the fragment twice (htmx load, then the chart cycle swaps in a skeleton first).
+	// Measure only after the chart cycle is idle and the final panel replaced the skeleton.
+	await page.waitForFunction(() => {
+		const body = document.getElementById("downtime-history-body");
+		return !document.querySelector('.target-detail-page [aria-busy="true"]') && body?.querySelector(".downtime-panel") && !body.querySelector(".target-skeleton");
+	}, null, { timeout: 30000 });
 	return { context, page };
 }
 for (const viewport of VIEWPORTS) {

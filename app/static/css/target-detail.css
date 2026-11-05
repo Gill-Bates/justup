@@ -1802,3 +1802,15 @@ details[open]>summary .target-details-chevron {
 		white-space: normal;
 	}
 }
+
+/* Coarse pointers: a 16px select avoids the iOS focus zoom, and legend toggles keep a touch-sized target. */
+@media (pointer: coarse) {
+	.target-toolbar .form-select {
+		font-size: 1rem;
+	}
+
+	.combined-legend-btn,
+	#target-dashboard-pane.active .combined-legend-btn {
+		min-height: var(--ui-target-min, 2.75rem);
+	}
+}

@@ -115,7 +115,11 @@ async function testSmtp() {
 		if (response.ok && result.ok !== false) {
 			window.justUpToast?.success?.(result.message || 'Test email queued');
 		} else {
-			const errorMsg = result.detail || result.error || ERROR_MESSAGES.SMTP_TEST_FAILED;
+			// A 422 detail is a list of {msg}; joining it avoids showing "[object Object]".
+			const detail = Array.isArray(result.detail)
+				? result.detail.map((e) => e?.msg).filter(Boolean).join('; ')
+				: result.detail;
+			const errorMsg = (typeof detail === 'string' && detail) || result.error || ERROR_MESSAGES.SMTP_TEST_FAILED;
 			window.justUpToast?.error?.(errorMsg);
 		}
 	} catch (error) {

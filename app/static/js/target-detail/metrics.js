@@ -191,13 +191,13 @@ async function fetchMetricGuarded(targetId, metric, loadToken, signal) {
   }
 }
 
+let _lastFetchErrorTime = 0;
+const FETCH_ERROR_DEBOUNCE_MS = 2000;
 /**
  * Show user-visible error feedback when a fetch fails.
  * Debounced to prevent toast spam when multiple metrics fail simultaneously.
  * @param {string} message - Error message
  */
-let _lastFetchErrorTime = 0;
-const FETCH_ERROR_DEBOUNCE_MS = 2000;
 
 function showFetchError(message) {
   console.warn("Fetch error:", message);

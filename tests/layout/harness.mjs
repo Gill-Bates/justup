@@ -1885,17 +1885,19 @@ async function auditPage(browser, app, state, browserName, vp, pg) {
 	}
 }
 
-// Scrollbar emulation. Playwright's Chromium hides scrollbars in headless mode. "classic" keeps the engine's
-// default bars (layout width > 0), "thin" applies `scrollbar-width: thin` to every element and "hidden" is the
-// headless default (no layout width: layout-equivalent to overlay scrollbars, which also take no layout space).
-// Chromium on Linux ignores the OverlayScrollbar switches (verified: width stays 15px), so real overlay painting is
-// not emulated. WebKit offers no switch: it runs once, with whatever the build paints.
+// Scrollbar emulation. "classic" keeps the engine's default bars (layout width > 0), "thin" applies
+// `scrollbar-width: thin` to every element and "hidden" turns the bars off through CDP (no layout width:
+// layout-equivalent to overlay scrollbars, which also take no layout space). Chromium on Linux ignores the
+// OverlayScrollbar switches (verified: width stays 15px), so real overlay painting is not emulated. WebKit offers
+// no switch: it runs once, with whatever the build paints.
 const SCROLLBAR_MODES = { chromium: ["classic", "thin", "hidden"], webkit: ["native"], firefox: ["native"] };
-async function launchWithScrollbars(browserType, mode) {
-	if (browserType.name() !== "chromium") throw new Error(`No scrollbar emulation for ${browserType.name()}`);
-	const options = { args: ["--disable-threaded-animation"] };
-	if (mode !== "hidden") options.ignoreDefaultArgs = ["--hide-scrollbars"];
-	return browserType.launch(options);
+async function applyScrollbarMode(page, mode) {
+	if (mode === "hidden") await (await page.context().newCDPSession(page)).send("Emulation.setScrollbarsHidden", { hidden: true });
+	if (mode === "thin") await page.addInitScript(() => {
+		const style = document.createElement("style");
+		style.textContent = "* { scrollbar-width: thin; }";
+		document.addEventListener("DOMContentLoaded", () => document.head.append(style));
+	});
 }
 // Layout width of a classic scrollbar in this browser; 0 for overlay or hidden bars.
 const probeScrollbar = (page) => page.evaluate(() => {
@@ -1911,7 +1913,7 @@ export {
 	auditDashboardGrid,
 	auditPage,
 	auditSelfTest,
-	launchWithScrollbars,
+	applyScrollbarMode,
 	probeScrollbar,
 	SCROLLBAR_MODES,
 	PAGES,

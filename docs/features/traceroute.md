@@ -94,8 +94,21 @@ some Nmap runs missed a hop and were retried; the IPv6 runs did not.
 - **Lost compared with MTR:** per-hop loss and average, best and worst round-trip time. A
   hop's single RTT is one sample and says nothing about loss or stability.
 - **Worker overhead:** about 0–0.5 s over a plain Nmap call (socket, validation, XML parsing).
-- **Not measured:** public IPv6 (the Docker bridge has no IPv6 route to the internet), arm64,
-  and IPv6 with three parallel traces.
+- **Sustained load (fake Nmap, not a network measurement).** Test double with 0.8 s per process,
+  5 scan loops and 3 trace loops for 12 s: peak 3 Nmap processes, 33 scans and 15 traces
+  completed, 238 trace requests refused as *busy* (retries every 0.1 s, none queued), longest
+  scan wait 2.5 s, longest trace 0.85 s. Neither kind starved: scans keep two slots, traces one.
+- **Abort, error, time-out (same test double).** 48 mixed scans and traces with failing,
+  hanging and cancelled processes: all slots were free again afterwards and no Nmap process
+  stayed behind. Refused traces used to leave one idle lock entry per address; they no
+  longer do.
+- **IPv6 and a switched-off target (fixture output, not a measurement).** A silent IPv6
+  target runs discovery, then one fallback with `-6` on both runs. Only the router that
+  answered is shown; the destination is never added as a hop, and a target without any route
+  reports *no trace*.
+- **Not measured:** public IPv6 and three parallel traces against a real host. The test
+  environment had no `nmap` binary and no IPv6 route to the internet, so these remain open,
+  as does arm64 (CI only).
 
 If the silent-target case matters, a tuning option would be a shorter budget for the first
 attempt (it currently takes 40 % of the request time); this was not implemented.

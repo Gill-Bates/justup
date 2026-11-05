@@ -9,6 +9,8 @@
  * nothing: the finished report reaches the user as a server-created notification (Notification
  * Center), and the button that started the job resets on 'pdf-job-completed'. Job ids are stored per
  * user; other users' entries and the old global/ready-list keys are dropped.
+ * Known limitation: writes are last-writer-wins across tabs, so a tab can drop a job another tab
+ * stored; that job then only reaches the user through its notification.
  * Auto-download: only the tab that started a job (marker in sessionStorage) navigates a hidden
  * same-origin iframe to the server's attachment URL once the job is completed (HEAD check first, then
  * a marker in user-scoped localStorage). Best effort: the marker is not atomic across tabs, and the

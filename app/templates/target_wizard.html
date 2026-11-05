@@ -57,26 +57,6 @@
             <div id="wizard-address-help" class="form-text">A domain without a scheme suggests HTTPS. Enter http:// explicitly to keep HTTP.</div>
             <div id="wizard-address-error" class="invalid-feedback" role="alert"></div>
           </div>
-          <div class="col-12 col-md-6 wizard-kind" data-kinds="tcp custom" data-ports-on-demand hidden>
-            <label for="wizard-ports" class="form-label">TCP ports <span class="wizard-kind" data-kinds="tcp" hidden>*</span></label>
-            <input id="wizard-ports" name="tcp_ports" class="form-control" type="text" maxlength="200" placeholder="e.g. 22,443" aria-describedby="wizard-ports-help wizard-ports-error">
-            <div id="wizard-ports-help" class="form-text">Choose ports explicitly; no port is assumed.</div>
-            <div id="wizard-ports-error" class="invalid-feedback" role="alert"></div>
-          </div>
-          <div class="col-12 col-md-6 wizard-kind" data-kinds="tcp custom" data-ports-on-demand hidden>
-            <label for="wizard-udp-ports" class="form-label">UDP ports</label>
-            <input id="wizard-udp-ports" name="udp_ports" class="form-control" type="text" maxlength="200" placeholder="e.g. 53,161" aria-describedby="wizard-udp-ports-help">
-            <div id="wizard-udp-ports-help" class="form-text">Enter ports manually or add them from a scan.</div>
-          </div>
-          <div class="col-12 wizard-kind" data-kinds="tcp custom" data-ports-on-demand hidden>
-            {% set scan_prefix = 'wizard' %}
-            {% set scan_host_id = 'wizard-address' %}
-            {% set scan_tcp_id = 'wizard-ports' %}
-            {% set scan_udp_id = 'wizard-udp-ports' %}
-            {% set scan_tcp_toggle_id = 'wizard-tcp' %}
-            {% set scan_udp_toggle_id = 'wizard-udp' %}
-            {% include 'fragments/network_scan_picker.html' %}
-          </div>
           <div class="col-12 col-lg-7"><label for="wizard-name" class="form-label">Name</label>
             <input id="wizard-name" name="name" class="form-control" type="text" maxlength="200" autocomplete="off" placeholder="Suggested from address">
           </div>
@@ -84,6 +64,18 @@
             <select id="wizard-group" name="group" class="form-select"><option value="">Ungrouped</option>
               {% for group in groups %}<option value="{{ group.name }}">{{ group.name }}</option>{% endfor %}
             </select>
+          </div>
+          <div class="col-12 wizard-kind" data-kinds="tcp custom" data-ports-on-demand hidden>
+            {# Backing fields of the form payload; the picker below is the only visible port input. #}
+            <input id="wizard-ports" name="tcp_ports" type="hidden">
+            <input id="wizard-udp-ports" name="udp_ports" type="hidden">
+            {% set scan_prefix = 'wizard' %}
+            {% set scan_host_id = 'wizard-address' %}
+            {% set scan_tcp_id = 'wizard-ports' %}
+            {% set scan_udp_id = 'wizard-udp-ports' %}
+            {% set scan_tcp_toggle_id = 'wizard-tcp' %}
+            {% set scan_udp_toggle_id = 'wizard-udp' %}
+            {% include 'fragments/network_scan_picker.html' %}
           </div>
         </div>
       </section>

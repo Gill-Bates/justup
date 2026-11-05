@@ -1,65 +1,66 @@
-{# Port picker (DESIGN.md, "Port picker"): manual, protocol-typed entry and Nmap discovery. Scanning is optional; saving never depends on it. #}
-<div class="card mt-3 ju-port-picker" data-network-scan-picker data-host-id="{{ scan_host_id }}"
+{# Port picker (DESIGN.md, "Port picker"): one manual, protocol-typed entry with removable chips; Nmap discovery is optional and collapsed. Saving never depends on a scan. #}
+<section class="ju-port-picker" data-network-scan-picker data-host-id="{{ scan_host_id }}"
   data-tcp-id="{{ scan_tcp_id }}" data-udp-id="{{ scan_udp_id }}"
-  data-tcp-toggle-id="{{ scan_tcp_toggle_id }}" data-udp-toggle-id="{{ scan_udp_toggle_id }}">
-  <div class="card-body">
-    <h3 class="h6" id="{{ scan_prefix }}-picker-title">Ports to monitor</h3>
-    <p class="small text-body-secondary mb-3">Enter ports yourself or discover them with a scan. Nothing is saved until you save the target. Port discovery uses the <a href="https://nmap.org/" target="_blank" rel="noopener noreferrer">Nmap Security Scanner</a>.</p>
-    <div class="mb-3" data-port-manual>
-      <label class="form-label" for="{{ scan_prefix }}-manual-ports">Add ports manually</label>
-      <div class="input-group">
-        <input class="form-control" type="text" id="{{ scan_prefix }}-manual-ports" data-manual-input maxlength="200" autocomplete="off" autocapitalize="none" spellcheck="false" enterkeyhint="done"
-          placeholder="e.g. 22, 443, udp:53, 161/udp" aria-describedby="{{ scan_prefix }}-manual-help {{ scan_prefix }}-manual-error">
-        <button class="btn btn-outline-secondary" type="button" data-scan-action="manual-add">Add ports</button>
-      </div>
-      <div class="form-text" id="{{ scan_prefix }}-manual-help">Numbers from 1 to 65535, separated by commas or spaces. A port without a prefix is TCP; write <code>udp:53</code> or <code>53/udp</code> for UDP.</div>
-      <div class="small text-danger mt-1" id="{{ scan_prefix }}-manual-error" data-manual-error role="alert" hidden></div>
-      <p class="small text-body-secondary mt-2 mb-1" id="{{ scan_prefix }}-chips-label">Selected ports</p>
-      <ul class="tag-input__list" data-port-chips aria-labelledby="{{ scan_prefix }}-chips-label"></ul>
-      <p class="small text-body-secondary mb-0" data-port-chips-empty>No ports chosen yet.</p>
+  data-tcp-toggle-id="{{ scan_tcp_toggle_id }}" data-udp-toggle-id="{{ scan_udp_toggle_id }}" aria-labelledby="{{ scan_prefix }}-picker-title">
+  <h3 class="h6" id="{{ scan_prefix }}-picker-title">Ports to monitor</h3>
+  <div data-port-manual>
+    <label class="form-label" for="{{ scan_prefix }}-manual-ports">Add ports</label>
+    <div class="input-group">
+      <input class="form-control" type="text" id="{{ scan_prefix }}-manual-ports" data-manual-input maxlength="200" autocomplete="off" autocapitalize="none" spellcheck="false" enterkeyhint="done"
+        placeholder="e.g. 22, 443, udp:53" aria-describedby="{{ scan_prefix }}-manual-help {{ scan_prefix }}-manual-ports-error">
+      <button class="btn btn-outline-secondary" type="button" data-scan-action="manual-add">Add</button>
     </div>
-    <hr class="my-3">
-    <h4 class="h6" id="{{ scan_prefix }}-scan-title">Discover ports</h4>
-    <fieldset class="border-0 p-0 mb-2">
-      <legend class="fs-6 mb-1">Protocols to scan</legend>
-      <div class="d-flex flex-wrap gap-3">
-        <label class="form-check"><input class="form-check-input" type="checkbox" data-scan-protocol="tcp" checked> TCP</label>
-        <label class="form-check"><input class="form-check-input" type="checkbox" data-scan-protocol="udp"> UDP</label>
-      </div>
-    </fieldset>
-    <div class="d-flex flex-wrap align-items-end gap-2">
-      <div><label class="form-label" for="{{ scan_prefix }}-scan-profile">Scan scope</label>
-        <select class="form-select" id="{{ scan_prefix }}-scan-profile" data-scan-profile>
-          <option value="quick">Quick scan</option><option value="extended">Extended scan</option>
-        </select>
-      </div>
-      <button class="btn btn-outline-primary" type="button" data-scan-action="start">Scan ports</button>
-      <button class="btn btn-outline-secondary" type="button" data-scan-action="cancel" hidden>Cancel scan</button>
-    </div>
-    <div role="status" aria-live="polite">
-      <p class="small text-danger mt-2 mb-0" data-scan-unavailable hidden>
-        <span id="{{ scan_prefix }}-scan-unavailable" data-scan-unavailable-text></span>
-        <button class="btn btn-link btn-sm p-0 align-baseline" type="button" data-scan-action="recheck">Check again</button>
-      </p>
-    </div>
-    <p class="small mt-2 mb-0 d-flex align-items-center gap-2" id="{{ scan_prefix }}-scan-status" data-scan-status role="status" aria-live="polite">
-      <span class="spinner-border spinner-border-sm" aria-hidden="true" data-scan-spinner hidden></span><span data-scan-status-text></span>
-    </p>
-    <p class="small text-danger mt-2 mb-0" id="{{ scan_prefix }}-scan-error" data-scan-error role="alert" hidden></p>
-    <div data-scan-results hidden>
-      <div class="table-responsive mt-3" role="region" tabindex="0" aria-label="Discovered ports">
-        <table class="table table-sm align-middle mb-0 ju-port-results">
-          <caption class="visually-hidden">Discovered ports: choose the ports to monitor</caption>
-          <thead><tr><th scope="col">Select</th><th scope="col">Protocol</th><th scope="col">Port</th><th scope="col">Service</th><th scope="col">Status</th></tr></thead>
-          <tbody data-scan-rows></tbody>
-        </table>
-      </div>
-      <div class="d-flex flex-wrap gap-2 mt-2">
-        <button class="btn btn-outline-secondary btn-sm" type="button" data-scan-action="select-open">Select all confirmed open ports</button>
-        <button class="btn btn-primary btn-sm" type="button" data-scan-action="apply">Add selected ports</button>
-      </div>
-      <p class="small text-body-secondary mt-2 mb-0">Only <strong>Open</strong> is confirmed. Uncertain states such as <em>open|filtered</em> are never selected automatically; tick them yourself if you want to monitor that port.</p>
-    </div>
-    <input type="hidden" name="network_scan_id" value="">
+    <div class="form-text" id="{{ scan_prefix }}-manual-help">Numbers from 1 to 65535, separated by commas or spaces. A port is TCP unless you write <code>udp:53</code> or <code>53/udp</code>. Nothing is saved until you save the target.</div>
+    <div class="small text-danger mt-1" id="{{ scan_prefix }}-manual-ports-error" data-manual-error role="alert" hidden></div>
+    <ul class="tag-input__list" data-port-chips aria-labelledby="{{ scan_prefix }}-picker-title"></ul>
+    <p class="small text-body-secondary mb-0" data-port-chips-empty>No ports chosen yet.</p>
   </div>
-</div>
+  <details class="ju-port-discover" data-scan-discover>
+    <summary><span class="material-icons" aria-hidden="true">radar</span>Discover ports with Nmap <span class="text-body-secondary fw-normal">(optional)</span></summary>
+    <div class="ju-port-discover__body">
+      <p class="small text-body-secondary mb-0">Port discovery uses the <a href="https://nmap.org/" target="_blank" rel="noopener noreferrer">Nmap Security Scanner</a>.</p>
+      <div class="ju-port-discover__options">
+        <fieldset class="border-0 p-0 m-0">
+          <legend class="fs-6 mb-1">Protocols to scan</legend>
+          <div class="d-flex flex-wrap gap-3">
+            <label class="form-check m-0"><input class="form-check-input" type="checkbox" data-scan-protocol="tcp" checked> TCP</label>
+            <label class="form-check m-0"><input class="form-check-input" type="checkbox" data-scan-protocol="udp"> UDP</label>
+          </div>
+        </fieldset>
+        <div><label class="form-label" for="{{ scan_prefix }}-scan-profile">Scan scope</label>
+          <select class="form-select" id="{{ scan_prefix }}-scan-profile" data-scan-profile>
+            <option value="quick">Quick scan</option><option value="extended">Extended scan</option>
+          </select>
+        </div>
+        <div class="d-flex flex-wrap gap-2">
+          <button class="btn btn-outline-primary" type="button" data-scan-action="start">Scan ports</button>
+          <button class="btn btn-outline-secondary" type="button" data-scan-action="cancel" hidden>Cancel scan</button>
+        </div>
+      </div>
+      <div role="status" aria-live="polite">
+        <p class="small text-danger mb-0" data-scan-unavailable hidden>
+          <span id="{{ scan_prefix }}-scan-unavailable" data-scan-unavailable-text></span>
+          <button class="btn btn-link btn-sm p-0 align-baseline" type="button" data-scan-action="recheck">Check again</button>
+        </p>
+      </div>
+    </div>
+  </details>
+  <p class="small mt-2 mb-0 d-flex align-items-center gap-2" id="{{ scan_prefix }}-scan-status" data-scan-status role="status" aria-live="polite">
+    <span class="spinner-border spinner-border-sm" aria-hidden="true" data-scan-spinner hidden></span><span data-scan-status-text></span>
+  </p>
+  <p class="small text-danger mt-2 mb-0" id="{{ scan_prefix }}-scan-error" data-scan-error role="alert" hidden></p>
+  <div class="ju-port-results" data-scan-results hidden>
+    <section aria-labelledby="{{ scan_prefix }}-confirmed-title">
+      <h4 class="h6 mb-1" id="{{ scan_prefix }}-confirmed-title" data-scan-confirmed-title>Confirmed open</h4>
+      <p class="small text-body-secondary mb-2" data-scan-confirmed-empty hidden></p>
+      <ul class="ju-port-list" data-scan-confirmed aria-labelledby="{{ scan_prefix }}-confirmed-title"></ul>
+      <button class="btn btn-primary btn-sm" type="button" data-scan-action="apply" disabled>Add selected ports (0)</button>
+    </section>
+    <details class="ju-port-other" data-scan-other hidden>
+      <summary data-scan-other-summary></summary>
+      <p class="small text-body-secondary my-2">Nmap could not confirm these ports as open. Tick a port only if you want to monitor it anyway.</p>
+      <ul class="ju-port-list" data-scan-other-list aria-label="Other scan results"></ul>
+    </details>
+  </div>
+  <input type="hidden" name="network_scan_id" value="">
+</section>

@@ -186,19 +186,6 @@
 			warning: function (msg) { showToast(msg, 'warning', 'warning'); }
 		};
 
-		(function () {
-			var urlParams = new URLSearchParams(window.location.search);
-			var toastMsg = urlParams.get('toast');
-			if (toastMsg) {
-				var safMsg = toastMsg.length > 200 ? toastMsg.substring(0, 200) + '…' : toastMsg;
-				setTimeout(function () { showToast(safMsg, 'success', 'check_circle'); }, 100);
-				urlParams.delete('toast');
-				var newUrl = urlParams.toString()
-					? window.location.pathname + '?' + urlParams.toString() + window.location.hash
-					: window.location.pathname + window.location.hash;
-				window.history.replaceState({}, '', newUrl);
-			}
-		})();
 
 		// Server Offline Detection
 
@@ -242,7 +229,6 @@
 
 		(function () {
 			var toggle = document.getElementById('theme-toggle');
-			var themeChanged = false;
 			var themes = ['system', 'light', 'dark'];
 			var selectedTheme = document.documentElement.getAttribute('data-user-theme') || 'system';
 			if (themes.indexOf(selectedTheme) === -1) selectedTheme = 'system';
@@ -270,7 +256,6 @@
 
 			if (toggle) {
 				toggle.addEventListener('click', function () {
-					themeChanged = true;
 					var next = themes[(themes.indexOf(selectedTheme) + 1) % themes.length];
 					selectedTheme = next;
 					if (window.setTheme) window.setTheme(next);
@@ -278,22 +263,6 @@
 				});
 			}
 
-			function loadThemeFromDb() {
-				window.apiFetch('/me/theme').then(function (resp) {
-					if (resp.status === 401 || resp.status === 403) return null;
-					if (!resp.ok) throw new Error('Theme lookup failed: ' + resp.status);
-					return resp.json();
-				}).then(function (data) {
-					if (!themeChanged && data && themes.indexOf(data.theme) !== -1) {
-						selectedTheme = data.theme;
-						if (window.setTheme) window.setTheme(selectedTheme);
-					}
-				}).catch(function (e) {
-					console.warn('Failed to load theme from DB:', e);
-				});
-			}
-
-			loadThemeFromDb();
 		})();
 
 		// HTMX Fragment Initialization (local-time formatting & accordion state)

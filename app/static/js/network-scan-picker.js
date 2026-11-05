@@ -43,18 +43,32 @@
     if (text !== undefined) node.textContent = text;
     return node;
   }
-  // Status badge of a scan row: icon and words, so an uncertain state is not told apart by colour alone.
+  // Status badge of a scan result: icon and words, so an unclear state is not told apart by colour alone.
   function stateBadge(info) {
     const variant = info.confirmed ? 'success' : 'neutral';
     const badge = el('span', `badge ju-status-badge--${variant} ju-state-badge${info.tone === 'uncertain' ? ' ju-state-badge--unknown' : ''}`);
     const icon = el('span', 'material-icons', info.icon);
     icon.setAttribute('aria-hidden', 'true');
     badge.append(icon, info.confirmed ? 'Open' : info.label);
-    const hint = el('span', info.confirmed ? 'visually-hidden' : 'small text-body-secondary ms-1', info.confirmed ? ' (confirmed)' : `(${info.note})`);
-    const cell = el('td');
-    cell.append(badge, hint);
-    return cell;
+    return badge;
   }
+  // One compact, selectable result. Scanner text is data: every part is set through textContent.
+  function resultItem(row, checked) {
+    const item = el('li', 'ju-port-item');
+    const label = el('label', 'ju-port-choice');
+    const choice = el('input', 'form-check-input');
+    choice.type = 'checkbox';
+    choice.checked = checked;
+    choice.dataset.protocol = row.protocol;
+    choice.dataset.port = String(row.port);
+    choice.dataset.state = row.state;
+    label.append(choice, el('span', 'ju-port-name', `${row.protocol.toUpperCase()} ${row.port}`));
+    if (row.service !== 'Unknown') label.append(el('span', `ju-port-service${row.hint ? ' ju-port-service--hint' : ''}`, row.service));
+    label.append(stateBadge(row.info));
+    item.append(label);
+    return item;
+  }
+  const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`;
 
   function init(root) {
     const form = root.closest('form');
@@ -66,12 +80,13 @@
     const scanId = form?.querySelector('[name="network_scan_id"]');
     const el_ = {
       start: q('[data-scan-action="start"]'), cancel: q('[data-scan-action="cancel"]'),
-      selectOpen: q('[data-scan-action="select-open"]'), apply: q('[data-scan-action="apply"]'),
+      apply: q('[data-scan-action="apply"]'), discover: q('[data-scan-discover]'),
       recheck: q('[data-scan-action="recheck"]'), manualAdd: q('[data-scan-action="manual-add"]'),
       manualInput: q('[data-manual-input]'), manualError: q('[data-manual-error]'),
       chips: q('[data-port-chips]'), chipsEmpty: q('[data-port-chips-empty]'),
       status: q('[data-scan-status-text]'), spinner: q('[data-scan-spinner]'), error: q('[data-scan-error]'),
-      results: q('[data-scan-results]'), rows: q('[data-scan-rows]'),
+      results: q('[data-scan-results]'), confirmedTitle: q('[data-scan-confirmed-title]'), confirmedEmpty: q('[data-scan-confirmed-empty]'),
+      confirmedList: q('[data-scan-confirmed]'), other: q('[data-scan-other]'), otherSummary: q('[data-scan-other-summary]'), otherList: q('[data-scan-other-list]'),
       notice: q('[data-scan-unavailable]'), noticeText: q('[data-scan-unavailable-text]'),
       profile: q('[data-scan-profile]')
     };
@@ -296,30 +311,33 @@
       return checking;
     }
 
-    // ----- results -----
-    function renderRows(rows) {
-      el_.rows.replaceChildren();
-      for (const row of rows) {
-        const tr = el('tr');
-        const choice = el('input', 'form-check-input');
-        choice.type = 'checkbox';
-        choice.dataset.protocol = row.protocol;
-        choice.dataset.port = String(row.port);
-        choice.dataset.state = row.state;
-        choice.dataset.confirmed = row.info.confirmed ? 'true' : 'false';
-        choice.setAttribute('aria-label', `Select ${row.protocol.toUpperCase()} port ${row.port}, ${row.info.confirmed ? 'confirmed open' : `${row.info.label.toLowerCase()}, ${row.info.note}`}`);
-        const select = el('td');
-        select.append(choice);
-        // Scanner text is data: every cell is set through textContent.
-        tr.append(select, el('td', undefined, row.protocol.toUpperCase()), el('td', undefined, String(row.port)), el('td', undefined, row.service), stateBadge(row.info));
-        el_.rows.append(tr);
-      }
+    // ----- results: confirmed open ports first and preselected, everything else collapsed and unselected -----
+    function chosenResults() {
+      return [...el_.results.querySelectorAll('input[type="checkbox"]:checked')];
+    }
+    function updateSelection() {
+      const count = chosenResults().length;
+      el_.apply.textContent = `Add selected ports (${count})`;
+      el_.apply.disabled = count === 0;
+    }
+    function renderResults(rows) {
+      const { confirmed, other } = core.splitResults(rows);
+      el_.confirmedList.replaceChildren(...confirmed.map(row => resultItem(row, true)));
+      el_.confirmedTitle.textContent = confirmed.length ? `${plural(confirmed.length, 'confirmed open port')}` : 'No confirmed open ports';
+      el_.confirmedEmpty.textContent = confirmed.length ? '' : 'Nmap did not confirm any port as open. You can still add ports manually.';
+      el_.confirmedEmpty.hidden = confirmed.length > 0;
+      el_.otherList.replaceChildren(...other.map(row => resultItem(row, false)));
+      el_.otherSummary.textContent = `${plural(other.length, 'other result')} – not confirmed open`;
+      el_.other.open = false;
+      el_.other.hidden = other.length === 0;
       el_.results.hidden = !rows.length;
+      if (rows.length) el_.discover.open = true;
+      updateSelection();
     }
     function finish(outcome) {
       ready();
       if (outcome.unavailable) markUnavailable(outcome.reason);
-      if (outcome.kind === 'results' || outcome.kind === 'uncertain-only') renderRows(outcome.rows);
+      if (outcome.kind === 'results' || outcome.kind === 'uncertain-only') renderResults(outcome.rows);
       else el_.results.hidden = true;
       show(outcome.unavailable ? { ...outcome, message: '' } : outcome);
     }
@@ -413,17 +431,10 @@
       setStatus('Host changed. Scan again to discover ports for the new host.');
       if (id && wasRunning) window.apiFetch(`/network-scans/${encodeURIComponent(id)}`, { method: 'DELETE' }).catch(() => {});
     });
-    // Additive: confirmed rows are ticked, nothing the user ticked before is removed.
-    el_.selectOpen.addEventListener('click', () => {
-      const confirmed = [...el_.rows.querySelectorAll('input[type="checkbox"][data-confirmed="true"]')];
-      for (const choice of confirmed) choice.checked = true;
-      setStatus(confirmed.length
-        ? `${confirmed.length} confirmed open port${confirmed.length === 1 ? '' : 's'} selected.`
-        : 'No confirmed open ports to select. Tick uncertain ports yourself if you want to monitor them.');
-    });
+    el_.results.addEventListener('change', event => { if (event.target instanceof Element && event.target.matches('input[type="checkbox"]')) updateSelection(); });
     el_.apply.addEventListener('click', () => {
       if (job?.status !== 'completed' || scanHost(host) !== checkedHost) return;
-      const selected = [...el_.rows.querySelectorAll('input[type="checkbox"]:checked')];
+      const selected = chosenResults();
       if (!selected.length) { setError('Select at least one port to add.'); return; }
       const additions = { tcp: [], udp: [] };
       for (const choice of selected) additions[choice.dataset.protocol].push(Number(choice.dataset.port));

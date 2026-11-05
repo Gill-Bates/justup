@@ -977,6 +977,16 @@ textarea.smtp-editor-frame {
 	box-shadow: var(--ui-shadow-subtle);
 }
 
+@media (pointer: coarse) {
+	.table .btn-icon {
+		width: var(--ui-target-min);
+		height: var(--ui-target-min);
+		min-width: var(--ui-target-min);
+		min-height: var(--ui-target-min);
+		flex-basis: var(--ui-target-min);
+	}
+}
+
 /* Material Icons: neutralize internal line-height */
 .table .btn-icon .material-icons {
 	font-size: 18px;
@@ -2141,7 +2151,8 @@ textarea.smtp-editor-frame {
 		flex-wrap: wrap;
 	}
 
-	.ui-page .d-flex.gap-2>.btn {
+	/* Icon-only buttons keep their square size */
+	.ui-page .d-flex.gap-2>.btn:not(.btn-icon) {
 		flex: 1 1 100%;
 	}
 }
@@ -2287,12 +2298,12 @@ textarea.smtp-editor-frame {
    SETTINGS PAGE TABS
    ============================================= */
 
-/* Placeholder collapse toggle icon rotation */
-[data-bs-toggle="collapse"] .material-icons {
+/* Collapse toggle chevron rotation; opt-in so non-chevron icons are never turned upside down */
+[data-bs-toggle="collapse"] .ju-collapse-chevron {
 	transition: transform 0.2s ease;
 }
 
-[data-bs-toggle="collapse"]:not(.collapsed) .material-icons {
+[data-bs-toggle="collapse"]:not(.collapsed) .ju-collapse-chevron {
 	transform: rotate(180deg);
 }
 

@@ -20,6 +20,8 @@
     address: document.getElementById('wizard-address'),
     ports: document.getElementById('wizard-ports'),
     udpPorts: document.getElementById('wizard-udp-ports'),
+    manualPorts: document.getElementById('wizard-manual-ports'),
+    manualPortsError: document.getElementById('wizard-manual-ports-error'),
     name: document.getElementById('wizard-name'),
     group: document.getElementById('wizard-group'),
     http: document.getElementById('wizard-http'),
@@ -58,7 +60,8 @@
     http_success_codes: 'http',
     ignore_cert_errors: 'tls'
   };
-  // Ports are entered once (step 2); the checks step only shows them and links back.
+  // Ports are entered once (step 2) in the picker; wizard-ports and wizard-udp-ports are hidden backing fields.
+  // The checks step only shows them and links back to the visible manual input.
   const portSummaries = {
     tcp: { input: fields.ports, toggle: fields.tcp, label: 'TCP', summary: document.getElementById('wizard-tcp-summary'), value: document.getElementById('wizard-tcp-summary-value'), error: document.getElementById('wizard-tcp-summary-error') },
     udp: { input: fields.udpPorts, toggle: fields.udp, label: 'UDP', summary: document.getElementById('wizard-udp-summary'), value: document.getElementById('wizard-udp-summary-value'), error: document.getElementById('wizard-udp-summary-error') }
@@ -90,6 +93,10 @@
       const message = document.getElementById(`${field.id}-error`);
       if (message) message.textContent = '';
     }
+    if (fields.manualPortsError) {
+      fields.manualPortsError.textContent = '';
+      fields.manualPortsError.hidden = true;
+    }
   }
 
   function showError(message, field) {
@@ -105,7 +112,9 @@
         detail.className = 'invalid-feedback';
         detail.setAttribute('role', 'alert');
         field.after(detail);
-        field.setAttribute('aria-describedby', detail.id);
+        // Keep the existing help-text reference; the error is added to it, not swapped in.
+        const describedBy = (field.getAttribute('aria-describedby') || '').split(/\s+/).filter(Boolean);
+        if (!describedBy.includes(detail.id)) field.setAttribute('aria-describedby', [...describedBy, detail.id].join(' '));
       }
       detail.textContent = message;
       field.focus();
@@ -172,9 +181,31 @@
   function editPorts(protocol) {
     updateKindFields();
     setStep(1);
-    const input = portSummaries[protocol].input;
+    const input = fields.manualPorts;
     input.focus();
     input.scrollIntoView?.({ block: 'center' });
+  }
+
+  // A port problem on the address step is shown at the visible manual input, never at the hidden backing fields.
+  function showAddressPortsError(message) {
+    errorBox.textContent = message;
+    errorBox.classList.remove('d-none');
+    const input = fields.manualPorts;
+    input.classList.add('is-invalid');
+    input.setAttribute('aria-invalid', 'true');
+    fields.manualPortsError.textContent = message;
+    fields.manualPortsError.hidden = false;
+    input.focus();
+  }
+
+  // Text typed into the manual input but not yet added counts as chosen ports; invalid text blocks Continue.
+  function commitPendingPorts() {
+    if (!fields.manualPorts.value.trim()) return true;
+    form.querySelector('[data-scan-action="manual-add"]')?.click();
+    if (fields.manualPortsError.hidden) return true;
+    errorBox.textContent = fields.manualPortsError.textContent;
+    errorBox.classList.remove('d-none');
+    return false;
   }
 
   // Reports a port problem at the summary of the checks step and focuses its Edit ports action.
@@ -255,16 +286,17 @@
       showError('Enter a URL, hostname, or IP address.', fields.address);
       return false;
     }
+    if (!commitPendingPorts()) return false;
     if (profile() === 'tcp' && !fields.ports.value.trim() && !fields.udpPorts.value.trim()) {
-      showError('Choose at least one TCP or UDP port.', fields.ports);
+      showAddressPortsError('Choose at least one TCP or UDP port.');
       return false;
     }
     if (fields.ports.value.trim() && !validPorts(fields.ports.value)) {
-      showError('Enter TCP port numbers from 1 to 65535, separated by commas.', fields.ports);
+      showAddressPortsError('Enter TCP port numbers from 1 to 65535, separated by commas.');
       return false;
     }
     if (fields.udpPorts.value.trim() && !validPorts(fields.udpPorts.value)) {
-      showError('Enter UDP port numbers from 1 to 65535, separated by commas.', fields.udpPorts);
+      showAddressPortsError('Enter UDP port numbers from 1 to 65535, separated by commas.');
       return false;
     }
     return true;
@@ -428,8 +460,8 @@
         setStep(step + 1);
       }
     } catch (error) {
-      const field = step === 1 && /port/i.test(error.message) ? fields.ports : null;
-      showError(error.message, field);
+      if (step === 1 && /port/i.test(error.message)) showAddressPortsError(error.message);
+      else showError(error.message);
     } finally {
       nextButton.disabled = false;
     }
@@ -441,7 +473,11 @@
   for (const toggle of [fields.http, fields.ping, fields.tcp, fields.udp, fields.cert]) {
     toggle.addEventListener('change', () => updateCheckGroups({ announce: true }));
   }
-  for (const input of [fields.ports, fields.udpPorts]) input.addEventListener('input', updatePortSummaries);
+  // The picker writes the hidden backing fields and reports "change" for them.
+  for (const input of [fields.ports, fields.udpPorts]) {
+    input.addEventListener('input', updatePortSummaries);
+    input.addEventListener('change', updatePortSummaries);
+  }
   for (const button of form.querySelectorAll('[data-edit-ports]')) {
     button.addEventListener('click', () => editPorts(button.dataset.editPorts));
   }

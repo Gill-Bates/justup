@@ -64,6 +64,9 @@ function formatDateForInput(date, roundUp = false) {
   return `${year}-${month}-${day}T${hours}:${minutes}`;
 }
 
+function _usesUtc() {
+  return typeof pageConfig !== "undefined" && pageConfig.useUtc === true;
+}
 /**
  * First instant of the current month or year, in UTC when pageConfig.useUtc is set.
  * @private
@@ -71,9 +74,6 @@ function formatDateForInput(date, roundUp = false) {
  * @param {boolean} wholeYear - true for January 1st, false for the 1st of the month
  * @returns {Date}
  */
-function _usesUtc() {
-  return typeof pageConfig !== "undefined" && pageConfig.useUtc === true;
-}
 
 function _calendarStart(now, wholeYear) {
   const utc = _usesUtc();

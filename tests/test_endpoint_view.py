@@ -158,7 +158,9 @@ def render_cards(t: dict) -> str:
 
 def check_badges(html: str) -> dict[str, str]:
     """Label -> markup of every badge in the Checks hero (CERT included), in document order."""
-    hero = re.search(r'<div class="ju-badges target-kpi-badges">(.*?)</div>\s*</div>\s*</div>', html, re.DOTALL).group(1)
+    hero = re.search(r'<div class="ju-badges target-kpi-badges">(.*?)</div>\s*</div>\s*</div>', html, re.DOTALL).group(
+        1
+    )
     badges = re.findall(r'<span class="badge.*?</span></span>', hero, re.DOTALL)
     out: dict[str, str] = {}
     for badge in badges:
@@ -168,7 +170,13 @@ def check_badges(html: str) -> dict[str, str]:
 
 
 def assert_no_endpoint_table(html: str) -> None:
-    for fragment in ("target-endpoints-card", "Network endpoints", "data-endpoint", "<table", "Waiting for first measurement"):
+    for fragment in (
+        "target-endpoints-card",
+        "Network endpoints",
+        "data-endpoint",
+        "<table",
+        "Waiting for first measurement",
+    ):
         assert fragment not in html, fragment
 
 
@@ -183,7 +191,9 @@ def test_detail_checks_show_up_down_and_unknown_apart_without_an_endpoint_table(
     html = render_cards(t)
     assert_no_endpoint_table(html)
     up, down, unknown = (
-        re.search(rf'<span class="badge[^>]*>(?:(?!<span class="badge).)*?{label}.*?</span></span>', html, re.DOTALL).group(0)
+        re.search(
+            rf'<span class="badge[^>]*>(?:(?!<span class="badge).)*?{label}.*?</span></span>', html, re.DOTALL
+        ).group(0)
         for label in ("TCP:25", "TCP:587", "UDP:161")
     )
     assert "ju-status-badge--success" in up and "check_circle" in up and ": Up<" in up
@@ -230,13 +240,22 @@ def test_disabled_checks_and_removed_ports_have_no_badge() -> None:
 
 
 def test_http_and_cert_badges_are_unchanged() -> None:
-    t = target(enable_ping=False, enable_tcp_connect=False, enable_udp_scan=False, enable_http_check=True,
-               http_status="down", enable_cert_expiration=True, cert_status="warning")
+    t = target(
+        enable_ping=False,
+        enable_tcp_connect=False,
+        enable_udp_scan=False,
+        enable_http_check=True,
+        http_status="down",
+        enable_cert_expiration=True,
+        cert_status="warning",
+    )
     html = render_cards(t)
-    http = re.search(r'<span class="badge[^>]*>(?:(?!<span class="badge).)*?HTTP.*?</span></span>', html, re.DOTALL).group(0)
+    http = re.search(
+        r'<span class="badge[^>]*>(?:(?!<span class="badge).)*?HTTP.*?</span></span>', html, re.DOTALL
+    ).group(0)
     assert "ju-status-badge--danger" in http and ": Down<" in http
     cert = re.search(r'<span class="badge\s+ju-status-badge--warning\s*">\s*CERT.*?</span>\s*</span>', html, re.DOTALL)
-    assert cert and "CERT<span class=\"visually-hidden\">: warning</span>" in cert.group(0)
+    assert cert and 'CERT<span class="visually-hidden">: warning</span>' in cert.group(0)
 
 
 def test_target_without_any_check_says_so_and_has_no_table() -> None:

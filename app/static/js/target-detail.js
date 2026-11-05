@@ -14,13 +14,16 @@
  *   2. utils/with-alpha.js
  *   3. charts/chart-config.js
  *   4. charts/chart-sampling.js
- *   5. charts/chart-builder.js
- *   6. charts/chart-theme.js
- *   7. target-detail/date-range.js
- *   8. target-detail/metrics.js
- *   9. target-detail/pdf-export.js
- *  10. target-detail/test-alert.js
- *  11. target-detail/auto-close.js
+ *   5. charts/chart-reset.js
+ *   6. charts/chart-builder.js
+ *   7. charts/combined-chart-data.js
+ *   8. charts/combined-chart.js
+ *   9. charts/chart-theme.js
+ *  10. target-detail/date-range.js
+ *  11. target-detail/metrics.js
+ *  12. target-detail/pdf-export.js
+ *  13. target-detail/test-alert.js
+ *  14. target-detail/auto-close.js
  *  (base.html, before app.js: target-detail/traceroute-cache.js -> window.TracerouteCache)
  *
  * @module target-detail
@@ -333,7 +336,7 @@ async function loadCharts({ silent = false } = {}) {
 	const btn = silent ? null : document.getElementById('load-range-btn');
 	if (btn) {
 		btn.disabled = true;
-		btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+		btn.innerHTML = '<span class="spinner-border spinner-border-sm" aria-hidden="true"></span><span class="visually-hidden">Loading…</span>';
 	}
 
 	const isStale = () => appState.currentLoadToken !== loadToken;
@@ -452,7 +455,7 @@ async function loadCharts({ silent = false } = {}) {
 			if (_livePending) _scheduleLiveRefresh();
 			if (btn) {
 				btn.disabled = false;
-				btn.innerHTML = '<span class="material-icons">refresh</span> Load';
+				btn.innerHTML = '<i class="material-icons" aria-hidden="true">refresh</i> Load';
 			}
 		}
 	}
@@ -595,9 +598,9 @@ function _cleanup() {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 document.addEventListener('DOMContentLoaded', () => {
-	_setupNetworkDiagnostics();
-
+	// Config first: the cached diagnostics render reads pageConfig.useUtc.
 	_readPageConfig();
+	_setupNetworkDiagnostics();
 
 	if (!pageConfig.targetId) {
 		console.error('target-detail.js: no targetId configured');

@@ -394,6 +394,14 @@ test('a session redirect is forwarded and stores nothing', async () => {
   assert.equal(p.rec.renders.length, 0);
 });
 
+test('an off-origin redirect target is never followed', async () => {
+  for (const target of ['//evil.example', '/\\evil.example', 'https://evil.example/']) {
+    const storage = new FakeStorage(); const clock = { t: T0 };
+    const p = page({ storage, clock, responses: [reply({ headers: { 'hx-redirect': target }, status: 500 })] });
+    await p.loader.show();
+    assert.deepEqual(p.rec.redirects, [], target);
+  }
+});
 test('two tabs with Web Locks coalesce the automatic scan into one request', async () => {
   const storage = new FakeStorage(); const clock = { t: T0 };
   seed(storage, clock, T0);

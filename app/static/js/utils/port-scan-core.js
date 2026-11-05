@@ -62,7 +62,7 @@
 		return ports.join(',');
 	}
 
-	// Nmap states. Only "open" is a confirmed result; every other state is shown as uncertain or closed.
+	// Nmap states. Only "open" is a confirmed result; "closed" is confirmed closed, every other state is unclear.
 	const STATES = {
 		open: { label: 'Open', confirmed: true, tone: 'open', icon: 'check_circle', note: 'confirmed open' },
 		closed: { label: 'Closed', confirmed: false, tone: 'closed', icon: 'cancel', note: 'confirmed closed' },
@@ -96,7 +96,7 @@
 				if (seen.has(key)) continue;
 				seen.add(key);
 				const state = typeof port.state === 'string' ? port.state : 'unknown';
-				rows.push({ protocol: port.protocol, port: port.port, state, info: describeState(state), service: serviceLabel(port.service) });
+				rows.push({ protocol: port.protocol, port: port.port, state, info: describeState(state), service: serviceLabel(port.service), hint: port.service?.method === 'table' && Boolean(port.service?.name) });
 			}
 		}
 		return rows.sort((a, b) => a.protocol.localeCompare(b.protocol) || a.port - b.port);
@@ -105,6 +105,23 @@
 	/** Rows that are confirmed open. */
 	function confirmedOpen(rows) {
 		return rows.filter(row => row.info.confirmed);
+	}
+
+	/** Counts of confirmed open, confirmed closed and unclear rows; the three never overlap. */
+	function summarizeRows(rows) {
+		const open = rows.filter(row => row.info.confirmed).length;
+		const closed = rows.filter(row => row.info.tone === 'closed').length;
+		return { total: rows.length, open, closed, unclear: rows.length - open - closed };
+	}
+
+	/** Confirmed open rows first-class, every other state apart. Order inside each group is kept. */
+	function splitResults(rows) {
+		return { confirmed: confirmedOpen(rows), other: rows.filter(row => !row.info.confirmed) };
+	}
+
+	/** "3 closed, 12 unclear" style detail of the rows that are not confirmed open. */
+	function otherDetail(counts) {
+		return [counts.closed && `${counts.closed} closed`, counts.unclear && `${counts.unclear} unclear`].filter(Boolean).join(', ');
 	}
 
 	const ERROR_TEXT = {
@@ -149,15 +166,18 @@
 		const udpNote = requested.includes('udp') && !confirmed.some(row => row.protocol === 'udp')
 			? ' No UDP port could be confirmed open: UDP results are uncertain, select them manually if you want to monitor them.'
 			: '';
+		const counts = summarizeRows(rows);
+		const detail = otherDetail(counts);
+		const found = `${rows.length} port${rows.length === 1 ? '' : 's'} found`;
 		if (!confirmed.length) {
 			return {
-				kind: 'uncertain-only', tone: 'warning', rows,
-				message: `${rows.length} port${rows.length === 1 ? '' : 's'} found, none confirmed open.${udpNote}`
+				kind: 'uncertain-only', tone: 'warning', rows, counts,
+				message: `${found}, none confirmed open${detail ? ` (${detail})` : ''}.${udpNote}`
 			};
 		}
 		return {
-			kind: 'results', tone: udpNote ? 'warning' : 'info', rows,
-			message: `${rows.length} port${rows.length === 1 ? '' : 's'} found, ${confirmed.length} confirmed open. Choose ports to monitor.${udpNote}`
+			kind: 'results', tone: udpNote ? 'warning' : 'info', rows, counts,
+			message: `${found}: ${confirmed.length} confirmed open${detail ? `, ${detail}` : ''}.${udpNote}`
 		};
 	}
 
@@ -179,6 +199,6 @@
 
 	root.JuPortScan = {
 		TERMINAL, PROTOCOLS, parsePort, parsePortList, parseTypedPorts, mergePorts, formatPorts,
-		describeState, serviceLabel, collectPorts, confirmedOpen, describeJob, describeRequestError, defaultProtocols
+		describeState, serviceLabel, collectPorts, confirmedOpen, summarizeRows, splitResults, describeJob, describeRequestError, defaultProtocols
 	};
 })(window);

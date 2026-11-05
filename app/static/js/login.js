@@ -129,6 +129,9 @@
 						return;
 					}
 
+					// 403 is the CSRF check, which a retry with the same page cannot pass.
+					if (resp.status === 403) throw new Error('Your session expired. Reload the page and sign in again.');
+					if (resp.status >= 500) throw new Error('Sign-in is unavailable right now. Please try again later.');
 					// Generic error message (prevent user enumeration)
 					throw new Error('Invalid username or password');
 				}
