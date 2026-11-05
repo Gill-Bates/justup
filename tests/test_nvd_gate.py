@@ -49,7 +49,7 @@ class FakeNvd:
         self.urls.append(url)
         query = urllib.parse.parse_qs(urllib.parse.urlparse(url).query, keep_blank_values=True)
         pages = self.by_cpe[query["virtualMatchString"][0]]
-        return pages[int(query["startIndex"][0]) and 1 or 0] if len(pages) > 1 else pages[0]
+        return pages[1 if int(query["startIndex"][0]) else 0]
 
 
 NMAP_CPE = "cpe:2.3:a:nmap:nmap:7.98:*:*:*:*:*:*:*"
@@ -154,7 +154,7 @@ def test_malformed_or_inconsistent_nvd_answer_is_a_failure_not_a_pass(sbom_file,
 
 
 def test_unreachable_nvd_fails_closed(sbom_file, capsys):
-    def unreachable(url):
+    def unreachable(_url):
         raise gate.GateError("NVD answered HTTP 503")
 
     assert run_check(sbom_file, unreachable) == 3
@@ -174,7 +174,9 @@ def test_paging_collects_every_page_and_detects_a_critical_on_the_last_one(sbom_
     [
         lambda s: s["components"].remove(next(c for c in s["components"] if c["name"] == "nmap")),
         lambda s: next(c for c in s["components"] if c["name"] == "nmap").pop("cpe"),
-        lambda s: next(c for c in s["components"] if c["name"] == "nmap").update(cpe="cpe:2.3:a:nmap:nmap:*:*:*:*:*:*:*:*"),
+        lambda s: next(c for c in s["components"] if c["name"] == "nmap").update(
+            cpe="cpe:2.3:a:nmap:nmap:*:*:*:*:*:*:*:*"
+        ),
         lambda s: s.update(bomFormat="SPDX"),
     ],
 )

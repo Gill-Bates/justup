@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import vm from "node:vm";
+const apiErrorSrc = readFileSync(new URL("../../app/static/js/utils/api-error.js", import.meta.url), "utf8");
 const src = readFileSync(new URL("../../app/static/js/target-detail/service-detection.js", import.meta.url), "utf8");
 function el() {
   const handlers = {};
@@ -49,6 +50,7 @@ function harness(apiFetch, { confirmed = true, noDialog = false } = {}) {
     getElementById: () => root,
     createElement: () => ({ children: [], textContent: "" }),
   };
+  vm.runInNewContext(apiErrorSrc, window);
   vm.runInNewContext(src, { window, document, Number, String, JSON, Error });
   const requests = () => calls.filter(([url]) => url !== "reload");
   return { calls, dialogs, requests, ...parts };

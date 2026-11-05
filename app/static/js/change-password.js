@@ -32,8 +32,10 @@
 			errBox.classList.add('d-none');
 			if (submitBtn.disabled) return;
 
-			if (newInput.value.length < 8) {
-				showError(errBox, 'The password must be at least 8 characters long.');
+			// The input's minlength attribute (rendered from the server limit) is the single source.
+			const minLength = newInput.minLength > 0 ? newInput.minLength : 8;
+			if (newInput.value.length < minLength) {
+				showError(errBox, 'The password must be at least ' + minLength + ' characters long.');
 				return;
 			}
 			if (newInput.value !== confirmInput.value) {
@@ -45,20 +47,15 @@
 			submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span> Saving…';
 
 			try {
-				const resp = await fetch('/me/complete-required-change', {
+				const resp = await fetch('/me/complete-required-change', withCsrf({
 					method: 'POST',
-					credentials: 'same-origin',
-					headers: {
-						'Content-Type': 'application/json',
-						'X-CSRF-Token': getCsrfToken()
-					},
+					headers: { 'Content-Type': 'application/json' },
 					body: JSON.stringify({ new_password: newInput.value })
-				});
+				}));
 				if (!resp.ok) {
 					let detail = 'Password change failed';
 					try {
-						const body = await resp.json();
-						if (typeof body.detail === 'string') detail = body.detail;
+						detail = JuApiError.fromBody(await resp.json(), detail);
 					} catch (parseErr) {
 						// Keep the generic message
 					}

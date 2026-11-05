@@ -122,13 +122,7 @@ async function downloadPdfReport(targetId, pdfPageSize) {
       const text = await response.text().catch(() => "");
       try {
         const errData = JSON.parse(text);
-        if (typeof errData.detail === "string") {
-          errorMsg = errData.detail;
-        } else if (Array.isArray(errData.detail)) {
-          errorMsg = errData.detail
-            .map((e) => e.msg || JSON.stringify(e))
-            .join(", ");
-        }
+        errorMsg = window.JuApiError.message(errData.detail, errorMsg);
       } catch {
         // Fallback: plaintext
         if (text) errorMsg += ` – ${text.substring(0, 200)}`;

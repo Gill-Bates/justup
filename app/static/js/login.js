@@ -105,22 +105,17 @@
 			submitBtn.setAttribute('aria-disabled', 'true');
 			submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span> Signing in…';
 
-			const csrfValue = getCsrfToken();
 
 			try {
-				const resp = await fetch('/login', {
+				const resp = await fetch('/login', withCsrf({
 					method: 'POST',
-					credentials: 'same-origin',
-					headers: {
-						'Content-Type': 'application/json',
-						'X-CSRF-Token': csrfValue
-					},
+					headers: { 'Content-Type': 'application/json' },
 					body: JSON.stringify({
 						username: usernameInput.value,
 						password: passwordInput.value,
 						website: (document.getElementById('website') || {}).value || ''
 					})
-				});
+				}));
 
 				if (!resp.ok) {
 					if (resp.status === 429) {

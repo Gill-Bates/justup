@@ -22,20 +22,7 @@
 	 * Use this instead of raw fetch() in templates to avoid auth/CSRF drift.
 	 */
 	window.apiFetch = function apiFetch(url, options) {
-		var opts = options ? Object.assign({}, options) : {};
-		var headers = new Headers(opts.headers || {});
-
-		var csrf = getCsrfToken();
-		if (csrf && !headers.has('X-CSRF-Token')) {
-			headers.set('X-CSRF-Token', csrf);
-		}
-
-		if (!opts.credentials) {
-			opts.credentials = 'same-origin';
-		}
-
-		opts.headers = headers;
-		return fetch(url, opts);
+		return fetch(url, withCsrf(options));
 	};
 
 	// ─────────────────────────────────────────────────────────────────────────
@@ -114,7 +101,7 @@
 			// CSRF Token
 			var csrfToken = getCsrfToken();
 			if (csrfToken) {
-				evt.detail.headers['X-CSRF-Token'] = csrfToken;
+				evt.detail.headers[CSRF_HEADER] = csrfToken;
 			}
 		});
 

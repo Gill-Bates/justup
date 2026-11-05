@@ -91,3 +91,32 @@ for (const viewport of VIEWPORTS) {
 		});
 	}
 }
+
+test("inline raster data:image survives the editor round trip, active content is dropped @smtp-link-field", async ({ browser, app, adminState }) => {
+	const context = await browser.newContext({ storageState: adminState });
+	const page = await context.newPage();
+	try {
+		await page.goto(app.base + "/ui/settings", { waitUntil: "load" });
+		await page.click("#smtp-tab");
+		await page.waitForSelector("#btn-mode-html", { timeout: 15000 });
+		await page.click("#btn-mode-html");
+		const png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==";
+		await page.evaluate((src) => {
+			document.getElementById("email_html_source").value = `<p><img id="ok" src="${src}"><img id="svg" src="data:image/svg+xml;base64,PHN2Zz4="><img id="js" src="javascript:alert(1)"><a id="h" href="data:text/html;base64,PGI+">x</a></p>`;
+		}, png);
+		await page.click("#btn-mode-edit");
+		await page.waitForFunction(() => document.getElementById("wysiwyg_frame")?.contentDocument?.body?.isContentEditable);
+		await page.click("#btn-mode-html");
+		const saved = await page.evaluate(() => {
+			const doc = new DOMParser().parseFromString(document.getElementById("email_html_source").value, "text/html");
+			const attr = (id, name) => doc.getElementById(id)?.getAttribute(name);
+			return { ok: attr("ok", "src"), svg: attr("svg", "src"), js: attr("js", "src"), href: attr("h", "href") };
+		});
+		assert.equal(saved.ok, png, "the inline PNG survives");
+		assert.equal(saved.svg, null);
+		assert.equal(saved.js, null);
+		assert.equal(saved.href, null);
+	} finally {
+		await context.close();
+	}
+});

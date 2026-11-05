@@ -1,0 +1,2 @@
+# Accepted CRITICAL CVEs for the components compiled into Nmap (tools/nvd-gate.py).
+# One entry per line: CVE-YYYY-NNNN <reason of at least 10 characters>. Keep empty without exceptions.

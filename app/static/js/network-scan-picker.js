@@ -19,12 +19,8 @@
     if (!value.includes('://')) return value;
     try { return new URL(value).hostname.replace(/^\[(.*)\]$/, '$1'); } catch (_) { return value; }
   }
-  // Error body of the scan API: a string, {code, message} or a 422 list of {msg}.
   function errorMessage(detail, status) {
-    if (typeof detail === 'string') return detail;
-    if (typeof detail?.message === 'string') return detail.message;
-    if (Array.isArray(detail)) return detail.map(item => item?.msg).filter(Boolean).join('; ');
-    return `Scan request failed (${status}).`;
+    return window.JuApiError.message(detail, `Scan request failed (${status}).`);
   }
   async function responseJson(response) {
     let data;

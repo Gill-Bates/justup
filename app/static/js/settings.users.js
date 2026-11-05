@@ -6,6 +6,14 @@
 // User Management and SMTP Functions for Settings Page
 
 // Constants for error messages (prevent backend leakage)
+// The password limit is the inputs' minlength attribute (rendered from the server constant).
+function passwordMinLength(inputId) {
+	const length = document.getElementById(inputId)?.minLength;
+	return length > 0 ? length : 8;
+}
+function passwordTooShort(inputId) {
+	return 'Password must be at least ' + passwordMinLength(inputId) + ' characters';
+}
 const ERROR_MESSAGES = {
 	SMTP_TEST_FAILED: 'SMTP test failed. Please check your configuration.',
 	LOAD_USERS_FAILED: 'Failed to load users',
@@ -16,7 +24,6 @@ const ERROR_MESSAGES = {
 	REVOKE_SESSIONS_FAILED: 'Failed to revoke sessions',
 	NETWORK_ERROR: 'Network error. Please check your connection.',
 	REQUIRED_FIELDS: 'Please fill in all required fields',
-	PASSWORD_TOO_SHORT: 'Password must be at least 8 characters',
 	PASSWORDS_DONT_MATCH: 'Passwords do not match',
 };
 
@@ -372,8 +379,8 @@ async function saveEditedUser() {
 	const fieldErrors = [];
 	if (!username) fieldErrors.push({ id: 'edit-user-username', message: 'Please enter a username' });
 	if (newPassword || confirmPassword) {
-		if ((newPassword || '').length < 8) {
-			fieldErrors.push({ id: 'edit-user-password', message: ERROR_MESSAGES.PASSWORD_TOO_SHORT });
+		if ((newPassword || '').length < passwordMinLength('edit-user-password')) {
+			fieldErrors.push({ id: 'edit-user-password', message: passwordTooShort('edit-user-password') });
 		} else if (newPassword !== confirmPassword) {
 			fieldErrors.push({ id: 'edit-user-password-confirm', message: ERROR_MESSAGES.PASSWORDS_DONT_MATCH });
 		}
@@ -483,7 +490,7 @@ async function createUser() {
 	const fieldErrors = [];
 	if (!username) fieldErrors.push({ id: 'new-user-username', message: 'Please enter a username' });
 	if (!password) fieldErrors.push({ id: 'new-user-password', message: 'Please enter a password' });
-	else if (password.length < 8) fieldErrors.push({ id: 'new-user-password', message: ERROR_MESSAGES.PASSWORD_TOO_SHORT });
+	else if (password.length < passwordMinLength('new-user-password')) fieldErrors.push({ id: 'new-user-password', message: passwordTooShort('new-user-password') });
 	if (window.JuFieldErrors.show(form, fieldErrors)) return;
 
 	btn.disabled = true;

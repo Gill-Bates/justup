@@ -21,7 +21,7 @@
 		return SCRIPT_SCHEMES.some(function (scheme) { return normalized.indexOf(scheme) === 0; });
 	}
 	// Raster inline images only: SVG can carry script, so image/svg+xml never matches.
-	var RASTER_DATA_URL = /^data:image\/(?:png|jpe?g|gif|webp|bmp|avif);base64,[a-z0-9+\/]*={0,2}$/;
+	var RASTER_DATA_URL = /^data:image\/(?:png|jpe?g|gif|webp|bmp|avif);base64,[a-z0-9+/]*={0,2}$/;
 	/** True for a base64 raster data:image/* address, ignoring case and hidden characters. */
 	function isRasterImageDataUrl(raw) {
 		return RASTER_DATA_URL.test(String(raw == null ? '' : raw).replace(HIDDEN, '').toLowerCase());

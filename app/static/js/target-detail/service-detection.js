@@ -51,7 +51,7 @@
 			body: JSON.stringify(body),
 		});
 		const result = await response.json().catch(() => ({}));
-		if (!response.ok) throw new Error(typeof result.detail === 'string' ? result.detail : `Request failed (${response.status})`);
+		if (!response.ok) throw new Error(window.JuApiError.message(result.detail, `Request failed (${response.status})`));
 		return result;
 	}
 	previewButton.addEventListener('click', async () => {

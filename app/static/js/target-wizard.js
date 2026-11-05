@@ -79,10 +79,8 @@
     return form.querySelector('input[name="profile"]:checked')?.value || 'website';
   }
 
-  // FastAPI sends a string, an object with a message, or a 422 list of {msg} entries.
   function errorDetailMessage(detail, fallback) {
-    if (typeof detail === 'string') return detail;
-    return detail?.message || (Array.isArray(detail) ? detail.map(item => item.msg).join('; ') : null) || fallback;
+    return window.JuApiError.message(detail, fallback);
   }
   function clearError() {
     errorBox.classList.add('d-none');
