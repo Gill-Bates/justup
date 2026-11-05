@@ -1039,11 +1039,8 @@ def test_reset_metrics_rolls_back_sqlite_when_tsdb_delete_fails(conn, monkeypatc
 
     monkeypatch.setattr(tsdb, "delete_target", boom)
     client = _client(conn, targets.router, user=_mk_user(conn, "root", admin=True))
-    try:
-        resp = client.post(f"/targets/{tid}/reset")
-        assert resp.status_code >= 500
-    except OSError:
-        pass  # the unhandled error surfaces through the test client; state is asserted below
+    with pytest.raises(OSError, match="disk"):  # the unhandled error surfaces through the test client
+        client.post(f"/targets/{tid}/reset")
     assert conn.execute("SELECT COUNT(*) FROM alerts WHERE target_id = ?", (tid,)).fetchone()[0] == 1
     assert sqlite_db.get_target_status(conn, tid) is not None
 

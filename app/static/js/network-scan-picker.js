@@ -329,11 +329,19 @@
       el_.results.hidden = !rows.length;
       updateSelection();
     }
+    // Hiding is not enough: stale rows must leave the DOM so they cannot be tabbed to or adopted.
+    function clearResults() {
+      el_.results.hidden = true;
+      el_.confirmedList.replaceChildren();
+      el_.otherList.replaceChildren();
+      el_.other.open = false;
+      updateSelection();
+    }
     function finish(outcome) {
       ready();
       if (outcome.unavailable) markUnavailable(outcome.reason);
       if (outcome.kind === 'results' || outcome.kind === 'uncertain-only') renderResults(outcome.rows);
-      else el_.results.hidden = true;
+      else clearResults();
       show(outcome.unavailable ? { ...outcome, message: '' } : outcome);
     }
     async function poll(id, sequence) {
@@ -368,7 +376,7 @@
       if (!protocols.length) { setError('Choose TCP or UDP before scanning.'); return; }
       stopPolling();
       scanId.value = '';
-      el_.results.hidden = true;
+      clearResults();
       checkedHost = target;
       checkedProtocols = protocols;
       job = null;
@@ -401,7 +409,7 @@
       const id = job?.id;
       stopPolling();
       ready();
-      el_.results.hidden = true;
+      clearResults();
       scanId.value = '';
       job = null;
       setStatus('Scan cancelled. You can still enter ports manually.');
@@ -420,7 +428,7 @@
       const wasRunning = job && !core.TERMINAL.includes(job.status);
       stopPolling();
       ready();
-      el_.results.hidden = true;
+      clearResults();
       job = null;
       scanId.value = '';
       setStatus('Host changed. Scan again to discover ports for the new host.');

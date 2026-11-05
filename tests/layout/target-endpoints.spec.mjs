@@ -14,6 +14,7 @@ import { spawnSync } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "./fixtures.mjs";
+import { waitForVisualStability } from "./harness.mjs";
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const VIEWPORTS = [
 	{ name: "1920x1080", width: 1920, height: 1080 },
@@ -83,7 +84,7 @@ for (const viewport of VIEWPORTS) {
 					await page.goto(`${app.base}/ui/targets/${ids[key]}`, { waitUntil: "load" });
 					await page.evaluate((mode) => document.documentElement.setAttribute("data-bs-theme", mode), theme);
 					await page.waitForFunction(() => document.querySelector("#combined-card") && !document.querySelector('.target-detail-page [aria-busy="true"]'), null, { timeout: 15000 });
-					await page.waitForTimeout(800);
+					await waitForVisualStability(page);
 					const result = await page.evaluate(() => {
 						const box = (element) => {
 							const rect = element.getBoundingClientRect();
