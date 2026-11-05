@@ -989,9 +989,9 @@ def test_downtime_is_labelled_as_an_estimate_everywhere(monkeypatch):
     assert "Est. duration" in text and "Estimated downtime:" in text
     assert "estimated downtime is about" not in text
     assert "| DOWNTIME" not in f"| {text}" and "| Duration" not in f"| {text}"
-    # The series is thinned to 5040 s: the two adjacent failures (points 10, 11) are one outage from the
-    # first to the last failed sample (84 min), the single failure (40) counts one 300 s check.
-    assert b.kpis.downtime_minutes == 84 + 5
+    # The series is thinned to 5040 s, beyond the 3 x 300 s gap boundary. Each failure
+    # proves one check interval; the unmeasured time between them stays UNKNOWN.
+    assert b.kpis.downtime_minutes == 3 * 5
 
 
 FULL_COVERAGE = {"interval_seconds": 5040}  # 120 checks fill the 7-day series

@@ -207,20 +207,21 @@ def test_dashboard_widget_and_pdf_table_show_the_history_duration(tmp_path):
     assert summary["downtime_seconds"] == sum(p.duration_seconds for p in found) == 240
     assert summary["incidents"] == len(found) == len(events) == 2
     assert sum((e.duration_minutes or 0) for e in events) == 4
-    kpi = pdf_report._compute_kpis(
-        pdf_report.ReportData(
-            target={"interval_seconds": 60},
-            from_date=at(0),
-            to_date=at(600),
-            http_data=[],
-            uptime_data=[{"ts": at(m).isoformat(), "value": v} for m, v in values],
-            ping_data=[],
-            tcp_data=[],
-            cert_data=[],
-            status_code_data=[],
-        )
+    report_data = pdf_report.ReportData(
+        target={"interval_seconds": 60},
+        from_date=at(0),
+        to_date=at(600),
+        http_data=[],
+        uptime_data=[{"ts": at(m).isoformat(), "value": v} for m, v in values if m not in (3, 4)],
+        ping_data=[],
+        tcp_data=[],
+        cert_data=[],
+        status_code_data=[],
+        downtime_periods=found,
     )
+    kpi = pdf_report._compute_kpis(report_data)
     assert kpi.downtime_minutes == 4
+    assert sum(e.duration_minutes or 0 for e in pdf_report._report_downtime_events(report_data)) == 4
 
 
 def test_measured_outages_rule_edge_cases():
@@ -297,16 +298,15 @@ def _resampled(start_min: float, hours: float, step_s: int, down: tuple[float, f
     return out
 
 
-def test_resampled_pdf_series_gives_one_outage_of_the_true_duration():
-    # Every spacing above 3 x the 60 s check interval must not turn the neighbouring points into gaps.
+def test_resampled_pdf_points_never_bridge_missing_check_intervals():
+    # The display series cannot prove downtime across gaps longer than three check intervals.
     for step in (270, 300, 3600):
         hours = 40 if step == 3600 else 12
         data = _resampled(0, hours, step, (60, 240) if step != 3600 else (600, 840))
         events = pdf_report._extract_downtime_events(data, 60, now=at(hours * 60 + 1))
-        assert len(events) == 1, (step, events)
-        expected = 180 if step != 3600 else 240
-        assert abs(events[0].duration_minutes - expected) <= 2 * step / 60, (step, events)
-        assert abs(pdf_report._downtime_minutes(data, 60) - expected) <= 2 * step / 60
+        assert len(events) > 1, (step, events)
+        assert all(event.duration_minutes == 1 for event in events)
+        assert pdf_report._downtime_minutes(data, 60) == len(events)
 
 
 def test_resampled_pdf_series_still_excludes_a_real_gap():

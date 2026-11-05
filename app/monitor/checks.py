@@ -1069,7 +1069,7 @@ def assess_service_identity(stored: dict | None, service) -> IdentityAssessment:
         return IdentityAssessment(SERVICE_IDENTIFIED, None, adopt=True, version=version)
     old_product = ((stored or {}).get("service_product") or "").strip()
     old_version = ((stored or {}).get("service_version") or "").strip()
-    if name.lower() != old_name.lower() or (product and old_product and product.lower() != old_product.lower()):
+    if name.lower() != old_name.lower() or product.lower() != old_product.lower():
         return IdentityAssessment(
             SERVICE_CHANGED, f"service identity changed: {old_product or old_name} -> {product or name}"
         )

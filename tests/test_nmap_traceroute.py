@@ -6,8 +6,8 @@
 
 """Traceroute through the Nmap worker: XML parser, command strategy, typed request and socket round trip.
 
-The XML samples follow real Nmap 7.993 output captured in a local router chain (see
-.agents/tasks/traceroute-nmap/progress.md); the stand-in executable replaces the privileged binary.
+The XML samples follow real Nmap 7.993 output captured in a local router chain; the stand-in
+executable replaces the privileged binary.
 """
 
 # ruff: noqa: SLF001

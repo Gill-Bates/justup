@@ -125,10 +125,14 @@ def test_service_detection_requires_admin_and_explicit_confirmation(client):
     response = client.post(f"{path}/preview", headers=ADMIN)
     assert response.status_code == 200 and response.json()["token"] == "a" * 32
     assert scheduler.previews == 1 and scheduler.confirmations == 0
-    assert client.post(f"{path}/confirm", headers={"X-Test-User": "user:2"}, json={"token": "a" * 32}).status_code == 403
+    assert (
+        client.post(f"{path}/confirm", headers={"X-Test-User": "user:2"}, json={"token": "a" * 32}).status_code == 403
+    )
     assert scheduler.confirmations == 0
     response = client.post(f"{path}/confirm", headers=ADMIN, json={"token": "a" * 32})
     assert response.status_code == 200 and scheduler.confirmations == 1
+
+
 OTHER_ADMIN = {"X-Test-User": "admin:2"}
 PLAIN_USER = {"X-Test-User": "user:3"}
 

@@ -20,7 +20,7 @@ import pytest
 from app.db import sqlite as sqlite_db
 from app.db import tsdb
 from app.monitor import checks, scheduler
-from app.monitor.scheduler import MonitorScheduler, TargetStatus
+from app.monitor.scheduler import MonitorScheduler, TargetRuntime, TargetStatus
 from app.services import nmap_client
 from app.services.nmap_scanner import (
     NmapHostResult,
@@ -258,6 +258,8 @@ def test_changed_version_is_a_note_not_a_change():
 def test_different_service_or_product_is_service_changed():
     assert checks.assess_service_identity(_stored(), _svc(product="Exim")).identity == "changed"
     assert checks.assess_service_identity(_stored(), _svc(name="http", product="nginx")).identity == "changed"
+    assert checks.assess_service_identity(_stored(), _svc(product="")).identity == "changed"
+    assert checks.assess_service_identity(_stored(service_product=None), _svc()).identity == "changed"
 
 
 def test_first_probed_identification_becomes_the_base_and_table_hits_are_ignored():
@@ -627,7 +629,7 @@ def _redetect(db_path, tmp_path, monkeypatch, service):
 def test_changed_version_after_an_update_changes_neither_status_nor_alerts(db_path, tmp_path, monkeypatch):
     tid, sched, preview, calls = _redetect(db_path, tmp_path, monkeypatch, _svc(version="3.9"))
     assert preview["changes"][0]["kind"] == "version_changed"
-    assert _ports(db_path, tid)[("tcp", 25)]["service_version"] == "3.7"
+    assert _ports(db_path, tid)[("tcp", 25)]["service_version"] == "3.8"
     sched.confirm_service_detection(tid, 1, preview["token"])
     port = _ports(db_path, tid)[("tcp", 25)]
     assert calls[0]["detect_services"] is True
@@ -637,7 +639,9 @@ def test_changed_version_after_an_update_changes_neither_status_nor_alerts(db_pa
 
 
 def test_changed_identity_is_a_diagnostic_event_and_not_a_port_outage(db_path, tmp_path, monkeypatch, caplog):
-    tid, sched, preview, _calls = _redetect(db_path, tmp_path, monkeypatch, _svc(name="http", product="nginx", version="1"))
+    tid, sched, preview, _calls = _redetect(
+        db_path, tmp_path, monkeypatch, _svc(name="http", product="nginx", version="1")
+    )
     assert preview["changes"][0]["kind"] == "service_changed"
     assert _ports(db_path, tid)[("tcp", 25)]["service_name"] == "smtp"
     sched.confirm_service_detection(tid, 1, preview["token"])
@@ -681,8 +685,13 @@ def test_service_detection_rejects_stale_target_before_confirmation(db_path, tmp
 
 def test_udp_detection_uses_central_host_when_tcp_host_differs(db_path, tmp_path, monkeypatch):
     tid = _target(
-        db_path, host="udp.example", tcp_host="tcp.example", enable_tcp_connect=True, tcp_ports="25",
-        enable_udp_scan=True, udp_ports="53",
+        db_path,
+        host="udp.example",
+        tcp_host="tcp.example",
+        enable_tcp_connect=True,
+        tcp_ports="25",
+        enable_udp_scan=True,
+        udp_ports="53",
     )
     sched = _sched(db_path, tmp_path)
     sched._refresh_targets(utcnow())
@@ -697,10 +706,26 @@ def test_udp_detection_uses_central_host_when_tcp_host_differs(db_path, tmp_path
     monkeypatch.setattr(nmap_client, "request_scan", fake_request_scan)
     preview = asyncio.run(sched.preview_service_detection(tid, owner_id=1))
     assert [(host, kwargs.get("tcp_ports"), kwargs.get("udp_ports")) for host, kwargs in calls] == [
-        ("tcp.example", [25], None), ("udp.example", None, [53]),
+        ("tcp.example", [25], None),
+        ("udp.example", None, [53]),
     ]
     assert {change["protocol"] for change in preview["changes"]} == {"tcp", "udp"}
     assert sched._udp_scan_target(sched._targets[tid]) == ("udp.example", True)
+
+    scheduled_hosts = []
+
+    async def fake_udp_scan(_target_id, host, _ports, _interval, _rt, _generation):
+        scheduled_hosts.append(host)
+
+    monkeypatch.setattr(sched, "_run_udp_scan", fake_udp_scan)
+
+    async def cycle():
+        rt = TargetRuntime(next_due=utcnow(), udp_seeded=True)
+        await sched._udp_cycle(tid, sched._targets[tid], rt, utcnow(), None)
+        await rt.udp_task
+
+    asyncio.run(cycle())
+    assert scheduled_hosts == ["udp.example"]
 
 
 # ── Alerts ─────────────────────────────────────────────────────────────────────

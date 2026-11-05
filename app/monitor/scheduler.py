@@ -1811,7 +1811,7 @@ class MonitorScheduler:
         if rt.udp_task is not None and rt.udp_task.done():
             rt.udp_task = None
         if due and rt.udp_task is None:
-            host = str(cfg.get("host") or cfg.get("tcp_host") or "")
+            host = str(cfg.get("host") or "")
             if host:
                 rt.udp_last_started = now
                 rt.udp_task = asyncio.create_task(
@@ -1968,9 +1968,15 @@ class MonitorScheduler:
                         continue
                     candidates.append(
                         ServiceDetectionCandidate(
-                            key[0], key[1], kind,
-                            tuple(previous.get(field) for field in ("service_name", "service_product", "service_version", "service_identity")),
-                            found.service, assessment,
+                            key[0],
+                            key[1],
+                            kind,
+                            tuple(
+                                previous.get(field)
+                                for field in ("service_name", "service_product", "service_version", "service_identity")
+                            ),
+                            found.service,
+                            assessment,
                         )
                     )
                 return tuple(sorted(candidates, key=lambda item: (item.protocol, item.port)))
@@ -1982,7 +1988,8 @@ class MonitorScheduler:
         with self._service_previews_lock:
             now = utcnow()
             self._service_previews = {
-                key: value for key, value in self._service_previews.items()
+                key: value
+                for key, value in self._service_previews.items()
                 if now - value.created_at < timedelta(minutes=5)
             }
             if len(self._service_previews) >= 64:
@@ -2010,12 +2017,22 @@ class MonitorScheduler:
             stored = {(r["protocol"], r["port"]): r for r in sqlite_db.list_network_ports(conn, target_id)}
             for candidate in pending.candidates:
                 row = stored.get((candidate.protocol, candidate.port))
-                if row is None or tuple(row.get(field) for field in ("service_name", "service_product", "service_version", "service_identity")) != candidate.previous:
+                if (
+                    row is None
+                    or tuple(
+                        row.get(field)
+                        for field in ("service_name", "service_product", "service_version", "service_identity")
+                    )
+                    != candidate.previous
+                ):
                     raise ValueError("Service metadata changed after detection")
             for candidate in pending.candidates:
                 adopt = candidate.kind in {"service_changed", "identified"}
                 sqlite_db.record_service_observation(
-                    conn, target_id, candidate.protocol, candidate.port,
+                    conn,
+                    target_id,
+                    candidate.protocol,
+                    candidate.port,
                     identity=checks.SERVICE_IDENTIFIED,
                     detail=candidate.assessment.detail,
                     service=candidate.service,
