@@ -8,6 +8,7 @@
 // only vertical scroller, and nothing runs sideways. The layout audit only sees the first tab in its initial state.
 import assert from "node:assert/strict";
 import { test } from "./fixtures.mjs";
+import { waitForVisualStability } from "./harness.mjs";
 
 const VIEWPORTS = [
 	{ name: "1280x720", width: 1280, height: 720 },
@@ -27,14 +28,15 @@ for (const viewport of VIEWPORTS) {
 				await page.evaluate((mode) => document.documentElement.setAttribute("data-bs-theme", mode), theme);
 				for (const tab of TABS) {
 					await page.click(`#target-${tab}-tab`);
-					await page.waitForTimeout(350);
+					await page.waitForSelector(`#target-${tab}-pane.show.active`);
+					await waitForVisualStability(page);
 					// Everything open: disclosures, collapsed blocks and every check card.
 					await page.evaluate(() => {
 						document.querySelectorAll(".tab-pane.active details").forEach((d) => { d.open = true; });
 						document.querySelectorAll(".tab-pane.active .collapse:not(.show)").forEach((c) => c.classList.add("show"));
 						document.querySelectorAll(".tab-pane.active .check-card input[role=switch]").forEach((i) => { if (!i.checked) i.click(); });
 					});
-					await page.waitForTimeout(300);
+					await waitForVisualStability(page);
 					const m = await page.evaluate(() => {
 						const de = document.documentElement;
 						const main = document.querySelector("main");

@@ -153,7 +153,7 @@ ignore = [
     "PLR0912",
     "PLR0913",
     "PLR0915",
-    # ping/signal-cli/whatweb are resolved from PATH on purpose - the image
+    # ping/signal-cli/whatweb/nmap are resolved from PATH on purpose - the image
     # provides them, and hardcoding /usr/bin would break local dev (S607). Every
     # call passes a list argv with a "--" option terminator and no shell (S603).
     "S603",

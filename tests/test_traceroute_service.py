@@ -1,3 +1,9 @@
+#!/usr/bin/env python3
+#
+# tests/test_traceroute_service.py
+# Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
+#
+
 """Shared traceroute service: pinned resolution, controlled failures, sync wrapper, web == PDF hops."""
 
 from __future__ import annotations

@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { test as base } from "@playwright/test";
-import { test as appTest } from "./fixtures.mjs";
+import { contrastRatio as contrast, test as appTest } from "./fixtures.mjs";
 import { startStaticAppServer } from "./test-support.mjs";
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..", "..");
 const THEMES = ["light", "dark"];
@@ -53,11 +53,6 @@ const parse = (value) => {
 	const [r, g, b, a = 1] = m[1].split(/[ ,/]+/).filter(Boolean).map(Number);
 	return { r, g, b, a };
 };
-const lum = ({ r, g, b }) => {
-	const f = (c) => { const s = c / 255; return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4; };
-	return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
-};
-const contrast = (a, b) => { const [x, y] = [lum(parse(a)), lum(parse(b))].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05); };
 const isBlue = (value) => { const c = parse(value); return c.a > 0 && c.b > c.g + 40 && c.b > c.r + 80; };
 const setTheme = async (page, theme) => {
 	await page.emulateMedia({ reducedMotion: "reduce" }); // ends colour transitions at once so measurements are stable

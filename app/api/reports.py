@@ -28,12 +28,11 @@ from ..services.pdf_worker import (
     get_pdf_path,
     submit_pdf_job,
 )
-from ..utils.availability_rules import downtime_series
 from ..utils.constants import VALID_PDF_PAGE_SIZES
 from ..utils.deps import get_conn, get_tsdb_dir
 from ..utils.metric_limits import choose_display_bucket_seconds, choose_points_limit
 from ..utils.rate_limit import RATE_LIMIT_PDF, rate_limit
-from ..utils.report_metrics import fetch_metric_data, report_filename
+from ..utils.report_metrics import fetch_downtime_periods, fetch_metric_data, report_filename
 from ..utils.report_metrics import parse_tcp_ports as _parse_tcp_ports
 from ..utils.time import parse_utc, utcnow
 from ..utils.uptime_metric import select_uptime_metric
@@ -329,14 +328,7 @@ async def get_target_pdf_report(
             _log.exception("Display query failed for metric %s target %d", metric, target_id)
 
     downtime_periods = await run_in_threadpool(
-        tsdb_db.query_downtime_periods,
-        tsdb_dir,
-        target_id=target_id,
-        since=from_date,
-        until=to_date,
-        limit=2**63 - 1,
-        series=downtime_series(target_dict),
-        check_interval_seconds=target_dict.get("interval_seconds") or 60,
+        fetch_downtime_periods, tsdb_dir, target_id, target_dict, from_date, to_date
     )
     report_data = ReportData(
         target=target_dict,

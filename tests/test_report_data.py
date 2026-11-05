@@ -32,6 +32,7 @@ from app.utils import crypto
 from app.utils.deps import get_conn
 from app.utils.metric_limits import choose_points_limit
 from app.utils.rate_limit import RateLimitExceededError, rate_limit_exceeded_handler, reset_all
+from app.utils.report_metrics import fetch_downtime_periods
 from tests import _support  # noqa: F401 - imported for its sys.path side effect
 
 FROM = datetime(2026, 1, 1, tzinfo=UTC)
@@ -193,6 +194,55 @@ def test_status_counts_are_flagged_exact(collect, fake_tsdb, tmp_path, monkeypat
     fake_tsdb({"http_ms": _points(2), "http_up": _points(2)})
     data = collect(tmp_path, monkeypatch, enable_http_check=1)
     assert data.status_counts_exact is True
+
+
+def _spy_downtime(monkeypatch, result):
+    """Replace the exact downtime query; ``result`` is returned, or raised when it is an exception."""
+    calls: list[dict] = []
+
+    def query(_tsdb_dir, **kwargs):
+        calls.append(kwargs)
+        if isinstance(result, BaseException):
+            raise result
+        return result
+
+    monkeypatch.setattr(tsdb_db, "query_downtime_periods", query)
+    return calls
+
+
+def test_exact_downtime_periods_reach_the_report_unchanged(collect, fake_tsdb, tmp_path, monkeypatch):
+    fake_tsdb({})
+    sentinel = [SimpleNamespace(marker="exact")]
+    calls = _spy_downtime(monkeypatch, sentinel)
+    data = collect(tmp_path, monkeypatch, enable_http_check=1)
+    assert data.downtime_periods is sentinel
+    assert len(calls) == 1 and calls[0]["limit"] == 2**63 - 1 and calls[0]["check_interval_seconds"] == 60
+
+
+@pytest.mark.parametrize(
+    ("target", "expected"), [({"interval_seconds": 300}, 300), ({"interval_seconds": 0}, 60), ({}, 60)]
+)
+def test_downtime_query_uses_the_target_interval_with_60_as_default(monkeypatch, tmp_path, target, expected):
+    calls = _spy_downtime(monkeypatch, [])
+    assert fetch_downtime_periods(tmp_path, 1, target, FROM, TO) == []
+    assert calls[0]["check_interval_seconds"] == expected
+
+
+def test_failing_downtime_query_falls_back_to_sampled_events(collect, fake_tsdb, tmp_path, monkeypatch):
+    fake_tsdb({})
+    _spy_downtime(monkeypatch, OSError("corrupt series file"))
+    data = collect(tmp_path, monkeypatch, enable_http_check=1)
+    assert data.downtime_periods is None
+
+
+def test_both_report_paths_configure_the_downtime_query_alike(fake_tsdb, tmp_path, monkeypatch):
+    fake_tsdb({})
+    calls = _spy_downtime(monkeypatch, [])
+    _collect_via_endpoint(tmp_path / "a", monkeypatch, enable_http_check=1, enable_ping=1)
+    _collect_via_worker(tmp_path / "b", monkeypatch, enable_http_check=1, enable_ping=1)
+    endpoint, worker = calls
+    assert endpoint.pop("series") == worker.pop("series") != []
+    assert endpoint == worker
 
 
 @pytest.mark.parametrize(

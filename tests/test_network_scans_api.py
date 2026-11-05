@@ -133,6 +133,46 @@ def test_service_detection_requires_admin_and_explicit_confirmation(client):
     assert response.status_code == 200 and scheduler.confirmations == 1
 
 
+@pytest.mark.parametrize(
+    ("error", "status_code"),
+    [
+        (LookupError("Target not found"), 404),
+        (ValueError("Target changed"), 409),
+        (NmapScannerError("busy", "Nmap is busy"), 429),
+        (NmapScannerError("unavailable", "Nmap worker is down"), 503),
+        (NmapScannerError("timeout", "Nmap scan worker timed out"), 503),
+    ],
+)
+def test_service_detection_maps_scheduler_errors_to_http_status(client, error, status_code):
+    class FailingScheduler:
+        async def preview_service_detection(self, target_id, owner_id):
+            raise error
+
+        def confirm_service_detection(self, target_id, owner_id, token):
+            raise error
+
+    client.app.state.scheduler = FailingScheduler()
+    path = "/api/network-scans/services/7"
+    detail = error.error.message if isinstance(error, NmapScannerError) else str(error)
+    response = client.post(f"{path}/preview", headers=ADMIN)
+    assert (response.status_code, response.json()["detail"]) == (status_code, detail)
+    if not isinstance(error, NmapScannerError):  # confirm never talks to the worker
+        response = client.post(f"{path}/confirm", headers=ADMIN, json={"token": "a" * 32})
+        assert (response.status_code, response.json()["detail"]) == (status_code, detail)
+
+
+def test_service_detection_without_a_scheduler_is_503(client):
+    path = "/api/network-scans/services/7"
+    assert client.post(f"{path}/preview", headers=ADMIN).status_code == 503
+    assert client.post(f"{path}/confirm", headers=ADMIN, json={"token": "a" * 32}).status_code == 503
+
+
+def test_service_detection_rejects_a_malformed_token(client):
+    client.app.state.scheduler = object()
+    response = client.post("/api/network-scans/services/7/confirm", headers=ADMIN, json={"token": "XYZ"})
+    assert response.status_code == 422
+
+
 OTHER_ADMIN = {"X-Test-User": "admin:2"}
 PLAIN_USER = {"X-Test-User": "user:3"}
 

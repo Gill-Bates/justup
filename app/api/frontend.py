@@ -553,10 +553,21 @@ def target_detail_page(target_id: int, request: Request, conn=Depends(get_conn))
             "use_utc": use_utc_dashboard(conn),
             "traceroute_cache_scope": _traceroute_cache_scope(user, row),
             "pdf_page_size": get_pdf_page_size(conn),
+            "rollup_days": _rollup_days(),
             "has_recipients": len(sqlite_db.get_target_recipient_ids(conn, target_id)) > 0,
             "alert_recipients": [dict(row) for row in sqlite_db.get_target_recipients(conn, target_id)],
         },
     )
+
+
+def _rollup_days() -> dict[str, int]:
+    """Retention windows per resolution, taken from the TSDB rollup config."""
+    return {
+        "raw": tsdb_db.ROLLUP_CONFIG["raw"][1],
+        "5m": tsdb_db.ROLLUP_CONFIG["5m_median"][1],
+        "max": tsdb_db.MAX_RETENTION_DAYS,
+        "max_years": tsdb_db.MAX_RETENTION_DAYS // 365,
+    }
 
 
 @router.get("/ui/targets/{target_id}/edit", response_class=HTMLResponse)
@@ -581,6 +592,7 @@ def target_edit_page(target_id: int, request: Request, conn=Depends(get_conn)):
             "target": target,
             "groups": groups,
             "limits": MONITORING_LIMITS,
+            "rollup_days": _rollup_days(),
         },
     )
 

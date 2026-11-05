@@ -81,14 +81,33 @@ The **service identity** is a separate dimension and never changes the transport
 | --- | --- |
 | `SERVICE_IDENTIFIED` | A probe identified the service (name from an active Nmap probe). |
 | `SERVICE_UNKNOWN` | Not identified. A name that only comes from the port table (`nmap-services`) is shown as a hint and does **not** count as identified. Manual ports are unknown. |
-| `SERVICE_CHANGED` | A later explicit re-detection found a different service name or product than the stored one. A changed version string alone is a note, not a change. |
+| `SERVICE_CHANGED` | An explicit re-detection found a different service name or product than the stored one. Re-detection only proposes the change; a confirmed change becomes the new `SERVICE_IDENTIFIED` base. A changed version string alone is a note, not a change. |
 
 A changed service never turns a port down and never raises a DOWN alert.
 
-!!! note "Open decision: re-detection"
-    The scheduler can compare a fresh service detection with the stored identity
-    (`SERVICE_CHANGED`), but no UI action, API route or schedule triggers that
-    detection yet. Today the identity comes from the discovery scan at set-up time.
+### Service re-detection
+
+An administrator can run a fresh service detection (`-sV`) for a target with **Detect services**
+in the network diagnostics of the target page. Nothing is stored by the scan itself.
+
+1. **Preview** (`POST /api/network-scans/services/{id}/preview`) scans the configured ports and
+   lists what would change. Nothing is stored.
+2. **Confirm** (`POST /api/network-scans/services/{id}/confirm`) stores the previewed result. A new
+   service or a changed service name or product becomes the stored identity (a change then
+   becomes the new `SERVICE_IDENTIFIED` base). A version-only change only updates the stored version.
+
+The confirmation token is single-use, bound to the administrator and the target, and valid for
+5 minutes. Confirm answers `409` if the target or a stored service changed since the preview or the
+preview expired, and `404` if the token is unknown, already used or no longer stored. Preview allows 5 requests per minute per IP and 2 per minute per user,
+confirm 10 per minute per IP and 5 per minute per user.
+
+UDP ports are scanned only against the central host (`host`), never against a separate TCP host.
+
+### Host change
+
+When the scan host of a target changes, the stored port observations no longer describe it.
+TCP rows are reset when the effective TCP host (`tcp_host`, or `host` if empty) changes; UDP rows
+are reset when `host` changes. A change of `host` also resets the target status.
 
 ### Overall target status
 
@@ -158,7 +177,7 @@ result, timeout) says nothing about the target. All UDP ports of that run become
 | Scan job lifetime | 15 min, then `expired` for 5 more minutes, then removed. |
 | Rate limit | 10 scan starts per minute per IP and 3 per minute per user. |
 
-Service detection (`-sV`) runs only during discovery, never in a monitoring cycle.
+Service detection (`-sV`) runs during discovery and on explicit administrator re-detection, never in a monitoring cycle.
 
 ## Limits compared with application health checks
 

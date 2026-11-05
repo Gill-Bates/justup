@@ -9,7 +9,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { test } from "./fixtures.mjs";
+import { contrastRatio, test } from "./fixtures.mjs";
 import { waitForVisualStability } from "./harness.mjs";
 
 const VIEWPORTS = [
@@ -55,24 +55,17 @@ async function expectFieldFocus(page, label) {
 		document.body.append(probe);
 		const token = getComputedStyle(probe).borderTopColor;
 		probe.remove();
-		const luminance = (value) => {
-			const [r, g, b] = /rgba?\(([^)]+)\)/.exec(value)[1].split(/[ ,/]+/).filter(Boolean).slice(0, 3).map((n) => {
-				const c = Number(n) / 255;
-				return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
-			});
-			return 0.2126 * r + 0.7152 * g + 0.0722 * b;
-		};
-		const [hi, lo] = [luminance(cs.borderTopColor), luminance(cs.backgroundColor)].sort((a, b) => b - a);
 		return {
 			active: document.activeElement === el, focusVisible: el.matches(":focus-visible"), border: cs.borderTopColor, token,
-			outline: cs.outlineStyle, shadow: cs.boxShadow, contrast: (hi + 0.05) / (lo + 0.05),
+			outline: cs.outlineStyle, shadow: cs.boxShadow, background: cs.backgroundColor,
 		};
 	});
 	assert.equal(state.active, true, `${label}: the search field owns the focus`);
 	assert.equal(state.focusVisible, true, `${label}: the focus is keyboard-visible`);
 	assert.equal(state.border, state.token, `${label}: focus shows as the field border (${state.border} vs ${state.token})`);
 	assert.ok(state.outline === "none" && state.shadow === "none", `${label}: no outline or glow (${state.outline} ${state.shadow})`);
-	assert.ok(state.contrast >= 3, `${label}: focus border contrast ${state.contrast.toFixed(2)}:1 is below 3:1`);
+	const contrast = contrastRatio(state.border, state.background);
+	assert.ok(contrast >= 3, `${label}: focus border contrast ${contrast.toFixed(2)}:1 is below 3:1`);
 }
 
 const setTheme = async (page, theme) => {
@@ -202,8 +195,19 @@ for (const viewport of VIEWPORTS) {
 				await page.waitForFunction(() => document.querySelectorAll("#targets-table tbody tr[data-search]").length >= 6, null, { timeout: 15000 });
 				assert.equal(await search.inputValue(), "luett", "the query survives the fragment swap");
 				await search.focus();
-				await page.evaluate(() => window.htmx.trigger(document.getElementById("targets-table"), "refresh"));
-				await page.waitForLoadState("networkidle");
+				// Arm the listener before the trigger; only a swap of the table itself counts (other polls also settle).
+				await page.evaluate(() => {
+					window.__tableSettled = new Promise((resolve) => {
+						const onSettle = (e) => {
+							if ((e.detail?.elt ?? e.target)?.id !== "targets-table") return;
+							document.body.removeEventListener("htmx:afterSettle", onSettle);
+							resolve();
+						};
+						document.body.addEventListener("htmx:afterSettle", onSettle);
+					});
+					window.htmx.trigger(document.getElementById("targets-table"), "refresh");
+				});
+				await page.evaluate(() => window.__tableSettled);
 				await expectFieldFocus(page, "after the fragment swap");
 				const during = await visibleGroups(page);
 				assert.deepEqual(during.map((group) => [group.name, group.visibleRows, group.expanded]), [["Websites", 2, true]], "the new matching row shows, the non-matching one stays hidden");

@@ -77,6 +77,44 @@ async def availability() -> dict[str, object]:
     }
 
 
+async def _worker_call(
+    payload: dict[str, object], timeout: float, timeout_message: str, failure_message: str
+) -> object:
+    """Send one request to the worker and return its ``result``; closing the connection cancels the child."""
+    try:
+        reader, writer = await asyncio.open_unix_connection(SOCKET_PATH, limit=MAX_RESPONSE_BYTES)
+    except OSError as exc:
+        raise NmapScannerError("unavailable", _unavailable_message()) from exc
+    try:
+        writer.write(json.dumps(payload, separators=(",", ":")).encode() + b"\n")
+        await writer.drain()
+        try:
+            async with asyncio.timeout(timeout + 5):
+                raw = await reader.readuntil(b"\n")
+        except asyncio.LimitOverrunError as exc:
+            raise NmapScannerError("output_limit", "Nmap worker response exceeded the size limit") from exc
+        except (TimeoutError, asyncio.IncompleteReadError) as exc:
+            raise NmapScannerError("timeout", timeout_message) from exc
+        if len(raw) > MAX_RESPONSE_BYTES:
+            raise NmapScannerError("output_limit", "Nmap worker response exceeded the size limit")
+        try:
+            response = json.loads(raw)
+        except (UnicodeError, json.JSONDecodeError) as exc:
+            raise NmapScannerError("process_failed", "Nmap worker returned invalid data") from exc
+        if not isinstance(response, dict):
+            raise NmapScannerError("process_failed", "Nmap worker returned invalid data")
+        error = response.get("error")
+        if error is not None:
+            if isinstance(error, dict) and isinstance(error.get("code"), str):
+                raise NmapScannerError(error["code"], str(error.get("message") or failure_message))
+            raise NmapScannerError("process_failed", failure_message)
+        return response.get("result")
+    finally:
+        writer.close()
+        with suppress(OSError):
+            await writer.wait_closed()
+
+
 async def request_scan(
     host: str,
     *,
@@ -97,38 +135,11 @@ async def request_scan(
         "timeout": timeout,
         "detect_services": detect_services,
     }
+    result = await _worker_call(payload, timeout, "Nmap scan worker timed out", "Nmap scan failed")
     try:
-        reader, writer = await asyncio.open_unix_connection(SOCKET_PATH, limit=MAX_RESPONSE_BYTES)
-    except (FileNotFoundError, ConnectionRefusedError, PermissionError, OSError) as exc:
-        raise NmapScannerError("unavailable", _unavailable_message()) from exc
-    try:
-        writer.write(json.dumps(payload, separators=(",", ":")).encode() + b"\n")
-        await writer.drain()
-        try:
-            async with asyncio.timeout(timeout + 5):
-                raw = await reader.readuntil(b"\n")
-        except asyncio.LimitOverrunError as exc:
-            raise NmapScannerError("output_limit", "Nmap worker response exceeded the size limit") from exc
-        except TimeoutError as exc:
-            raise NmapScannerError("timeout", "Nmap scan worker timed out") from exc
-        if len(raw) > MAX_RESPONSE_BYTES:
-            raise NmapScannerError("output_limit", "Nmap worker response exceeded the size limit")
-        try:
-            response = json.loads(raw)
-        except (UnicodeError, json.JSONDecodeError) as exc:
-            raise NmapScannerError("process_failed", "Nmap worker returned invalid data") from exc
-        if not isinstance(response, dict):
-            raise NmapScannerError("process_failed", "Nmap worker returned invalid data")
-        if "error" in response:
-            error = response["error"]
-            if isinstance(error, dict) and isinstance(error.get("code"), str):
-                raise NmapScannerError(error["code"], str(error.get("message") or "Nmap scan failed"))
-            raise NmapScannerError("process_failed", "Nmap scan failed")
-        return NmapScanResult.model_validate(response.get("result"))
-    finally:
-        writer.close()
-        with suppress(OSError):
-            await writer.wait_closed()
+        return NmapScanResult.model_validate(result)
+    except ValueError as exc:  # pydantic's ValidationError
+        raise NmapScannerError("process_failed", "Nmap worker returned an invalid scan result") from exc
 
 
 async def request_traceroute(
@@ -146,36 +157,10 @@ async def request_traceroute(
         "probe_port": probe_port,
         "timeout": timeout,
     }
+    result = await _worker_call(
+        payload, timeout, "Nmap traceroute worker did not answer in time", "Nmap traceroute failed"
+    )
     try:
-        reader, writer = await asyncio.open_unix_connection(SOCKET_PATH, limit=MAX_RESPONSE_BYTES)
-    except OSError as exc:
-        raise NmapScannerError("unavailable", _unavailable_message()) from exc
-    try:
-        writer.write(json.dumps(payload, separators=(",", ":")).encode() + b"\n")
-        await writer.drain()
-        try:
-            async with asyncio.timeout(timeout + 5):
-                raw = await reader.readuntil(b"\n")
-        except asyncio.LimitOverrunError as exc:
-            raise NmapScannerError("output_limit", "Nmap worker response exceeded the size limit") from exc
-        except (TimeoutError, asyncio.IncompleteReadError) as exc:
-            raise NmapScannerError("timeout", "Nmap traceroute worker did not answer in time") from exc
-        try:
-            response = json.loads(raw)
-        except (UnicodeError, json.JSONDecodeError) as exc:
-            raise NmapScannerError("process_failed", "Nmap worker returned invalid data") from exc
-        if not isinstance(response, dict):
-            raise NmapScannerError("process_failed", "Nmap worker returned invalid data")
-        error = response.get("error")
-        if error is not None:
-            if isinstance(error, dict) and isinstance(error.get("code"), str):
-                raise NmapScannerError(error["code"], str(error.get("message") or "Nmap traceroute failed"))
-            raise NmapScannerError("process_failed", "Nmap traceroute failed")
-        try:
-            return Route.model_validate(response.get("result"))
-        except ValueError as exc:  # pydantic's ValidationError
-            raise NmapScannerError("process_failed", "Nmap worker returned an invalid route") from exc
-    finally:
-        writer.close()
-        with suppress(OSError):
-            await writer.wait_closed()
+        return Route.model_validate(result)
+    except ValueError as exc:  # pydantic's ValidationError
+        raise NmapScannerError("process_failed", "Nmap worker returned an invalid route") from exc

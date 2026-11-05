@@ -695,14 +695,20 @@ textarea.smtp-editor-frame {
 }
 
 @media (prefers-reduced-motion: reduce) {
-	.form-range::-webkit-slider-thumb,
+	.form-range::-webkit-slider-thumb {
+		transition: none;
+	}
+
 	.form-range::-moz-range-thumb {
 		transition: none;
 	}
 }
 
 @media (forced-colors: active) {
-	.form-range::-webkit-slider-thumb,
+	.form-range::-webkit-slider-thumb {
+		background-color: Highlight;
+	}
+
 	.form-range::-moz-range-thumb {
 		background-color: Highlight;
 	}
@@ -1327,7 +1333,7 @@ textarea.smtp-editor-frame {
 	width: 2.5rem;
 	height: 2.5rem;
 	border-radius: var(--bs-border-radius);
-	background: rgb(var(--bs-primary-rgb) / 12%);
+	background: rgb(var(--bs-primary-rgb), 0.12);
 	color: var(--bs-primary);
 }
 
@@ -2763,7 +2769,7 @@ body.server-offline #server-offline-overlay {
 }
 
 #server-offline-overlay .card {
-	--bs-card-bg: rgb(var(--bs-body-bg-rgb) / 72%);
+	--bs-card-bg: rgb(var(--bs-body-bg-rgb), 0.72);
 
 	width: min(560px, calc(100vw - 2rem));
 	backdrop-filter: blur(14px) saturate(160%);

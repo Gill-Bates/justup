@@ -26,8 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from ..utils import maintenance
-from ..utils.availability_rules import downtime_series
-from ..utils.report_metrics import fetch_metric_data, parse_tcp_ports, report_filename
+from ..utils.report_metrics import fetch_downtime_periods, fetch_metric_data, parse_tcp_ports, report_filename
 from ..utils.tcp_ports import DEFAULT_TCP_PORTS
 from ..utils.uptime_metric import select_uptime_metric
 
@@ -370,14 +369,8 @@ class PDFWorker:
                         "tcp_port_data": tcp_port_data or {},
                         "display_data": display_data,
                         "status_counts_exact": True,
-                        "downtime_periods": tsdb_db.query_downtime_periods(
-                            _j.tsdb_dir,
-                            target_id=_j.target_id,
-                            since=_j.from_date,
-                            until=_j.to_date,
-                            limit=2**63 - 1,
-                            series=downtime_series(target),
-                            check_interval_seconds=target.get("interval_seconds") or 60,
+                        "downtime_periods": fetch_downtime_periods(
+                            _j.tsdb_dir, _j.target_id, target, _j.from_date, _j.to_date
                         ),
                     }
 

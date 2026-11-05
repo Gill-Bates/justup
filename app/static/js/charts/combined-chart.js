@@ -481,9 +481,11 @@ function _renderCombinedText(canvas, input, view, chart) {
     })
   )
     text += "; peak lines hidden";
+  var rawDays =
+    (typeof pageConfig !== "undefined" && pageConfig.rawRetentionDays) || 30;
   var rollupNote =
-    input.range.from.getTime() < Date.now() - 30 * 86400000
-      ? " Data older than 30 days uses stored rollups; raw latency extremes and individual status codes are unavailable there."
+    input.range.from.getTime() < Date.now() - rawDays * 86400000
+      ? " Data older than " + rawDays + " days uses stored rollups; raw latency extremes and individual status codes are unavailable there."
       : "";
   if (input.statusRawOnly)
     rollupNote += " Status markers cover retained raw checks only.";
@@ -632,6 +634,7 @@ function _createCombinedZoomLoader(
           controller.signal,
         );
       });
+      if (input.statusEnabled) {
         requests.push(
           fetchDisplayMetricRange(
             pageConfig.targetId,
@@ -642,6 +645,7 @@ function _createCombinedZoomLoader(
             controller.signal,
           ),
         );
+      }
       requests.push(
         fetchDisplayMetricRange(
           pageConfig.targetId,

@@ -347,7 +347,7 @@
 								aria-describedby="retention_days_hint">
 							<span class="input-group-text">days</span>
 						</div>
-						<div class="form-text" id="retention_days_hint">Raw: 30d · 5-min: 180d · hourly: up to limit (max. 10y).</div>
+						<div class="form-text" id="retention_days_hint">Raw: {{ rollup_days.raw }}d · 5-min: {{ rollup_days['5m'] }}d · hourly: up to limit (max. {{ rollup_days.max_years }}y).</div>
 					</div>
 					<div class="col-md-2" role="group" aria-labelledby="is_enabled-group-label">
 						<span class="form-label d-inline-block" id="is_enabled-group-label">Status</span>

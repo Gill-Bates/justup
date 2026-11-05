@@ -228,10 +228,72 @@ class TestClient:
             async with server:
                 await nmap_client.request_scan("10.0.0.5", tcp_ports=[22], timeout=5)
 
-        with pytest.raises((NmapScannerError, ValidationError)) as exc:
+        with pytest.raises(NmapScannerError) as exc:
             asyncio.run(scenario())
-        if isinstance(exc.value, NmapScannerError):
-            assert exc.value.error.code in {"process_failed", "timeout"}
+        assert exc.value.error.code in {"process_failed", "timeout"}  # "timeout": the EOF-before-newline reply
+
+    @pytest.mark.parametrize("call", ["scan", "trace"])
+    @pytest.mark.parametrize(
+        ("reply", "code", "message_part"),
+        [
+            (b'{"error": {"code": "busy", "message": "all slots taken"}}\n', "busy", "all slots taken"),
+            (b'{"error": {"code": "busy"}}\n', "busy", "failed"),
+            (b'{"error": {"message": "m"}}\n', "process_failed", "failed"),
+            (b'{"error": "x"}\n', "process_failed", "failed"),
+            (b"not json\n", "process_failed", "invalid data"),
+            (b"\xff\xfe\n", "process_failed", "invalid data"),
+            (b"[1]\n", "process_failed", "invalid data"),
+            (b'{"result": {"hosts": "no"}}\n', "process_failed", "invalid"),
+            (b'{"result": null}\n', "process_failed", "invalid"),
+            (b'{"error": null, "result": {"hosts": "no"}}\n', "process_failed", "invalid"),
+            (b'{"result": ', "timeout", ""),  # EOF before the newline
+            (b"x" * (nmap_client.MAX_RESPONSE_BYTES + 10), "output_limit", "size limit"),
+        ],
+    )
+    def test_both_requests_map_worker_answers_alike(self, sock_dir, monkeypatch, call, reply, code, message_part):
+        monkeypatch.setattr(nmap_client, "SOCKET_PATH", str(sock_dir / "w.sock"))
+
+        async def answer(reader, writer):
+            await reader.readline()
+            writer.write(reply)
+            await writer.drain()
+            writer.close()
+
+        async def scenario():
+            server = await asyncio.start_unix_server(answer, path=str(sock_dir / "w.sock"))
+            async with server:
+                if call == "scan":
+                    await nmap_client.request_scan("10.0.0.5", tcp_ports=[22], timeout=5)
+                else:
+                    await nmap_client.request_traceroute("10.0.0.5", timeout=5)
+
+        with pytest.raises(NmapScannerError) as exc:
+            asyncio.run(scenario())
+        assert exc.value.error.code == code
+        assert message_part in exc.value.error.message
+
+    def test_silent_traceroute_worker_times_out(self, sock_dir, monkeypatch):
+        monkeypatch.setattr(nmap_client, "SOCKET_PATH", str(sock_dir / "w.sock"))
+
+        async def silent(reader, writer):
+            await reader.readline()
+            await reader.read()
+
+        async def scenario():
+            server = await asyncio.start_unix_server(silent, path=str(sock_dir / "w.sock"))
+            async with server:
+                with pytest.raises(NmapScannerError) as exc:
+                    await nmap_client.request_traceroute("10.0.0.5", timeout=0.2)
+                assert exc.value.error.code == "timeout"
+
+        asyncio.run(scenario())
+
+    def test_missing_socket_makes_traceroute_unavailable(self, sock_dir, monkeypatch):
+        monkeypatch.setattr(nmap_client, "SOCKET_PATH", str(sock_dir / "absent.sock"))
+        monkeypatch.setattr(nmap_client, "WORKER_STATUS_PATH", sock_dir / "status")
+        with pytest.raises(NmapScannerError) as exc:
+            asyncio.run(nmap_client.request_traceroute("10.0.0.5", timeout=5))
+        assert exc.value.error.code == "unavailable"
 
     def test_silent_worker_times_out(self, sock_dir, monkeypatch):
         monkeypatch.setattr(nmap_client, "SOCKET_PATH", str(sock_dir / "w.sock"))

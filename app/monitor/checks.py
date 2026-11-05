@@ -27,6 +27,7 @@ from weakref import WeakKeyDictionary
 
 from cryptography import x509
 
+from app.db.sqlite.network_ports import SERVICE_NAME_MAX, SERVICE_TEXT_MAX
 from app.utils.http_status import DEFAULT_HTTP_SUCCESS_CODES, is_status_code_allowed
 from app.utils.ssrf import is_blocked_ip, redact_url, resolve_validated
 
@@ -1051,6 +1052,7 @@ class IdentityAssessment:
     detail: str | None = None
     adopt: bool = False  # store the observed service as the new base
     version: str | None = None
+    version_changed: bool = False
 
 
 def assess_service_identity(stored: dict | None, service) -> IdentityAssessment:
@@ -1059,11 +1061,12 @@ def assess_service_identity(stored: dict | None, service) -> IdentityAssessment:
     A changed version string (an update) is only a diagnostic note. A different service name or product
     is SERVICE_CHANGED. Neither ever affects the port status: identity is not availability.
     """
-    name = (getattr(service, "name", None) or "").strip()
+    # Stored values are truncated on write, so compare the observed ones truncated alike.
+    name = (getattr(service, "name", None) or "")[:SERVICE_NAME_MAX].strip()
     if service is None or getattr(service, "method", None) != "probed" or not name:
         return IdentityAssessment(None)
-    product = (getattr(service, "product", None) or "").strip()
-    version = (getattr(service, "version", None) or "").strip()
+    product = (getattr(service, "product", None) or "")[:SERVICE_TEXT_MAX].strip()
+    version = (getattr(service, "version", None) or "")[:SERVICE_TEXT_MAX].strip()
     old_name = ((stored or {}).get("service_name") or "").strip()
     if not old_name or (stored or {}).get("service_identity") != SERVICE_IDENTIFIED:
         return IdentityAssessment(SERVICE_IDENTIFIED, None, adopt=True, version=version)
@@ -1075,6 +1078,9 @@ def assess_service_identity(stored: dict | None, service) -> IdentityAssessment:
         )
     if version != old_version:
         return IdentityAssessment(
-            SERVICE_IDENTIFIED, f"version changed: {old_version or '-'} -> {version or '-'}", version=version
+            SERVICE_IDENTIFIED,
+            f"version changed: {old_version or '-'} -> {version or '-'}",
+            version=version,
+            version_changed=True,
         )
     return IdentityAssessment(SERVICE_IDENTIFIED)

@@ -232,7 +232,7 @@ def test_widget_allowlist_matches_client_registry_and_template():
 
 
 def test_widget_sizes_agree_between_template_registry_and_server():
-    """Registry and server table must carry identical minimums; the template carries defaults only."""
+    """Registry and server table must carry identical minimums; the template carries no geometry."""
     registry = (ROOT / "app/static/js/dashboard-widgets.js").read_text(encoding="utf-8")
     template = (ROOT / "app/templates/dashboard.html").read_text(encoding="utf-8")
     definitions = {
@@ -240,13 +240,12 @@ def test_widget_sizes_agree_between_template_registry_and_server():
         for m in re.finditer(r"def\('([a-z-]+)', '[^']+', (\d+), (\d+), (\d+), (\d+), (\d+), (\d+)", registry)
     }
     assert set(definitions) == set(layouts.DASHBOARD_WIDGET_MIN_SIZES) == DASHBOARD_WIDGETS
-    for wid, (x, y, w, h, min_w, min_h) in definitions.items():
+    for wid, (_x, _y, _w, _h, min_w, min_h) in definitions.items():
         assert layouts.DASHBOARD_WIDGET_MIN_SIZES[wid] == (min_w, min_h), f"{wid}: registry and server minimum differ"
         tile = re.search(rf'<div class="grid-stack-item[^"]*"[^>]*gs-id="{wid}"[^>]*>', template)
         assert tile is not None, wid
         assert "gs-min-" not in tile.group(), f"{wid}: the template must not carry its own minimum"
-        for key, value in {"x": x, "y": y, "w": w, "h": h}.items():
-            assert f'gs-{key}="{value}"' in tile.group(), f"{wid}: template default {key} differs from the registry"
+        assert not re.search(r"gs-[xywh]=", tile.group()), f"{wid}: geometry belongs to the registry only"
 
 
 def test_uptime_summary_excludes_unknown_time_and_disabled_targets(env, monkeypatch):

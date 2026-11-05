@@ -19,7 +19,19 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
-from app.api import csp_report, dashboard_layout, frontend, pop, recipients, reports, settings, signal, targets, users
+from app.api import (
+    csp_report,
+    dashboard_layout,
+    frontend,
+    network_scans,
+    pop,
+    recipients,
+    reports,
+    settings,
+    signal,
+    targets,
+    users,
+)
 from app.api.auth import get_current_user
 from app.api.csp_report import CSP_REPORT_PATH
 from app.db import sqlite as sqlite_db
@@ -648,6 +660,12 @@ RATE_LIMITED_ROUTES = {
     ("DELETE", "/me/dashboard-layout"): ["60/minute"],
     ("POST", "/api/admin/pop/refresh"): ["10/minute"],
     ("POST", CSP_REPORT_PATH): ["30/minute"],
+    ("GET", "/network-scans/status"): ["60/minute"],
+    ("POST", "/network-scans/services/{target_id}/preview"): ["2/minute", "5/minute"],
+    ("POST", "/network-scans/services/{target_id}/confirm"): ["10/minute", "5/minute"],
+    ("POST", "/network-scans"): ["10/minute", "3/minute"],
+    ("GET", "/network-scans/{scan_id}"): ["60/minute"],
+    ("DELETE", "/network-scans/{scan_id}"): ["10/minute"],
 }
 
 
@@ -665,7 +683,7 @@ def _route_specs(router_or_app) -> dict[tuple[str, str], list[str]]:
     return found
 
 
-def test_all_39_rate_limited_routes_keep_their_limit_exactly_once():
+def test_all_45_rate_limited_routes_keep_their_limit_exactly_once():
     found: dict[tuple[str, str], list[str]] = {}
     for router in (
         users.router,
@@ -679,9 +697,10 @@ def test_all_39_rate_limited_routes_keep_their_limit_exactly_once():
         reports.ui_router,
         pop.router,
         frontend.router,
+        network_scans.router,
     ):
         found |= _route_specs(router)
-    assert len(RATE_LIMITED_ROUTES) == 39
+    assert len(RATE_LIMITED_ROUTES) == 45
     assert found == {k: sorted(v) for k, v in RATE_LIMITED_ROUTES.items()}
 
 

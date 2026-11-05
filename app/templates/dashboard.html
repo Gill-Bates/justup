@@ -51,7 +51,7 @@
 	<div class="grid-stack dashboard-grid dashboard-grid--loading" id="dashboard-grid" data-is-admin="{{ 'true' if user.is_admin else 'false' }}">
 
 		<!-- Four independently movable status heroes. -->
-		<div class="grid-stack-item" gs-id="status-online" gs-x="0" gs-y="0" gs-w="3" gs-h="2" data-widget-id="status-online">
+		<div class="grid-stack-item" gs-id="status-online" data-widget-id="status-online">
 			<div class="grid-stack-item-content">
 				<button type="button" class="dashboard-widget-handle" hidden
 					aria-label="Move or resize widget: Online. Arrow keys move it, Shift with arrow keys resizes it.">
@@ -68,7 +68,7 @@
 				</div>
 			</div>
 		</div>
-		<div class="grid-stack-item" gs-id="status-offline" gs-x="3" gs-y="0" gs-w="3" gs-h="2" data-widget-id="status-offline">
+		<div class="grid-stack-item" gs-id="status-offline" data-widget-id="status-offline">
 			<div class="grid-stack-item-content">
 				<button type="button" class="dashboard-widget-handle" hidden
 					aria-label="Move or resize widget: Offline. Arrow keys move it, Shift with arrow keys resizes it.">
@@ -85,7 +85,7 @@
 				</div>
 			</div>
 		</div>
-		<div class="grid-stack-item" gs-id="status-disabled" gs-x="6" gs-y="0" gs-w="3" gs-h="2" data-widget-id="status-disabled">
+		<div class="grid-stack-item" gs-id="status-disabled" data-widget-id="status-disabled">
 			<div class="grid-stack-item-content">
 				<button type="button" class="dashboard-widget-handle" hidden
 					aria-label="Move or resize widget: Disabled. Arrow keys move it, Shift with arrow keys resizes it.">
@@ -102,7 +102,7 @@
 				</div>
 			</div>
 		</div>
-		<div class="grid-stack-item" gs-id="status-total" gs-x="9" gs-y="0" gs-w="3" gs-h="2" data-widget-id="status-total">
+		<div class="grid-stack-item" gs-id="status-total" data-widget-id="status-total">
 			<div class="grid-stack-item-content">
 				<button type="button" class="dashboard-widget-handle" hidden
 					aria-label="Move or resize widget: Total. Arrow keys move it, Shift with arrow keys resizes it.">
@@ -121,7 +121,7 @@
 		</div>
 
 		<!-- quality -->
-		<div class="grid-stack-item" gs-id="quality" gs-x="0" gs-y="2" gs-w="6" gs-h="3" data-widget-id="quality">
+		<div class="grid-stack-item" gs-id="quality" data-widget-id="quality">
 			<div class="grid-stack-item-content">
 				<button type="button" class="dashboard-widget-handle" hidden aria-label="Move or resize widget: Monitor quality. Arrow keys move it, Shift with arrow keys resizes it.">
 					<span class="material-icons" aria-hidden="true">drag_indicator</span>
@@ -131,7 +131,7 @@
 		</div>
 
 		<!-- downtime -->
-		<div class="grid-stack-item" gs-id="downtime" gs-x="0" gs-y="5" gs-w="12" gs-h="4" data-widget-id="downtime">
+		<div class="grid-stack-item" gs-id="downtime" data-widget-id="downtime">
 			<div class="grid-stack-item-content">
 				<button type="button" class="dashboard-widget-handle" hidden aria-label="Move or resize widget: Downtime overview. Arrow keys move it, Shift with arrow keys resizes it.">
 					<span class="material-icons" aria-hidden="true">drag_indicator</span>
@@ -186,27 +186,27 @@
 			</div>
 		</div>
 
-		<div class="grid-stack-item d-none" gs-id="alerts-open" gs-x="6" gs-y="2" gs-w="6" gs-h="3" data-widget-id="alerts-open">
+		<div class="grid-stack-item d-none" gs-id="alerts-open" data-widget-id="alerts-open">
 			{{ monitoring_card('Alerts', 'notifications_active', 'alerts-open-status') }}
 		</div>
 		{% if user.is_admin %}
-		<div class="grid-stack-item d-none" gs-id="delivery-queue" gs-x="4" gs-y="2" gs-w="4" gs-h="3" data-widget-id="delivery-queue">
+		<div class="grid-stack-item d-none" gs-id="delivery-queue" data-widget-id="delivery-queue">
 				{{ monitoring_card('Delivery queue', 'outbox', 'delivery-queue-status') }}
 		</div>
 		{% endif %}
-		<div class="grid-stack-item d-none" gs-id="uptime-day" gs-x="0" gs-y="10" gs-w="3" gs-h="2" data-widget-id="uptime-day">
+		<div class="grid-stack-item d-none" gs-id="uptime-day" data-widget-id="uptime-day">
 			{{ monitoring_card('Uptime (24h)', 'monitor_heart') }}
 		</div>
-		<div class="grid-stack-item d-none" gs-id="cert-expiry" gs-x="3" gs-y="10" gs-w="3" gs-h="4" data-widget-id="cert-expiry">
+		<div class="grid-stack-item d-none" gs-id="cert-expiry" data-widget-id="cert-expiry">
 			{{ monitoring_card('Certificate expiry', 'verified_user') }}
 		</div>
-		<div class="grid-stack-item d-none" gs-id="slowest-monitors" gs-x="0" gs-y="14" gs-w="6" gs-h="4" data-widget-id="slowest-monitors">
+		<div class="grid-stack-item d-none" gs-id="slowest-monitors" data-widget-id="slowest-monitors">
 			{{ monitoring_card('Slowest monitors (latest)', 'speed') }}
 		</div>
-		<div class="grid-stack-item d-none" gs-id="quality-trend" gs-x="6" gs-y="14" gs-w="6" gs-h="4" data-widget-id="quality-trend">
+		<div class="grid-stack-item d-none" gs-id="quality-trend" data-widget-id="quality-trend">
 			{{ monitoring_card('Quality trend (24h)', 'show_chart') }}
 		</div>
-		<div class="grid-stack-item d-none" gs-id="stale-checks" gs-x="6" gs-y="10" gs-w="3" gs-h="4" data-widget-id="stale-checks">
+		<div class="grid-stack-item d-none" gs-id="stale-checks" data-widget-id="stale-checks">
 			{{ monitoring_card('Stale checks', 'schedule') }}
 		</div>
 	</div>

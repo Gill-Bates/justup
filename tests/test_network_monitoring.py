@@ -19,6 +19,7 @@ import pytest
 
 from app.db import sqlite as sqlite_db
 from app.db import tsdb
+from app.db.sqlite.network_ports import SERVICE_NAME_MAX, SERVICE_TEXT_MAX
 from app.monitor import checks, scheduler
 from app.monitor.scheduler import MonitorScheduler, TargetRuntime, TargetStatus
 from app.services import nmap_client
@@ -253,6 +254,22 @@ def _stored(**kw):
 def test_changed_version_is_a_note_not_a_change():
     verdict = checks.assess_service_identity(_stored(), _svc(version="3.8"))
     assert verdict.identity == "identified" and "3.7 -> 3.8" in verdict.detail and verdict.version == "3.8"
+
+
+def test_version_change_is_flagged_by_a_typed_field_and_unchanged_is_not():
+    assert checks.assess_service_identity(_stored(), _svc(version="3.8")).version_changed is True
+    assert checks.assess_service_identity(_stored(service_version="3.8"), _svc(version="3.8")).version_changed is False
+
+
+def test_overlong_service_values_match_their_truncated_stored_form():
+    name, product, version = "n" * 130, "p" * 200, "v" * 200
+    stored = _stored(
+        service_name=name[:SERVICE_NAME_MAX],
+        service_product=product[:SERVICE_TEXT_MAX],
+        service_version=version[:SERVICE_TEXT_MAX],
+    )
+    verdict = checks.assess_service_identity(stored, _svc(name=name, product=product, version=version))
+    assert (verdict.identity, verdict.detail, verdict.version_changed) == ("identified", None, False)
 
 
 def test_different_service_or_product_is_service_changed():
@@ -638,12 +655,14 @@ def test_changed_version_after_an_update_changes_neither_status_nor_alerts(db_pa
     assert _alert_ids(db_path) == []
 
 
-def test_changed_identity_is_a_diagnostic_event_and_not_a_port_outage(db_path, tmp_path, monkeypatch, caplog):
+def test_confirmed_service_change_adopts_the_new_identity_without_a_port_outage(db_path, tmp_path, monkeypatch):
     tid, sched, preview, _calls = _redetect(
         db_path, tmp_path, monkeypatch, _svc(name="http", product="nginx", version="1")
     )
     assert preview["changes"][0]["kind"] == "service_changed"
-    assert _ports(db_path, tid)[("tcp", 25)]["service_name"] == "smtp"
+    declined = _ports(db_path, tid)[("tcp", 25)]  # a preview alone stores nothing
+    assert declined["service_name"] == "smtp" and declined["service_identity"] == "identified"
+    assert declined["identity_changed_at"] is None
     sched.confirm_service_detection(tid, 1, preview["token"])
     port = _ports(db_path, tid)[("tcp", 25)]
     assert port["service_identity"] == "identified"
@@ -681,6 +700,46 @@ def test_service_detection_rejects_stale_target_before_confirmation(db_path, tmp
     with pytest.raises(ValueError, match="Target changed"):
         sched.confirm_service_detection(tid, 1, preview["token"])
     assert _ports(db_path, tid)[("tcp", 25)]["service_name"] == "smtp"
+
+
+@pytest.mark.parametrize(
+    ("column", "value"),
+    [
+        ("service_name", "http"),
+        ("service_product", "Exim"),
+        ("service_version", "9.9"),
+        ("service_identity", "unknown"),
+    ],
+)
+def test_confirmation_fails_when_any_baseline_column_changed_after_the_preview(
+    db_path, tmp_path, monkeypatch, column, value
+):
+    tid, sched, preview, _calls = _redetect(db_path, tmp_path, monkeypatch, _svc(name="http", product="nginx"))
+    conn = sqlite_db.connect(db_path)
+    conn.execute(f"UPDATE target_network_ports SET {column} = ? WHERE target_id = ?", (value, tid))  # noqa: S608
+    conn.commit()
+    sqlite_db.close_connection(conn)
+    with pytest.raises(ValueError, match="Service metadata changed"):
+        sched.confirm_service_detection(tid, 1, preview["token"])
+    assert _ports(db_path, tid)[("tcp", 25)][column] == value
+
+
+def test_expired_service_detection_preview_cannot_be_confirmed(db_path, tmp_path, monkeypatch):
+    tid, sched, preview, _calls = _redetect(db_path, tmp_path, monkeypatch, _svc(name="http", product="nginx"))
+    monkeypatch.setattr(scheduler, "utcnow", lambda: utcnow() + timedelta(minutes=5))
+    with pytest.raises(ValueError, match="expired"):
+        sched.confirm_service_detection(tid, 1, preview["token"])
+    assert _ports(db_path, tid)[("tcp", 25)]["service_name"] == "smtp"
+
+
+def test_the_65th_service_detection_preview_evicts_the_oldest(db_path, tmp_path, monkeypatch):
+    tid, sched, first, _calls = _redetect(db_path, tmp_path, monkeypatch, _svc(name="http", product="nginx"))
+    tokens = [first["token"]]
+    tokens.extend(asyncio.run(sched.preview_service_detection(tid, owner_id=1))["token"] for _ in range(64))
+    with pytest.raises(LookupError):
+        sched.confirm_service_detection(tid, 1, tokens[0])
+    sched.confirm_service_detection(tid, 1, tokens[-1])
+    assert _ports(db_path, tid)[("tcp", 25)]["service_name"] == "http"
 
 
 def test_udp_detection_uses_central_host_when_tcp_host_differs(db_path, tmp_path, monkeypatch):

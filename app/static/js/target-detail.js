@@ -50,6 +50,7 @@ let pageConfig = {
 	targetId: null,
 	useUtc: false,
 	pdfPageSize: 'a4',
+	rawRetentionDays: 30,
 	tcpPorts: [],
 	slaConfig: { enabled: false, availabilityPct: 99.9, responseTimeMs: 500, pingLatencyMs: 100 },
 	// Feature flags (set by Jinja2 data-attributes)
@@ -77,6 +78,7 @@ function _readPageConfig() {
 	pageConfig.targetId = parseInt(d.targetId) || null;
 	pageConfig.useUtc = d.useUtc === 'true';
 	pageConfig.pdfPageSize = d.pdfPageSize || 'a4';
+	pageConfig.rawRetentionDays = parseInt(d.rawRetentionDays, 10) || pageConfig.rawRetentionDays;
 	pageConfig.tcpPorts = (d.tcpPorts || '80').split(',').map(p => p.trim()).filter(Boolean);
 
 	pageConfig.slaConfig = {

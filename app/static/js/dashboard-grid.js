@@ -494,6 +494,8 @@
 			alwaysShowResizeHandle: true,
 			handle: '.dashboard-widget-handle',
 		}, '#dashboard-grid');
+		// The template carries no geometry; place every tile from the registry before anything is revealed.
+		applyLayout(DEFAULT_LAYOUT.map(defaultEntry));
 
 		grid.on('change', onGridChange);
 		grid.on('dragstart resizestart', () => limitRows(true));

@@ -25,6 +25,7 @@ from starlette.requests import Request
 from app.api import signal as signal_api
 from app.api.auth import require_admin
 from app.db import sqlite as sqlite_db
+from app.db import tsdb as tsdb_db
 from app.models.targets import TargetCreate, TargetPublic, target_row_to_dict
 from app.models.users import hash_token, new_token
 from app.services.notifications.signal_errors import SignalTimeout
@@ -696,6 +697,10 @@ class TestTargetWizardContracts:
         assert 'id="target-form"' in edit_page.text
         assert 'id="target-wizard-form"' not in edit_page.text
         assert "http://example.com:8080/health?x=1" in edit_page.text
+        raw, mid = tsdb_db.ROLLUP_CONFIG["raw"][1], tsdb_db.ROLLUP_CONFIG["5m_median"][1]
+        assert f"Raw: {raw}d · 5-min: {mid}d" in edit_page.text
+        detail_page = env["admin"].call("GET", f"/ui/targets/{created.json()['id']}")
+        assert f'data-raw-retention-days="{raw}"' in detail_page.text
 
     def test_concurrent_exact_create_has_one_winner(self, env):
         values = _preview_target(env, "server", "race.example.com")["values"]

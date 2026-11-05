@@ -315,7 +315,7 @@ def test_unchanged_ports_keep_their_metadata_when_saved_again(conn):
     assert (port["port"], port["service_name"], port["source"]) == (22, "ssh", "discovered")
 
 
-def test_host_change_discards_observations_but_keeps_ports_and_history(conn, tmp_path: Path):
+def test_scan_host_change_discards_observations_but_keeps_ports_and_history(conn, tmp_path: Path):
     client = _app_client(conn, tmp_path)
     created = client.post(
         "/targets",
@@ -352,7 +352,7 @@ def test_host_change_discards_observations_but_keeps_ports_and_history(conn, tmp
     assert renamed.json()["network_ports"][0]["service_name"] == "ssh"
     assert sqlite_db.get_target_status(conn, tid)["overall_status"] == "down"
 
-    changed = client.patch(f"/targets/{tid}", json={"host": "new.example.com"})
+    changed = client.patch(f"/targets/{tid}", json={"host": "new.example.com", "tcp_host": "new.example.com"})
     assert changed.status_code == 200, changed.text
     result = changed.json()
     assert (result["tcp_ports"], result["udp_ports"], result["enable_tcp_connect"], result["enable_udp_scan"]) == (
@@ -384,6 +384,56 @@ def test_host_change_discards_observations_but_keeps_ports_and_history(conn, tmp
         )
     assert sqlite_db.get_target_status(conn, tid) is None
     assert tsdb.query_latest(tmp_path, target_id=tid, metric="tcp_up_22") == history
+
+
+def _observed_target(conn, tmp_path: Path, name: str):
+    """A target with a separate tcp_host and one identified TCP and one identified UDP port."""
+    client = _app_client(conn, tmp_path)
+    created = client.post(
+        "/targets",
+        json={
+            "name": name,
+            "host": "old.example.com",
+            "enable_tcp_connect": True,
+            "tcp_host": "tcp.example.com",
+            "tcp_ports": "22",
+            "enable_udp_scan": True,
+            "udp_ports": "53",
+        },
+    )
+    assert created.status_code == 201, created.text
+    tid = created.json()["id"]
+    scan = _scan(
+        _port("tcp", 22, name="ssh", method="probed", confidence=10),
+        _port("udp", 53, name="domain", method="probed", confidence=8),
+    )
+    sqlite_db.sync_network_ports(conn, tid, tcp_ports=[22], udp_ports=[53], scan_result=scan)
+    conn.execute(
+        "INSERT INTO target_status(target_id, overall_status, updated_at) VALUES (?, 'down', ?)",
+        (tid, utcnow()),
+    )
+    conn.commit()
+    return client, tid
+
+
+def _names(response) -> dict[str, str | None]:
+    return {port["protocol"]: port["service_name"] for port in response.json()["network_ports"]}
+
+
+def test_host_change_resets_only_udp_observations_when_tcp_has_its_own_host(conn, tmp_path: Path):
+    client, tid = _observed_target(conn, tmp_path, "host-only")
+    changed = client.patch(f"/targets/{tid}", json={"host": "new.example.com"})
+    assert changed.status_code == 200, changed.text
+    assert _names(changed) == {"tcp": "ssh", "udp": None}
+    assert sqlite_db.get_target_status(conn, tid) is None
+
+
+def test_tcp_host_change_resets_only_tcp_observations(conn, tmp_path: Path):
+    client, tid = _observed_target(conn, tmp_path, "tcp-host-only")
+    changed = client.patch(f"/targets/{tid}", json={"tcp_host": "other.example.com"})
+    assert changed.status_code == 200, changed.text
+    assert _names(changed) == {"tcp": None, "udp": "domain"}
+    assert sqlite_db.get_target_status(conn, tid)["overall_status"] == "down"
 
 
 def _stub_job(monkeypatch, *, host: str, result: NmapScanResult | None, owner_ok: bool = True):

@@ -328,7 +328,7 @@ h6,
 
 /* ===== Tables ===== */
 .table {
-	--bs-table-hover-bg: rgb(var(--bs-primary-rgb) / 8%);
+	--bs-table-hover-bg: rgb(var(--bs-primary-rgb), 0.08);
 	--bs-table-border-color: var(--ju-panel-line);
 }
 
@@ -648,7 +648,7 @@ html {
 
 .ju-topbar-button:hover,
 .ju-topbar-button:focus-visible {
-	background: rgb(var(--bs-primary-rgb) / 9%);
+	background: rgb(var(--bs-primary-rgb), 0.09);
 }
 
 

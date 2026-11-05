@@ -75,8 +75,9 @@ The interactive map is described in [Traceroute & maps](traceroute.md).
   configured HTTP check URL; nothing is stored.
 - The cover shows how much of the period the availability checks cover. Below
   80 % coverage the availability is shown as an approximation with a note.
-- Downtime is an estimate (failed checks x interval; event spans in the log), not an
-  exact outage time.
+- Downtime and the downtime log use the same recorded downtime periods as the dashboard. Time
+  without measurements is never counted as downtime. Only if the periods cannot be read does the
+  report fall back to the sampled data (failed checks x interval), which is an estimate.
 - The SLA table shows only configured targets. Charts without a latency SLA draw a
   default reference line (500 ms response, 100 ms ping), labelled as not an SLA.
 - The traceroute (Nmap, the same measurement as the web view) queries at most 30 hops and

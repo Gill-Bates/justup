@@ -39,7 +39,9 @@ The build proves the Debian copies of zlib and PCRE2 in two ways. PCRE2 is a dir
 
 ## Inputs that move with the build time
 
-The runtime and `signal-cli-dist` stages run `apt-get update && apt-get upgrade` during each build.
+The `nmap-builder`, `libsignal-build`, `signal-cli-dist`, `jre-builder` and `runtime` stages run `apt-get update && apt-get upgrade` during each build.
+
+The Nmap builder and the runtime stage upgrade independently. If Debian publishes a library update between the two, the builder/runtime library comparison fails the build; rebuild in that case.
 
 Consequence: two builds with the same base digest, run at different times, can contain different Debian package versions. The base digest fixes the starting point, not the final package set. A bit-for-bit reproducible rebuild would additionally need pinned package sources or a Debian snapshot; the pipeline does not provide that.
 

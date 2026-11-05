@@ -95,6 +95,14 @@ class QualityState:
     DOWN: str = "down"
 
 
+_SERVICE_BASELINE_FIELDS = ("service_name", "service_product", "service_version", "service_identity")
+
+
+def _service_baseline(row: Any) -> tuple[Any, ...]:
+    """Return the stored service columns a preview must still find unchanged on confirm."""
+    return tuple(row.get(field) for field in _SERVICE_BASELINE_FIELDS)
+
+
 @dataclass(frozen=True)
 class ServiceDetectionCandidate:
     protocol: str
@@ -1962,7 +1970,7 @@ class MonitorScheduler:
                         kind = "service_changed"
                     elif assessment.adopt:
                         kind = "identified"
-                    elif assessment.detail and assessment.detail.startswith("version changed:"):
+                    elif assessment.version_changed:
                         kind = "version_changed"
                     else:
                         continue
@@ -1971,10 +1979,7 @@ class MonitorScheduler:
                             key[0],
                             key[1],
                             kind,
-                            tuple(
-                                previous.get(field)
-                                for field in ("service_name", "service_product", "service_version", "service_identity")
-                            ),
+                            _service_baseline(previous),
                             found.service,
                             assessment,
                         )
@@ -2017,14 +2022,7 @@ class MonitorScheduler:
             stored = {(r["protocol"], r["port"]): r for r in sqlite_db.list_network_ports(conn, target_id)}
             for candidate in pending.candidates:
                 row = stored.get((candidate.protocol, candidate.port))
-                if (
-                    row is None
-                    or tuple(
-                        row.get(field)
-                        for field in ("service_name", "service_product", "service_version", "service_identity")
-                    )
-                    != candidate.previous
-                ):
+                if row is None or _service_baseline(row) != candidate.previous:
                     raise ValueError("Service metadata changed after detection")
             for candidate in pending.candidates:
                 adopt = candidate.kind in {"service_changed", "identified"}

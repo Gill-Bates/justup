@@ -433,14 +433,24 @@ def test_nmap_links_pcre2_and_zlib_from_debian_and_drops_the_unused_ssh2():
     assert "libpcre2-8.so.0" in stage and "nmap-libz" in stage and "nmap-libpcre2" in stage
     # zlib is no direct NEEDED entry of the binary, so the banner must name the Debian copy positively.
     assert "libz-[0-9]" in stage and "libpcre2-[0-9]" in stage
-    # "! cmd" is ignored by "set -e": a negative check in the builder script must be an explicit if.
+    # "! cmd" is ignored by "set -e": a negative check must be an explicit if.
+    # This guard covers the builder stage only.
     assert not re.search(r"^!\s", stage, re.MULTILINE)
 
 
 def test_runtime_stage_compares_the_builder_library_list_with_its_own_ldd_result():
     text = (ROOT / "docker" / "Dockerfile").read_text(encoding="utf-8")
+    pipeline = r"awk '/=>/ \{print \$1\}' [^|]+ \| sort \| paste -sd, -"
+    # Both stages derive the list with the same pipeline, so the comparison is like for like.
+    assert re.search(r"runtime_dependencies=%s\\n' \"\$\(" + pipeline, nmap_builder_stage())
     runtime = text[text.index("AS runtime") :]
-    assert "runtime_dependencies=" in runtime and "differ between builder" in runtime
+    assert re.search(r'runtime_dependencies="\$\(' + pipeline, runtime)
+    # A mismatch must exit non-zero and must not be swallowed.
+    match = re.search(
+        r'test "\$builder_dependencies" = "\$runtime_dependencies"\s*\\?\s*\|\|\s*\{[^\n]*exit 1', runtime
+    )
+    assert match, "the library comparison must exit 1 on a mismatch"
+    assert "|| true" not in runtime[match.start() : match.end() + 200]
 
 
 def test_adoptium_key_is_pinned_by_its_exact_fingerprint():

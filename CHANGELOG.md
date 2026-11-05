@@ -4,6 +4,18 @@
 - `Fix` The plain-text part of alert mails shows the URL of a link instead of dropping it.
 
 ## [Unreleased]
+- `New` Admins can re-detect the services of a target (**Detect services**): a preview shows the changes and nothing is stored until the admin confirms.
+- `Change` A host change resets the observed port service data (per protocol) and the target status.
+- `New` The sidebar has an About entry, and the About page shows the Nmap version.
+- `Change` The PDF downtime log and downtime KPI use the recorded downtime periods; gaps without measurements no longer count as downtime.
+- `Fix` UDP scans no longer fall back to the TCP host; they use the target host.
+- `Fix` The PDF report no longer fails when the downtime query errors; it falls back to the sampled data.
+- `Fix` The Nmap scan worker returns proper errors for an empty (EOF) or invalid result instead of a 500 or leaked validation text.
+- `Fix` The service-identity comparison respects the stored length limits, so long product or version strings no longer show a false change.
+- `Fix` Zooming the combined chart keeps the downtime bands on targets without HTTP checks.
+- `Fix` Hover and background tints written with invalid `rgb()` syntax now apply.
+- `Fix` The slider thumb reduced-motion and forced-colors rules now apply.
+- `Fix` The first dashboard paint for admins no longer overlaps the tiles.
 - `Change` The factory dashboard layout is now: the four status tiles on top, Monitor quality, Delivery queue (admins) and Alerts as one row of equal cards, and the Downtime overview across the full width below. Without the queue card, Quality and Alerts share the row. Your saved layout is not changed; Reset layout applies the new default.
 - `Security` The bundled Nmap now uses the Debian PCRE2 and zlib packages, so the image scan covers them, and it no longer contains libssh2 (only used by the NSE scripts, which are not built). The remaining bundled libraries (libpcap, libdnet, liblinear) are listed with their versions in the image provenance and the release notes; the image scan cannot see them.
 - `Security` The release image build now fails when its Nmap is not linked against the Debian zlib and PCRE2 (the earlier negative banner check never failed the build), when the Adoptium signing key is anything but the one expected key (exact fingerprint instead of a text search), or when the Nmap libraries of the builder and the runtime stage differ.

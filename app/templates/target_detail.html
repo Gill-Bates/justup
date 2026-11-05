@@ -46,6 +46,7 @@
 
 	<!-- Server-rendered config for JS (no inline script, no |safe, XSS-safe) -->
 	<div id="target-config" class="d-none" data-target-id="{{ target.id }}"
+		data-raw-retention-days="{{ rollup_days.raw }}"
 		data-use-utc="{{ 'true' if use_utc else 'false' }}" data-pdf-page-size="{{ pdf_page_size or 'a4' }}"
 		data-tcp-ports="{{ target.tcp_ports or '80' }}"
 		data-udp-ports="{{ target.udp_ports or '' }}"

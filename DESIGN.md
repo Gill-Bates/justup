@@ -18,7 +18,7 @@ Operators scan the dashboard and investigate targets, often on desktop. Administ
 
 ## Information architecture
 
-Retain the current navigation hierarchy and labels: Dashboard; Manage containing Targets, Notifications, and Groups; and Settings. Preserve the sidebar's desktop rail and mobile drawer behavior. Do not add a new top-level navigation pattern as a side effect of adding a page. Display the full justUp! wordmark once in the content top bar, immediately to the right of the sidebar; use the compact brand mark in the sidebar. Both brand links go to the dashboard. Keep page titles and actions in the content area. Preserve the existing page families and their established navigation, tabs, and workflows. Dashboard layouts use the V2 JSON contract; historical database schemas are upgraded by the versioned SQLite migrations.
+Retain the current navigation hierarchy and labels: Dashboard; Manage containing Targets, Notifications, and Groups; Settings (admin only); and About (all users). Preserve the sidebar's desktop rail and mobile drawer behavior. Do not add a new top-level navigation pattern as a side effect of adding a page. Display the full justUp! wordmark once in the content top bar, immediately to the right of the sidebar; use the compact brand mark in the sidebar. Both brand links go to the dashboard. Keep page titles and actions in the content area. Preserve the existing page families and their established navigation, tabs, and workflows. Dashboard layouts use the V2 JSON contract; historical database schemas are upgraded by the versioned SQLite migrations.
 
 ## Design principles
 

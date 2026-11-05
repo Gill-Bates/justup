@@ -62,6 +62,8 @@ headers from other peers create no new buckets.
 | `/recipients/{recipient_id}/test/{queue_id}` | GET | `60/minute` | IP |
 | `/me/dashboard-layout` | GET, PUT, DELETE | `60/minute` each | IP |
 | `/api/admin/pop/refresh` | POST | `10/minute` | IP |
+| `/api/network-scans/services/{target_id}/preview` | POST | `5/minute` and `2/minute` | IP and user |
+| `/api/network-scans/services/{target_id}/confirm` | POST | `10/minute` and `5/minute` | IP and user |
 | `/csp-report` | POST | `30/minute` | IP |
 
 A regression test (`tests/test_rate_limit.py`) pins this table, including that no route is

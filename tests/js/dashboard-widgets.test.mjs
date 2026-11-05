@@ -75,3 +75,14 @@ test('queue distinguishes backlog from failed history and unavailable data', () 
   assert.equal(queueState({ ...clear, services: {} }, now)[0], 'Status unavailable');
   assert.equal(queueState({ ...clear, stuck_processing: 1, services: { monitor_scheduler: { state: 'degraded' } } }, now)[0], 'Stalled');
 });
+
+test('dashboard template carries no grid geometry; the registry is the single source', () => {
+  const html = readFileSync(new URL('../../app/templates/dashboard.html', import.meta.url), 'utf8');
+  const items = html.match(/<div class="grid-stack-item[ "][^>]*>/g) || [];
+  assert.equal(items.length, window.JuDashboardRegistry.registry.length);
+  for (const tag of items) {
+    assert.match(tag, /gs-id="/);
+    assert.match(tag, /data-widget-id="/);
+    assert.doesNotMatch(tag, /gs-[xywh]=/);
+  }
+});

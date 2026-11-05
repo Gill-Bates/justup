@@ -15,6 +15,7 @@ from datetime import datetime
 from typing import Any
 
 from ..db import tsdb as tsdb_db
+from .availability_rules import downtime_series
 
 _log = logging.getLogger(__name__)
 
@@ -93,6 +94,23 @@ def fetch_metric_data(
         if errors is not None:
             errors.append(f"{metric}: data unavailable")
         return []
+
+
+def fetch_downtime_periods(tsdb_dir, target_id: int, target: Any, since: datetime, until: datetime) -> list | None:
+    """Return exact downtime periods newest first, or ``None`` so the report falls back to sampled events."""
+    try:
+        return tsdb_db.query_downtime_periods(
+            tsdb_dir,
+            target_id=target_id,
+            since=since,
+            until=until,
+            limit=2**63 - 1,
+            series=downtime_series(target),
+            check_interval_seconds=target.get("interval_seconds") or 60,
+        )
+    except Exception:  # noqa: BLE001 - one bad series file must not fail the whole report
+        _log.exception("Downtime query failed for target %d; using sampled fallback", target_id)
+        return None
 
 
 def report_filename(target_name: object, report_date: datetime) -> str:

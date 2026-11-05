@@ -324,6 +324,13 @@ jobs:
           JUSTUP_LAYOUT_BROWSERS: chromium
           JUSTUP_LAYOUT_OUTPUT: ${{ runner.temp }}/layout-artifacts
         run: npx playwright test --config tests/layout/playwright.config.mjs --grep '@combined-zoom-reset|@public-hostname-ui|@target-endpoints|@portpicker|@endpoint-state'
+      # These specs guard tab presses, edit-target tabs, load stability, card corners and overlays, and chart clipping.
+      - name: Run tab, load stability, card and chart clip browser checks (Chromium + WebKit)
+        env:
+          JUSTUP_LAYOUT_BROWSERS: chromium,webkit
+          JUSTUP_LAYOUT_OUTPUT: ${{ runner.temp }}/layout-artifacts
+        run: npx playwright test --config tests/layout/playwright.config.mjs --grep '@settings-tab-press|@edit-target-tabs|@load-stability|@card-corners|@card-overlays|@combined-clip'
+
       - name: Run focus, cursor and targets search browser checks
         env:
           JUSTUP_LAYOUT_BROWSERS: chromium,webkit

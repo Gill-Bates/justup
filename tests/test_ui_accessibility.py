@@ -66,10 +66,10 @@ def test_sidebar_links_to_about_page_for_every_user() -> None:
     base = (TEMPLATES / "base.html").read_text(encoding="utf-8")
     about = re.search(r'<a\b[^>]*href="/ui/about"[^>]*>.*?</a>', base, re.DOTALL)
     assert about, "About page is missing from the sidebar"
-    assert 'active_page == \'about\'' in about.group(0)
+    assert "active_page == 'about'" in about.group(0)
     assert 'aria-current="page"' in about.group(0)
     assert 'ju-nav-text">About</span>' in about.group(0)
-    assert base.index('href="/ui/about"') > base.index('{% endif %}', base.index('href="/ui/settings"'))
+    assert base.index('href="/ui/about"') > base.index("{% endif %}", base.index('href="/ui/settings"'))
 
 
 def test_target_detail_uses_accessible_dashboard_and_network_tabs() -> None:

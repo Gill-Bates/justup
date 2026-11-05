@@ -9,11 +9,15 @@
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Iterable
+from collections.abc import Collection, Iterable
 
 from app.models.network_scan import NmapScanResult
 from app.utils.tcp_ports import parse_port_list
 from app.utils.time import utcnow
+
+# Column limits for stored service values; identity checks truncate observed values the same way.
+SERVICE_NAME_MAX = 100
+SERVICE_TEXT_MAX = 150
 
 RAW_STATES = frozenset({"open", "closed", "filtered", "unfiltered", "open|filtered", "closed|filtered", "unknown"})
 SERVICE_IDENTITIES = frozenset({"identified", "unknown", "changed"})
@@ -67,19 +71,20 @@ def sync_network_ports(
     tcp_ports: Iterable[int],
     udp_ports: Iterable[int],
     scan_result: NmapScanResult | None = None,
-    reset_observations: bool = False,
+    reset_protocols: Collection[str] = (),
 ) -> None:
-    """Reconcile configured pairs; drop observations when the target host changes."""
-    if reset_observations:
+    """Reconcile configured pairs; drop observations of ``reset_protocols`` whose scan host changed."""
+    reset = sorted({p for p in reset_protocols if p in {"tcp", "udp"}})
+    if reset:
         conn.execute(
-            """UPDATE target_network_ports
+            f"""UPDATE target_network_ports
                SET source = 'manual', service_name = NULL, service_product = NULL,
                    service_version = NULL, service_method = NULL, confidence = NULL,
                    discovered_at = NULL, status = 'unknown', checked_at = NULL,
                    last_up_at = NULL, detail = NULL, raw_state = NULL,
                    service_identity = 'unknown', identity_changed_at = NULL, latency_ms = NULL
-               WHERE target_id = ?""",
-            (target_id,),
+               WHERE target_id = ? AND protocol IN ({",".join("?" * len(reset))})""",  # noqa: S608 - placeholders only
+            (target_id, *reset),
         )
     tcp = parse_port_list(list(tcp_ports))
     udp = parse_port_list(list(udp_ports))
@@ -113,9 +118,9 @@ def sync_network_ports(
                    identity_changed_at = NULL
                WHERE target_id = ? AND protocol = ? AND port = ?""",
             (
-                service.name[:100] if service and service.name else None,
-                service.product[:150] if service and service.product else None,
-                service.version[:150] if service and service.version else None,
+                service.name[:SERVICE_NAME_MAX] if service and service.name else None,
+                service.product[:SERVICE_TEXT_MAX] if service and service.product else None,
+                service.version[:SERVICE_TEXT_MAX] if service and service.version else None,
                 service.method if service else None,
                 service.confidence if service else None,
                 scan_result.completed_at,
@@ -198,9 +203,9 @@ def record_service_observation(
                    confidence = ?, discovered_at = ?, service_identity = ?, identity_changed_at = NULL
                WHERE target_id = ? AND protocol = ? AND port = ?""",
             (
-                service.name[:100] if service.name else None,
-                service.product[:150] if service.product else None,
-                service.version[:150] if service.version else None,
+                service.name[:SERVICE_NAME_MAX] if service.name else None,
+                service.product[:SERVICE_TEXT_MAX] if service.product else None,
+                service.version[:SERVICE_TEXT_MAX] if service.version else None,
                 service.method,
                 service.confidence,
                 now,
@@ -225,7 +230,7 @@ def record_service_observation(
             identity,
             now,
             identity,
-            version[:150] if version else None,
+            version[:SERVICE_TEXT_MAX] if version else None,
             detail[:200] if detail else None,
             target_id,
             protocol,
