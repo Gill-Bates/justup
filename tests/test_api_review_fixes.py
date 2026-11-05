@@ -2010,6 +2010,8 @@ def test_template_reset_is_all_or_nothing_when_a_write_fails(conn, kind, monkeyp
         client.post(url + "/reset")
     monkeypatch.setattr(sqlite_db, "set_setting", real)
     assert _template_state(conn, kind) == before
+
+
 @pytest.mark.asyncio
 async def test_settings_spooler_init_runs_off_the_event_loop(monkeypatch):
     import threading

@@ -555,12 +555,12 @@ def _patch_locked(target_id: int, payload: TargetUpdate, conn, owner_id: int | N
 
     if patch_db:
         sqlite_db.update_target(conn, target_id=target_id, patch=patch_db, manage_transaction=False)
-    host_changed = effective["host"] != existing["host"]
+    host_changed = _norm_host(effective["host"]) != _norm_host(existing["host"])
     if host_changed:
         sqlite_db.delete_target_status(conn, target_id)
     # TCP scans tcp_host (falling back to host); UDP scans host only, so each protocol resets on its own host.
     old_hosts, new_hosts = protocol_scan_hosts(existing), protocol_scan_hosts(effective)
-    reset_protocols = {p for p, h in new_hosts.items() if h != old_hosts[p]}
+    reset_protocols = {p for p, h in new_hosts.items() if _norm_host(h) != _norm_host(old_hosts[p])}
     scan_result, scan_protocols = (
         _scan_result_for_target(payload.network_scan_id, owner_id, effective)
         if payload.network_scan_id and owner_id is not None

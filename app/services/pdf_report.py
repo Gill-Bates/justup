@@ -93,7 +93,6 @@ from app.utils.cert_target import resolve_cert_target
 from app.utils.downtime_view import display_seconds
 from app.utils.ssrf import redact_url
 from app.utils.status_palette import STATUS_PALETTE
-from app.utils.time import utcnow
 from app.utils.tls_model import Check, ScanStatus, TlsScanResult, Verdict
 from app.utils.tls_scanner import scan_tls
 from app.utils.uptime_metric import uptime_level
@@ -1590,8 +1589,7 @@ def _report_downtime_events(report_data: ReportData) -> list[DowntimeEvent]:
             )
             for period in reversed(report_data.downtime_periods)
         ]
-    # Live time as reference: a trailing DOWN point of a closed range is not an ongoing outage.
-    return _extract_downtime_events(report_data.uptime_data, report_data.target.get("interval_seconds") or 60, utcnow())
+    return _extract_downtime_events(report_data.uptime_data, report_data.target.get("interval_seconds") or 60)
 
 
 # ---------------------------------------------------------------------------

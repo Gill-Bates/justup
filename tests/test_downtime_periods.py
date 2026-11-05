@@ -426,10 +426,3 @@ def test_sparse_failures_and_long_gaps_are_never_counted_as_downtime():
     table = pdf_report._report_downtime_events(report_data)
     assert [e.duration_minutes for e in table] == [1, 1, 1]
     assert pdf_report._compute_kpis(report_data).downtime_minutes == 3
-
-
-def test_trailing_down_of_a_closed_report_range_is_not_ongoing():
-    data = [{"ts": at(m).isoformat(), "value": v} for m, v in [(0, 1), (1, 1), (2, 0), (3, 0)]]
-    events = pdf_report._report_downtime_events(_report(data))
-    assert all(e.end is not None for e in events)
-    assert pdf_report._compute_kpis(_report(data)).downtime_minutes == 1

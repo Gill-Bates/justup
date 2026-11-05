@@ -193,6 +193,8 @@ async def test_queue_row_is_not_sent_when_starttls_is_missing(scheduler, db_path
 
     assert all(not inst.sent for inst in fakes[0].instances)
     assert spooler.get_queue_stats_detailed()["by_status"].get("sent", 0) == 0
+
+
 @pytest.mark.asyncio
 async def test_first_spooler_init_under_write_lock_does_not_block_event_loop(scheduler, db_path, monkeypatch):
     import asyncio

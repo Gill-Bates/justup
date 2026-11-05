@@ -8,7 +8,7 @@
 - `Change` A host change resets the observed port service data (per protocol) and the target status.
 - `New` The sidebar has an About entry, and the About page shows the Nmap version.
 - `Change` The PDF downtime log and downtime KPI use the recorded downtime periods; gaps without measurements no longer count as downtime.
-- `Fix` PDF downtime minutes in the KPI and the downtime log now use the same whole-second durations as the dashboard and the downtime history, and a failed check at the end of a past report range is no longer shown as an ongoing outage.
+- `Fix` PDF downtime minutes in the KPI and the downtime log now use the same whole-second durations as the dashboard and the downtime history.
 - `Fix` UDP scans no longer fall back to the TCP host; they use the target host.
 - `Fix` The PDF report no longer fails when the downtime query errors; it falls back to the sampled data.
 - `Fix` The Nmap scan worker returns proper errors for an empty (EOF) or invalid result instead of a 500 or leaked validation text.

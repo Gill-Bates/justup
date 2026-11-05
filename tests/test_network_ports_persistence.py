@@ -563,3 +563,11 @@ def test_scan_of_unrelated_host_is_rejected_for_split_hosts(conn, tmp_path: Path
     client = _app_client(conn, tmp_path)
     _stub_job(monkeypatch, host="other.example.com", result=_scan())
     assert client.post("/targets", json=_split_host_body()).status_code == 422
+
+
+def test_host_spelling_change_keeps_observations_and_status(conn, tmp_path: Path):
+    client, tid = _observed_target(conn, tmp_path, "host-spelling")
+    changed = client.patch(f"/targets/{tid}", json={"host": " OLD.example.com. "})
+    assert changed.status_code == 200, changed.text
+    assert _names(changed) == {"tcp": "ssh", "udp": "domain"}
+    assert sqlite_db.get_target_status(conn, tid)["overall_status"] == "down"
