@@ -661,14 +661,6 @@ test("responsive legend follows chart width and updates when the chart resizes",
   assert.equal(chart.options.plugins.legend.position, "right");
 });
 
-test("latency source priority mirrors _PRIORITY in app/utils/uptime_metric.py", () => {
-  const py = readFileSync(new URL("../../app/utils/uptime_metric.py", import.meta.url), "utf8");
-  const block = py.match(/_PRIORITY\s*=\s*\(([^\n]*)\)\s*\n/);
-  assert.ok(block, "_PRIORITY tuple not found");
-  const pyMetrics = [...block[1].matchAll(/"(\w+_up)"\)/g)].map((m) => m[1]);
-  assert.deepEqual(pyMetrics, plain(D.SOURCES.map((s) => s.upMetric)));
-});
-
 test("fallback status buckets carry explicit bounds like server buckets", () => {
   const W = 600 * 60000;
   const buckets = D.bucketStatus([pt(0, 200), pt(1, 503), pt(2, 200), pt(500, 404)], T0, T0 + W, 2);

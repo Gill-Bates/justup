@@ -12,7 +12,6 @@
  * - Error parsing utilities
  * - Toast notifications
  * - FormData helpers
- * - XSS prevention utilities
  * - LocalStorage wrapper with error handling
  */
 
@@ -46,7 +45,6 @@ try { _bindHtmxCacheInvalidation(); } catch { /* no-op */ }
 export const DOM = {
     // Settings form
     settingsForm: () => _cache.settingsForm ??= document.getElementById('settings-form'),
-    settingsToast: () => _cache.settingsToast ??= document.getElementById('settings-toast'),
     
     // General settings
     purgeEnabled: () => _cache.purgeEnabled ??= document.getElementById('purge_enabled'),
@@ -228,57 +226,6 @@ export async function getErrorMessage(resp) {
     }
 }
 
-/**
- * Parse response and handle error/success cases
- * @param {Response} resp - Fetch Response object
- * @returns {Promise<{ok: boolean, data?: any, error?: string}>}
- */
-export async function parseResponse(resp) {
-    if (resp.ok) {
-        try {
-            // Only parse JSON if Content-Type indicates it
-            const contentType = resp.headers.get('content-type');
-            if (contentType?.includes('application/json')) {
-                const data = await resp.json();
-                return { ok: true, data };
-            }
-            return { ok: true };
-        } catch {
-            return { ok: true };
-        }
-    }
-    const error = await getErrorMessage(resp);
-    return { ok: false, error };
-}
-
-
-// getCsrfToken() comes from utils/csrf.js (classic script loaded by base.html).
-
-/**
- * CSRF-aware fetch wrapper for UI routes.
- *
- * Automatically adds X-CSRF-Token header on state-changing methods.
- * Re-reads cookie on every call to support token rotation.
- *
- * @param {string} url
- * @param {RequestInit} [options={}]
- * @returns {Promise<Response>}
- */
-export async function secureFetch(url, options = {}) {
-    const method = (options.method || 'GET').toUpperCase();
-    const headers = new Headers(options.headers || {});
-
-    if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) {
-        const token = getCsrfToken();
-        if (token) {
-            headers.set('X-CSRF-Token', token);
-        }
-    }
-
-    return fetch(url, { ...options, headers });
-}
-
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Toast Notifications
 // ─────────────────────────────────────────────────────────────────────────────
@@ -289,82 +236,10 @@ export async function secureFetch(url, options = {}) {
  * @param {string} message - Message to display
  */
 export function notify(type, message) {
-    const msg = String(message ?? '');
-    
-    // Normalize type mapping (error → danger for Bootstrap)
-    const typeMap = { error: 'danger', success: 'success', warning: 'warning', info: 'info' };
-    const variant = typeMap[type] || 'info';
-    
-    // Try global justUpToast first
-    if (window.justUpToast && typeof window.justUpToast[type] === 'function') {
-        window.justUpToast[type](msg);
-        return;
-    }
-
-    // Fallback to vanilla toast
-    function showVanillaToast(text, variant) {
-        const el = document.createElement('div');
-        el.setAttribute('role', 'status');
-        el.setAttribute('aria-live', 'assertive');
-        Object.assign(el.style, {
-            position: 'fixed',
-            top: '1rem',
-            right: '1rem',
-            zIndex: '3000',
-            maxWidth: '420px',
-            padding: '0.75rem 1rem',
-            borderRadius: '0.5rem',
-            boxShadow: '0 12px 30px rgba(0,0,0,.25)',
-            backdropFilter: 'blur(8px)',
-            webkitBackdropFilter: 'blur(8px)',
-            border: '1px solid rgba(255,255,255,.2)',
-            background: 'rgba(33,37,41,.92)',
-            color: '#fff'
-        });
-        
-        const bgColors = {
-            danger: 'rgba(220,53,69,.92)',
-            warning: 'rgba(255,193,7,.92)',
-            info: 'rgba(13,202,240,.92)',
-            success: 'rgba(25,135,84,.92)'
-        };
-        if (bgColors[variant]) el.style.background = bgColors[variant];
-        
-        el.textContent = String(text);
-        document.body.appendChild(el);
-        
-        setTimeout(() => {
-            el.style.transition = 'opacity .25s ease';
-            el.style.opacity = '0';
-            setTimeout(() => el.remove(), 300);
-        }, 3500);
-    }
-
-    // Fallback to settings-toast
-	    const toastEl = DOM.settingsToast();
-	    const bodyEl = toastEl?.querySelector('.toast-body');
-	    if (toastEl && bodyEl && window.bootstrap) {
-	        bodyEl.replaceChildren();
-	        const icon = document.createElement('span');
-	        const iconMap = { success: 'check_circle', error: 'error', warning: 'warning' };
-	        const iconName = iconMap[type] || 'info';
-	        icon.className = 'material-icons me-2';
-	        icon.textContent = iconName;
-	        bodyEl.appendChild(icon);
-	        const span = document.createElement('span');
-	        span.textContent = msg;
-	        bodyEl.appendChild(span);
-	        
-	        // Normalize: info -> success (no cyan toasts)
-	        const normalizedVariant = (variant === 'info') ? 'success' : variant;
-	        toastEl.classList.remove('text-bg-success', 'text-bg-danger', 'text-bg-warning');
-	        toastEl.classList.add(`text-bg-${normalizedVariant}`);
-	        bootstrap.Toast.getOrCreateInstance(toastEl, { delay: 5000 }).show();
-	        return;
-	    }
-    
-    console.warn('Toast fallback:', msg);
-    showVanillaToast(msg, variant);
+    const api = window.justUpToast;
+    const show = api && (api[type] || api.info);
+    if (show) show(String(message ?? ''));
+    else console.warn('Toast unavailable:', message);
 }
 
 
@@ -487,37 +362,6 @@ export function formatNumber(num) {
         return (num / 1_000).toFixed(1) + 'k';
     }
     return num.toLocaleString();
-}
-
-
-// ─────────────────────────────────────────────────────────────────────────────
-// URL Normalization
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * Normalize Signal API Base URL:
- * - Prefer protocol + host + port (origin) when URL is parseable
- * - Remove trailing slashes
- * @param {string} url 
- * @returns {string}
- */
-export function normalizeBaseUrl(url) {
-    if (!url) return '';
-    
-    try {
-        const parsed = new URL(url);
-        let base = parsed.origin;
-        
-        // If origin is 'null' (e.g., invalid URL), fall back to manual cleanup
-        if (base === 'null') {
-            base = url;
-        }
-        
-        return base.replace(/\/+$/, '');
-    } catch {
-        // If URL parsing fails, only trim whitespace and trailing slashes
-        return url.trim().replace(/\/+$/, '');
-    }
 }
 
 

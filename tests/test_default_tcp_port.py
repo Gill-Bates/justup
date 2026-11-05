@@ -50,3 +50,17 @@ def test_scheduler_keeps_a_manual_list(stored, expected) -> None:
 )
 def test_pdf_report_ports_use_the_shared_default(target, expected) -> None:
     assert pdf_worker._report_tcp_ports(target) == expected  # noqa: SLF001
+
+
+@pytest.mark.parametrize(
+    ("target", "expected"),
+    [
+        ({"host": "a.example", "tcp_host": "t.example"}, {"tcp": "t.example", "udp": "a.example"}),
+        ({"host": "a.example", "tcp_host": None}, {"tcp": "a.example", "udp": "a.example"}),
+        ({"host": "a.example"}, {"tcp": "a.example", "udp": "a.example"}),
+        ({"host": "", "tcp_host": ""}, {"tcp": "", "udp": ""}),
+        ({"host": None, "tcp_host": "t.example"}, {"tcp": "t.example", "udp": ""}),
+    ],
+)
+def test_protocol_scan_hosts(target, expected) -> None:
+    assert tcp_ports.protocol_scan_hosts(target) == expected

@@ -273,16 +273,8 @@ async function loadUsers() {
 		html += '</tbody></table>';
 		container.innerHTML = html;
 
-		// Convert local-time elements
-		container.querySelectorAll('.local-time').forEach(el => {
-			const utc = el.dataset.utc;
-			if (utc) {
-				try {
-					const d = new Date(utc);
-					el.textContent = d.toLocaleString();
-				} catch (e) { }
-			}
-		});
+		// Format timestamps with the shared rule (honours the UTC display setting)
+		window.JuLocalTime?.init(container);
 
 	} catch (error) {
 		console.error('Load users error:', error);
@@ -412,7 +404,7 @@ async function saveEditedUser() {
 				if (modal) modal.hide();
 			}
 			await loadUsers();
-			showToast('User updated', 'success');
+			usersToast('User updated', 'success');
 		} else {
 			let errorMsg = ERROR_MESSAGES.UPDATE_USER_FAILED;
 			try {
@@ -455,18 +447,18 @@ async function toggleUserActive(userId, isActive, toggleBtn = null) {
 		});
 		if (response.ok) {
 			await loadUsers();
-			showToast(isActive ? 'User activated' : 'User deactivated', 'success');
+			usersToast(isActive ? 'User activated' : 'User deactivated', 'success');
 		} else {
 			let msg = ERROR_MESSAGES.TOGGLE_USER_FAILED;
 			try {
 				const data = await response.json();
 				msg = window.JuApiError.message(data.detail, '') || data.error || msg;
 			} catch (e) { }
-			showToast(msg, 'danger');
+			usersToast(msg, 'danger');
 		}
 	} catch (error) {
 		console.error('Toggle user error:', error);
-		showToast(ERROR_MESSAGES.NETWORK_ERROR, 'danger');
+		usersToast(ERROR_MESSAGES.NETWORK_ERROR, 'danger');
 	} finally {
 		// Re-enable button (loadUsers will rebuild the DOM anyway)
 		if (toggleBtn) toggleBtn.disabled = false;
@@ -511,7 +503,7 @@ async function createUser() {
 			}
 			form.reset();
 			loadUsers();
-			showToast('User created successfully', 'success');
+			usersToast('User created successfully', 'success');
 		} else {
 			// Map backend errors to user-friendly messages
 			let errorMsg = ERROR_MESSAGES.CREATE_USER_FAILED;
@@ -587,14 +579,14 @@ async function revokeUserSessions(userId, username) {
 		const response = await window.apiFetch(`/users/${userId}/revoke-sessions`, { method: 'POST' });
 		if (response.ok) {
 			const { revoked } = await response.json();
-			showToast(`Revoked ${revoked} session(s)`, 'success');
+			usersToast(`Revoked ${revoked} session(s)`, 'success');
 		} else {
 			const detail = (await response.json().catch(() => ({}))).detail;
-			showToast(window.JuApiError.message(detail, ERROR_MESSAGES.REVOKE_SESSIONS_FAILED), 'danger');
+			usersToast(window.JuApiError.message(detail, ERROR_MESSAGES.REVOKE_SESSIONS_FAILED), 'danger');
 		}
 	} catch (error) {
 		console.error('Revoke sessions error:', error);
-		showToast(ERROR_MESSAGES.NETWORK_ERROR, 'danger');
+		usersToast(ERROR_MESSAGES.NETWORK_ERROR, 'danger');
 	}
 }
 
@@ -609,44 +601,22 @@ async function deleteUser(userId, username) {
 
 		if (response.ok) {
 			loadUsers();
-			showToast('User deleted', 'success');
+			usersToast('User deleted', 'success');
 		} else {
-			showToast(ERROR_MESSAGES.DELETE_USER_FAILED, 'danger');
+			usersToast(ERROR_MESSAGES.DELETE_USER_FAILED, 'danger');
 		}
 	} catch (error) {
 		console.error('Delete user error:', error);
-		showToast(ERROR_MESSAGES.NETWORK_ERROR, 'danger');
+		usersToast(ERROR_MESSAGES.NETWORK_ERROR, 'danger');
 	}
 }
 
-// Utility: Show Toast with appropriate icon
-// Uses DOM APIs to prevent XSS from backend messages
-function showToast(message, type = 'success') {
-	const toastEl = document.getElementById('settings-toast');
-	if (!toastEl) return;
-
-	const toastBody = toastEl.querySelector('.toast-body');
-	if (!toastBody) return;
-
-	const iconName = type === 'success' ? 'check_circle' : 'error';
-
-	// Normalize: info -> success (no cyan toasts)
-	const normalizedType = (type === 'info') ? 'success' : type;
-	toastEl.className = `toast align-items-center text-bg-${normalizedType} border-0`;
-
-	// Build content safely using DOM APIs (prevents XSS)
-	toastBody.innerHTML = '';
-	const iconEl = document.createElement('span');
-	iconEl.className = 'material-icons me-2';
-	iconEl.textContent = iconName;
-
-	const textEl = document.createElement('span');
-	textEl.textContent = message;
-
-	toastBody.append(iconEl, textEl);
-
-	const toast = new bootstrap.Toast(toastEl);
-	toast.show();
+// Thin delegate to the single toast implementation in app.js (window.justUpToast).
+function usersToast(message, type = 'success') {
+	const api = window.justUpToast;
+	const show = api && (api[type === 'danger' ? 'error' : type] || api.success);
+	if (show) show(String(message));
+	else console.warn('Toast unavailable:', message);
 }
 
 // Event Listeners

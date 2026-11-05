@@ -669,12 +669,14 @@ export async function loadSettings() {
         setChecked(DOM.authDisabled(), data.auth_disabled === true);
 
         // Metrics timeout slider
-        const metricsTimeout = data.metrics_timeout_minutes || 5;
-        setValue(DOM.metricsTimeoutMinutes(), metricsTimeout);
-        updateRangeActiveTick(DOM.metricsTimeoutMinutes());
-        const metricsTimeoutDisplay = document.getElementById('metrics_timeout_value');
-        if (metricsTimeoutDisplay) {
-            metricsTimeoutDisplay.textContent = `${metricsTimeout} min`;
+        const metricsEl = DOM.metricsTimeoutMinutes();
+        if (metricsEl) {
+            setValue(metricsEl, data.metrics_timeout_minutes || 5);
+            updateRangeActiveTick(metricsEl);
+            const text = formatRangeValue(metricsEl);
+            const metricsTimeoutDisplay = document.getElementById('metrics_timeout_value');
+            if (metricsTimeoutDisplay) metricsTimeoutDisplay.textContent = text;
+            metricsEl.setAttribute('aria-valuetext', text);
         }
 
         // Session lifetime slider
@@ -686,12 +688,6 @@ export async function loadSettings() {
             const sessionDisplay = document.getElementById('session_max_days_value');
             if (sessionDisplay) sessionDisplay.textContent = text;
             sessionEl.setAttribute('aria-valuetext', text);
-        }
-
-        // Store initial auth state for reload comparison on save
-        const authEl = DOM.authDisabled();
-        if (authEl) {
-            authEl.dataset.initialState = String(data.auth_disabled === true);
         }
 
         // Toggle Signal panel based on enabled state
@@ -778,15 +774,6 @@ async function sendSetting(key, value) {
             // Keep SMTP UI in sync without a full reload
             if (key === 'smtp_enabled' || key === 'smtp_host' || key === 'smtp_from') {
                 updateSmtpUiFromDom();
-            }
-
-            // Special handling for auth_disabled - reload page
-            if (key === 'auth_disabled') {
-                const authEl = DOM.authDisabled();
-                const oldAuth = authEl?.dataset.initialState === 'true';
-                if (oldAuth !== value) {
-                    setTimeout(() => location.reload(), 1000);
-                }
             }
             return true;
         } else {

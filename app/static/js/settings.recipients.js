@@ -446,7 +446,7 @@ async function recheckSignalFromList(btn) {
 		if (!response.ok) {
 			const message = await extractApiError(response, 'Signal check failed');
 			_setSignalIcon(recipientId, SIGNAL_ICONS.unknown, 'text-body-secondary', 'Check failed');
-			showToast(`${name} · Signal: ${message}`, 'warning');
+			recipientsToast(`${name} · Signal: ${message}`, 'warning');
 			return;
 		}
 		const data = await response.json();
@@ -459,11 +459,11 @@ async function recheckSignalFromList(btn) {
 			registered === true ? SIGNAL_ICONS.registered : registered === false ? SIGNAL_ICONS.unregistered : SIGNAL_ICONS.unavailable,
 			registered === true ? 'text-success' : registered === false ? 'text-warning' : 'text-body-secondary',
 			label);
-		showToast(`${name} · Signal: ${label}`, registered === true ? 'success' : 'warning');
+		recipientsToast(`${name} · Signal: ${label}`, registered === true ? 'success' : 'warning');
 	} catch (error) {
 		console.warn('Signal re-check failed:', error?.name);
 		_setSignalIcon(recipientId, SIGNAL_ICONS.unknown, 'text-body-secondary', 'Check failed');
-		showToast(`${name} · Signal: Check failed`, 'warning');
+		recipientsToast(`${name} · Signal: Check failed`, 'warning');
 	} finally {
 		if (icon) icon.textContent = 'sync';
 		btn.removeAttribute('aria-busy');
@@ -528,10 +528,10 @@ async function addRecipient() {
 			// Show warning toast if phone not registered with Signal
 			if (data.warnings && data.warnings.length > 0) {
 				for (const warning of data.warnings) {
-					showToast(warning, 'warning');
+					recipientsToast(warning, 'warning');
 				}
 			} else {
-				showToast('Recipient added successfully', 'success');
+				recipientsToast('Recipient added successfully', 'success');
 			}
 		} else {
 			const errorMsg = await extractApiError(response, 'Failed to add recipient');
@@ -613,7 +613,7 @@ async function editRecipient(recipientId) {
 		}
 	} catch (error) {
 		console.error('Edit recipient error:', error);
-		showToast('Failed to load recipient', 'danger');
+		recipientsToast('Failed to load recipient', 'danger');
 	}
 }
 
@@ -759,7 +759,7 @@ async function sendTestFromList(btn) {
 			for (const line of lines) {
 				if (line.state === 'sending') continue;
 				const label = TEST_CHANNEL_LABELS[line.channel] || line.channel;
-				showToast(`${name} · ${label}: ${line.message}`, line.state === 'sent' ? 'success' : 'warning');
+				recipientsToast(`${name} · ${label}: ${line.message}`, line.state === 'sent' ? 'success' : 'warning');
 			}
 		},
 	});
@@ -840,10 +840,10 @@ async function saveRecipient() {
 			// Show warning toast if phone not registered with Signal
 			if (data.warnings && data.warnings.length > 0) {
 				for (const warning of data.warnings) {
-					showToast(warning, 'warning');
+					recipientsToast(warning, 'warning');
 				}
 			} else {
-				showToast('Recipient updated successfully', 'success');
+				recipientsToast('Recipient updated successfully', 'success');
 			}
 		} else {
 			const errorMsg = await extractApiError(response, 'Failed to update recipient');
@@ -894,13 +894,13 @@ async function deleteRecipient(recipientId, recipientName) {
 		
 		if (response.ok) {
 			loadRecipients();
-			showToast('Recipient deleted', 'success');
+			recipientsToast('Recipient deleted', 'success');
 		} else {
-			showToast('Failed to delete recipient', 'danger');
+			recipientsToast('Failed to delete recipient', 'danger');
 		}
 	} catch (error) {
 		console.error('Delete recipient error:', error);
-		showToast('Network error. Please check your connection.', 'danger');
+		recipientsToast('Network error. Please check your connection.', 'danger');
 	}
 }
 
@@ -915,59 +915,22 @@ async function toggleRecipientEnabled(recipientId, currentlyEnabled) {
 		
 		if (response.ok) {
 			loadRecipients();
-			showToast(currentlyEnabled ? 'Recipient paused' : 'Recipient enabled', 'success');
+			recipientsToast(currentlyEnabled ? 'Recipient paused' : 'Recipient enabled', 'success');
 		} else {
-			showToast('Failed to update recipient', 'danger');
+			recipientsToast('Failed to update recipient', 'danger');
 		}
 	} catch (error) {
 		console.error('Toggle recipient error:', error);
-		showToast('Network error. Please check your connection.', 'danger');
+		recipientsToast('Network error. Please check your connection.', 'danger');
 	}
 }
 
-// Utility: Show Toast with appropriate icon (XSS-safe)
-function showToast(message, type = 'success') {
-	// Use global toast system if available (consistent with rest of app)
-	if (window.justUpToast) {
-		const method = type === 'danger' ? 'error' : type;
-		if (window.justUpToast[method]) {
-			window.justUpToast[method](message);
-			return;
-		}
-	}
-
-	// Fallback: local toast implementation
-	const toastEl = document.getElementById('settings-toast');
-	if (!toastEl) return;
-	
-	const toastBody = toastEl.querySelector('.toast-body');
-	if (!toastBody) return;
-	
-	const icons = {
-		success: 'check_circle',
-		warning: 'warning',
-		danger: 'error'
-	};
-	const icon = icons[type] || 'info';
-	
-	// XSS-safe: build DOM nodes instead of innerHTML
-	// Normalize: info -> success (no cyan toasts)
-	const normalizedType = (type === 'info') ? 'success' : type;
-	toastEl.className = `toast align-items-center text-bg-${normalizedType} border-0`;
-	toastBody.innerHTML = '';
-	
-	const iconSpan = document.createElement('span');
-	iconSpan.className = 'material-icons me-2';
-	iconSpan.textContent = icon;
-	
-	const textSpan = document.createElement('span');
-	textSpan.textContent = message;  // Safe: uses textContent
-	
-	toastBody.appendChild(iconSpan);
-	toastBody.appendChild(textSpan);
-	
-	const toast = new bootstrap.Toast(toastEl);
-	toast.show();
+// Thin delegate to the single toast implementation in app.js (window.justUpToast).
+function recipientsToast(message, type = 'success') {
+	const api = window.justUpToast;
+	const show = api && (api[type === 'danger' ? 'error' : type] || api.success);
+	if (show) show(String(message));
+	else console.warn('Toast unavailable:', message);
 }
 
 // Event Listeners

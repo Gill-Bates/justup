@@ -384,6 +384,22 @@ time.sleep(60)
 """
 
 
+class TestTraceProcessLifecycle:
+    def test_missing_binary_is_unavailable(self, tmp_path):
+        with pytest.raises(NmapScannerError) as exc:
+            asyncio.run(scanner._run_trace([str(tmp_path / "absent")], "10.0.0.5", 1))
+        assert exc.value.error.code == "unavailable"
+
+    def test_timeout_kills_the_whole_process_group(self, use, tmp_path):
+        pids = tmp_path / "trace-pids"
+        path = use(HANG_BODY.format(pids=str(pids)))
+        with pytest.raises(NmapScannerError) as exc:
+            asyncio.run(scanner._run_trace([str(path)], "10.0.0.5", 1))
+        assert exc.value.error.code == "timeout"
+        for pid in map(int, pids.read_text().split()):
+            _assert_gone(pid)
+
+
 class TestTimeoutAndCancel:
     def test_timeout_kills_the_whole_process_group(self, use, tmp_path):
         pids = tmp_path / "pids"

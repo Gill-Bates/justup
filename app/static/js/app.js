@@ -229,7 +229,7 @@
 
 		(function () {
 			var toggle = document.getElementById('theme-toggle');
-			var themes = window.JU_THEMES;
+			var themes = ['system', 'light', 'dark'];
 			var selectedTheme = document.documentElement.getAttribute('data-user-theme') || 'system';
 			if (themes.indexOf(selectedTheme) === -1) selectedTheme = 'system';
 			var themeSaveQueue = Promise.resolve();
@@ -287,6 +287,9 @@
 					}
 				});
 			}
+
+			// Shared with scripts that render .local-time elements themselves (e.g. the users list)
+			window.JuLocalTime = { init: initLocalTimes };
 
 			function initAccordionState(root) {
 				(root || document).querySelectorAll('.accordion-collapse:not([data-state-init])').forEach(function (collapse) {

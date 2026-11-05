@@ -51,7 +51,7 @@ from app.utils.constants import (
 from app.utils.crypto import decrypt_secret
 from app.utils.ssrf import redact_url
 from app.utils.status_helper import cert_severity
-from app.utils.tcp_ports import DEFAULT_TCP_PORTS, parse_port_list
+from app.utils.tcp_ports import DEFAULT_TCP_PORTS, parse_port_list, protocol_scan_hosts
 from app.utils.time import utcnow
 from app.utils.uptime_metric import enabled_availability_metrics
 
@@ -1192,7 +1192,7 @@ class MonitorScheduler:
     @staticmethod
     def _udp_scan_target(cfg: dict[str, Any]) -> tuple[str, bool]:
         """What a UDP scan result belongs to: the scanned host and whether UDP scanning is on."""
-        return str(cfg.get("host") or ""), bool(cfg.get("enable_udp_scan"))
+        return protocol_scan_hosts(cfg)["udp"], bool(cfg.get("enable_udp_scan"))
 
     @staticmethod
     def _drop_udp_scan(rt: TargetRuntime) -> None:
@@ -1428,7 +1428,7 @@ class MonitorScheduler:
 
                 # TCP Connect (Multi-Port)
                 if cfg["enable_tcp_connect"]:
-                    t_host = str(cfg.get("tcp_host") or cfg.get("host") or "")
+                    t_host = protocol_scan_hosts(cfg)["tcp"]
                     tcp_ports: list[int] = cfg.get("tcp_ports") or []
 
                     if not t_host or not tcp_ports:
@@ -1821,7 +1821,7 @@ class MonitorScheduler:
         if rt.udp_task is not None and rt.udp_task.done():
             rt.udp_task = None
         if due and rt.udp_task is None:
-            host = str(cfg.get("host") or "")
+            host = protocol_scan_hosts(cfg)["udp"]
             if host:
                 rt.udp_last_started = now
                 rt.udp_task = asyncio.create_task(
@@ -1950,8 +1950,8 @@ class MonitorScheduler:
         cfg = self._targets.get(target_id)
         if not cfg:
             raise LookupError("Target not found in the monitoring snapshot")
-        tcp_host = str(cfg.get("tcp_host") or cfg.get("host") or "")
-        udp_host = str(cfg.get("host") or "")
+        scan_hosts = protocol_scan_hosts(cfg)
+        tcp_host, udp_host = scan_hosts["tcp"], scan_hosts["udp"]
         tcp = list(cfg.get("tcp_ports") or []) if cfg.get("enable_tcp_connect") else []
         udp = list(cfg.get("udp_ports") or []) if cfg.get("enable_udp_scan") else []
         if (tcp and not tcp_host) or (udp and not udp_host):

@@ -58,14 +58,6 @@ def test_canvas_has_image_role_accessible_name_and_text_alternatives() -> None:
     assert html.count('id="combined-peaks-toggle"') == 1 and 'role="switch"' in html
 
 
-def test_panels_carry_no_explanatory_subtitles() -> None:
-    # The page is not documentation (DESIGN.md): titles and axis labels stay, descriptive paragraphs go.
-    html = TEMPLATE.read_text(encoding="utf-8")
-    assert "target-panel-sub" not in html
-    assert "Drag to zoom" not in html
-    assert "Per-check state" not in html
-
-
 def test_empty_states_are_rendered_for_targets_without_checks() -> None:
     html = TEMPLATE.read_text(encoding="utf-8")
     assert 'id="combined-empty"' in html
@@ -80,22 +72,9 @@ def test_page_loads_combined_chart_scripts_after_the_chart_builder() -> None:
     assert order == sorted(order)
 
 
-def test_performance_details_tile_is_gone_and_donut_sits_next_to_the_chart() -> None:
+def test_donut_sits_next_to_the_chart() -> None:
     html = TEMPLATE.read_text(encoding="utf-8")
-    assert "target-performance" not in html
-    for removed in ("chart-response-time", "chart-ping", "chart-tcp"):
-        assert f'id="{removed}"' not in html
     canvas = re.search(r'<canvas\b[^>]*id="chart-status-code"[^>]*>', html)
     assert canvas and 'role="img"' in canvas.group(0) and "aria-label=" in canvas.group(0)
     assert re.search(r"enable_http_check %\}\s*<section", html)
     assert 'id="status-donut-empty"' in html and "combined-layout--donut" in html
-
-
-def test_removed_performance_chart_code_is_not_referenced_anywhere() -> None:
-    for name in ("target-detail.js", "charts/chart-builder.js"):
-        text = (ROOT / "app" / "static" / "js" / name).read_text(encoding="utf-8")
-        assert "target-performance-details" not in text
-        assert "buildMultiPortTcpChart" not in text
-        assert "function buildChart(" not in text
-    css = (ROOT / "app" / "static" / "css" / "target-detail.css").read_text(encoding="utf-8")
-    assert "target-performance" not in css

@@ -20,7 +20,7 @@
 	var backdrop = document.getElementById('sidebar-backdrop');
 	// Keep in sync with the 991.98px breakpoint in gentelella-layout.css and dashboard-grid.js.
 	var mobile = window.matchMedia('(max-width: 991.98px)');
-	var STORAGE_KEY = window.JuSidebarState.KEY;
+	var STORAGE_KEY = 'ju-sidebar';
 
 	function isOpen() {
 		return mobile.matches ? root.classList.contains('ju-nav-open') : !root.classList.contains('ju-nav-sm');
@@ -58,7 +58,7 @@
 
 	function toggleRail() {
 		var collapsed = root.classList.toggle('ju-nav-sm');
-		try { localStorage.setItem(STORAGE_KEY, collapsed ? window.JuSidebarState.COLLAPSED : 'expanded'); } catch (e) { /* storage blocked */ }
+		try { localStorage.setItem(STORAGE_KEY, collapsed ? 'collapsed' : 'expanded'); } catch (e) { /* storage blocked */ }
 		sync();
 	}
 	if (collapse) collapse.addEventListener('click', toggleRail);

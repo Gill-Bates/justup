@@ -83,15 +83,7 @@ class NmapScannerError(RuntimeError):
 
 def parse_nmap_xml(data: bytes, *, started_at: datetime, completed_at: datetime) -> NmapScanResult:
     """Parse bounded Nmap XML without expanding external entities or DTDs."""
-    if len(data) > MAX_OUTPUT_BYTES or b"\x00" in data:
-        raise NmapScannerError("invalid_xml", "Nmap returned an invalid or oversized XML document")
-    try:
-        text = data.decode("utf-8")
-        root = ElementTree.fromstring(text, forbid_dtd=False, forbid_entities=True, forbid_external=True)
-    except (UnicodeError, ElementTree.ParseError, DefusedXmlException) as exc:
-        raise NmapScannerError("invalid_xml", "Nmap returned invalid XML") from exc
-    if root.tag != "nmaprun":
-        raise NmapScannerError("invalid_xml", "Nmap returned an unexpected XML document")
+    root = _parse_root(data)
     hosts: list[NmapHostResult] = []
     for host in root.findall("host"):
         address_el = next((node for node in host.findall("address") if node.get("addrtype") in {"ipv4", "ipv6"}), None)
@@ -288,31 +280,34 @@ async def scan_selected_ports(
             del _target_locks[address]
 
 
+async def _exec_bounded(command: list[str], timeout: float, timeout_message: str) -> tuple[int, bytes, bytes]:
+    """Run ``command`` in its own session with bounded output; stop the whole group on timeout or cancel."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=True
+        )
+    except FileNotFoundError as exc:
+        raise NmapScannerError("unavailable", "Nmap is not installed") from exc
+    except PermissionError as exc:
+        raise NmapScannerError("permission_denied", "Nmap is not executable") from exc
+    try:
+        async with asyncio.timeout(timeout + 2):
+            stdout, stderr = await asyncio.gather(_read_bounded(proc.stdout), _read_bounded(proc.stderr))
+            await proc.wait()
+    except TimeoutError as exc:
+        await _stop_process(proc)
+        raise NmapScannerError("timeout", timeout_message) from exc
+    except BaseException:
+        await _stop_process(proc)
+        raise
+    return proc.returncode, stdout, stderr
+
+
 async def _run_locked(command: list[str], timeout: float) -> NmapScanResult:
     async with _scan_slots, _nmap_slots:
         started = utcnow()
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                *command,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                start_new_session=True,
-            )
-        except FileNotFoundError as exc:
-            raise NmapScannerError("unavailable", "Nmap is not installed") from exc
-        except PermissionError as exc:
-            raise NmapScannerError("permission_denied", "Nmap is not executable") from exc
-        try:
-            async with asyncio.timeout(timeout + 2):
-                stdout, stderr = await asyncio.gather(_read_bounded(proc.stdout), _read_bounded(proc.stderr))
-                await proc.wait()
-        except TimeoutError as exc:
-            await _stop_process(proc)
-            raise NmapScannerError("timeout", "Nmap scan timed out") from exc
-        except BaseException:
-            await _stop_process(proc)
-            raise
-        if proc.returncode != 0:
+        returncode, stdout, stderr = await _exec_bounded(command, timeout, "Nmap scan timed out")
+        if returncode != 0:
             detail = "Nmap could not complete the scan"
             if b"requires root privileges" in stderr.lower() or b"permission denied" in stderr.lower():
                 raise NmapScannerError("permission_denied", detail)
@@ -453,25 +448,8 @@ def _trace_command(address: str, *, budget: int, probe: tuple[RequestedProbeProt
 
 async def _run_trace(command: list[str], address: str, timeout: float) -> Route:
     started = utcnow()
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            *command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=True
-        )
-    except FileNotFoundError as exc:
-        raise NmapScannerError("unavailable", "Nmap is not installed") from exc
-    except PermissionError as exc:
-        raise NmapScannerError("permission_denied", "Nmap is not executable") from exc
-    try:
-        async with asyncio.timeout(timeout + 2):
-            stdout, stderr = await asyncio.gather(_read_bounded(proc.stdout), _read_bounded(proc.stderr))
-            await proc.wait()
-    except TimeoutError as exc:
-        await _stop_process(proc)
-        raise NmapScannerError("timeout", "Nmap traceroute timed out") from exc
-    except BaseException:
-        await _stop_process(proc)
-        raise
-    if proc.returncode != 0:
+    returncode, stdout, stderr = await _exec_bounded(command, timeout, "Nmap traceroute timed out")
+    if returncode != 0:
         lowered = stderr.lower()
         if b"root" in lowered or b"permission denied" in lowered:
             raise NmapScannerError("permission_denied", "Nmap lacks the privileges for a traceroute")

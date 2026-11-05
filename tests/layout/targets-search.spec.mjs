@@ -199,7 +199,8 @@ for (const viewport of VIEWPORTS) {
 				await page.evaluate(() => {
 					window.__tableSettled = new Promise((resolve) => {
 						const onSettle = (e) => {
-							if ((e.detail?.elt ?? e.target)?.id !== "targets-table") return;
+							// htmx 1.9 settles the swapped children, so match the container by ancestry.
+							if (!e.target?.closest?.("#targets-table")) return;
 							document.body.removeEventListener("htmx:afterSettle", onSettle);
 							resolve();
 						};

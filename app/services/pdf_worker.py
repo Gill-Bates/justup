@@ -135,6 +135,8 @@ def _db_connection(db_connector: Callable, db_path: Path):
 
 def _update_job_status(db_connector: Callable, db_path: Path, job_id: str, **fields) -> None:
     """Write one job-status update on a short-lived connection (blocking; call it off the event loop)."""
+    from ..db import sqlite as sqlite_db
+
     with _db_connection(db_connector, db_path) as conn:
         sqlite_db.update_report_job(conn, job_id, **fields)
 
@@ -270,10 +272,10 @@ class PDFWorker:
                 if not isinstance(_job.target_dict, dict):
                     raise ValueError("target_dict must be a dict")
 
-                async def _set_status(**fields) -> None:
-                    await loop.run_in_executor(
+                async def _set_status(_j=_job, _loop=loop, **fields) -> None:
+                    await _loop.run_in_executor(
                         self.io_executor,
-                        functools.partial(_update_job_status, db_connector, _job.db_path, _job.job_id, **fields),
+                        functools.partial(_update_job_status, db_connector, _j.db_path, _j.job_id, **fields),
                     )
 
                 await _set_status(status="processing", progress=PROGRESS_PROCESSING)
