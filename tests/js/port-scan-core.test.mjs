@@ -23,6 +23,15 @@ test("a port list is validated strictly and keeps invalid parts visible", () => 
   assert.equal(core.parsePort("65536"), null);
   assert.equal(core.parsePort("1e3"), null);
 });
+test("port list edge cases shared by the wizard and the picker", () => {
+  assert.deepEqual(plain(core.parsePortList("22,,80")), { ports: [22, 80], invalid: [] });
+  assert.deepEqual(plain(core.parsePortList(" 22 , 80 ")), { ports: [22, 80], invalid: [] });
+  assert.deepEqual(plain(core.parsePortList("22, 443,")), { ports: [22, 443], invalid: [] });
+  // Space-separated input stays invalid on the client until that compatibility decision is made.
+  assert.deepEqual(plain(core.parsePortList("22 80")).invalid, ["22 80"]);
+  assert.deepEqual(plain(core.parsePortList("0,65536,+22,22.0")).invalid, ["0", "65536", "+22", "22.0"]);
+  assert.deepEqual(plain(core.parsePortList("80,80,80")), { ports: [80], invalid: [] });
+});
 test("typed manual input separates TCP and UDP and defaults to TCP", () => {
   const parsed = plain(core.parseTypedPorts("22, 443 udp:53 161/udp tcp:25 25/tcp 22"));
   assert.deepEqual(parsed, { tcp: [22, 25, 443], udp: [53, 161], invalid: [] });

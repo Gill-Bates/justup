@@ -229,7 +229,7 @@
 
 		(function () {
 			var toggle = document.getElementById('theme-toggle');
-			var themes = ['system', 'light', 'dark'];
+			var themes = window.JU_THEMES;
 			var selectedTheme = document.documentElement.getAttribute('data-user-theme') || 'system';
 			if (themes.indexOf(selectedTheme) === -1) selectedTheme = 'system';
 			var themeSaveQueue = Promise.resolve();

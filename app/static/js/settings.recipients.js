@@ -32,9 +32,9 @@ async function extractApiError(response, fallbackMessage) {
 	let msg = fallbackMessage;
 	try {
 		const data = await response.json();
-		// Classic script: the ES module formatter is loaded dynamically.
-		const { formatErrorDetail } = await import('./settings.core.js');
-		msg = formatErrorDetail(data?.detail) || (typeof data?.error === 'string' && data.error) || msg;
+		const detail = data?.detail;
+		msg = window.JuApiError.message(detail, Array.isArray(detail) ? 'Invalid input' : '')
+			|| (typeof data?.error === 'string' && data.error) || msg;
 	} catch (e) {
 		// ignore parse errors
 	}

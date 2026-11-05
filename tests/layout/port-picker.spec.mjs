@@ -99,6 +99,8 @@ async function message(picker) {
 async function rowOf(picker, protocol, port) {
 	return picker.locator("[data-scan-results] li", { has: picker.page().locator(`input[data-protocol="${protocol}"][data-port="${port}"]`) });
 }
+// Row text without the Material Icons ligature names.
+const rowText = async (picker, protocol, port) => (await (await rowOf(picker, protocol, port)).innerText()).replace(/\b(?:check_circle|cancel|help)\s*/g, "");
 const ticked = (picker) => picker.locator("[data-scan-results] input:checked").evaluateAll((nodes) => nodes.map((node) => `${node.dataset.protocol}:${node.dataset.port}`).sort());
 const openOthers = async (picker) => {
 	const other = picker.locator("[data-scan-other]");
@@ -202,7 +204,7 @@ test("scan, confirmed-first results, selection and adoption keep manual ports an
 	// No table: a compact confirmed list first, preselected, with the primary action showing the count.
 	assert.equal(await picker.locator("table").count(), 0);
 	assert.equal(await picker.locator("[data-scan-confirmed-title]").innerText(), "3 confirmed open ports");
-	const ssh = await (await rowOf(picker, "tcp", 22)).innerText();
+	const ssh = await rowText(picker, "tcp", 22);
 	assert.match(ssh, /TCP 22\s+ssh · OpenSSH · 9\.2\s+Open/);
 	assert.deepEqual(await ticked(picker), ["tcp:22", "tcp:443", "udp:53"], "confirmed open ports are preselected, nothing else");
 	assert.equal(await picker.locator("[data-scan-action=apply]").innerText(), "Add selected ports (3)");
@@ -212,7 +214,7 @@ test("scan, confirmed-first results, selection and adoption keep manual ports an
 	assert.equal(await other.evaluate((node) => node.open), false);
 	assert.equal(await other.locator("summary").innerText(), "1 other result – not confirmed open");
 	await other.locator("summary").click();
-	const snmp = await (await rowOf(picker, "udp", 161)).innerText();
+	const snmp = await rowText(picker, "udp", 161);
 	assert.match(snmp, /UDP 161\s+snmp \(table hint\)\s+Open or filtered/);
 	assert.doesNotMatch(snmp.replace(/open or filtered|open\|filtered/gi, ""), /\bopen\b/i, "an unclear UDP state is never labelled open");
 	assert.doesNotMatch(snmp, /uncertain/i, "the shared note replaces the per-row repetition");
@@ -256,8 +258,8 @@ test("16 results with one open port: only that port is primary, 15 others are co
 	await runScan(picker);
 	assert.match(await message(picker), /16 ports found: 1 confirmed open, 2 closed, 13 unclear\./);
 	assert.equal(await picker.locator("[data-scan-confirmed-title]").innerText(), "1 confirmed open port");
-	assert.deepEqual(await picker.locator("[data-scan-confirmed] li").allInnerTexts(), [(await (await rowOf(picker, "tcp", 80)).innerText())]);
-	assert.match(await (await rowOf(picker, "tcp", 80)).innerText(), /TCP 80\s+http \(table hint\)\s+Open/);
+	assert.deepEqual((await picker.locator("[data-scan-confirmed] li").allInnerTexts()).map((text) => text.replace(/\b(?:check_circle|cancel|help)\s*/g, "")), [await rowText(picker, "tcp", 80)]);
+	assert.match(await rowText(picker, "tcp", 80), /TCP 80\s+http \(table hint\)\s+Open/);
 	assert.equal(await picker.locator("[data-scan-confirmed] li").count(), 1);
 	assert.deepEqual(await ticked(picker), ["tcp:80"]);
 	assert.equal(await picker.locator("[data-scan-action=apply]").innerText(), "Add selected ports (1)");
@@ -269,9 +271,9 @@ test("16 results with one open port: only that port is primary, 15 others are co
 	assert.equal(await picker.locator("[data-scan-other-list] li").count(), 15);
 	assert.equal(await picker.locator("[data-scan-other-list] input:checked").count(), 0, "unclear and closed ports are never preselected");
 	// Closed and unclear are told apart, in words, not only by colour.
-	assert.match(await (await rowOf(picker, "tcp", 21)).innerText(), /Closed/);
-	assert.match(await (await rowOf(picker, "tcp", 111)).innerText(), /Filtered/);
-	assert.match(await (await rowOf(picker, "udp", 161)).innerText(), /Open or filtered/);
+	assert.match(await rowText(picker, "tcp", 21), /Closed/);
+	assert.match(await rowText(picker, "tcp", 111), /Filtered/);
+	assert.match(await rowText(picker, "udp", 161), /Open or filtered/);
 	assert.equal(await picker.locator("[data-scan-other-list]").evaluate((node) => (node.textContent.match(/uncertain/gi) || []).length), 0, "no per-row repetition");
 	// An unclear port can be chosen by hand and is adopted with the confirmed one.
 	await picker.getByRole("checkbox", { name: /TCP 111 / }).check();
@@ -394,7 +396,7 @@ test("scanner text is rendered as text, never as HTML @portpicker", async ({ app
 	await runScan(picker);
 	await openOthers(picker);
 	assert.equal(await picker.locator("[data-scan-results] img, [data-scan-results] script, [data-scan-results] b").count(), 0);
-	assert.match(await (await rowOf(picker, "tcp", 80)).innerText(), /<img src=x onerror="window.__pwn=1"> · <b>bold<\/b>/);
+	assert.match(await rowText(picker, "tcp", 80), /<img src=x onerror="window.__pwn=1"> · <b>bold<\/b>/);
 	assert.equal(await page.evaluate(() => window.__pwn), undefined);
 	// Error text from the server is text as well.
 	const { state } = await stubScan(page);
@@ -543,6 +545,14 @@ test.describe("target form", () => {
 		assert.equal(body.udp_ports, "53,161");
 		assert.equal(body.network_scan_id, SCAN_ID);
 		assert.equal(body.enable_ping, true, "ICMP is untouched");
+	});
+	test("edit: the editor uses the same picker component as the wizard @portpicker", async ({ app, page }) => {
+		await stubScan(page);
+		const hooks = (picker) => picker.evaluate((root) => [...new Set([root, ...root.querySelectorAll("*")].flatMap((node) => [...node.attributes].map((attr) => attr.name).filter((name) => name.startsWith("data-scan") || name.startsWith("data-manual") || name.startsWith("data-port"))))].sort());
+		const editHooks = await hooks(await openEdit(page, app));
+		const wizardHooks = await hooks(await openWizard(page, app));
+		assert.deepEqual(editHooks, wizardHooks);
+		assert.ok(editHooks.includes("data-manual-input") && editHooks.includes("data-scan-discover"));
 	});
 	test("edit: manual changes persist only with the form submission @portpicker", async ({ app, page }) => {
 		await stubScan(page);

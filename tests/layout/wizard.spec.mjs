@@ -40,12 +40,18 @@ async function stubPortScan(page) {
 	});
 }
 
+// Ports are typed into the one visible picker input and added with Enter.
+async function typePorts(page, text) {
+	const input = page.locator("#wizard-manual-ports");
+	await input.fill(text);
+	await input.press("Enter");
+}
 async function openChecksStep(page, app, { profile, address, ports }) {
 	await page.goto(`${app.base}/ui/targets/new`);
 	await page.locator(`input[name="profile"][value="${profile}"]`).check({ force: true });
 	await page.getByRole("button", { name: "Continue" }).click();
 	await page.locator("#wizard-address").fill(address);
-	if (ports) await page.locator("#wizard-ports").fill(ports);
+	if (ports) await typePorts(page, ports);
 	await page.getByRole("button", { name: "Continue" }).click();
 	await page.locator("#step-checks-title").waitFor({ state: "visible" });
 	await page.locator("#wizard-advanced > summary").click();
@@ -93,14 +99,15 @@ test("ports are entered once: the checks step shows a summary and an Edit ports 
 	assert.match(await page.locator("#wizard-tcp-summary").innerText(), /TCP ports:\s*25/);
 	await page.getByRole("button", { name: "Edit ports" }).click();
 	await page.locator("#step-address-title").waitFor({ state: "visible" });
-	assert.equal(await page.evaluate(() => document.activeElement?.id), "wizard-ports", "the source field is focused");
-	await page.locator("#wizard-ports").fill("25,587");
+	assert.equal(await page.evaluate(() => document.activeElement?.id), "wizard-manual-ports", "the visible manual input is focused");
+	await typePorts(page, "587");
 	await page.getByRole("button", { name: "Continue" }).click();
 	await page.locator("#step-checks-title").waitFor({ state: "visible" });
 	assert.match(await page.locator("#wizard-tcp-summary").innerText(), /TCP ports:\s*25, 587/);
 	// Back keeps working and the ports survive the round trip.
 	await page.getByRole("button", { name: "Back" }).click();
 	assert.equal(await page.locator("#wizard-ports").inputValue(), "25,587");
+	assert.deepEqual(await page.locator("[data-port-chips] .tag-input__text").allInnerTexts(), ["TCP 25", "TCP 587"]);
 });
 
 test("TCP on without a port blocks Continue with an inline error and a jump action @wizard", async ({ app, page }) => {
@@ -113,15 +120,39 @@ test("TCP on without a port blocks Continue with an inline error and a jump acti
 	assert.equal(await page.locator("#step-checks-title").isVisible(), true, "still on the checks step");
 	assert.equal(await page.evaluate(() => document.activeElement?.dataset.editPorts), "tcp");
 	await page.getByRole("button", { name: "Edit ports" }).click();
-	assert.equal(await page.evaluate(() => document.activeElement?.id), "wizard-ports");
+	assert.equal(await page.evaluate(() => document.activeElement?.id), "wizard-manual-ports");
+});
+
+test("address-step port errors focus the visible input, never a hidden backing field @wizard", async ({ app, page }) => {
+	await page.goto(`${app.base}/ui/targets/new`);
+	await page.locator('input[name="profile"][value="tcp"]').check({ force: true });
+	await page.getByRole("button", { name: "Continue" }).click();
+	await page.locator("#wizard-address").fill("focus.example.org");
+	await page.getByRole("button", { name: "Continue" }).click();
+	assert.equal(await page.locator("#step-address-title").isVisible(), true, "still on the address step");
+	assert.equal(await page.evaluate(() => document.activeElement?.id), "wizard-manual-ports");
+	assert.equal(await page.locator("#wizard-manual-ports").getAttribute("aria-invalid"), "true");
+	assert.match(await page.locator("#wizard-manual-ports-error").innerText(), /Choose at least one TCP or UDP port/);
+	assert.equal(await page.locator("#wizard-manual-ports-error").getAttribute("role"), "alert");
+	// Text that was typed but not added is taken over; invalid text blocks Continue at the same input.
+	await page.locator("#wizard-manual-ports").fill("70000");
+	await page.getByRole("button", { name: "Continue" }).click();
+	assert.equal(await page.locator("#step-address-title").isVisible(), true);
+	assert.equal(await page.evaluate(() => document.activeElement?.id), "wizard-manual-ports");
+	assert.match(await page.locator("#wizard-manual-ports-error").innerText(), /70000/);
+	await page.locator("#wizard-manual-ports").fill("8443");
+	assert.equal(await page.locator("#wizard-manual-ports").getAttribute("aria-invalid"), "false", "typing clears the error state");
+	await page.getByRole("button", { name: "Continue" }).click();
+	await page.locator("#step-checks-title").waitFor({ state: "visible" });
+	assert.equal(await page.locator("#wizard-ports").inputValue(), "8443", "pending text counts as chosen");
 });
 
 test("a port check on a website profile reveals the port fields from Edit ports @wizard", async ({ app, page }) => {
 	await openChecksStep(page, app, { profile: "website", address: "https://site.example.org/" });
 	await page.locator(TOGGLES.tcp).setChecked(true, { force: true });
 	await page.getByRole("button", { name: "Edit ports" }).click();
-	assert.equal(await page.locator("#wizard-ports").isVisible(), true);
-	assert.equal(await page.evaluate(() => document.activeElement?.id), "wizard-ports");
+	assert.equal(await page.locator("#wizard-manual-ports").isVisible(), true);
+	assert.equal(await page.evaluate(() => document.activeElement?.id), "wizard-manual-ports");
 });
 
 test("the submitted payload keeps tcp_ports and udp_ports from the address step @wizard", async ({ app, page }) => {
@@ -129,8 +160,7 @@ test("the submitted payload keeps tcp_ports and udp_ports from the address step 
 	await page.locator('input[name="profile"][value="custom"]').check({ force: true });
 	await page.getByRole("button", { name: "Continue" }).click();
 	await page.locator("#wizard-address").fill("payload.example.org");
-	await page.locator("#wizard-ports").fill("22,443");
-	await page.locator("#wizard-udp-ports").fill("53");
+	await typePorts(page, "22, 443 udp:53");
 	await page.getByRole("button", { name: "Continue" }).click();
 	await page.locator("#step-checks-title").waitFor({ state: "visible" });
 	await page.locator(TOGGLES.tcp).setChecked(true, { force: true });
@@ -188,14 +218,15 @@ test("discovered TCP and UDP ports can be selected without saving the wizard @wi
 	await page.locator('input[name="profile"][value="custom"]').check({ force: true });
 	await page.getByRole("button", { name: "Continue" }).click();
 	await page.locator("#wizard-address").fill("mail.example.org");
-	await page.locator("#wizard-ports").fill("22");
+	await typePorts(page, "22");
+	await page.locator("[data-scan-discover] > summary").click();
 	await page.locator('[data-scan-protocol="udp"]').check();
 	await page.getByRole("button", { name: "Scan ports" }).click();
 	await page.locator("[data-scan-results]").waitFor({ state: "visible" });
-	await page.getByRole("button", { name: "Select all confirmed open ports" }).click();
-	assert.equal(await page.locator('[data-scan-rows] input:checked').count(), 2, "uncertain UDP is not selected as open");
-	await page.getByRole("checkbox", { name: /Select UDP port 161/ }).check();
-	await page.getByRole("button", { name: "Add selected ports" }).click();
+	assert.equal(await page.locator("[data-scan-results] input:checked").count(), 2, "confirmed ports are preselected, uncertain UDP is not");
+	await page.locator("[data-scan-other] > summary").click();
+	await page.getByRole("checkbox", { name: /UDP 161/ }).check();
+	await page.getByRole("button", { name: "Add selected ports (3)" }).click();
 	assert.equal(await page.locator("#wizard-ports").inputValue(), "22,443");
 	assert.equal(await page.locator("#wizard-udp-ports").inputValue(), "53,161");
 	assert.equal(await page.locator("#wizard-tcp").isChecked(), true);
@@ -219,17 +250,35 @@ test("discovered ports preserve manual entries in target edit @wizard", async ({
 	await page.locator("#tcp_ports_input").press("Enter");
 	await page.locator("#enable_udp_scan").check();
 	await page.locator("#udp_ports").fill("161");
+	await page.locator("[data-scan-discover] > summary").click();
 	await page.locator('[data-scan-protocol="udp"]').check();
 	await page.getByRole("button", { name: "Scan ports" }).click();
 	await page.locator("[data-scan-results]").waitFor({ state: "visible" });
-	await page.getByRole("button", { name: "Select all confirmed open ports" }).click();
-	await page.getByRole("button", { name: "Add selected ports" }).click();
+	await page.getByRole("button", { name: "Add selected ports (2)" }).click();
 	assert.match(await page.locator("#tcp_ports").inputValue(), /(?:^|,)22(?:,|$)/);
 	assert.match(await page.locator("#tcp_ports").inputValue(), /(?:^|,)443(?:,|$)/);
 	assert.equal(await page.locator("#udp_ports").inputValue(), "53,161");
 	assert.equal(await page.locator('[name="network_scan_id"]').inputValue(), SCAN_ID);
 });
 
+test("the address step scrolls as one region with a long chip list and the actions stay reachable @wizard", async ({ app, page }) => {
+	await page.setViewportSize({ width: 320, height: 640 });
+	await page.goto(`${app.base}/ui/targets/new`);
+	await page.locator('input[name="profile"][value="custom"]').check({ force: true });
+	await page.getByRole("button", { name: "Continue" }).click();
+	await page.locator("#wizard-address").fill("scroll.example.org");
+	await typePorts(page, Array.from({ length: 60 }, (_, index) => 2000 + index).join(" "));
+	const regions = await page.evaluate(() => [...document.querySelectorAll("body *")]
+		.filter((node) => node.offsetParent !== null && ["auto", "scroll"].includes(getComputedStyle(node).overflowY) && node.scrollHeight > node.clientHeight + 1)
+		.map((node) => node.className || node.tagName));
+	assert.equal(regions.filter((name) => String(name).includes("target-wizard-step")).length, 1, `the wizard step scrolls: ${regions}`);
+	assert.deepEqual(regions.filter((name) => !String(name).includes("target-wizard-step") && !/ju-content|main/.test(String(name))), [], "no nested vertical scroll region");
+	for (const name of ["Back", "Continue"]) {
+		const box = await page.getByRole("button", { name }).boundingBox();
+		assert.ok(box && box.y + box.height <= 640 + 1, `${name} stays reachable`);
+	}
+	assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), true);
+});
 for (const viewport of VIEWPORTS) {
 	for (const theme of ["light", "dark"]) {
 		test(`checks step fits ${viewport.name} in ${theme} with HTTP and TCP active @wizard`, async ({ app, page }) => {
@@ -263,7 +312,8 @@ async function openScanStep(page, app, address = "mail.example.org") {
 	await page.locator('input[name="profile"][value="tcp"]').check({ force: true });
 	await page.getByRole("button", { name: "Continue" }).click();
 	await page.locator("#wizard-address").fill(address);
-	await page.locator("#wizard-ports").fill("22,443");
+	await typePorts(page, "22, 443");
+	await page.locator("[data-scan-discover] > summary").click();
 }
 test("wizard: scan button is disabled with a visible, announced reason while the worker is down, manual ports still save @wizard", async ({ app, page }) => {
 	const worker = { current: WORKER_DOWN };
@@ -285,7 +335,7 @@ test("wizard: scan button is disabled with a visible, announced reason while the
 	// Protocols and scope stay usable and manual entry is unaffected.
 	await page.locator('[data-scan-protocol="udp"]').check();
 	await page.locator("[data-scan-profile]").selectOption("extended");
-	await page.locator("#wizard-udp-ports").fill("161");
+	await typePorts(page, "udp:161");
 	await page.getByRole("button", { name: "Continue" }).click();
 	await page.locator("#step-checks-title").waitFor({ state: "visible" });
 	await page.getByRole("button", { name: "Continue" }).click();

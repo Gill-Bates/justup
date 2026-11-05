@@ -10,6 +10,7 @@ import vm from 'node:vm';
 const source = readFileSync(new URL('../../app/static/js/target-wizard.js', import.meta.url), 'utf8');
 const optionalGroupsSource = readFileSync(new URL('../../app/static/js/utils/optional-groups.js', import.meta.url), 'utf8');
 const groupsSource = readFileSync(new URL('../../app/static/js/utils/check-groups.js', import.meta.url), 'utf8');
+const portScanSource = readFileSync(new URL('../../app/static/js/utils/port-scan-core.js', import.meta.url), 'utf8');
 function el(extra = {}) {
   const listeners = {};
   return {
@@ -51,6 +52,7 @@ function setup(profileValue = 'website') {
   sandbox.window.window = sandbox.window;
   vm.runInNewContext(optionalGroupsSource, sandbox.window);
   vm.runInNewContext(groupsSource, sandbox.window);
+  vm.runInNewContext(portScanSource, sandbox.window);
   vm.runInNewContext(source, sandbox);
   const answer = (index, values) => pending[index]({
     ok: true, status: 200,

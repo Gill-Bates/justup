@@ -68,7 +68,7 @@
 	 * @param {string} theme - 'system', 'light', or 'dark'
 	 */
 	window.setTheme = function (theme) {
-		var valid = ['light', 'dark', 'system'].indexOf(theme) !== -1 ? theme : 'system';
+		var valid = window.JU_THEMES.indexOf(theme) !== -1 ? theme : 'system';
 		var effective = valid;
 		if (valid === 'system') {
 			effective = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
@@ -116,7 +116,9 @@
 
 	// Restore the desktop sidebar rail state before first paint to avoid a layout jump.
 	try {
-		if (localStorage.getItem('ju-sidebar') === 'collapsed') document.documentElement.classList.add('ju-nav-sm');
+		if (localStorage.getItem(window.JuSidebarState.KEY) === window.JuSidebarState.COLLAPSED) {
+			document.documentElement.classList.add('ju-nav-sm');
+		}
 	} catch (e) { /* storage blocked */ }
 
 	// Apply the server-rendered user preference before the page content paints.

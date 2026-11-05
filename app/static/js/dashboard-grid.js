@@ -89,7 +89,7 @@
 		if (!response.ok) {
 			let detail = '';
 			try { detail = (await response.json()).detail; } catch (e) { /* non-JSON error body */ }
-			throw new Error(typeof detail === 'string' && detail ? detail : `Request failed (${response.status})`);
+			throw new Error(window.JuApiError.message(detail, `Request failed (${response.status})`));
 		}
 		return response.json();
 	}

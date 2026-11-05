@@ -2227,8 +2227,8 @@ textarea.smtp-editor-frame {
 		flex-wrap: wrap;
 	}
 
-	/* Icon-only buttons keep their square size */
-	.ui-page .d-flex.gap-2>.btn:not(.btn-icon) {
+	/* Icon-only buttons, including those whose label hides below sm, keep their square size */
+	.ui-page .d-flex.gap-2>.btn:not(.btn-icon, :has(> .d-none.d-sm-inline)) {
 		flex: 1 1 100%;
 	}
 }

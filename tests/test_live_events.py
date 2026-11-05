@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import threading
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -467,3 +468,12 @@ def test_real_uvicorn_stop_with_open_sse_stream_logs_no_error(caplog: pytest.Log
         elapsed = time.monotonic() - started
     assert not thread.is_alive() and elapsed < 3
     assert "Exception in ASGI application" not in caplog.text
+
+
+def test_client_event_types_match_the_server_contract() -> None:
+    # The browser subscribes only to the types it lists; a server type missing there is silently ignored.
+    source = (Path(__file__).resolve().parents[1] / "app/static/js/live-events.js").read_text(encoding="utf-8")
+    match = re.search(r"var EVENT_TYPES = \[(.*?)\];", source, re.DOTALL)
+    assert match, "EVENT_TYPES list not found in live-events.js"
+    client_types = set(re.findall(r"'([^']+)'", match.group(1)))
+    assert client_types == set(event_bus.EVENT_TYPES) | {"system.auth-lost"}

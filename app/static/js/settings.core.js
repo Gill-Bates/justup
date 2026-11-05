@@ -202,14 +202,7 @@ export async function withSpinner(btn, fn, loadingText = null) {
  * @returns {string} Message, or '' when nothing readable is present
  */
 export function formatErrorDetail(detail) {
-    if (typeof detail === 'string') return detail;
-    if (Array.isArray(detail)) {
-        const msgs = detail
-            .map((e) => (typeof e === 'string' ? e : e?.msg))
-            .filter((m) => typeof m === 'string' && m);
-        return msgs.join('; ') || 'Invalid input';
-    }
-    return '';
+    return window.JuApiError.message(detail, Array.isArray(detail) ? 'Invalid input' : '');
 }
 
 /**

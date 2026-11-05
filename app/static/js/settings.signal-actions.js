@@ -89,7 +89,7 @@ export async function sendTestMessage() {
             notify('success', data.message || 'Test message queued');
         } else {
             const data = await resp.json().catch(() => ({}));
-            const msg = data.detail || 'Send failed';
+            const msg = window.JuApiError.message(data.detail, 'Send failed');
             notify('error', msg);
         }
     } catch (e) {
@@ -559,7 +559,7 @@ async function saveSignalTemplates() {
                 notify('success', 'Signal templates saved');
             } else {
                 const data = await resp.json().catch(() => ({}));
-                notify('error', data.detail || data.error || 'Failed to save templates');
+                notify('error', window.JuApiError.message(data.detail, '') || data.error || 'Failed to save templates');
             }
         }, 'Saving...');
     } catch (e) {
@@ -584,7 +584,7 @@ async function resetSignalTemplates() {
 
             if (!resp.ok) {
                 const data = await resp.json().catch(() => ({}));
-                notify('error', data.detail || data.error || 'Failed to reset templates');
+                notify('error', window.JuApiError.message(data.detail, '') || data.error || 'Failed to reset templates');
                 return;
             }
 

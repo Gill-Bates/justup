@@ -15,16 +15,20 @@
 	var HIDDEN = /[\s\u0000-\u001f]/g;
 	var SCRIPT_SCHEMES = ['javascript:', 'data:', 'vbscript:'];
 
+	/** True when the address starts with a script-capable scheme, ignoring case and hidden characters. */
+	function isScriptUrl(raw) {
+		var normalized = String(raw == null ? '' : raw).replace(HIDDEN, '').toLowerCase();
+		return SCRIPT_SCHEMES.some(function (scheme) { return normalized.indexOf(scheme) === 0; });
+	}
 	/** @returns {{ok: true, url: string}|{ok: false, error: string}} */
 	function validateLinkUrl(raw) {
 		var url = raw == null ? '' : String(raw).trim();
 		if (!url || /^https?:\/\/$/i.test(url)) return { ok: false, error: 'Enter a web address.' };
-		var normalized = url.replace(HIDDEN, '').toLowerCase();
-		if (SCRIPT_SCHEMES.some(function (scheme) { return normalized.indexOf(scheme) === 0; })) {
+		if (isScriptUrl(url)) {
 			return { ok: false, error: 'This kind of address is not allowed. Use an http or https address.' };
 		}
 		return { ok: true, url: url };
 	}
 
-	root.JuLinkUrl = { validateLinkUrl: validateLinkUrl };
+	root.JuLinkUrl = { validateLinkUrl: validateLinkUrl, isScriptUrl: isScriptUrl };
 })(typeof window !== 'undefined' ? window : globalThis);

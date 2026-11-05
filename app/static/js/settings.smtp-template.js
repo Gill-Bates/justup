@@ -290,11 +290,8 @@
     // Remove event handler attributes (onclick, onerror, etc.) and javascript: URLs
     doc.querySelectorAll('*').forEach(function (el) {
       Array.from(el.attributes).forEach(function (attr) {
-        // Browsers ignore whitespace/control chars inside URL schemes
-        // eslint-disable-next-line no-control-regex
-        var value = attr.value.replace(/[\s\u0000-\u001f]/g, '').toLowerCase();
         if (attr.name.startsWith('on') ||
-            (/^(href|src|xlink:href|action|formaction)$/.test(attr.name) && value.startsWith('javascript:'))) {
+            (/^(href|src|xlink:href|action|formaction)$/.test(attr.name) && window.JuLinkUrl.isScriptUrl(attr.value))) {
           el.removeAttribute(attr.name);
         }
       });

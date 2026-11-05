@@ -22,7 +22,7 @@ A five-step wizard (type, address, checks, recipients, review) suggests checks b
 Defaults: 60 s interval, two retries, 365 days retention, auto-close. You can
 change them before creation. A domain without scheme suggests HTTPS; an explicit
 `http://` stays HTTP. The summary does not contact the target.
-In the TCP/UDP service profile the **TCP ports** and **UDP ports** fields sit side by side below the address (stacked on narrow screens); enter at least one of them.
+In the TCP/UDP service profile the address step asks for the host, name and group, then **Ports to monitor**: one input for TCP and UDP ports (`22, 443` for TCP, `udp:53` or `53/udp` for UDP) with the chosen ports shown as removable chips; enter at least one. Port discovery with Nmap is optional and collapsed.
 In the checks step, settings appear only for active checks: the TCP port field with TCP, URL, method and success codes with HTTP, and the TLS option "Ignore TLS certificate errors" with HTTP or certificate expiry. Interval, retries, retention and auto-close are always shown. The summary lists only active checks.
 
 Exact duplicates are blocked. Different services on the same host are allowed;
@@ -53,9 +53,9 @@ partially overlapping checks show a warning. **Edit** opens the full editor.
 ## Port discovery
 
 The wizard and the target editor can scan the host for open ports and add the
-selected ones to the TCP or UDP port fields. Discovery uses the
+selected ones to the list of ports to monitor. Discovery uses the
 [Nmap Security Scanner](https://nmap.org/) bundled in the image. Choose TCP, UDP or
-both and a **Quick** or **Extended** scope, then select the ports to adopt.
+both and a **Quick** or **Extended** scope. Ports Nmap confirmed open are preselected; other results stay collapsed and are never selected for you.
 
 - Only administrators can scan. The host must pass the same validation as a check
   target; at most 128 ports are scanned and two scans run at once (`429` when busy).

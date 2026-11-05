@@ -302,11 +302,10 @@
     return true;
   }
 
+  // Same rule as the port picker, so "22,,80" or a trailing comma passes in both places.
   function validPorts(value) {
-    return value.split(',').every(part => {
-      const text = part.trim();
-      return /^[0-9]+$/.test(text) && Number(text) >= 1 && Number(text) <= 65535;
-    });
+    const parsed = window.JuPortScan.parsePortList(value);
+    return parsed.invalid.length === 0 && parsed.ports.length > 0;
   }
 
   function validateChecks() {

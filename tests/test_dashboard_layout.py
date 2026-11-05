@@ -333,3 +333,25 @@ def test_availability_last_point_is_capped_by_stale_after_and_window_start():
 def test_availability_non_monotonic_timestamps_never_yield_negative_time():
     up, known = _avail([(300, 1), (100, 0), (200, 1)], stale_after=1000.0, minutes=10)
     assert 0.0 <= up <= known <= 600.0
+
+
+def test_client_layout_bounds_mirror_the_server_model() -> None:
+    # dashboard-grid.js validates stored layouts with the same bounds; a drift makes every save fail with 422.
+    from app.api.dashboard_layout import DASHBOARD_MAX_Y, DashboardWidgetLayout
+
+    source = (Path(__file__).resolve().parents[1] / "app/static/js/dashboard-grid.js").read_text(encoding="utf-8")
+    max_y = re.search(r"const MAX_Y = (\d+);", source)
+    assert max_y and int(max_y.group(1)) == DASHBOARD_MAX_Y
+
+    def bounds(name: str) -> tuple[int, int]:
+        meta = {type(m).__name__: m for m in DashboardWidgetLayout.model_fields[name].metadata}
+        return meta["Ge"].ge, meta["Le"].le
+
+    assert bounds("x") == (0, 11)
+    assert bounds("y") == (0, DASHBOARD_MAX_Y)
+    assert bounds("w") == (1, 12)
+    assert bounds("h") == (1, 100)
+    assert "inRange(saved.x, 11) && inRange(saved.y, MAX_Y)" in source
+    assert "saved.w >= 1 && saved.w <= 12" in source
+    assert "saved.h >= 1 && saved.h <= 100" in source
+    assert "saved.x + saved.w <= 12 && saved.y + saved.h <= MAX_Y" in source

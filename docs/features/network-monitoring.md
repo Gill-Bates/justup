@@ -29,8 +29,8 @@ There are two ways, and you can mix them. A scan is never required to create a t
 
 ### Automatic discovery
 
-In the target wizard and the target editor, **Scan ports** starts an Nmap scan of the
-target host with TCP, UDP or both and one of two scopes:
+In the target wizard and the target editor, **Discover ports with Nmap** (collapsed by
+default) opens the scan options. **Scan ports** starts an Nmap scan of the target host with TCP, UDP or both and one of two scopes:
 
 | Scope | TCP ports | UDP ports |
 | --- | --- | --- |
@@ -38,20 +38,27 @@ target host with TCP, UDP or both and one of two scopes:
 | Extended | Quick plus 23, 111, 135, 139, 389, 445, 636, 1521, 2375, 27017 | Quick plus 69, 137, 138, 389, 4500, 5353 |
 
 There is no full 65,535-port scan, no NSE script, no OS fingerprinting and no traceroute.
-Discovery uses service detection (`-sV --version-light`) so the result table can show the
+Discovery uses service detection (`-sV --version-light`) so a result can show the
 service Nmap recognised.
 
 The scan runs as a background job. The page stays usable and shows an activity indicator,
 not a progress percentage, because Nmap gives no reliable progress. A scan can be
 cancelled; a cancelled or expired job never delivers late results.
 
-The result table lists protocol, port, service and state:
+After a scan a summary counts the results (for example "16 ports found: 1 confirmed open,
+2 closed, 13 unclear") and the results fall into two groups:
 
-- **Open** is a confirmed result. **Select all confirmed open ports** adds exactly these.
-- Uncertain UDP states (`open|filtered`, `filtered`, and similar) are shown as uncertain,
-  never as open, and are never selected automatically. You can still tick them yourself.
-- **Adopt selected ports** merges the choice into the TCP and UDP port fields without
-  duplicates and keeps ports you typed by hand. Nothing is stored until you save the form.
+- **Confirmed open** lists the ports Nmap found open (`open`). They are selected for you,
+  but not added yet. Change the selection if you like and choose **Add selected ports (N)**.
+- **Other results** (for example "15 other results – not confirmed open") stay collapsed.
+  They hold ports Nmap found closed and ports whose state it could not determine
+  (`filtered`, `open|filtered`, `closed|filtered`, `unfiltered`). Each result shows its Nmap
+  state in words. These ports are never selected automatically; you can tick them yourself.
+- A service marked "(table hint)" is the usual service of that port number, not a detection.
+- **Add selected ports** merges the choice into the port list without duplicates and keeps
+  ports you typed by hand. Nothing is stored until you save the form.
+- If no port is confirmed open, the page says so and does not claim that the other ports
+  are closed.
 
 Which service Nmap named (and whether it was identified by a probe or only guessed from the
 port table) is stored with the port when you save. The server takes this from its own
@@ -59,8 +66,9 @@ completed scan job, not from the browser, so it cannot be forged by a client.
 
 ### Manual configuration
 
-The TCP and UDP port fields accept single ports and comma-separated lists in the range
-1-65535. A manually entered port has no service name and is monitored like any other.
+In the wizard and the editor, one input takes single ports and lists in the range 1-65535,
+separated by commas or spaces. A port is TCP unless you write `udp:53` or `53/udp`. The
+ports appear as removable chips (`TCP 22`, `UDP 53`) below the input. A manually entered port has no service name and is monitored like any other.
 
 ## Status values
 

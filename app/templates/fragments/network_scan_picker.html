@@ -4,11 +4,11 @@
   data-tcp-toggle-id="{{ scan_tcp_toggle_id }}" data-udp-toggle-id="{{ scan_udp_toggle_id }}" aria-labelledby="{{ scan_prefix }}-picker-title">
   <h3 class="h6" id="{{ scan_prefix }}-picker-title">Ports to monitor</h3>
   <div data-port-manual>
-    <label class="form-label" for="{{ scan_prefix }}-manual-ports">Add ports</label>
+    <label class="form-label" for="{{ scan_prefix }}-manual-ports">Add ports manually</label>
     <div class="input-group">
       <input class="form-control" type="text" id="{{ scan_prefix }}-manual-ports" data-manual-input maxlength="200" autocomplete="off" autocapitalize="none" spellcheck="false" enterkeyhint="done"
         placeholder="e.g. 22, 443, udp:53" aria-describedby="{{ scan_prefix }}-manual-help {{ scan_prefix }}-manual-ports-error">
-      <button class="btn btn-outline-secondary" type="button" data-scan-action="manual-add">Add</button>
+      <button class="btn btn-outline-secondary" type="button" data-scan-action="manual-add">Add ports</button>
     </div>
     <div class="form-text" id="{{ scan_prefix }}-manual-help">Numbers from 1 to 65535, separated by commas or spaces. A port is TCP unless you write <code>udp:53</code> or <code>53/udp</code>. Nothing is saved until you save the target.</div>
     <div class="small text-danger mt-1" id="{{ scan_prefix }}-manual-ports-error" data-manual-error role="alert" hidden></div>

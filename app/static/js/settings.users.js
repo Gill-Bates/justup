@@ -115,11 +115,7 @@ async function testSmtp() {
 		if (response.ok && result.ok !== false) {
 			window.justUpToast?.success?.(result.message || 'Test email queued');
 		} else {
-			// A 422 detail is a list of {msg}; joining it avoids showing "[object Object]".
-			const detail = Array.isArray(result.detail)
-				? result.detail.map((e) => e?.msg).filter(Boolean).join('; ')
-				: result.detail;
-			const errorMsg = (typeof detail === 'string' && detail) || result.error || ERROR_MESSAGES.SMTP_TEST_FAILED;
+			const errorMsg = window.JuApiError.message(result.detail, '') || result.error || ERROR_MESSAGES.SMTP_TEST_FAILED;
 			window.justUpToast?.error?.(errorMsg);
 		}
 	} catch (error) {
@@ -421,7 +417,7 @@ async function saveEditedUser() {
 			let errorMsg = ERROR_MESSAGES.UPDATE_USER_FAILED;
 			try {
 				const data = await response.json();
-				errorMsg = data.detail || data.error || errorMsg;
+				errorMsg = window.JuApiError.message(data.detail, '') || data.error || errorMsg;
 			} catch (e) { }
 			if (errorDiv) {
 				errorDiv.textContent = errorMsg;
@@ -464,7 +460,7 @@ async function toggleUserActive(userId, isActive, toggleBtn = null) {
 			let msg = ERROR_MESSAGES.TOGGLE_USER_FAILED;
 			try {
 				const data = await response.json();
-				msg = data.detail || data.error || msg;
+				msg = window.JuApiError.message(data.detail, '') || data.error || msg;
 			} catch (e) { }
 			showToast(msg, 'danger');
 		}
@@ -521,7 +517,7 @@ async function createUser() {
 			let errorMsg = ERROR_MESSAGES.CREATE_USER_FAILED;
 			try {
 				const error = await response.json();
-				if (error.detail && error.detail.includes('already exists')) {
+				if (window.JuApiError.message(error.detail, '').includes('already exists')) {
 					errorMsg = 'Username already exists';
 				}
 			} catch (parseError) {
@@ -594,7 +590,7 @@ async function revokeUserSessions(userId, username) {
 			showToast(`Revoked ${revoked} session(s)`, 'success');
 		} else {
 			const detail = (await response.json().catch(() => ({}))).detail;
-			showToast(typeof detail === 'string' ? detail : ERROR_MESSAGES.REVOKE_SESSIONS_FAILED, 'danger');
+			showToast(window.JuApiError.message(detail, ERROR_MESSAGES.REVOKE_SESSIONS_FAILED), 'danger');
 		}
 	} catch (error) {
 		console.error('Revoke sessions error:', error);

@@ -57,9 +57,7 @@ async function sendTestAlert(targetId, elements) {
       let errorMsg = `Server error: ${response.status}`;
       try {
         const errData = await response.json();
-        if (typeof errData.detail === "string") {
-          errorMsg = errData.detail;
-        }
+        errorMsg = window.JuApiError.message(errData.detail, errorMsg);
       } catch {
         // Non-JSON response (e.g. proxy error page)
         const text = await response.text().catch(() => "");

@@ -219,7 +219,7 @@
 			const res = await apiFetch(API.flush, { method: 'DELETE' });
 			if (!res.ok) {
 				const err = await res.json().catch(function () { return {}; });
-				throw new Error(err.detail || 'Flush failed');
+				throw new Error(window.JuApiError.message(err.detail, 'Flush failed'));
 			}
 			const data = await res.json();
 			window.justUpToast?.success?.('Flushed ' + (data.deleted || 0) + ' notifications');
@@ -244,7 +244,7 @@
 			const res = await apiFetch(API.clearLog, { method: 'DELETE' });
 			if (!res.ok) {
 				const err = await res.json().catch(function () { return {}; });
-				throw new Error(err.detail || 'Clear log failed');
+				throw new Error(window.JuApiError.message(err.detail, 'Clear log failed'));
 			}
 			const data = await res.json();
 			window.justUpToast?.success?.('Cleared ' + (data.deleted || 0) + ' log entries');
