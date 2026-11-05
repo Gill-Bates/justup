@@ -311,6 +311,13 @@ lookup_pop_by_hostname = lkp_h
 # ---------------------------------------------------------------------------
 
 
+def _valid_coordinates(lat: object, lon: object) -> bool:
+    """True for finite numeric WGS84 coordinates (-90..90, -180..180); booleans and non-numbers are invalid."""
+    if any(isinstance(v, bool) or not isinstance(v, (int, float)) for v in (lat, lon)):
+        return False
+    return math.isfinite(lat) and math.isfinite(lon) and -90 <= lat <= 90 and -180 <= lon <= 180
+
+
 def upsert_pop_location(
     conn: sqlite3.Connection,
     canonical_code: str,
@@ -327,7 +334,8 @@ def upsert_pop_location(
     """
     Insert or update a POP location.
 
-    Manual and seed entries are never overwritten; only imported rows are updated.
+    Manual and seed entries and active reviewed ('learned') rows are never overwritten; only imported rows
+    are updated. Invalid coordinates (NaN, infinite, outside the WGS84 range) skip the record.
 
     Args:
         import_run_id: Optional run ID for delta tracking
@@ -343,13 +351,12 @@ def upsert_pop_location(
     city = _normalize_city(city)
     country = _normalize_country(country)
 
-    # NaN/inf would pass clamping as a pole/meridian value; refuse to persist them.
-    # Finite out-of-range values keep being clamped (unchanged behaviour).
-    if not (math.isfinite(float(lat)) and math.isfinite(float(lon))):
-        _log.debug("Skipping POP location %s/%s: non-finite coordinates", canonical_code, alias_code)
+    # Reject, never clamp: an out-of-range or non-finite value marks a corrupt source record, and clamping
+    # would store a fabricated position at a pole or the antimeridian instead of dropping the record.
+    if not _valid_coordinates(lat, lon):
+        _log.debug("Skipping POP location %s/%s: invalid coordinates", canonical_code, alias_code)
         return False
-    lat = max(-90.0, min(90.0, float(lat)))
-    lon = max(-180.0, min(180.0, float(lon)))
+    lat, lon = float(lat), float(lon)
 
     # Clamp confidence/priority
     confidence = max(0, min(100, int(confidence)))

@@ -86,6 +86,11 @@ learned rows without a matching review remain in their previous active/retired
 state and are shown with no review status; cleanup or migration of those rows
 requires a separate authorised operation.
 
+Imports never overwrite manual or seed rows or an active reviewed `learned` row; after a
+revocation the import may reclaim the alias. An import record with invalid coordinates
+(NaN, infinite or outside latitude -90..90 / longitude -180..180) is skipped, not clamped:
+clamping would store a position that no source reported.
+
 Inbox notifications are removed automatically after 180 days, unread ones included;
 their read and hidden marks go with them.
 

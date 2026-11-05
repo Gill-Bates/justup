@@ -369,11 +369,7 @@
     } else {
       parts.push("No response time data in this range");
     }
-    parts.push(
-      s.lastCode !== null
-        ? "last HTTP status " + s.lastCode
-        : "no HTTP status codes",
-    );
+    if (s.lastCode !== null) parts.push("last HTTP status " + s.lastCode);
     parts.push(s.outages + (s.outages === 1 ? " outage" : " outages"));
     return parts.join("; ");
   }

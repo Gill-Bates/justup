@@ -1483,13 +1483,7 @@ class MonitorScheduler:
             udp_checks: list[checks.PortCheck] = []
             if cfg.get("enable_udp_scan") and cfg.get("udp_ports"):
                 udp_checks = await self._udp_cycle(target_id, cfg, rt, utcnow(), generation)
-                statuses = [c.status for c in udp_checks]
-                if PortStatus.DOWN in statuses:
-                    snapshot["udp_up"] = 0
-                elif all(st == PortStatus.UP for st in statuses):
-                    snapshot["udp_up"] = 1
-                else:
-                    snapshot["udp_up"] = None  # UNKNOWN: neither down nor up
+                snapshot["udp_up"] = self._udp_aggregate(udp_checks)
             tcp_checks = self._tcp_port_checks(cfg, snapshot)
             rt.down_endpoints = {
                 "tcp": [f"tcp:{c.port}" for c in tcp_checks if c.status == PortStatus.DOWN],
@@ -1551,14 +1545,15 @@ class MonitorScheduler:
                     # Points exist only for a scan that just ended: a cached result is never re-emitted as a
                     # new measurement (no artificial downtime from one scan).
                     new_udp = udp_checks if rt.udp_new_result else []
-                    confirmed = [c for c in new_udp if c.status in (PortStatus.UP, PortStatus.DOWN)]
                     for c in new_udp:
                         if c.status == PortStatus.UNKNOWN:
                             put(f"udp_unknown_{c.port}", 1)
                         else:
                             put(f"udp_up_{c.port}", 1 if c.status == PortStatus.UP else 0)
-                    if confirmed:
-                        put("udp_up", int(all(c.status == PortStatus.UP for c in confirmed)))
+                    # Same ternary state as the live status: written only when known (all up, or one down).
+                    udp_aggregate = self._udp_aggregate(new_udp)
+                    if udp_aggregate is not None:
+                        put("udp_up", udp_aggregate)
 
                     if cfg["enable_cert_expiration"] and snapshot["cert_days_left"] is not None:
                         put("cert_days_left", float(snapshot["cert_days_left"]))
@@ -1594,30 +1589,6 @@ class MonitorScheduler:
                     generation=generation,
                 )
 
-            def _overall_status_from_snapshot() -> str:
-                checks_for_status: list[int | None] = []
-                if cfg["enable_http_check"]:
-                    checks_for_status.append(snapshot.get("http_up"))
-                if cfg["enable_ping"]:
-                    checks_for_status.append(snapshot.get("ping_up"))
-                if cfg["enable_tcp_connect"]:
-                    checks_for_status.append(snapshot.get("tcp_up"))
-                udp_enabled = bool(cfg.get("enable_udp_scan") and cfg.get("udp_ports"))
-                if not checks_for_status and not udp_enabled:
-                    return TargetStatus.DISABLED  # Already str constant
-                if any(v is None for v in checks_for_status):
-                    return TargetStatus.UNKNOWN  # Already str constant
-                if any(v != 1 for v in checks_for_status):
-                    return TargetStatus.DOWN  # Already str constant
-                if udp_enabled:
-                    # A confirmed UDP DOWN is down; an unconfirmed port (filtered, open|filtered, scan
-                    # failure, stale result) is UNKNOWN and never down.
-                    if snapshot.get("udp_up") == 0:
-                        return TargetStatus.DOWN
-                    if snapshot.get("udp_up") is None:
-                        return TargetStatus.UNKNOWN
-                return TargetStatus.UP  # Already str constant
-
             async def _compute_uptime_percent(hours: int = 24) -> float | None:
                 """Uptime of the window under the same rule as the overall status: all enabled checks up."""
                 metrics = enabled_availability_metrics(cfg)
@@ -1632,7 +1603,7 @@ class MonitorScheduler:
                 )
                 return (up / total * 100.0) if total else None
 
-            overall_status = _overall_status_from_snapshot()
+            overall_status = self._overall_status(cfg, snapshot)
             try:
                 uptime_percent: float | None = None
                 uptime_percent_30d: float | None = None
@@ -1725,6 +1696,37 @@ class MonitorScheduler:
             with suppress(asyncio.CancelledError):
                 await heartbeat
             await self._release_target_lock(target_id)
+
+    @staticmethod
+    def _udp_aggregate(udp_checks: list[checks.PortCheck]) -> int | None:
+        """Ternary UDP state: 0 if any port is confirmed down, 1 if all are up, None (UNKNOWN) otherwise."""
+        statuses = [c.status for c in udp_checks]
+        if PortStatus.DOWN in statuses:
+            return 0
+        if statuses and all(st == PortStatus.UP for st in statuses):
+            return 1
+        return None
+
+    @staticmethod
+    def _overall_status(cfg: dict[str, Any], snapshot: dict[str, Any]) -> str:
+        """Overall status from the enabled checks; a confirmed outage outranks any unknown result."""
+        values: list[int | None] = []
+        if cfg["enable_http_check"]:
+            values.append(snapshot.get("http_up"))
+        if cfg["enable_ping"]:
+            values.append(snapshot.get("ping_up"))
+        if cfg["enable_tcp_connect"]:
+            values.append(snapshot.get("tcp_up"))
+        if cfg.get("enable_udp_scan") and cfg.get("udp_ports"):
+            # An unconfirmed port (filtered, open|filtered, scan failure, stale result) is None, never 0.
+            values.append(snapshot.get("udp_up"))
+        if not values:
+            return TargetStatus.DISABLED
+        if any(v == 0 for v in values):
+            return TargetStatus.DOWN
+        if any(v is None for v in values):
+            return TargetStatus.UNKNOWN
+        return TargetStatus.UP
 
     @staticmethod
     def _tcp_port_checks(cfg: dict[str, Any], snapshot: dict[str, Any]) -> list[checks.PortCheck]:

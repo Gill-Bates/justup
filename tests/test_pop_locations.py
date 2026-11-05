@@ -122,13 +122,37 @@ def _upsert(conn, lat: float, lon: float, alias: str = "zzz") -> bool:
     )
 
 
-@pytest.mark.parametrize(("lat", "lon"), [(float("nan"), 8.0), (50.0, float("inf")), (float("-inf"), 8.0)])
-def test_upsert_rejects_non_finite_coordinates(conn, lat, lon) -> None:
+@pytest.mark.parametrize(
+    ("lat", "lon"),
+    [
+        (float("nan"), 8.0),
+        (50.0, float("nan")),
+        (50.0, float("inf")),
+        (float("-inf"), 8.0),
+        (90.0001, 0.0),
+        (-90.0001, 0.0),
+        (0.0, 180.0001),
+        (0.0, -180.0001),
+        (123.0, -999.0),
+        (None, 8.0),
+        ("50.1", 8.6),
+        (True, 8.6),
+    ],
+)
+def test_upsert_rejects_invalid_coordinates_without_touching_the_table(conn, lat, lon) -> None:
     assert _upsert(conn, lat, lon) is False
     assert conn.execute("SELECT COUNT(*) FROM pop_locations WHERE alias_code = 'zzz'").fetchone()[0] == 0
 
 
-def test_upsert_still_clamps_finite_out_of_range_coordinates(conn) -> None:
-    assert _upsert(conn, 123.0, -999.0) is True
+@pytest.mark.parametrize(("lat", "lon"), [(90.0, 180.0), (-90.0, -180.0), (0, 0), (50, 8)])
+def test_upsert_accepts_the_boundary_values(conn, lat, lon) -> None:
+    assert _upsert(conn, lat, lon) is True
     row = conn.execute("SELECT lat, lon FROM pop_locations WHERE alias_code = 'zzz'").fetchone()
-    assert (row[0], row[1]) == (90.0, -180.0)
+    assert (row[0], row[1]) == (lat, lon)
+
+
+def test_invalid_coordinates_do_not_overwrite_an_existing_imported_row(conn) -> None:
+    assert _upsert(conn, 50.0, 8.0) is True
+    assert _upsert(conn, 123.0, 8.0) is False
+    row = conn.execute("SELECT lat, lon FROM pop_locations WHERE alias_code = 'zzz'").fetchone()
+    assert (row[0], row[1]) == (50.0, 8.0)

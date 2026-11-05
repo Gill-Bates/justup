@@ -58,6 +58,14 @@ def test_canvas_has_image_role_accessible_name_and_text_alternatives() -> None:
     assert html.count('id="combined-peaks-toggle"') == 1 and 'role="switch"' in html
 
 
+def test_panels_carry_no_explanatory_subtitles() -> None:
+    # The page is not documentation (DESIGN.md): titles and axis labels stay, descriptive paragraphs go.
+    html = TEMPLATE.read_text(encoding="utf-8")
+    assert "target-panel-sub" not in html
+    assert "Drag to zoom" not in html
+    assert "Per-check state" not in html
+
+
 def test_empty_states_are_rendered_for_targets_without_checks() -> None:
     html = TEMPLATE.read_text(encoding="utf-8")
     assert 'id="combined-empty"' in html

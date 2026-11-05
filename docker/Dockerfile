@@ -506,10 +506,24 @@ RUN test -s /usr/share/nmap/nmap-services \
  && ! grep -q 'not found' /usr/share/doc/nmap/DEPENDENCIES.txt
 # Debian packages (name=version) that own every library the binary resolves here: the part of Nmap an image scan covers.
 RUN set -eu \
- && libs="$(awk '/=>/ && $3 ~ /^\// {print $3}' /usr/share/doc/nmap/DEPENDENCIES.txt)" \
- && pkgs="$(for lib in $libs; do dpkg-query -S "$(readlink -f "$lib")" | cut -d: -f1; done | sort -u)" \
- && test -n "$pkgs" \
- && printf 'system_libraries=%s\n' "$(dpkg-query -W -f='${binary:Package}=${Version}\n' $pkgs | sort | paste -sd, -)" \
+ && libraries="$(awk '/=>/ && $3 ~ /^\// {print $3}' /usr/share/doc/nmap/DEPENDENCIES.txt)" \
+ && test -n "$libraries" \
+ && package_names="$(for library in $libraries; do \
+      real_library="$(readlink -f "$library")" || exit 1; \
+      owner="$(dpkg-query -S "$real_library")" || exit 1; \
+      case "$owner" in *:*) package="${owner%%: *}" ;; *) echo "Cannot parse package owner for $real_library: $owner" >&2; exit 1 ;; esac; \
+      test -n "$package" || { echo "No Debian package owns $real_library" >&2; exit 1; }; \
+      printf '%s\n' "$package"; \
+    done \
+    )" \
+ && test -n "$package_names" \
+ && package_versions="$(for package in $package_names; do \
+      dpkg-query -W -f='${binary:Package}=${Version}\n' "$package" || exit 1; \
+    done)" \
+ && test -n "$package_versions" \
+ && system_libraries="$(printf '%s\n' "$package_versions" | sort -u | paste -sd, -)" \
+ && test -n "$system_libraries" \
+ && printf 'system_libraries=%s\n' "$system_libraries" \
       >> /usr/share/doc/nmap/PROVENANCE.txt
 
 # Non-root user with dedicated home directory (security: avoid HOME=/tmp)

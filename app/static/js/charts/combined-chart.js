@@ -1059,7 +1059,9 @@ function buildCombinedChart(canvasId, input) {
   if (statusBuckets.length)
     Object.assign(annotations, _statusStripAnnotations(statusBuckets, palette));
   _styleAnnotations(annotations, palette);
-  o.plugins.annotation = { annotations: annotations };
+  // The shared line config sets the root `clip: false`, which the annotation plugin inherits unless
+  // it is set here; without it bands and the status strip run over the axes.
+  o.plugins.annotation = { clip: true, annotations: annotations };
 
   var chart = _createOrUpdateChart(canvasId, canvas, config);
   chart._buildGeneration = buildGeneration;

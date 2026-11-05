@@ -111,6 +111,10 @@ test("summary text reports latency range, last status and outages", () => {
   assert.match(text, /last HTTP status 503/);
   assert.match(text, /1 outage$/);
   assert.match(D.describeSummary("Ping", D.summarize([], [], [])), /No response time data/);
+  // Without status codes the summary stays silent about them instead of announcing their absence.
+  const noCodes = D.describeSummary("Ping", D.summarize(ms, [], [{}]));
+  assert.doesNotMatch(noCodes, /HTTP status/);
+  assert.match(noCodes, /min 100 ms, median 200 ms, max 300 ms; 1 outage$/);
 });
 
 test("visible summary and canvas aria label use the measured peak instead of the median ceiling", () => {

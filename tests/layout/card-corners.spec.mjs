@@ -82,6 +82,8 @@ for (const viewport of VIEWPORTS) {
 				await page.waitForTimeout(400);
 				const card = page.locator(".check-card:has(#enable_http_check)");
 				await card.scrollIntoViewIfNeeded();
+				// A header color unlike the page and the border makes any square paint over the arc unmistakable.
+				await card.evaluate((el) => el.querySelector(".card-header").style.setProperty("background-color", "rgb(255, 0, 255)", "important"));
 				const box = await card.boundingBox();
 				const info = await card.evaluate((el) => {
 					const header = el.querySelector(".card-header");
@@ -106,12 +108,22 @@ for (const viewport of VIEWPORTS) {
 							found.push(Array.from(context2d.getImageData(x, y, 1, 1).data.slice(0, 3)));
 						}
 					}
-					return found;
+					// Pixels outside the rounded frame (more than the radius from the arc center) next to the corner.
+					const radius = 8, outer = [];
+					for (let dx = 1; dx <= 3; dx++) {
+						for (let dy = 1; dy <= 3; dy++) {
+							if (Math.hypot(radius - dx, radius - dy) < radius + 0.8) continue;
+							outer.push(Array.from(context2d.getImageData(Math.round((2 + dx) * scale), Math.round((size - 2 - dy) * scale), 1, 1).data.slice(0, 3)));
+						}
+					}
+					return { found, outer };
 				}, { png, size });
-				const header = info.header.match(/\d+/g).map(Number);
-				const arcVisible = diagonal.some((pixel) => pixel.some((value, i) => Math.abs(value - header[i]) >= 12));
-				const close = !arcVisible;
-				assert.equal(close, false, `no border pixel on the corner diagonal differs from the header background ${header}: the arc is overpainted`);
+				const { outer } = diagonal;
+				const header = [255, 0, 255];
+				const arcVisible = diagonal.found.some((pixel) => pixel.some((value, i) => Math.abs(value - header[i]) >= 40));
+				assert.equal(arcVisible, true, `no border pixel on the corner diagonal differs from the header background ${header}: the arc is overpainted`);
+				// The pixel right at the outer corner lies outside the rounded frame: these show the page, never the header.
+				assert.ok(outer.length > 0 && !outer.some((pixel) => pixel.every((value, i) => Math.abs(value - header[i]) < 40)), `a pixel outside the rounded frame has the header color ${header}: a square header paints over it`);
 			} finally {
 				await context.close();
 			}

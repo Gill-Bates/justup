@@ -474,6 +474,60 @@ def test_get_ssl_data_uses_the_shared_certificate_target_resolution(monkeypatch,
     assert (result is None) == (expected is None)
 
 
+def _scan_targets(monkeypatch, fields) -> list[str]:
+    calls = []
+    monkeypatch.setattr(pdf_report, "scan_tls", lambda target, **_k: calls.append(target) or _tls_result())
+    _builder(fields)._get_ssl_data()
+    return calls
+
+
+@pytest.mark.parametrize(
+    ("fields", "expected"),
+    [
+        # A configured http:// is never upgraded to https:// for a scan, whatever else is set.
+        ({"http_url": "http://host.example"}, []),
+        ({"http_url": "HTTP://host.example"}, []),
+        ({"http_url": "http://host.example:8443/", "cert_port": 8443}, []),
+        ({"http_url": "http://[2001:db8::1]:8080/"}, []),
+        ({"http_url": "http://u:pw@host.example/p?token=x#frag", "http_port": 8443}, []),
+        ({"http_url": "ftp://host.example"}, []),
+        ({"http_url": "http://[bad"}, []),
+        # The scheme check is case-insensitive; userinfo, path, query and fragment never reach the scan target.
+        ({"http_url": "HTTPS://Host.Example/"}, ["https://host.example"]),
+        ({"http_url": "https://u:pw@host.example:8443/p?token=x#frag"}, ["https://host.example:8443"]),
+        ({"http_url": "https://[2001:db8::1]:8443/"}, ["https://[2001:db8::1]:8443"]),
+        ({"http_url": "https://host.example", "cert_port": 8443}, ["https://host.example:8443"]),
+        # An explicit cert_host is the user's request for a TLS scan, also next to a plain-HTTP site.
+        ({"http_url": "http://h.example", "cert_host": "c.example", "cert_port": 8443}, ["https://c.example:8443"]),
+        ({"http_url": "https://h.example:9443/", "cert_host": "c.example"}, ["https://c.example:9443"]),
+    ],
+)
+def test_ssl_scan_never_turns_http_into_https_and_never_exposes_url_secrets(monkeypatch, fields, expected):
+    assert _scan_targets(monkeypatch, fields) == expected
+
+
+def test_plain_http_target_gets_a_neutral_marking_and_no_tls_section_or_secrets(monkeypatch):
+    url = "http://user:hunter2@plain.example:8080/path?token=SECRET#frag"
+    b = _full_builder(
+        monkeypatch, ssl=None, target_extra={"http_url": url, "host": None, "ping_host": None, "cert_host": None}
+    )
+    b._assemble()
+    text = _texts(b)
+    assert "Certificate" not in text and "Not applicable" not in text
+    assert "HTTP" in text and "no TLS scan" in text
+    assert "plain.example" in text
+    for leaked in ("user", "hunter2", "SECRET", "frag", "token="):
+        assert leaked not in text
+    uris = set(re.findall(rb"/URI \(([^)]*)\)", b.build()))
+    assert uris <= {b"https://github.com/Gill-Bates/justUp"}  # no link from the monitored URL
+
+
+def test_secure_target_still_shows_the_tls_sections(monkeypatch):
+    b = _full_builder(monkeypatch, ssl=_tls_result())
+    b._assemble()
+    assert "Certificate" in _texts(b)
+
+
 # ─── Layout contracts: chapters, page breaks, repeated headers, A4/Letter ──────────────────────
 
 

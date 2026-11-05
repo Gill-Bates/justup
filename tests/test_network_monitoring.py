@@ -524,6 +524,87 @@ def test_tcp_down_wins_over_udp_unknown(db_path, tmp_path, monkeypatch):
     assert _status(db_path, tid) == TargetStatus.DOWN
 
 
+# ── Ternary UDP aggregate: UP / DOWN / UNKNOWN across ports and checks ────────
+
+
+@pytest.mark.parametrize(
+    ("states", "expected_udp_up", "expected_status"),
+    [
+        ({53: "open", 161: "filtered"}, [], TargetStatus.UNKNOWN),
+        ({53: "open", 123: "open"}, [1], TargetStatus.UP),
+        ({161: "filtered", 500: "open|filtered"}, [], TargetStatus.UNKNOWN),
+    ],
+    ids=["up+unknown", "up+up", "unknown+unknown"],
+)
+def test_udp_aggregate_is_written_only_when_known(
+    db_path, tmp_path, monkeypatch, states, expected_udp_up, expected_status
+):
+    tid = _target(db_path, enable_udp_scan=True, udp_ports=",".join(str(p) for p in states))
+    sched = _sched(db_path, tmp_path)
+    sched._refresh_targets(utcnow())
+    _fake_scan(monkeypatch, _scan_result(states))
+    _run_cycles(sched, tid, 2)
+    assert _values(tmp_path, tid, "udp_up")[:1] == expected_udp_up
+    assert _status(db_path, tid) == expected_status
+
+
+def test_udp_up_and_confirmed_down_aggregate_to_down(db_path, tmp_path, monkeypatch):
+    tid = _target(db_path, enable_udp_scan=True, udp_ports="53,123")
+    sched = _sched(db_path, tmp_path)
+    sched._refresh_targets(utcnow())
+    _fake_scan(monkeypatch, _scan_result({53: "open", 123: "closed"}))
+    _run_confirmed_scans(sched, tid)
+    assert _values(tmp_path, tid, "udp_up")[-1] == 0
+    assert _status(db_path, tid) == TargetStatus.DOWN
+
+
+def test_quality_gate_unknown_overrides_a_confirmed_udp_down_without_new_points(db_path, tmp_path, monkeypatch):
+    tid = _target(db_path, enable_udp_scan=True, udp_ports="53")
+    sched = _sched(db_path, tmp_path)
+    sched._refresh_targets(utcnow())
+    _fake_scan(monkeypatch, _scan_result({53: "closed"}))
+    _run_confirmed_scans(sched, tid)
+    assert _status(db_path, tid) == TargetStatus.DOWN
+    before = _values(tmp_path, tid, "udp_up")
+    asyncio.run(sched._handle_connectivity_issue(tid, utcnow(), None))
+    assert _status(db_path, tid) == TargetStatus.UNKNOWN
+    assert _values(tmp_path, tid, "udp_up") == before  # a skipped cycle invents neither downtime nor uptime
+
+
+_ENABLED = {"enable_http_check": True, "enable_ping": True, "enable_tcp_connect": True, "enable_udp_scan": True}
+_UP, _DOWN, _UNK = 1, 0, None
+
+
+@pytest.mark.parametrize(
+    ("http", "ping", "tcp", "udp", "expected"),
+    [
+        (_UP, _UP, _UP, _UP, TargetStatus.UP),
+        (_UP, _UP, _UP, _UNK, TargetStatus.UNKNOWN),
+        (_UP, _UP, _UP, _DOWN, TargetStatus.DOWN),
+        (_UNK, _UP, _UP, _UP, TargetStatus.UNKNOWN),
+        (_UNK, _UP, _UP, _UNK, TargetStatus.UNKNOWN),
+        # A confirmed outage wins over any unknown result, whichever check reports it.
+        (_UNK, _UP, _UP, _DOWN, TargetStatus.DOWN),
+        (_UP, _UNK, _UP, _DOWN, TargetStatus.DOWN),
+        (_UP, _UP, _UNK, _DOWN, TargetStatus.DOWN),
+        (_UNK, _UP, _DOWN, _UNK, TargetStatus.DOWN),
+        (_UP, _UNK, _DOWN, _UP, TargetStatus.DOWN),
+        (_DOWN, _UNK, _UP, _UNK, TargetStatus.DOWN),
+        (_UP, _DOWN, _UNK, _UP, TargetStatus.DOWN),
+        (_DOWN, _DOWN, _DOWN, _DOWN, TargetStatus.DOWN),
+    ],
+)
+def test_overall_status_confirmed_down_wins_over_unknown(http, ping, tcp, udp, expected):
+    cfg = {**_ENABLED, "udp_ports": [53]}
+    snapshot = {"http_up": http, "ping_up": ping, "tcp_up": tcp, "udp_up": udp}
+    assert MonitorScheduler._overall_status(cfg, snapshot) == expected
+
+
+def test_overall_status_without_enabled_checks_is_disabled():
+    cfg = {"enable_http_check": False, "enable_ping": False, "enable_tcp_connect": False, "enable_udp_scan": False}
+    assert MonitorScheduler._overall_status(cfg, {}) == TargetStatus.DISABLED
+
+
 # ── Service identity ──────────────────────────────────────────────────────────
 
 

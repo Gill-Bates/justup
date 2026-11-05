@@ -96,6 +96,9 @@ A target is `down` if at least one enabled endpoint is confirmed down. Otherwise
 `unknown` if at least one endpoint is unknown, otherwise `up`. Unknown endpoints do not
 cause DOWN alerts and do not send recovery messages. Endpoints that were measured keep
 their own status on the target page even when the target as a whole is `unknown`.
+The UDP aggregate follows the same rule: one confirmed `down` port makes it `down`, all ports `up` make it
+`up`, anything else is `unknown`. History and reports get a `udp_up` point only when the aggregate is known;
+an unknown cycle leaves a gap, not downtime.
 
 ## Uncertain UDP results
 

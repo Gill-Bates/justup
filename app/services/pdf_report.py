@@ -919,6 +919,15 @@ def _left_margin(ticks: list[float], width: float, has_label: bool = True) -> fl
     return min(0.25, (0.14 + 0.075 * chars + (0.22 if has_label else 0)) / width)
 
 
+def _latency_plot_left_in(data: list[dict], from_date: datetime, sla_threshold_ms: int | None, width: float) -> float:
+    """Inches a latency chart reserves left of its plot area for the Y tick labels (0 without data)."""
+    tz = _report_tz(from_date)
+    if not data or all(math.isnan(v) for v in _parse_series(data, tz)[1]):
+        return 0.0
+    ticks = _axis_scale([_build_view(data, tz)], sla_threshold_ms)[1]
+    return _left_margin(ticks, width, has_label=False) * width
+
+
 def _keep_tick_labels_inside(fig) -> None:
     """Axes run edge to edge; a tick label at the border is aligned inward instead of being clipped."""
     fig.canvas.draw()
@@ -954,8 +963,12 @@ def _create_line_chart(
     sla_threshold_ms: int | None = None,
     threshold_label: str | None = None,
     legend_below: bool = False,
+    plot_left_in: float | None = None,
 ) -> bytes | None:
-    """Create a latency time-series chart; measurements and the SLA threshold are drawn distinctly."""
+    """Create a latency time-series chart; measurements and the SLA threshold are drawn distinctly.
+
+    plot_left_in fixes the plot's left edge so the chapter's time axes line up.
+    """
     if not data:
         return None
     tz = _report_tz(from_date)
@@ -1030,7 +1043,7 @@ def _create_line_chart(
             borderaxespad=0.2,
         )
         top_edge = 0.98 if legend_below else 0.88 if len(handles) <= 3 else 0.82
-        left = _left_margin(ticks, width, has_label=False)
+        left = _left_margin(ticks, width, has_label=False) if plot_left_in is None else plot_left_in / width
         fig.subplots_adjust(left=left, right=1.0, top=top_edge, bottom=0.31)
         # Put the unit above the plot so the axis needs space only for its tick labels.
         ax.yaxis.set_label_coords(0.0, 1.02)
@@ -1045,6 +1058,7 @@ def _create_response_time_chart(
     height: float = 2.5,
     sla_threshold_ms: int | None = None,
     threshold_label: str | None = None,
+    plot_left_in: float | None = None,
 ) -> bytes | None:
     """Create a response time chart as PNG bytes."""
     return _create_line_chart(
@@ -1058,6 +1072,7 @@ def _create_response_time_chart(
         sla_threshold_ms=sla_threshold_ms,
         threshold_label=threshold_label,
         legend_below=True,
+        plot_left_in=plot_left_in,
     )
 
 
@@ -1069,6 +1084,7 @@ def _create_ping_chart(
     height: float = 2.5,
     sla_threshold_ms: int | None = None,
     threshold_label: str | None = None,
+    plot_left_in: float | None = None,
 ) -> bytes | None:
     """Create a ping latency chart as PNG bytes."""
     return _create_line_chart(
@@ -1081,11 +1097,17 @@ def _create_ping_chart(
         height=height,
         sla_threshold_ms=sla_threshold_ms,
         threshold_label=threshold_label,
+        plot_left_in=plot_left_in,
     )
 
 
 def _create_tcp_chart(
-    data: list[dict], from_date: datetime, to_date: datetime, width: float = 6.7, height: float = 2.5
+    data: list[dict],
+    from_date: datetime,
+    to_date: datetime,
+    width: float = 6.7,
+    height: float = 2.5,
+    plot_left_in: float | None = None,
 ) -> bytes | None:
     """Create a TCP latency chart as PNG bytes."""
     return _create_line_chart(
@@ -1096,15 +1118,22 @@ def _create_tcp_chart(
         ylabel="TCP latency (ms)",
         width=width,
         height=height,
+        plot_left_in=plot_left_in,
     )
 
 
 def _create_uptime_chart(
-    data: list[dict], from_date: datetime, to_date: datetime, width: float = 6.7, height: float = 1.45
+    data: list[dict],
+    from_date: datetime,
+    to_date: datetime,
+    width: float = 6.7,
+    height: float = 1.45,
+    plot_left_in: float = 0.0,
 ) -> bytes | None:
     """Create an availability status strip as PNG bytes.
 
     Up and Down intervals are drawn as blocks; periods without samples stay empty.
+    plot_left_in leaves the Y-axis gutter of the latency charts empty so the time axes align.
     """
     tz = _report_tz(from_date)
     points = [(t, v) for t, v in zip(*_parse_series(data, tz), strict=True) if not math.isnan(v)] if data else []
@@ -1151,7 +1180,7 @@ def _create_uptime_chart(
             fontsize=8,
             borderaxespad=0.2,
         )
-        fig.subplots_adjust(left=0.0, right=1.0, top=0.80, bottom=0.42)
+        fig.subplots_adjust(left=plot_left_in / width, right=1.0, top=0.80, bottom=0.42)
         return _fig_png(fig)
 
 
@@ -1176,6 +1205,7 @@ def _create_coverage_bar(
     width: float = 6.7,
     height: float = 0.7,
     interval_seconds: float = 60,
+    plot_left_in: float = 0.0,
 ) -> bytes | None:
     """Compact bar over the whole reporting period: where checks exist and where the period is empty."""
     tz = _report_tz(from_date)
@@ -1219,8 +1249,19 @@ def _create_coverage_bar(
             fontsize=8,
             borderaxespad=0.2,
         )
-        fig.subplots_adjust(left=0.0, right=1.0, top=0.62, bottom=0.42)
+        fig.subplots_adjust(left=plot_left_in / width, right=1.0, top=0.62, bottom=0.42)
         return _fig_png(fig)
+
+
+def _port_scales(port_data: dict[int, list[dict]], tz) -> tuple[dict, dict, list[float]]:
+    """Per-port views and Y scales plus the tick list with the widest labels."""
+    views = {port: _build_view(data, tz) for port, data in sorted(port_data.items())}
+    shared = _ports_share_scale(list(views.values()))
+    scales = {port: _axis_scale(list(views.values()) if shared else [views[port]], target=3) for port in views}
+    widest = max(
+        (s[1] for s in scales.values()), key=lambda t: len(_fmt_tick(1 if len(t) < 2 else t[1] - t[0])(t[-1], 0))
+    )
+    return views, scales, widest
 
 
 def _create_multi_port_tcp_chart(
@@ -1229,6 +1270,7 @@ def _create_multi_port_tcp_chart(
     to_date: datetime,
     width: float = 6.7,
     height: float | None = None,  # Auto-calculated based on number of ports
+    plot_left_in: float | None = None,
 ) -> bytes | None:
     """Create a small-multiples TCP latency chart with one panel per port.
 
@@ -1249,12 +1291,7 @@ def _create_multi_port_tcp_chart(
     if height is None:
         height = min(7.5, max(1.9, num_ports * 1.0 + 0.6))
 
-    views = {port: _build_view(port_data[port], tz) for port in sorted_ports}
-    shared = _ports_share_scale(list(views.values()))
-    scales = {port: _axis_scale(list(views.values()) if shared else [views[port]], target=3) for port in sorted_ports}
-    widest = max(
-        (s[1] for s in scales.values()), key=lambda t: len(_fmt_tick(1 if len(t) < 2 else t[1] - t[0])(t[-1], 0))
-    )
+    views, scales, widest = _port_scales(port_data, tz)
 
     with _safe_figure(nrows=num_ports, ncols=1, figsize=(width, height), sharex=True, squeeze=False) as (fig, axes):
         flat_axes = axes.flatten()
@@ -1294,7 +1331,7 @@ def _create_multi_port_tcp_chart(
                 borderaxespad=0.2,
             )
         _format_time_axis(flat_axes[-1], from_date=from_date, to_date=to_date)
-        left = _left_margin(widest, width, has_label=False)
+        left = _left_margin(widest, width, has_label=False) if plot_left_in is None else plot_left_in / width
         fig.text(0.0, 0.99, "TCP latency (ms)", ha="left", va="top", fontsize=8, color="#495057")
         fig.subplots_adjust(left=left, right=1.0, top=1 - 0.3 / height, bottom=min(0.34, 0.65 / height), hspace=0.6)
         return _fig_png(fig)
@@ -2648,8 +2685,14 @@ class PDFReportBuilder:
     def _cover_name(self) -> tuple[str, str]:
         """Return (title, secondary line): the target name, plus its host when it differs."""
         target = self.report_data.target
-        host = target.get("ping_host") or target.get("host") or target.get("http_url", "")
-        host = str(host).replace("https://", "").replace("http://", "").split("/")[0] if host else ""
+        host = target.get("ping_host") or target.get("host") or ""
+        if not host and target.get("http_url"):
+            # Only the host name of the URL: userinfo, query and fragment may carry secrets.
+            try:
+                host = urlparse(str(target["http_url"])).hostname or ""
+            except ValueError:
+                host = ""
+        host = str(host)
         name = str(target.get("name") or host or "Unknown target")
         return name, ("" if host.lower() == name.lower() else host)
 
@@ -2969,13 +3012,9 @@ class PDFReportBuilder:
 
         self._add_ssl_summary()
         if self._get_ssl_data() is None:
-            self._group_title("Certificate & TLS")
-            self.elements.append(
-                Paragraph(
-                    "Not applicable: the target is not served over HTTPS, so no certificate or TLS scan was run.",
-                    self.styles["note"],
-                )
-            )
+            # No TLS section for a target without a scanned HTTPS endpoint; plain HTTP is stated, not rated.
+            transport = "HTTP, no TLS scan" if self._http_scheme() == "http" else "No TLS scan"
+            self.elements.append(self._kv_table([("Transport", Paragraph(transport, self.styles["value"]), None)]))
 
         self._add_detected_stack()
 
@@ -3077,6 +3116,18 @@ class PDFReportBuilder:
         self._group_title("Detected Technology Stack")
         self.elements.append(self._kv_table(rows))
 
+    @staticmethod
+    def _url_scheme(url: str) -> str:
+        """Lower-case URL scheme, or "" when the URL cannot be parsed."""
+        try:
+            return urlparse(url).scheme.lower()
+        except ValueError:
+            return ""
+
+    def _http_scheme(self) -> str:
+        """Scheme of the configured HTTP URL ("http", "https" or "" when none or unusable)."""
+        return self._url_scheme(str(self.report_data.target.get("http_url") or "").strip())
+
     def _get_ssl_data(self) -> TlsScanResult | None:
         """Run the TLS scan once per report and cache the outcome (also when it is None).
 
@@ -3094,10 +3145,11 @@ class PDFReportBuilder:
         target = self.report_data.target
 
         cert_host = target.get("cert_host")
-        http_url = target.get("http_url") or target.get("url") or ""
+        http_url = str(target.get("http_url") or target.get("url") or "").strip()
         if not http_url and target.get("host"):
             http_url = f"https://{target['host']}"
-        if not http_url.startswith("https://"):
+        if self._url_scheme(http_url) != "https":
+            # Never upgrade a configured http:// to https://: only an explicit cert_host asks for a scan.
             if not cert_host:
                 _log.debug("Skipping SSL scan for non-HTTPS target: %s", redact_url(http_url))
                 return None
@@ -3695,6 +3747,10 @@ class PDFReportBuilder:
         width = self._chart_width_in()
         kpis = self.kpis
         added = 0
+        display = data.display_data or {}
+        left_in = self._shared_plot_left_in(
+            width, display, c_from_default=data.from_date, sla=(sla_response_ms, sla_ping_ms)
+        )
 
         # Few samples in a long period: show the gap once on a coverage bar, then zoom into the measured window.
         window = self._detail_window()
@@ -3707,6 +3763,7 @@ class PDFReportBuilder:
                 data.to_date,
                 width=width,
                 interval_seconds=data.target.get("interval_seconds") or 60,
+                plot_left_in=left_in,
             )
             if bar:
                 self._add_chart_section(
@@ -3719,7 +3776,12 @@ class PDFReportBuilder:
                 added += 1
 
         uptime_chart = _create_uptime_chart(
-            data.uptime_data, from_date=c_from, to_date=c_to, width=width, height=1.0 if window else 1.45
+            data.uptime_data,
+            from_date=c_from,
+            to_date=c_to,
+            width=width,
+            height=1.0 if window else 1.45,
+            plot_left_in=left_in,
         )
         if uptime_chart:
             rate = _fmt_pct(kpis.uptime_percent)
@@ -3734,7 +3796,6 @@ class PDFReportBuilder:
             )
             added += 1
 
-        display = data.display_data or {}
         line_height = 1.4 if window else 2.5
         response_chart = _create_response_time_chart(
             display.get("http_ms", data.http_data),
@@ -3744,6 +3805,7 @@ class PDFReportBuilder:
             height=line_height,
             sla_threshold_ms=int(sla_response_ms) if sla_response_ms else None,
             threshold_label=response_label,
+            plot_left_in=left_in,
         )
         if response_chart:
             self._add_chart_section(
@@ -3764,6 +3826,7 @@ class PDFReportBuilder:
                 height=line_height,
                 sla_threshold_ms=int(sla_ping_ms) if sla_ping_ms else None,
                 threshold_label=ping_label,
+                plot_left_in=left_in,
             )
             if ping_chart:
                 self._add_chart_section(
@@ -3780,11 +3843,17 @@ class PDFReportBuilder:
                 display_ports = {
                     port: display.get(f"tcp_ms_{port}", points) for port, points in data.tcp_port_data.items()
                 }
-                tcp_chart = _create_multi_port_tcp_chart(display_ports, from_date=c_from, to_date=c_to, width=width)
+                tcp_chart = _create_multi_port_tcp_chart(
+                    display_ports, from_date=c_from, to_date=c_to, width=width, plot_left_in=left_in
+                )
                 note = self._multi_port_note(display_ports, self.tz)
             if not tcp_chart and data.tcp_data:
                 tcp_chart = _create_tcp_chart(
-                    display.get("tcp_ms", data.tcp_data), from_date=c_from, to_date=c_to, width=width
+                    display.get("tcp_ms", data.tcp_data),
+                    from_date=c_from,
+                    to_date=c_to,
+                    width=width,
+                    plot_left_in=left_in,
                 )
                 note = self._latency_note(data.tcp_data, display.get("tcp_ms"), self.tz)
             if tcp_chart:
@@ -3798,6 +3867,34 @@ class PDFReportBuilder:
             )
         if page_break:
             self.elements.append(PageBreak())
+
+    def _shared_plot_left_in(
+        self, width: float, display: dict, *, c_from_default: datetime, sla: tuple[float | None, float | None]
+    ) -> float:
+        """Widest Y-axis gutter among the chapter's charts, so every chart's plot area starts at the same x."""
+        data = self.report_data
+        window = self._detail_window()
+        from_date = window[0] if window else c_from_default
+        gutters = [
+            _latency_plot_left_in(
+                display.get("http_ms", data.http_data), from_date, int(sla[0]) if sla[0] else None, width
+            )
+        ]
+        if data.target.get("enable_ping") and data.ping_data:
+            gutters.append(
+                _latency_plot_left_in(
+                    display.get("ping_ms", data.ping_data), from_date, int(sla[1]) if sla[1] else None, width
+                )
+            )
+        if data.target.get("enable_tcp_connect"):
+            if data.tcp_port_data:
+                ports = {port: display.get(f"tcp_ms_{port}", pts) for port, pts in data.tcp_port_data.items()}
+                ports = {port: pts for port, pts in ports.items() if pts}
+                if ports:
+                    gutters.append(_left_margin(_port_scales(ports, _report_tz(from_date))[2], width, False) * width)
+            if data.tcp_data:
+                gutters.append(_latency_plot_left_in(display.get("tcp_ms", data.tcp_data), from_date, None, width))
+        return max(gutters)
 
     def _detail_window(self) -> tuple[datetime, datetime] | None:
         """Time span of the recorded samples when low coverage leaves most of the period empty."""
