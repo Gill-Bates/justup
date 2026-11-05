@@ -37,10 +37,9 @@ _Layout = tuple[dict[str, _TableShape], dict[str, _IndexShape]]
 
 
 # Documented historical variants that stay accepted although they differ from the baseline DDL:
-# - alerts.active_incident: ALTER TABLE in migration 3 cannot change a default later, so upgraded
-#   databases carry DEFAULT 0 while new ones carry DEFAULT 1. Every writer sets the column
-#   explicitly (create_alert inserts 1, resolve/acknowledge/deactivate set 0), so it never applies.
-# - idx_recipients_phone: a v1 database may keep the non-unique/non-partial index while duplicate
+# - alerts.active_incident: former version-10 databases may carry DEFAULT 0 while the new baseline
+#   carries DEFAULT 1. Every writer sets the column explicitly, so the default never applies.
+# - idx_recipients_phone: a former-current database may keep the non-unique/non-partial index while duplicate
 #   phone numbers exist (_ensure_unique_recipient_phone); only its table and columns are compared.
 _TOLERATED_COLUMN_DEFAULTS: dict[tuple[str, str], frozenset[str]] = {
     ("alerts", "active_incident"): frozenset({"0", "1"}),

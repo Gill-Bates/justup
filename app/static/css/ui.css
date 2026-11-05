@@ -239,6 +239,68 @@ textarea.smtp-editor-frame {
 	font-size: 1rem;
 }
 
+/* Settings > Network: public outbound IPs. Long IPv6 values wrap inside their cell, never widen the card. */
+.egress-list {
+	display: grid;
+	gap: 0.75rem;
+}
+
+.egress-row {
+	display: grid;
+	gap: 0.125rem;
+	min-width: 0;
+}
+
+.egress-label {
+	font-weight: 600;
+}
+
+.egress-value {
+	margin: 0;
+	min-width: 0;
+}
+
+.egress-line {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0.5rem;
+	min-width: 0;
+}
+
+.egress-address {
+	min-width: 0;
+	max-width: 100%;
+	overflow-wrap: anywhere;
+	font-size: 0.95rem;
+	color: var(--bs-body-color);
+}
+
+.egress-actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0.5rem 0.75rem;
+}
+
+.egress-actions .btn {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.25rem;
+}
+
+.egress-actions .material-icons {
+	font-size: 1rem;
+}
+
+.egress-line .btn-icon .material-icons {
+	font-size: 1.125rem;
+}
+
+.egress-card [aria-disabled="true"] {
+	cursor: progress;
+}
+
 /* Compact vertical rhythm inside settings cards. */
 .settings-compact {
 	display: grid;

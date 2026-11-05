@@ -73,4 +73,42 @@
 					</div>
 				</div>
 			</details>
+
+			<details class="card shadow-sm settings-card settings-details egress-card" open data-public-egress data-endpoint="/settings/network/public-egress">
+				<summary class="card-header"><h2 class="h6 mb-0">Public outbound IPs</h2></summary>
+				<div class="card-body settings-compact">
+					<p class="form-text mb-0" id="egress_privacy_hint"><strong>Privacy:</strong> to find these addresses, justUp! connects to icanhazip.com and ipify.org over HTTPS. They see this server's public address and nothing else. The check runs when you open this tab and on Refresh; results are not saved.</p>
+					<dl class="egress-list mb-0">
+						<div class="egress-row" data-egress-family="ipv4">
+							<dt class="egress-label">IPv4</dt>
+							<dd class="egress-value">
+								<span class="egress-line">
+									<code class="egress-address" data-egress-address>&mdash;</code>
+									<span class="badge ju-status-badge--neutral" data-egress-badge>Checking&hellip;</span>
+									<button type="button" class="btn btn-icon btn-sm" data-egress-copy aria-label="Copy IPv4 address" title="Copy IPv4 address" disabled><span class="material-icons" aria-hidden="true">content_copy</span></button>
+								</span>
+								<span class="form-text d-block" data-egress-detail></span>
+							</dd>
+						</div>
+						<div class="egress-row" data-egress-family="ipv6">
+							<dt class="egress-label">IPv6</dt>
+							<dd class="egress-value">
+								<span class="egress-line">
+									<code class="egress-address" data-egress-address>&mdash;</code>
+									<span class="badge ju-status-badge--neutral" data-egress-badge>Checking&hellip;</span>
+									<button type="button" class="btn btn-icon btn-sm" data-egress-copy aria-label="Copy IPv6 address" title="Copy IPv6 address" disabled><span class="material-icons" aria-hidden="true">content_copy</span></button>
+								</span>
+								<span class="form-text d-block" data-egress-detail></span>
+							</dd>
+						</div>
+					</dl>
+					<div class="egress-actions">
+						<button type="button" class="btn btn-outline-secondary btn-sm" data-egress-refresh><span class="material-icons" aria-hidden="true">refresh</span> Refresh</button>
+						<span class="form-text mb-0">Last checked: <time data-egress-checked>&hellip;</time></span>
+					</div>
+					<p class="form-text mb-0">These are the currently observed outbound IP addresses. Routing, proxies or NAT may cause different destinations to see different addresses.</p>
+					<p class="form-text text-warning-emphasis mb-0" data-egress-proxy hidden>A proxy is set in this container's environment. These addresses are measured directly, not through the proxy; HTTP monitors that use it may appear with another address.</p>
+					<div class="visually-hidden" role="status" aria-live="polite" data-egress-live></div>
+				</div>
+			</details>
 </form>

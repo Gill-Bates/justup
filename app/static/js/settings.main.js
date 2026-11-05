@@ -13,6 +13,7 @@ import { DOM } from './settings.core.js';
 import { initSignal, toggleSignalPanel, loadSignalStatus } from './settings.signal.js';
 import { initStorage } from './settings.storage.js';
 import { initTagInputs } from './utils/tag-input.js';
+import { initPublicEgress } from './settings.public-egress.js';
 
 
 function initTooltips() {
@@ -98,12 +99,14 @@ document.addEventListener('DOMContentLoaded', () => {
         initSignal();
         initStorage();
         initTagInputs();
+        initPublicEgress();
     });
     
     // Initialize all modules (for non-HTMX loaded content)
     initSignal();
     initStorage();
     initTagInputs();
+    initPublicEgress();
     
     // Note: Settings and storage stats are loaded via HTMX fragments,
     // not via direct API calls (which would require auth)

@@ -29,7 +29,7 @@ from fastapi import (
     Request,
     UploadFile,
 )
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, EmailStr
 from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
@@ -610,6 +610,19 @@ async def get_storage_stats(request: Request, _admin=Depends(require_admin)):
         "total_points": stats["total_points"],
         "tsdb_saved_bytes": stats["tsdb_saved_bytes"],
     }
+
+
+@router.get("/network/public-egress", dependencies=[Depends(rate_limit("12/minute"))])
+async def get_public_egress(refresh: bool = False, _admin=Depends(require_admin)):
+    """Observed public IPv4/IPv6 egress address of this server (read-only, never stored).
+
+    The addresses come from external HTTPS echo endpoints queried by the server itself, one connection per
+    address family. ``refresh`` skips a fresh cache but stays inside the rate limit and a minimum interval.
+    """
+    from ..services.public_egress import get_public_egress as lookup
+
+    result = await run_in_threadpool(lookup, refresh=refresh)
+    return JSONResponse(result, headers={"Cache-Control": "private, no-store"})
 
 
 @router.get("/db-health")

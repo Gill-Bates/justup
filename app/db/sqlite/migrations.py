@@ -79,6 +79,8 @@ def check_schema_compatibility(conn: sqlite3.Connection) -> int:
     elif version in (SCHEMA_VERSION, LEGACY_SCHEMA_VERSION):
         if diffs := _diff_layout((tables, indexes), _expected_layout()):
             raise _drift_error(conn, version, diffs)
+    elif version < SCHEMA_VERSION and not _missing_migrations(version):
+        return version
     elif version < LEGACY_SCHEMA_VERSION:
         raise IncompatibleSchemaError(
             f"{where}: its schema version is {version}, but this release supports {SCHEMA_VERSION} "
@@ -118,7 +120,15 @@ def init_schema(conn: sqlite3.Connection) -> None:
     elif int(conn.execute("PRAGMA auto_vacuum").fetchone()[0]) == 0:
         _log.info("Database has auto_vacuum=0; free pages are not returned incrementally (no automatic VACUUM)")
     ensure_wal_mode(conn)
-    pending = [] if current == 0 else [m for m in MIGRATIONS if current < m.version <= SCHEMA_VERSION]
+    pending = (
+        []
+        if current == 0
+        else [
+            m
+            for m in sorted(MIGRATIONS, key=lambda migration: migration.version)
+            if current < m.version <= SCHEMA_VERSION
+        ]
+    )
     step: Migration | None = None
     try:
         with transaction(conn, immediate=True):
