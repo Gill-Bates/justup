@@ -462,6 +462,11 @@
 @container dashboard-body (width < 13rem) {
 	.dashboard-monitor-metrics {
 		grid-template-columns: minmax(0, 1fr);
+		gap: 0.125rem;
+	}
+
+	.dashboard-monitor-metrics dt {
+		min-height: 0;
 	}
 }
 

@@ -35,6 +35,8 @@ Trivy (`scanners: vuln`) reports only packages from a package database (dpkg) or
 
 `/usr/share/doc/nmap/PROVENANCE.txt` in the image, the `nmap-provenance-<arch>.txt` release asset and the "Nmap composition" section of the release notes list the bundled library versions and the Debian packages. The bundled versions come from the signed source tarball, so they are identical on both architectures (`nmap_bundled_libraries` in `toolchain-<arch>.txt`, compared by the parity gate). When a CVE is published for libpcap, libdnet, liblinear or Nmap, compare it with these versions by hand; a green Trivy result says nothing about them. Moving libpcap to Debian was not done: Debian's libpcap is older than the bundled one and would add `libdbus-1-3` to the runtime image. Matching Nmap's components against NVD by CPE is a possible follow-up, not part of the release gate.
 
+The build proves the Debian copies of zlib and PCRE2 in two ways. PCRE2 is a direct `NEEDED` entry of the binary. zlib is not: the linker leaves `libz.so.1` out of Nmap's own list and it resolves only through `libcrypto`, so the check reads the banner (`libz-<version>` for Debian, `nmap-libz-<version>` for the bundled copy) and the resolved `libz.so.1` in the `ldd` output. The runtime stage compares the library list recorded by the builder (`runtime_dependencies`) with its own `ldd` result and fails on any difference, then adds `system_libraries` for the packages that own those libraries.
+
 ## Inputs that move with the build time
 
 The runtime and `signal-cli-dist` stages run `apt-get update && apt-get upgrade` during each build.
@@ -42,6 +44,10 @@ The runtime and `signal-cli-dist` stages run `apt-get update && apt-get upgrade`
 Consequence: two builds with the same base digest, run at different times, can contain different Debian package versions. The base digest fixes the starting point, not the final package set. A bit-for-bit reproducible rebuild would additionally need pinned package sources or a Debian snapshot; the pipeline does not provide that.
 
 The Trivy scan of the built images and the digest recorded per architecture show what a given release actually contains.
+
+Archived per release today: the digest of each architecture, `toolchain-<arch>.txt` (Python packages, signal-cli, libsignal, Java version, Nmap), `nmap-provenance-<arch>.txt` and the Trivy reports. Not archived: the complete Debian package inventory of the image, the exact Temurin package version, and the moving inputs (Debian and Adoptium repositories, `FLAG_ICONS_VERSION=main`). Archiving `dpkg-query -W` output per architecture would close the largest gap; it is not implemented.
+
+The Trivy gate covers dpkg and language packages only. The libraries compiled into Nmap (libpcap, libdnet, liblinear) and Nmap itself are not part of that check; a CPE/NVD check for them is a separate open task.
 
 ## Updates
 

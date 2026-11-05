@@ -402,6 +402,7 @@ jobs:
           grep -Eq '^bundled_libraries=libdnet=[0-9.]+,liblinear=[0-9.]+,libpcap=[0-9.]+$' "nmap-provenance-${ARCH}.txt"
           grep -q '^bundled_libraries_origin=' "nmap-provenance-${ARCH}.txt"
           grep -Eq '^system_libraries=.*libpcre2-8-0=' "nmap-provenance-${ARCH}.txt"
+          grep -Eq '^system_libraries=.*zlib1g=' "nmap-provenance-${ARCH}.txt"
           docker run --rm -i --platform "$PLATFORM" --entrypoint python "$TEST_IMAGE" - binary "$ARCH" < tools/verify-nmap-worker.py
           docker run --rm --platform "$PLATFORM" --entrypoint sh "$TEST_IMAGE" \
             -c 'test -s /usr/share/doc/nmap/LICENSE && test -s /usr/share/doc/nmap/NOTICE.txt'

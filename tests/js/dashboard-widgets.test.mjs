@@ -29,8 +29,33 @@ test('factory layouts retain six originals and expose only allowed defaults', ()
   const alerts = admin.find(entry => entry.id === 'alerts-open');
   assert.equal(alerts.label, 'Alerts');
   const queue = admin.find(entry => entry.id === 'delivery-queue');
-  assert.equal(alerts.defaultX, queue.defaultX);
-  assert.equal(alerts.defaultY, queue.defaultY + queue.defaultSize.h);
+  // Admin factory arrangement: quality, delivery queue and alerts are three equal cards in one row,
+  // the downtime table spans the full width below them.
+  const placed = id => { const e = admin.find(entry => entry.id === id); return [e.defaultX, e.defaultY, e.defaultSize.w, e.defaultSize.h]; };
+  assert.deepEqual(placed('quality'), [0, 2, 4, 3]);
+  assert.deepEqual(placed('delivery-queue'), [4, 2, 4, 3]);
+  assert.deepEqual(placed('alerts-open'), [8, 2, 4, 3]);
+  assert.deepEqual(placed('downtime'), [0, 5, 12, 4]);
+});
+test('factory layout without the delivery queue fills the middle row with quality and alerts', () => {
+  const normal = window.JuDashboardRegistry.forRole(false);
+  const placed = id => { const e = normal.find(entry => entry.id === id); return [e.defaultX, e.defaultY, e.defaultSize.w, e.defaultSize.h]; };
+  assert.deepEqual(placed('quality'), [0, 2, 6, 3]);
+  assert.deepEqual(placed('alerts-open'), [6, 2, 6, 3]);
+  assert.deepEqual(placed('downtime'), [0, 5, 12, 4]);
+});
+test('factory layout has no overlapping visible widgets for either role', () => {
+  for (const isAdmin of [false, true]) {
+    const visible = window.JuDashboardRegistry.forRole(isAdmin).filter(entry => entry.defaultVisible);
+    for (const [i, a] of visible.entries()) {
+      assert.ok(a.defaultX >= 0 && a.defaultX + a.defaultSize.w <= 12, `${a.id} stays inside the 12 columns`);
+      for (const b of visible.slice(i + 1)) {
+        const apart = a.defaultX + a.defaultSize.w <= b.defaultX || b.defaultX + b.defaultSize.w <= a.defaultX
+          || a.defaultY + a.defaultSize.h <= b.defaultY || b.defaultY + b.defaultSize.h <= a.defaultY;
+        assert.ok(apart, `${a.id} and ${b.id} overlap (admin=${isAdmin})`);
+      }
+    }
+  }
 });
 
 test('queue distinguishes backlog from failed history and unavailable data', () => {

@@ -102,7 +102,7 @@ def _plot_edges(png: bytes, *, min_fraction: float = 0.5) -> tuple[int, int]:
 
 def _chapter_images(builder: pdf_report.PDFReportBuilder, monkeypatch) -> dict[str, bytes]:
     images: dict[str, bytes] = {}
-    monkeypatch.setattr(builder, "_add_chart_section", lambda title, png, note=None: images.setdefault(title, png))
+    monkeypatch.setattr(builder, "_add_chart_section", lambda title, png, *_: images.setdefault(title, png))
     builder._build_charts_page(page_break=False)  # noqa: SLF001
     return images
 

@@ -133,11 +133,28 @@ if readelf -d /out/usr/bin/nmap | grep -Eq 'RPATH|RUNPATH'; then
 fi
 mkdir -p /out/usr/share/doc/nmap
 ldd /out/usr/bin/nmap > /out/usr/share/doc/nmap/DEPENDENCIES.txt
-! grep -q 'not found' /out/usr/share/doc/nmap/DEPENDENCIES.txt
-! grep -Eq '/tmp/|/out/|/build' /out/usr/share/doc/nmap/DEPENDENCIES.txt
+# "! cmd" never trips "set -e", so every negative check is an explicit if.
+if grep -q 'not found' /out/usr/share/doc/nmap/DEPENDENCIES.txt; then
+  echo "nmap has unresolved libraries" >&2; exit 1
+fi
+if grep -Eq '/tmp/|/out/|/build' /out/usr/share/doc/nmap/DEPENDENCIES.txt; then
+  echo "nmap resolves a library from the build tree" >&2; exit 1
+fi
 # A silent autodetect fallback to the bundled copies would hide them from the scan: fail instead.
+# PCRE2 is a direct NEEDED entry. zlib is not: the linker drops libz.so.1 from nmap's own list and it
+# resolves only through libcrypto, so zlib is proven by the banner (Debian: "libz-<v>", bundled:
+# "nmap-libz-<v>") plus the Debian library in the ldd output.
 readelf -d /out/usr/bin/nmap | grep -q 'NEEDED.*libpcre2-8.so.0'
-! NMAPDIR=/out/usr/share/nmap /out/usr/bin/nmap --version | grep -Eq 'nmap-libz|nmap-libpcre2|libssh2'
+banner="$(NMAPDIR=/out/usr/share/nmap /out/usr/bin/nmap --version)"
+compiled_with="$(sed -n 's/^Compiled with: //p' <<<"$banner")"
+for required in 'libz-[0-9]' 'libpcre2-[0-9]'; do
+  grep -Eq "(^| )${required}" <<<"$compiled_with" \
+    || { echo "nmap banner lacks the Debian library ${required}: ${compiled_with}" >&2; exit 1; }
+done
+if grep -Eq 'nmap-libz|nmap-libpcre2|libssh2' <<<"$compiled_with"; then
+  echo "nmap bundles a library that must come from Debian: ${compiled_with}" >&2; exit 1
+fi
+grep -Eq '^[[:space:]]*libz\.so\.1 => /' /out/usr/share/doc/nmap/DEPENDENCIES.txt
 # Versions of the libraries compiled into the binary, read from the verified source tree.
 libpcap_version="$(cat libpcap/VERSION.txt)"
 libdnet_version="$(sed -n "s/^PACKAGE_VERSION='\(.*\)'$/\1/p" libdnet-stripped/configure)"
@@ -145,7 +162,7 @@ liblinear_version="$(awk '/#define LIBLINEAR_VERSION/ {printf "%d.%02d", $3/100,
 for v in "$libpcap_version" "$libdnet_version" "$liblinear_version"; do
   [[ "$v" =~ ^[0-9]+(\.[0-9]+)+$ ]] || { echo "Cannot read a bundled library version (got '${v}')" >&2; exit 1; }
 done
-actual="$(NMAPDIR=/out/usr/share/nmap /out/usr/bin/nmap --version | sed -n 's/^Nmap version \([^ ]*\).*/\1/p')"
+actual="$(sed -n 's/^Nmap version \([^ ]*\).*/\1/p' <<<"$banner")"
 [[ "$actual" == "$version" ]] || { echo "Built Nmap ${actual} differs from the resolved ${version}" >&2; exit 1; }
 
 # Licence, provenance and the notice (NPSL redistribution) travel with the binary.
@@ -395,7 +412,8 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
     gpg \
     binutils \
  && curl -fsSL https://packages.adoptium.net/artifactory/api/gpg/key/public -o /tmp/adoptium.key \
- && gpg --import --import-options show-only /tmp/adoptium.key 2>&1 | grep -q "3B04D753C9050D9A5D343F39843C48A565F8F04B" \
+ && fingerprints="$(gpg --show-keys --with-colons /tmp/adoptium.key | awk -F: '$1=="pub"{p=1;next} $1=="sub"{p=0} $1=="fpr"&&p{print $10;p=0}')" \
+ && test "$fingerprints" = "3B04D753C9050D9A5D343F39843C48A565F8F04B" \
  && gpg --dearmor -o /usr/share/keyrings/adoptium.gpg /tmp/adoptium.key \
  && rm /tmp/adoptium.key \
  && echo "deb [signed-by=/usr/share/keyrings/adoptium.gpg] https://packages.adoptium.net/artifactory/deb $(. /etc/os-release && echo "$VERSION_CODENAME") main" > /etc/apt/sources.list.d/adoptium.list \
@@ -503,8 +521,13 @@ RUN test -s /usr/share/nmap/nmap-services \
  && test -s /usr/share/nmap/nmap-service-probes \
  && nmap --version \
  && ldd /usr/bin/nmap > /usr/share/doc/nmap/DEPENDENCIES.txt \
- && ! grep -q 'not found' /usr/share/doc/nmap/DEPENDENCIES.txt
+ && ! grep -q 'not found' /usr/share/doc/nmap/DEPENDENCIES.txt \
+ && builder_dependencies="$(sed -n 's/^runtime_dependencies=//p' /usr/share/doc/nmap/PROVENANCE.txt)" \
+ && runtime_dependencies="$(awk '/=>/ {print $1}' /usr/share/doc/nmap/DEPENDENCIES.txt | sort | paste -sd, -)" \
+ && { test "$builder_dependencies" = "$runtime_dependencies" \
+      || { echo "Nmap libraries differ between builder (${builder_dependencies}) and runtime (${runtime_dependencies})" >&2; exit 1; }; }
 # Debian packages (name=version) that own every library the binary resolves here: the part of Nmap an image scan covers.
+# The library list (runtime_dependencies, from the builder) was compared with this stage's ldd result above.
 RUN set -eu \
  && libraries="$(awk '/=>/ && $3 ~ /^\// {print $3}' /usr/share/doc/nmap/DEPENDENCIES.txt)" \
  && test -n "$libraries" \

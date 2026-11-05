@@ -431,6 +431,23 @@ def test_nmap_links_pcre2_and_zlib_from_debian_and_drops_the_unused_ssh2():
     assert "--without-libssh2" in stage  # libssh2 serves NSE only, and NSE is not built
     # An autodetect fallback to the bundled copy must fail the build, not ship silently.
     assert "libpcre2-8.so.0" in stage and "nmap-libz" in stage and "nmap-libpcre2" in stage
+    # zlib is no direct NEEDED entry of the binary, so the banner must name the Debian copy positively.
+    assert "libz-[0-9]" in stage and "libpcre2-[0-9]" in stage
+    # "! cmd" is ignored by "set -e": a negative check in the builder script must be an explicit if.
+    assert not re.search(r"^!\s", stage, re.MULTILINE)
+
+
+def test_runtime_stage_compares_the_builder_library_list_with_its_own_ldd_result():
+    text = (ROOT / "docker" / "Dockerfile").read_text(encoding="utf-8")
+    runtime = text[text.index("AS runtime") :]
+    assert "runtime_dependencies=" in runtime and "differ between builder" in runtime
+
+
+def test_adoptium_key_is_pinned_by_its_exact_fingerprint():
+    text = (ROOT / "docker" / "Dockerfile").read_text(encoding="utf-8")
+    stage = text[text.index("AS jre-builder") : text.index("AS runtime")]
+    assert "--show-keys --with-colons" in stage
+    assert re.search(r'test "\$fingerprints" = "[0-9A-F]{40}"', stage)
 
 
 def test_nmap_composition_is_recorded_for_bundled_and_system_libraries():

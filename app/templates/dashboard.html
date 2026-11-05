@@ -121,7 +121,7 @@
 		</div>
 
 		<!-- quality -->
-		<div class="grid-stack-item" gs-id="quality" gs-x="0" gs-y="2" gs-w="3" gs-h="3" data-widget-id="quality">
+		<div class="grid-stack-item" gs-id="quality" gs-x="0" gs-y="2" gs-w="6" gs-h="3" data-widget-id="quality">
 			<div class="grid-stack-item-content">
 				<button type="button" class="dashboard-widget-handle" hidden aria-label="Move or resize widget: Monitor quality. Arrow keys move it, Shift with arrow keys resizes it.">
 					<span class="material-icons" aria-hidden="true">drag_indicator</span>
@@ -131,7 +131,7 @@
 		</div>
 
 		<!-- downtime -->
-		<div class="grid-stack-item" gs-id="downtime" gs-x="3" gs-y="2" gs-w="6" gs-h="4" data-widget-id="downtime">
+		<div class="grid-stack-item" gs-id="downtime" gs-x="0" gs-y="5" gs-w="12" gs-h="4" data-widget-id="downtime">
 			<div class="grid-stack-item-content">
 				<button type="button" class="dashboard-widget-handle" hidden aria-label="Move or resize widget: Downtime overview. Arrow keys move it, Shift with arrow keys resizes it.">
 					<span class="material-icons" aria-hidden="true">drag_indicator</span>
@@ -186,11 +186,11 @@
 			</div>
 		</div>
 
-		<div class="grid-stack-item d-none" gs-id="alerts-open" gs-x="9" gs-y="2" gs-w="3" gs-h="4" data-widget-id="alerts-open">
+		<div class="grid-stack-item d-none" gs-id="alerts-open" gs-x="6" gs-y="2" gs-w="6" gs-h="3" data-widget-id="alerts-open">
 			{{ monitoring_card('Alerts', 'notifications_active', 'alerts-open-status') }}
 		</div>
 		{% if user.is_admin %}
-		<div class="grid-stack-item d-none" gs-id="delivery-queue" gs-x="9" gs-y="2" gs-w="3" gs-h="3" data-widget-id="delivery-queue">
+		<div class="grid-stack-item d-none" gs-id="delivery-queue" gs-x="4" gs-y="2" gs-w="4" gs-h="3" data-widget-id="delivery-queue">
 				{{ monitoring_card('Delivery queue', 'outbox', 'delivery-queue-status') }}
 		</div>
 		{% endif %}
