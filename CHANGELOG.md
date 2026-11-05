@@ -21,6 +21,8 @@
 - `Change` The target details no longer carry explanatory sentences under the panel titles ("Latency, HTTP status codes and outages ...", "Per-check state ...") nor the "no HTTP status codes" part of the chart summary line.
 - `Fix` Cards keep their rounded border at the corners when their content is collapsed (for example the check cards in the target form): the inner radius now follows the card radius.
 - `Fix` The chart of a target without an HTTP check no longer shows the note "No HTTP status codes: the HTTP check is not enabled."
+- `Fix` The tab bar of Edit Target (General, HTTP / TLS, Network, Alerts & SLA) no longer scrolls vertically by one pixel (ghost scroll under the tabs).
+- `Fix` Native select fields show a hand cursor while operable and `not-allowed` while disabled.
 - `Fix` "Insert link" in the mail template editor no longer opens a browser popup: the address is typed into a field of the editor, and a blocked address (for example `javascript:`) is shown as an error at that field.
 - `Fix` "Reset metrics" and "Delete target" ask in the application's own dialog (naming the target and the consequence) instead of the browser's native popup.
 - `Fix` The target preview suggests HTTPS only when the final settings really check an https:// URL; an `http://` override or a switched-off HTTP check no longer gets the suggestion.

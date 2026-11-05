@@ -2927,6 +2927,11 @@ summary:focus-visible,
 	background-image: var(--ju-switch-thumb-off);
 }
 
+/* overflow-x: auto makes y auto too; the active tab's -1px margin over the bar border would give a 1px ghost scroll. */
+.target-edit-tabs {
+	overflow-y: hidden;
+}
+
 /* Operable controls show a hand, disabled toggles and selects not-allowed, text fields keep the I-beam. */
 a[href],
 select:not(:disabled),

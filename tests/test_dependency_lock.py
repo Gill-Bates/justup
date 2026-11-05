@@ -392,11 +392,11 @@ def _pip_install(requirements: Path, find_links: Path) -> subprocess.CompletedPr
         if os.environ.get("CI"):
             pytest.fail(message)
         pytest.skip(message)
-    target = tempfile.mkdtemp(dir=requirements.parent)
-    command = [sys.executable, "-m", "pip", "install", "--target", target, "--no-deps", "--no-index"]
-    command += ["--no-cache-dir", "--require-hashes", "--only-binary=:all:"]
-    command += ["--find-links", str(find_links), "-r", str(requirements)]
-    return subprocess.run(command, capture_output=True, text=True, timeout=180, check=False)
+    with tempfile.TemporaryDirectory(dir=requirements.parent) as target:
+        command = [sys.executable, "-m", "pip", "install", "--target", target, "--no-deps", "--no-index"]
+        command += ["--no-cache-dir", "--require-hashes", "--only-binary=:all:"]
+        command += ["--find-links", str(find_links), "-r", str(requirements)]
+        return subprocess.run(command, capture_output=True, text=True, timeout=180, check=False)
 
 
 def _sslyze_requirement(tmp_path: Path, digest: str) -> Path:

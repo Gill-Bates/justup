@@ -216,6 +216,14 @@ const PAGES = [
 	},
 	{ id: "target-new", path: "/ui/targets/new" },
 	{ id: "target-edit", path: "/ui/targets/1/edit" },
+	...["http", "network"].map((tab) => ({
+		id: `target-edit-${tab}`, path: "/ui/targets/1/edit",
+		async prepare(page) {
+			await page.click(`#target-${tab}-tab`);
+			await page.waitForSelector(`#target-${tab}-pane.show.active`);
+			await waitForVisualStability(page);
+		},
+	})),
 	{ id: "target-dashboard", path: "/ui/targets/1", shot: true },
 	{ id: "target-dashboard-kpi", path: "/ui/targets/2", shot: true },
 	{ id: "target-dashboard-data", path: "/ui/targets/4", shot: true },

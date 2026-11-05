@@ -587,7 +587,7 @@
 		// The chain: segment i joins the display positions of node i and i+1, trimmed to stop markerGap px
 		// before each marker. Every segment is a halo line under the colored line; both live in panes
 		// between the basemap/labels and the markers. A dashed segment marks an estimated or unknown
-		// path (never a physical link). Route length is bounded (<=20 hops).
+		// path (never a physical link). Route length is bounded (<=30 hops).
 		map.createPane('chainHalo');
 		map.getPane('chainHalo').style.zIndex = 380;
 		map.createPane('chain');

@@ -54,6 +54,9 @@ the page works as before and keeps the result in memory only.
   receives only that capability; without it the page reports a permission error.
 - **Limits.** At most 30 hops. One shared deadline covers name resolution and all
   attempts. Two traces run at a time; a further request is refused as busy.
+  Traces and port scans share three Nmap process slots (at most two scans, at most two
+  traces), so monitoring scans can never take the last slot from an interactive trace, and
+  traces never block a scan for longer than one trace takes.
 - **Values.** Each hop has a single round-trip time as reported by Nmap. There are no
   loss, average, best or worst statistics. Hops that do not answer are shown as
   *No reply*. IPv4 and IPv6 are supported; a host name is resolved once and that

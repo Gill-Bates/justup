@@ -1729,17 +1729,20 @@ def test_about_page_probes_signal_cli_once_and_caches_failure(conn, monkeypatch)
     calls = []
 
     def boom(*_a, **_k):
-        calls.append(1)
+        calls.append(_a[0])
         raise FileNotFoundError("signal-cli")
 
     monkeypatch.setattr(subprocess, "run", boom)
     monkeypatch.setattr(frontend, "_signal_cli_cache", None)
+    monkeypatch.setattr(frontend, "_nmap_cache", None)
     monkeypatch.setattr(frontend, "require_ui_user", lambda *_a, **_k: {"id": 1})
     monkeypatch.setattr(frontend, "templates", SimpleNamespace(TemplateResponse=lambda _r, _n, ctx: ctx))
     for _ in range(3):
         ctx = frontend.about_page(SimpleNamespace(), conn)
-    assert len(calls) == 1
+    assert calls.count(["signal-cli", "--version"]) == 1
+    assert calls.count(["nmap", "--version"]) == 1
     assert ("signal-cli", "not available") in ctx["dependencies"]
+    assert ctx["nmap_version"] == "not available"
 
 
 def test_about_page_reprobes_signal_cli_after_ttl(monkeypatch):
@@ -1759,6 +1762,31 @@ def test_about_page_reprobes_signal_cli_after_ttl(monkeypatch):
     monkeypatch.setattr(frontend, "_signal_cli_cache", (0.0, "old"))
     assert frontend._signal_cli_version() == "0.13.23"
     assert len(calls) == 2
+
+
+def test_about_page_displays_installed_nmap_version(conn, monkeypatch):
+    import subprocess
+
+    calls = []
+
+    def nmap_version(command, **kwargs):
+        calls.append((command, kwargs))
+        return SimpleNamespace(returncode=0, stdout="Nmap version 7.993 ( https://nmap.org )\nCompiled with: libpcre2")
+
+    monkeypatch.setattr(subprocess, "run", nmap_version)
+    monkeypatch.setattr(frontend, "_nmap_cache", None)
+    monkeypatch.setattr(frontend, "_signal_cli_version", lambda: "unavailable")
+    monkeypatch.setattr(frontend, "require_ui_user", lambda *_a, **_k: {"id": 1})
+    monkeypatch.setattr(frontend, "templates", SimpleNamespace(TemplateResponse=lambda _r, _n, ctx: ctx))
+    for _ in range(2):
+        ctx = frontend.about_page(SimpleNamespace(), conn)
+    assert ctx["nmap_version"] == "7.993"
+    assert len(calls) == 1
+    assert calls[0][0] == ["nmap", "--version"]
+    assert calls[0][1]["timeout"] == 5
+    assert "{{ nmap_version }}" in (Path(__file__).resolve().parent.parent / "app/templates/about.html").read_text(
+        encoding="utf-8"
+    )
 
 
 def test_alerts_day_filter_includes_last_microsecond_of_day(conn):

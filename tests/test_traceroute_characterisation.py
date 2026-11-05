@@ -26,7 +26,7 @@ from tests.test_traceroute_pipeline import HOST, ROUTES, TARGET_IP, _geo, _patch
 from tests.traceroute_helpers import patch_trace
 
 
-def _record_mtr(monkeypatch: pytest.MonkeyPatch, hops: list[dict], resolved: str | None) -> list[tuple[Any, Any]]:
+def _record_trace(monkeypatch: pytest.MonkeyPatch, hops: list[dict], resolved: str | None) -> list[tuple[Any, Any]]:
     """Patch both pipelines to the same trace result and record (host argument, force_ipv6) per call."""
     _patch_sources(monkeypatch, hops)
     for module in (traceroute_geo, pdf_report):  # the shared stub geolocates IPv4 only
@@ -54,7 +54,7 @@ def test_both_pipelines_trace_the_resolved_address_or_nothing(
     host: str,
     force_ipv6: bool | None,  # noqa: ARG001
 ) -> None:
-    calls = _record_mtr(monkeypatch, ROUTES["reached"], resolved)
+    calls = _record_trace(monkeypatch, ROUTES["reached"], resolved)
     pdf_report._run_traceroute_with_interpolation(host)
     _web_context_for(monkeypatch, host)
     # Exactly the resolved address is traced by both; an unresolvable host is never traced by name.
@@ -64,7 +64,7 @@ def test_both_pipelines_trace_the_resolved_address_or_nothing(
 def test_the_resolved_ip_is_traced_on_the_web_and_in_the_pdf(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls = _record_mtr(monkeypatch, ROUTES["reached"], TARGET_IP)
+    calls = _record_trace(monkeypatch, ROUTES["reached"], TARGET_IP)
     pdf_report._run_traceroute_with_interpolation(HOST)
     _web_context_for(monkeypatch, HOST)
     assert calls == [TARGET_IP, TARGET_IP]
@@ -73,7 +73,7 @@ def test_the_resolved_ip_is_traced_on_the_web_and_in_the_pdf(
 def test_synthetic_destination_keeps_the_last_responding_hop_latency_only_as_an_estimate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _record_mtr(monkeypatch, ROUTES["trailing_timeout"], TARGET_IP)
+    _record_trace(monkeypatch, ROUTES["trailing_timeout"], TARGET_IP)
     pdf_hops, _points, _interpolated = pdf_report._run_traceroute_with_interpolation(HOST)
     web_hops = _web_context_for(monkeypatch, HOST)["hops"]
     for hops in (pdf_hops, web_hops):

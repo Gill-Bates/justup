@@ -41,7 +41,12 @@ for (const viewport of VIEWPORTS) {
 						const footer = document.querySelector(".ju-footer, footer");
 						const pane = document.querySelector(".tab-pane.active");
 						const sideways = [...pane.querySelectorAll("*")].filter((e) => e.getBoundingClientRect().right > de.clientWidth + 1 && !e.closest(".ju-table-viewport, .nav-tabs, .tag-input, .dropdown-menu")).length;
+						const bar = document.getElementById("target-edit-tabs");
 						return {
+							// The bar scrolls sideways on narrow screens only; a vertical range the user can reach by wheel or touch is a ghost scroll.
+							barY: bar.scrollHeight - bar.clientHeight,
+							barUserScrollsY: /auto|scroll/.test(getComputedStyle(bar).overflowY),
+							barX: bar.scrollWidth - bar.clientWidth,
 							docOverflow: de.scrollHeight - de.clientHeight,
 							docSideways: de.scrollWidth - de.clientWidth,
 							footerBottom: Math.round(footer.getBoundingClientRect().bottom),
@@ -53,6 +58,8 @@ for (const viewport of VIEWPORTS) {
 						};
 					});
 					const label = `${tab}: ${JSON.stringify(m)}`;
+					assert.ok(m.barY <= 0 || !m.barUserScrollsY, `the tab bar can be scrolled vertically, a ghost scroll (${label})`);
+					if (viewport.width >= 768) assert.ok(m.barX <= 0, `the tab bar scrolls sideways (${label})`);
 					assert.ok(m.docOverflow <= 1, `the document scrolls vertically (${label})`);
 					assert.ok(m.docSideways <= 1, `the document scrolls sideways (${label})`);
 					assert.equal(m.footerBottom, m.viewportHeight, `the footer is not on the last row of the viewport (${label})`);

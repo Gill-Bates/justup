@@ -951,6 +951,32 @@ def _signal_cli_version() -> str:
         return label
 
 
+_nmap_lock = threading.Lock()
+_nmap_cache: tuple[float, str] | None = None
+
+
+def _nmap_version() -> str:
+    """Return the installed Nmap binary version, refreshing after the same probe TTL as signal-cli."""
+    import subprocess
+
+    global _nmap_cache
+    with _nmap_lock:
+        now = time.monotonic()
+        if _nmap_cache is not None and now < _nmap_cache[0]:
+            return _nmap_cache[1]
+        try:
+            result = subprocess.run(["nmap", "--version"], capture_output=True, text=True, timeout=5, check=False)
+            match = (
+                re.match(r"^Nmap version ([0-9]+(?:\.[0-9]+)+)\b", result.stdout) if result.returncode == 0 else None
+            )
+            label = match.group(1) if match else "not available"
+        except (OSError, subprocess.TimeoutExpired):
+            label = "not available"
+        ttl = _SIGNAL_CLI_TTL_OK_SECONDS if label != "not available" else _SIGNAL_CLI_TTL_FAILED_SECONDS
+        _nmap_cache = (time.monotonic() + ttl, label)
+        return label
+
+
 @router.get("/ui/about", response_class=HTMLResponse)
 def about_page(request: Request, conn=Depends(get_conn)):
     """Render the about page with version, dependencies, and license."""
@@ -1009,6 +1035,7 @@ def about_page(request: Request, conn=Depends(get_conn)):
             "version": VERSION,
             "build_info": BUILD_INFO,
             "python_version": python_version,
+            "nmap_version": _nmap_version(),
             "geoip_build_info": _get_geoip_build_info(),
             "dependencies": dependencies,
             "license_text": license_text,
