@@ -213,7 +213,8 @@ def build_snapshot(
             excluded["pfx_inactive_or_malformed"] += 1
             continue
         pfx_id, lan_id = _int_id(row.get("id")), _int_id(row.get("ixlan_id"))
-        version = _PROTOCOL_VERSION.get(row.get("protocol"))
+        protocol = row.get("protocol")
+        version = _PROTOCOL_VERSION.get(protocol) if isinstance(protocol, str) else None  # unhashable JSON is malformed
         text = row.get("prefix")
         if pfx_id is None or lan_id not in ixlan_to_ix or version is None or not isinstance(text, str):
             excluded["pfx_inconsistent"] += 1

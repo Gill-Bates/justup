@@ -312,6 +312,22 @@ class TestProcessFailures:
             _scan(udp=[53])
         assert exc.value.error.code == "permission_denied"
 
+    @pytest.mark.parametrize(
+        ("stderr", "code"),
+        [
+            ("Couldn't open a raw socket. Error: Operation not permitted (1)", "permission_denied"),
+            ("OPERATION NOT PERMITTED", "permission_denied"),
+            ("dnet: Failed to open device: Permission denied", "permission_denied"),
+            ("Some unrelated failure", "process_failed"),
+        ],
+    )
+    def test_scan_permission_errors_are_classified_without_raw_stderr(self, use, stderr, code):
+        use(f"sys.stderr.write({stderr!r}); sys.exit(1)")
+        with pytest.raises(NmapScannerError) as exc:
+            _scan(udp=[53])
+        assert exc.value.error.code == code
+        assert stderr not in exc.value.error.message
+
     def test_unexpected_exit_code_hides_stderr(self, use):
         use("sys.stderr.write('SECRET-RAW-DETAIL'); sys.exit(2)")
         with pytest.raises(NmapScannerError) as exc:
@@ -398,6 +414,23 @@ class TestTraceProcessLifecycle:
         assert exc.value.error.code == "timeout"
         for pid in map(int, pids.read_text().split()):
             _assert_gone(pid)
+
+
+    @pytest.mark.parametrize(
+        ("stderr", "code"),
+        [
+            ("Couldn't open a raw socket. Error: Operation not permitted (1)", "permission_denied"),
+            ("Traceroute has to be run as root", "permission_denied"),
+            ("sendto in send_ip_packet_sd: Permission denied", "permission_denied"),
+            ("Some unrelated failure", "process_failed"),
+        ],
+    )
+    def test_trace_permission_errors_are_classified_without_raw_stderr(self, use, stderr, code):
+        path = use(f"sys.stderr.write({stderr!r}); sys.exit(1)")
+        with pytest.raises(NmapScannerError) as exc:
+            asyncio.run(scanner._run_trace([str(path)], "10.0.0.5", 5))
+        assert exc.value.error.code == code
+        assert stderr not in exc.value.error.message
 
 
 class TestTimeoutAndCancel:

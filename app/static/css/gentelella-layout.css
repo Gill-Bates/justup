@@ -88,6 +88,7 @@
 	--ju-dv-6: #8a5a2b;
 	--ju-dv-7: #3730a3;
 	--ju-dv-8: #be185d;
+	--ju-peak: #c62828;
 }
 
 [data-bs-theme="dark"] {
@@ -139,6 +140,7 @@
 	--ju-dv-6: #d2a679;
 	--ju-dv-7: #4f6bed;
 	--ju-dv-8: #f472b6;
+	--ju-peak: #ff6b6b;
 }
 
 body {

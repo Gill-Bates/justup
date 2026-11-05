@@ -151,7 +151,13 @@ def collect_report_inputs(
             return None
 
     uptime_metric = select_uptime_metric(target)
-    http_data = uptime_data = ping_data = tcp_data = cert_data = status_code_data = []
+    # Separate lists: a chained assignment would alias one object across all series.
+    http_data: list[dict[str, Any]] = []
+    uptime_data: list[dict[str, Any]] = []
+    ping_data: list[dict[str, Any]] = []
+    tcp_data: list[dict[str, Any]] = []
+    cert_data: list[dict[str, Any]] = []
+    status_code_data: list[dict[str, Any]] = []
     tcp_port_data: dict[int, list[dict[str, Any]]] = {}
 
     if target.get("enable_http_check"):

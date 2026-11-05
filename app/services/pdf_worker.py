@@ -170,9 +170,8 @@ class PDFWorker:
         )
 
     def shutdown(self) -> None:
-        """Graceful shutdown: finish current work, then force-stop."""
+        """Signal the loops to stop and wait for running jobs to finish."""
         self.stop_event.set()
-        # Give running jobs a chance to finish
         self.cpu_executor.shutdown(wait=True, cancel_futures=False)
         self.io_executor.shutdown(wait=True, cancel_futures=False)
         _log.info("PDF worker shutdown complete")

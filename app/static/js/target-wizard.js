@@ -176,7 +176,7 @@
     }
   }
 
-  function editPorts(protocol) {
+  function editPorts() {
     updateKindFields();
     setStep(1);
     const input = fields.manualPorts;

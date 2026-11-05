@@ -341,6 +341,11 @@ for target_id in ${JSON.stringify(targetIds)}:
 			"tcp_ms_8443": 42 + (index % 6) * 8,
 			"tcp_up_8443": 0 if ping_down else 1,
 		}
+		# Isolated spikes so every series has notable peaks (stems) to render.
+		spikes = {"http_ms": {12: 900, 28: 1400}, "ping_ms": {20: 260}, "tcp_ms_443": {25: 420}, "tcp_ms_8443": {8: 480, 52: 520}}
+		for metric, at_index in spikes.items():
+			if index in at_index:
+				values[metric] = at_index[index]
 		for metric, value in values.items():
 			append_point(config.tsdb_dir, target_id=target_id, metric=metric, value=value, retention_days=365, at=at)
 `;

@@ -397,12 +397,7 @@ IXP_TABLES = ("ix", "ixlan", "ixpfx", "ixfac")
 PEERINGDB_PAGE_SIZE = 2000
 PEERINGDB_MAX_PAGES = 50  # per table; a table that never ends is a broken or hostile response
 PEERINGDB_MAX_ROWS = 100_000
-# Batch size for DB operations (performance optimization)
-
-# ---------------------------------------------------------------------------
-# Curated city-to-code hints for grouping PeeringDB city evidence.
-# These hints do not prove a router hostname alias.
-# ---------------------------------------------------------------------------
+# Curated city-to-code hints for grouping PeeringDB city evidence; they do not prove a router hostname alias.
 
 # Major network hubs with standard 3-letter codes
 # Source: IATA, major IXP naming conventions

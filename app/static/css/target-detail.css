@@ -1071,19 +1071,6 @@ details[open]>summary .target-details-chevron {
 	width: 1rem;
 }
 
-/* Dash patterns mirror COMBINED_DASHES in combined-chart.js (16px = 1rem). */
-.combined-swatch--dash-1 {
-	background: repeating-linear-gradient(90deg, var(--swatch-color) 0 6px, transparent 6px 9px);
-}
-
-.combined-swatch--dash-2 {
-	background: repeating-linear-gradient(90deg, var(--swatch-color) 0 2px, transparent 2px 5px);
-}
-
-.combined-swatch--dash-3 {
-	background: linear-gradient(90deg, var(--swatch-color) 0 8px, transparent 8px 11px, var(--swatch-color) 11px 13px, transparent 13px);
-}
-
 .combined-swatch--circle {
 	border-radius: 50%;
 }

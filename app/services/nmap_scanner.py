@@ -303,13 +303,22 @@ async def _exec_bounded(command: list[str], timeout: float, timeout_message: str
     return proc.returncode, stdout, stderr
 
 
+_PERMISSION_MARKERS = (b"root privileges", b"as root", b"permission denied", b"operation not permitted")
+
+
+def _is_permission_error(stderr: bytes) -> bool:
+    """True when Nmap's stderr reports missing privileges; shared by scan and trace paths."""
+    lowered = stderr.lower()
+    return any(marker in lowered for marker in _PERMISSION_MARKERS)
+
+
 async def _run_locked(command: list[str], timeout: float) -> NmapScanResult:
     async with _scan_slots, _nmap_slots:
         started = utcnow()
         returncode, stdout, stderr = await _exec_bounded(command, timeout, "Nmap scan timed out")
         if returncode != 0:
             detail = "Nmap could not complete the scan"
-            if b"requires root privileges" in stderr.lower() or b"permission denied" in stderr.lower():
+            if _is_permission_error(stderr):
                 raise NmapScannerError("permission_denied", detail)
             raise NmapScannerError("process_failed", detail)
         result = parse_nmap_xml(stdout, started_at=started, completed_at=utcnow())
@@ -329,8 +338,7 @@ async def discover_ports(host: str, protocols: set[str], *, timeout: float, prof
     return await scan_selected_ports(host, list(tcp), list(udp), timeout=timeout, detect_services=True)
 
 
-# --- Traceroute -----------------------------------------------------------------------------------
-# `--traceroute` cannot be combined with `-sT` (a connect scan sends no raw probes), so a trace never
+# Traceroute: `--traceroute` cannot be combined with `-sT` (a connect scan sends no raw probes), so a trace never
 # reuses the port-scan command. Attempt 1 is host discovery only (`-sn`: nothing is port-scanned);
 # attempt 2 runs only when attempt 1 produced no trace or timed out, as one bounded SYN (or UDP) probe port.
 # A probe requested by the caller is the caller's decision: it runs first, alone and with the whole budget.
@@ -450,8 +458,7 @@ async def _run_trace(command: list[str], address: str, timeout: float) -> Route:
     started = utcnow()
     returncode, stdout, stderr = await _exec_bounded(command, timeout, "Nmap traceroute timed out")
     if returncode != 0:
-        lowered = stderr.lower()
-        if b"root" in lowered or b"permission denied" in lowered:
+        if _is_permission_error(stderr):
             raise NmapScannerError("permission_denied", "Nmap lacks the privileges for a traceroute")
         raise NmapScannerError("process_failed", "Nmap could not complete the traceroute")
     route = parse_traceroute_xml(stdout, destination_ip=address, started_at=started, completed_at=utcnow())

@@ -109,9 +109,7 @@ class EchoLookupError(Exception):
         self.unavailable = unavailable
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # Validation
-# ─────────────────────────────────────────────────────────────────────────────
 
 
 def parse_echo_address(text: str, family: Family) -> str:
@@ -133,9 +131,7 @@ def parse_echo_address(text: str, family: Family) -> str:
     return canonical
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # Single provider lookup
-# ─────────────────────────────────────────────────────────────────────────────
 
 _NO_ROUTE_ERRNOS = {
     errno.ENETUNREACH,
@@ -272,9 +268,7 @@ def _fetch_one(provider: Provider, family: Family) -> str:
     raise last
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # Combination, cache, single flight
-# ─────────────────────────────────────────────────────────────────────────────
 
 _executor = ThreadPoolExecutor(max_workers=MAX_PENDING_FETCHES, thread_name_prefix="public-egress")
 _fetch_slots = threading.BoundedSemaphore(MAX_PENDING_FETCHES)

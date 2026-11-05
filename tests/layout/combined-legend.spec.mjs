@@ -67,7 +67,7 @@ const peakState = (page) => page.evaluate(() => {
 	const datasets = chart.data.datasets;
 	const visible = (kind) => datasets.map((d, i) => (d._kind === kind && chart.isDatasetVisible(i) ? d._srcKey : null)).filter(Boolean);
 	return {
-		visibleMs: visible("ms"), visiblePeaks: visible("peak"), axis: chart.options.scales.yPeak?.display ?? null,
+		visibleMs: visible("ms"), visiblePeaks: visible("peak"),
 		xMin: chart.scales.x.min, xMax: chart.scales.x.max,
 	};
 });
@@ -99,7 +99,6 @@ for (const viewport of VIEWPORTS) {
 				if (!await peaks.isChecked()) await peaks.check();
 				const shown = await peakState(page);
 				assert.equal(shown.visiblePeaks.length, shown.visibleMs.length, `${theme}: every visible series shows its peak`);
-				assert.equal(shown.axis, true, `${theme}: right axis visible with peaks`);
 
 				// Keyboard: Tab from the last legend button reaches the switch with a visible focus ring.
 				await buttons.last().focus();
@@ -114,11 +113,10 @@ for (const viewport of VIEWPORTS) {
 				await page.keyboard.press("Space");
 				const hidden = await peakState(page);
 				assert.deepEqual(hidden.visiblePeaks, [], `${theme}: the switch hides the peaks of all series`);
-				assert.equal(hidden.axis, false, `${theme}: right axis hidden without peaks`);
 				assert.deepEqual(hidden.visibleMs, shown.visibleMs, `${theme}: series stay visible`);
 				assert.equal(hidden.xMin, shown.xMin);
 				assert.equal(hidden.xMax, shown.xMax);
-				assert.match(await page.locator("#combined-summary").textContent(), /peak lines hidden/);
+				assert.match(await page.locator("#combined-summary").textContent(), /peaks hidden/);
 				await page.keyboard.press("Space");
 				const again = await peakState(page);
 				assert.equal(again.visiblePeaks.length, again.visibleMs.length, `${theme}: peaks return together`);

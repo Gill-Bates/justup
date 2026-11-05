@@ -147,42 +147,74 @@
     return insertGaps(series, minGapMs);
   }
 
+  /** Linear-interpolated percentile of an ascending array (q in 0..1). */
+  function quantile(sorted, q) {
+    if (!sorted.length) return 0;
+    var pos = (sorted.length - 1) * q;
+    var lo = Math.floor(pos);
+    var hi = Math.ceil(pos);
+    return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo);
+  }
+
+  /** A drawn peak never rises above this multiple of the series' highest median. */
+  var PEAK_CAP_FACTOR = 3;
+
   /**
-   * Build a gap-preserving maximum-response-time line from raw display buckets.
-   * Rollups do not expose raw extrema, so those intervals stay null instead of implying data.
-   * @param {object[]} points
-   * @param {number} [minGapMs] - Fixed gap threshold in ms
-   * @returns {object[]}
+   * Notable latency peaks of one series: isolated events, not a curve. The selection follows the
+   * PDF report: a maximum counts when it exceeds the Tukey fence of all maxima (at least 1.5x the
+   * overall median), is >= 1.5x its own interval median and rises >= 1 ms above it. Intervals
+   * without a finite maximum (rollups, gaps) yield nothing; nothing is interpolated.
+   * `y` is the plotted height on the response-time axis, capped so one extreme value cannot
+   * flatten the normal curve; `max` is always the real value and `capped` marks the difference.
+   * @param {object[]} points - display points {ts, value, max?, count?}
+   * @returns {{x: number, y: number, max: number, median: number, count: number, capped: boolean}[]}
    */
-  function toPeakSeries(points, minGapMs) {
-    var series = (points || [])
-      .map(function (point) {
-        var x = new Date(point.ts).getTime();
-        if (!isFinite(x)) return null;
-        var value = Number(point.value);
-        var max = point.max == null ? null : Number(point.max);
-        if (max === null || !isFinite(max)) {
-          return {
-            x: x,
-            y: null,
-            count: Number(point.count) || 0,
-            median: isFinite(value) ? value : null,
-            outlier: false,
-          };
-        }
-        return {
-          x: x,
-          y: max,
-          count: Number(point.count) || 1,
-          median: isFinite(value) ? value : null,
-          outlier: isFinite(value) && max > value * 2,
-        };
+  function toPeakSeries(points) {
+    var rows = [];
+    (points || []).forEach(function (point) {
+      var x = new Date(point.ts).getTime();
+      var median = Number(point.value);
+      var max = point.max == null ? NaN : Number(point.max);
+      if (!isFinite(x) || !isFinite(median) || !isFinite(max)) return;
+      rows.push({ x: x, median: median, max: max, count: Number(point.count) || 1 });
+    });
+    if (!rows.length) return [];
+    var maxes = rows
+      .map(function (r) {
+        return r.max;
       })
-      .filter(Boolean)
+      .sort(function (a, b) {
+        return a - b;
+      });
+    var medians = rows
+      .map(function (r) {
+        return r.median;
+      })
+      .sort(function (a, b) {
+        return a - b;
+      });
+    var q1 = quantile(maxes, 0.25);
+    var q3 = quantile(maxes, 0.75);
+    var fence = Math.max(q3 + 1.5 * (q3 - q1), 1.5 * quantile(medians, 0.5));
+    var cap = medians[medians.length - 1] * PEAK_CAP_FACTOR;
+    return rows
+      .filter(function (r) {
+        return r.max > fence && r.max >= r.median * 1.5 && r.max - r.median >= 1;
+      })
       .sort(function (a, b) {
         return a.x - b.x;
+      })
+      .map(function (r) {
+        var y = Math.min(r.max, Math.max(cap, r.median));
+        return {
+          x: r.x,
+          y: y,
+          max: r.max,
+          median: r.median,
+          count: r.count,
+          capped: y < r.max,
+        };
       });
-    return insertGaps(series, minGapMs);
   }
 
   /**

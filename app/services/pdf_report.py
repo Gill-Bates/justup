@@ -139,9 +139,7 @@ def _clean_site_title(raw: Any, font_name: str) -> str:
 # Serialize all PDF generation to prevent chart/font corruption.
 _PDF_LOCK = threading.Lock()
 
-# ---------------------------------------------------------------------------
 # Constants
-# ---------------------------------------------------------------------------
 
 FONT_DIR = Path(__file__).parent.parent / "static" / "fonts"
 STATIC_DIR = Path(__file__).parent.parent / "static"
@@ -200,9 +198,7 @@ TCP_PORT_COLORS = [
     "#0dcaf0",  # info cyan
 ]
 
-# ---------------------------------------------------------------------------
 # Spacing Design Tokens (consistent layout rhythm)
-# ---------------------------------------------------------------------------
 SPACE_XS = 1 * mm  # Minimal: dividers, tight padding
 SPACE_SM = 2 * mm  # Small: inner cell padding
 SPACE_MD = 4 * mm  # Medium: between elements
@@ -218,9 +214,7 @@ TABLE_PADDING_BANNER = (SPACE_MD, SPACE_LG, SPACE_MD, SPACE_LG)
 PDF_DPI = 600
 
 
-# ---------------------------------------------------------------------------
 # Traceroute route data
-# ---------------------------------------------------------------------------
 
 
 def _run_traceroute_with_interpolation(
@@ -321,9 +315,7 @@ def _run_traceroute_with_interpolation(
     return display_hops, geo_points, has_interpolation
 
 
-# ---------------------------------------------------------------------------
 # Data Structures
-# ---------------------------------------------------------------------------
 
 
 @dataclass
@@ -383,9 +375,7 @@ class DowntimeEvent:
     duration_minutes: int | None
 
 
-# ---------------------------------------------------------------------------
 # Font Registration
-# ---------------------------------------------------------------------------
 
 _fonts_registered = False
 _fonts_lock = threading.Lock()
@@ -519,9 +509,7 @@ def _get_font_bold() -> str:
     return "IBMPlexSans-Bold"
 
 
-# ---------------------------------------------------------------------------
 # Matplotlib Chart Generation
-# ---------------------------------------------------------------------------
 
 # Guard to prevent repeated matplotlib style setup (global state)
 _mpl_initialized = False
@@ -710,9 +698,7 @@ def _style_axes(ax, *, from_date: datetime, to_date: datetime) -> None:
     _format_time_axis(ax, from_date=from_date, to_date=to_date)
 
 
-# ---------------------------------------------------------------------------
 # Latency scale and peaks
-# ---------------------------------------------------------------------------
 
 PEAK_COLOR = "#b02a5b"  # solid interval bars; the SLA line stays orange and dashed
 _MAX_PEAK_MARKS = 6
@@ -1463,9 +1449,7 @@ def _format_time_axis(ax, *, from_date: datetime, to_date: datetime) -> None:
     )
 
 
-# ---------------------------------------------------------------------------
 # KPI Calculation
-# ---------------------------------------------------------------------------
 
 
 def _valid_values(points: list[dict]) -> list[float]:
@@ -1592,9 +1576,7 @@ def _report_downtime_events(report_data: ReportData) -> list[DowntimeEvent]:
     return _extract_downtime_events(report_data.uptime_data, report_data.target.get("interval_seconds") or 60)
 
 
-# ---------------------------------------------------------------------------
 # Custom Flowables
-# ---------------------------------------------------------------------------
 
 
 class RoundedKPICard(Flowable):
@@ -1816,9 +1798,7 @@ class SuccessCheckCircle(Flowable):
         canvas.restoreState()
 
 
-# ---------------------------------------------------------------------------
 # Formatting helpers
-# ---------------------------------------------------------------------------
 
 
 def _fmt_pct(value: float | None) -> str:
@@ -2295,9 +2275,7 @@ class _ReportDocTemplate(SimpleDocTemplate):
             self.chapter_pages.setdefault(name, self.page)
 
 
-# ---------------------------------------------------------------------------
 # PDF Document Generation
-# ---------------------------------------------------------------------------
 
 
 class PDFReportBuilder:
@@ -4234,9 +4212,7 @@ class PDFReportBuilder:
         self.elements.append(table)
 
 
-# ---------------------------------------------------------------------------
 # Public API
-# ---------------------------------------------------------------------------
 
 
 def generate_pdf_report(report_data: ReportData, page_size: str = "a4") -> bytes:

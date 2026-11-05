@@ -145,7 +145,6 @@ function peakChart(showPeaks) {
     visibility,
     chart: {
       data: { datasets }, scales, _showPeaks: showPeaks,
-      options: { scales: { yPeak: { display: false } } },
       isDatasetVisible: (index) => visibility.get(index) ?? true,
       setDatasetVisibility: (index, visible) => visibility.set(index, visible),
     },
@@ -158,14 +157,12 @@ test("showing peaks follows the legend state of each series and keeps the zoom r
   context._syncPeaks(chart);
   assert.equal(visibility.get(1), true);
   assert.equal(visibility.get(3), false, "peak of a hidden series stays hidden");
-  assert.equal(chart.options.scales.yPeak.display, true);
   visibility.set(2, true);
   context._syncPeaks(chart);
   assert.equal(visibility.get(3), true, "revealing the series reveals its peak");
   chart._showPeaks = false;
   context._syncPeaks(chart);
   assert.deepEqual([visibility.get(1), visibility.get(3)], [false, false]);
-  assert.equal(chart.options.scales.yPeak.display, false, "no empty right axis while peaks are off");
   assert.deepEqual(plain(chart.scales.x), { min: 100, max: 200 });
 });
 

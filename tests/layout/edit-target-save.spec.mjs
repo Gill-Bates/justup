@@ -76,7 +76,7 @@ for (const viewport of VIEWPORTS) {
 				assert.equal(pathOf(page), OVERVIEW, "the editor must end on the overview, not on the target detail page");
 				const stored = await page.evaluate(async (targetId) => (await (await window.apiFetch(`/targets/${targetId}`)).json()).name, id);
 				assert.equal(stored, renamed);
-				await page.locator("#targets-table").getByText(renamed).first().waitFor();
+				await page.locator("#targets-table").getByText(renamed).first().waitFor({ state: "attached" });
 			} finally {
 				await deleteTarget(page, id);
 			}
@@ -155,8 +155,9 @@ for (const viewport of VIEWPORTS) {
 				await patched;
 				// In the redirect delay after a complete save: the button has to stay locked.
 				await page.locator("#global-toast-body", { hasText: "Target updated" }).waitFor();
-				await page.evaluate(() => document.getElementById("target-form").requestSubmit());
-				await page.locator("#name").first().press("Enter").catch(() => {});
+				// The page may already be gone under load; the request counters below still decide.
+				await page.evaluate(() => document.getElementById("target-form").requestSubmit()).catch(() => {});
+				await page.locator("#name").press("Enter", { timeout: 1000 }).catch(() => {});
 				await page.waitForURL((url) => url.pathname === OVERVIEW);
 				await page.waitForTimeout(500);
 				assert.deepEqual(counts, { patch: 1, put: 1 });

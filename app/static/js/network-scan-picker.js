@@ -121,8 +121,7 @@
 
     // ----- manual entry and the selected-ports list -----
     function readPorts(protocol) {
-      const parsed = core.parsePortList(fields[protocol].value);
-      return parsed;
+      return core.parsePortList(fields[protocol].value);
     }
     function writePorts(protocol, ports, { enable = true } = {}) {
       const input = fields[protocol];

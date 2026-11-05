@@ -167,11 +167,11 @@
 			body.replaceChildren(); number(body, latest.score, 'Latest quality score');
 			const wrapper = node('div', undefined, 'dashboard-monitor-chart'); const canvas = node('canvas');
 			canvas.setAttribute('role', 'img'); wrapper.append(canvas); body.append(wrapper);
-		chart = new window.Chart(canvas, {
-			type: 'line',
-			data: { labels, datasets: [{ label: 'Quality score', data: values, borderColor: color, borderWidth: 2, pointRadius: 0, spanGaps: false }] },
-			options: { responsive: true, maintainAspectRatio: false, animation: false, plugins: { legend: { display: false } }, scales: { y: { min: 0, max: 100 } } },
-		});
+			chart = new window.Chart(canvas, {
+				type: 'line',
+				data: { labels, datasets: [{ label: 'Quality score', data: values, borderColor: color, borderWidth: 2, pointRadius: 0, spanGaps: false }] },
+				options: { responsive: true, maintainAspectRatio: false, animation: false, plugins: { legend: { display: false } }, scales: { y: { min: 0, max: 100 } } },
+			});
 		}
 		chart.canvas.setAttribute('aria-label', `Quality score over the last 24 hours. Latest: ${latest.score}. Missing measurements are gaps.`);
 	}

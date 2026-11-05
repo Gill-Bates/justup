@@ -435,8 +435,8 @@
 						var resp = await window.apiFetch('/quality/current', { signal: controller.signal });
 						if (!resp.ok) {
 							consecutiveFailures++;
-						if (consecutiveFailures >= failureLimit) showQualityUnavailable();
-						return;
+							if (consecutiveFailures >= failureLimit) showQualityUnavailable();
+							return;
 						}
 						var data = await resp.json();
 
@@ -575,7 +575,7 @@
 						return;
 					}
 					attempts++;
-					window.apiFetch('/targets/' + targetId + '/notification-status/' + taskId).then(function (resp) {
+					window.apiFetch('/targets/' + encodeURIComponent(targetId) + '/notification-status/' + encodeURIComponent(taskId)).then(function (resp) {
 						if (!resp.ok) {
 							var error = new Error('HTTP ' + resp.status);
 							error.status = resp.status;

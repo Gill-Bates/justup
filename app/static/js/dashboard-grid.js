@@ -144,8 +144,6 @@
 		return layout;
 	}
 
-	// Two passes: park every widget far down first, then move it to its row, so a widget does not
-	// collide with neighbours still at the template position and shove them around.
 	// GridStack's own row bound: settled layout plus the reserve while editing, the layout bound otherwise.
 	// Never 0: GridStack compacts the whole layout when its rows exceed the new bound; the open bound
 	// also has to cover the parking rows of applyLayout.
@@ -153,6 +151,8 @@
 		grid.updateOptions({ maxRow: editing ? grid.getRow() + EDIT_RESERVE_ROWS : NO_ROW_LIMIT });
 	}
 
+	// Two passes: park every widget far down first, then move it to its row, so a widget does not
+	// collide with neighbours still at the template position and shove them around.
 	function applyLayout(layout) {
 		applyingLayout = true;
 		limitRows(false); // parking rows and stored positions must not be clamped by the edit bound

@@ -24,7 +24,7 @@
 	var LEGACY_KEYS = ['justup_pdf_jobs', 'justup_pdf_ready']; // global, owner unknown: deleted
 	var userStorage = window.JustUpUserStorage;
 	var JOB_ID_RE = /^[a-zA-Z0-9_-]{1,64}$/; // same format the server accepts
-var MAX_JOB_AGE_MS = 5 * 60 * 1000; // 5 minutes
+	var MAX_JOB_AGE_MS = 5 * 60 * 1000; // 5 minutes
 	var POLL_INTERVAL_MS = 2000;
 	var MAX_ATTEMPTS = 5; // consecutive transient failures before giving up
 	var MAX_BACKOFF_MS = 30000;

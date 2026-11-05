@@ -189,7 +189,7 @@ def update_settings(payload: SettingsUpdate, conn=Depends(get_conn), _admin=Depe
             try:
                 value = encrypt_secret(value)
             except Exception as e:
-                _log.error("Failed to encrypt SMTP password: %s", e)
+                _log.error("Failed to encrypt SMTP password: %s", type(e).__name__)
                 raise HTTPException(status_code=500, detail="Failed to encrypt password") from e
         transformed[k] = value
 

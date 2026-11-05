@@ -33,9 +33,7 @@ from app.utils.ssrf import is_blocked_ip, redact_url, resolve_validated
 
 _log = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
 # Configuration Constants
-# ---------------------------------------------------------------------------
 
 # ThreadPool for blocking I/O (prevents thread explosion)
 _EXECUTOR = ThreadPoolExecutor(max_workers=10, thread_name_prefix="check_")
@@ -121,17 +119,14 @@ def _deterministic_user_agent(target_id: int | None = None) -> str:
     """
     Return a deterministic User-Agent.
 
-    If target_id is provided, returns a stable UA based on hash.
-    Otherwise returns the default UA.
+    With a target_id the UA carries it as a suffix; otherwise the default UA is returned.
     """
     if target_id is not None:
         return f"{DEFAULT_USER_AGENT} target/{target_id}"
     return DEFAULT_USER_AGENT
 
 
-# ---------------------------------------------------------------------------
 # Helper Functions
-# ---------------------------------------------------------------------------
 
 
 NETWORK_UNREACHABLE = "network unreachable"
@@ -613,7 +608,12 @@ async def http_head(
     candidate_ips: list[str] = []
     if hostname:
         # Prefer our own parallel DNS lookup (Quad9 + Cloudflare): independent of the container resolver.
-        public_ip = await _resolve_host_via_public_dns_first_answer(hostname)
+        try:
+            ipaddress.ip_address(hostname)
+            hostname_is_literal = True  # a literal needs no DNS query (and must not be sent to public resolvers)
+        except ValueError:
+            hostname_is_literal = False
+        public_ip = None if hostname_is_literal else await _resolve_host_via_public_dns_first_answer(hostname)
         if public_ip:
             try:
                 if not skip_ssrf_check and _is_ip_blocked_for_ssrf(ipaddress.ip_address(public_ip)):
@@ -629,8 +629,6 @@ async def http_head(
 
     auth = httpx.BasicAuth(*basic_auth) if basic_auth else None
     base_headers = {"User-Agent": _deterministic_user_agent(target_id)}
-
-    # Maximum redirects to follow (SSRF protection)
 
     start = time.perf_counter()
     try:
@@ -921,9 +919,7 @@ async def tcp_connect_ports(
     return list(outcomes)  # type: ignore[arg-type]
 
 
-# ---------------------------------------------------------------------------
 # Connectivity Check - Verify Application's Own Internet Connection
-# ---------------------------------------------------------------------------
 
 # Reference hosts that are considered "always available"
 # We check multiple to avoid false positives if one is temporarily down
@@ -1038,9 +1034,7 @@ async def has_connectivity(timeout_seconds: float = 2.0) -> bool:
     return result.ok
 
 
-# ---------------------------------------------------------------------------
 # Network port checks (UDP via the Nmap worker) and service identity
-# ---------------------------------------------------------------------------
 
 # Port status is the transport dimension; service identity is a separate one (see assess_service_identity).
 PORT_UP = "up"

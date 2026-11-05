@@ -58,28 +58,33 @@ test("gaps in the series become null points instead of interpolated lines", () =
   assert.equal(D.toGappedSeries([pt(0, 10), pt(1, 12), pt(2, 11)]).length, 3);
 });
 
-test("peak response times preserve rollup gaps and match measurement gaps without changing peak values", () => {
-  const points = [
-    { ts: new Date(T0).toISOString(), value: 100, max: 350, count: 6 },
-    { ts: new Date(T0 + 60000).toISOString(), value: 150, max: 180, count: 5 },
-    { ts: new Date(T0 + 120000).toISOString(), value: 200, max: null, count: 1, rollup: true },
-    { ts: new Date(T0 + 180000).toISOString(), value: 250, max: 700, count: 4 },
-    { ts: new Date(T0 + 4 * 60 * 60000).toISOString(), value: 300, max: 900, count: 3 },
-  ];
-  const minGapMs = 3 * 60 * 60000;
-  const measurements = D.toGappedSeries(points, minGapMs);
-  const peaks = D.toPeakSeries(points, minGapMs);
-  assert.deepEqual(plain(peaks.map(p => p.y)), [350, 180, null, 700, null, 900]);
-  assert.deepEqual(plain(peaks.filter(p => p.y !== null).map(p => [p.y, p.median, p.outlier, p.count])), [
-    [350, 100, true, 6], [180, 150, false, 5], [700, 250, true, 4], [900, 300, true, 3],
-  ]);
-  const gapX = T0 + 180000 + 1;
-  assert.equal(measurements.find(p => p.x === gapX).y, null);
-  assert.equal(peaks.find(p => p.x === gapX).y, null);
-  assert.equal(peaks[0].median, 100);
-  assert.equal(peaks[0].count, 6);
+const peakPoint = (i, value, max, count = 1) => ({ ts: new Date(T0 + i * 60000).toISOString(), value, max, count });
+const quietPoints = () => [100, 102, 98, 101, 99, 103, 100, 97].map((v, i) => peakPoint(i, v, v + 8, 5));
+test("only notable peaks are selected, as isolated events without gap or null entries", () => {
+  const points = quietPoints();
+  points[3] = peakPoint(3, 101, 700, 4);
+  points[5] = { ...peakPoint(5, 103, null), rollup: true };
+  points[6] = peakPoint(6, 100, Number.NaN);
+  const peaks = D.toPeakSeries(points);
+  assert.equal(peaks.length, 1, "ordinary bucket maxima are no peaks; rollups and non-finite maxima are skipped");
+  assert.equal(peaks[0].x, T0 + 3 * 60000);
+  assert.equal(peaks[0].max, 700);
+  assert.equal(peaks[0].median, 101);
+  assert.equal(peaks[0].count, 4);
+  assert.ok(peaks.every((p) => Number.isFinite(p.y)), "no null points: nothing connects peaks");
+  assert.deepEqual(plain(D.toPeakSeries([])), []);
+  assert.deepEqual(plain(D.toPeakSeries([{ ts: new Date(T0).toISOString(), value: 5, max: null }])), []);
 });
-
+test("a peak is drawn at most three medians high; the real maximum stays in max", () => {
+  const points = quietPoints();
+  points[2] = peakPoint(2, 98, 30000);
+  points[6] = peakPoint(6, 100, 250);
+  const [far, near] = D.toPeakSeries(points).sort((a, b) => b.max - a.max);
+  const cap = 3 * 103;
+  assert.deepEqual(plain([far.max, far.y, far.capped]), [30000, cap, true]);
+  assert.deepEqual(plain([near.max, near.y, near.capped]), [250, 250, false]);
+  assert.ok(far.y > far.median, "the stem always rises above its median");
+});
 test("status bucketing keeps the worst code of a bucket", () => {
   const points = [pt(0, 200), pt(1, 503), pt(2, 200), pt(500, 404)];
   const buckets = D.bucketStatus(points, T0, T0 + 600 * 60000, 2);
@@ -311,6 +316,7 @@ test("zoom reloads finer buckets once and reset restores the overview", async ()
       calls.push(metric);
       if (metric === "http_ms") return {
         bucket_seconds: 3600, points: [
+          ...[120, 130, 140, 150, 160, 170].map((m) => ({ ...pt(m, 120), max: 130, min: 80, count: 4 })),
           { ...pt(60, 120), max: 500, min: 80, count: 4 },
           { ...pt(360, 130), max: 180, min: 100, count: 3 },
         ]
@@ -326,10 +332,10 @@ test("zoom reloads finer buckets once and reset restores the overview", async ()
   vm.runInNewContext(chartSource, context);
   const original = [{ x: T0, y: 100 }];
   const originalPeaks = D.toPeakSeries([
-    { ...pt(0, 100), max: 250, count: 1 },
+    ...[0, 10, 20, 30, 40, 50, 60].map((m) => ({ ...pt(m, 100), max: 110, count: 1 })),
     { ...pt(300, 120), max: 400, count: 1 },
-  ], 3 * 60 * 60000);
-  assert.deepEqual(plain(originalPeaks.map(p => p.y)), [250, null, 400]);
+  ]);
+  assert.deepEqual(plain(originalPeaks.map(p => p.max)), [400]);
   const datasets = [
     { _kind: "ms", _srcKey: "http", data: original },
     { _kind: "peak", _srcKey: "http", data: originalPeaks },
@@ -337,7 +343,7 @@ test("zoom reloads finer buckets once and reset restores the overview", async ()
   ];
   const chartOptions = {
     plugins: { annotation: { annotations: { down0: { xMin: T0, xMax: T0 + 1 } } } },
-    scales: { yPeak: { display: false } },
+    scales: {},
   };
   const chart = {
     data: { datasets }, scales: { x: { min: T0, max: T0 + 7 * 86400000 } },
@@ -356,10 +362,9 @@ test("zoom reloads finer buckets once and reset restores the overview", async ()
   chart._reloadVisible();
   await timers.run(300);
   assert.deepEqual(calls, ["http_ms", "http_status", "http_up"]);
-  assert.equal(chart.data.datasets[0].data.length, 3);
-  assert.deepEqual(plain(chart.data.datasets[1].data.map(p => p.y)), [500, null, 180]);
+  assert.equal(chart.data.datasets[0].data.length, 9);
+  assert.deepEqual(plain(chart.data.datasets[1].data.map(p => p.max)), [500]);
   assert.equal(chart.data.datasets[2].data[0].code, 503);
-  assert.equal(chart.options.scales.yPeak.display, true);
   chart._palette.down = "#0f0";
   chart.scales.x.min = T0;
   chart.scales.x.max = T0 + 7 * 86400000;
@@ -558,7 +563,7 @@ test("zoom reload refreshes summary and label; reset restores the overview", asy
   const overview = els["combined-summary"].textContent;
   assert.match(overview, /min 100 ms/);
   const datasets = [{ _kind: "ms", _srcKey: "http", data: series }];
-  const chartOptions = { plugins: { annotation: { annotations: {} } }, scales: { yPeak: { display: false } } };
+  const chartOptions = { plugins: { annotation: { annotations: {} } }, scales: {} };
   const chart = {
     data: { datasets }, scales: { x: { min: T0 + 60 * 60000, max: T0 + 90 * 60000 } },
     options: chartOptions, config: { options: chartOptions },

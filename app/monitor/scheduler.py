@@ -57,10 +57,7 @@ from app.utils.uptime_metric import enabled_availability_metrics
 
 _log = logging.getLogger(__name__)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Status Constants (avoid magic strings)
-# NOTE: Plain string constants instead of StrEnum.
-# ─────────────────────────────────────────────────────────────────────────────
+# Status constants: plain strings instead of StrEnum.
 
 
 class TargetStatus:
@@ -382,9 +379,7 @@ QUALITY_PROBE_INTERVAL_SECONDS = 30
 # Alert cooldown: minimum seconds between alerts for the same target (prevents flapping spam)
 ALERT_COOLDOWN_SECONDS = 300  # 5 minutes
 
-# ─────────────────────────────────────────────────────────────────────────────
 # Alert Stability Thresholds (Hysteresis) - DIAGNOSTIC CONSTANTS
-# ─────────────────────────────────────────────────────────────────────────────
 # NOTE: These constants are used for diagnostics and debugging only.
 # The actual alert decision logic uses the metrics_timeout_minutes setting,
 # the down_since timestamp, and the fail_timestamps sliding window.
@@ -398,7 +393,6 @@ ALERT_COOLDOWN_SECONDS = 300  # 5 minutes
 #       timers of a target WITHOUT an open alert are reset), and the first full UP resolves it and
 #       sends RESOLVED through _maybe_alert (unless auto_close_alert is off: then the alert is only
 #       deactivated and no recovery notification is sent).
-# ─────────────────────────────────────────────────────────────────────────────
 FAIL_THRESHOLD = 3  # Cycles to confirm DOWN (diagnostic reference)
 RECOVERY_THRESHOLD = 2  # Cycles to confirm RECOVERY (diagnostic reference)
 MIN_DOWN_SECONDS = 120  # Minimum duration before DOWN alert
