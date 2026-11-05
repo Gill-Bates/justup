@@ -278,6 +278,19 @@
 			// Shared with scripts that render .local-time elements themselves (e.g. the users list)
 			window.JuLocalTime = { init: initLocalTimes };
 
+			// Mirror a Bootstrap collapse state onto its panel and its toggle button.
+			function setAccordionExpanded(collapse, button, expanded) {
+				collapse.classList.toggle('show', expanded);
+				if (button) {
+					button.classList.toggle('collapsed', !expanded);
+					button.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+				}
+			}
+			function storeAccordionState(key, state) {
+				try {
+					localStorage.setItem(key, state);
+				} catch (e) { /* localStorage unavailable */ }
+			}
 			function initAccordionState(root) {
 				(root || document).querySelectorAll('.accordion-collapse:not([data-state-init])').forEach(function (collapse) {
 					collapse.setAttribute('data-state-init', '1');
@@ -288,39 +301,17 @@
 						try {
 							saved = localStorage.getItem(key);
 						} catch (e) { /* localStorage unavailable */ }
-						if (saved === 'collapsed' && !forceExpanded) {
-							collapse.classList.remove('show');
-							var button = document.querySelector('[data-group-key="' + CSS.escape(key) + '"].accordion-button');
-							if (button) {
-								button.classList.add('collapsed');
-								button.setAttribute('aria-expanded', 'false');
-							}
-						}
+						var button = document.querySelector('[data-group-key="' + CSS.escape(key) + '"].accordion-button');
+						if (saved === 'collapsed' && !forceExpanded) setAccordionExpanded(collapse, button, false);
 						if (forceExpanded) {
-							collapse.classList.add('show');
-							var button2 = document.querySelector('[data-group-key="' + CSS.escape(key) + '"].accordion-button');
-							if (button2) {
-								button2.classList.remove('collapsed');
-								button2.setAttribute('aria-expanded', 'true');
-							}
-							try {
-								localStorage.setItem(key, 'expanded');
-							} catch (e) { /* localStorage unavailable */ }
+							setAccordionExpanded(collapse, button, true);
+							storeAccordionState(key, 'expanded');
 						}
-						collapse.addEventListener('shown.bs.collapse', function () {
-							try {
-								localStorage.setItem(key, 'expanded');
-							} catch (e) { /* localStorage unavailable */ }
-						});
-						collapse.addEventListener('hidden.bs.collapse', function () {
-							try {
-								localStorage.setItem(key, 'collapsed');
-							} catch (e) { /* localStorage unavailable */ }
-						});
+						collapse.addEventListener('shown.bs.collapse', function () { storeAccordionState(key, 'expanded'); });
+						collapse.addEventListener('hidden.bs.collapse', function () { storeAccordionState(key, 'collapsed'); });
 					}
 				});
 			}
-
 			function initFragment(root) {
 				initLocalTimes(root);
 				initAccordionState(root);
@@ -511,12 +502,7 @@
 				if (window.innerWidth >= 768) return;
 				acc.setAttribute('data-mobile-collapsed', '1');
 				acc.querySelectorAll('.accordion-collapse.show').forEach(function (el) {
-					el.classList.remove('show');
-					var btn = acc.querySelector('[data-bs-target="#' + el.id + '"]');
-					if (btn) {
-						btn.classList.add('collapsed');
-						btn.setAttribute('aria-expanded', 'false');
-					}
+					setAccordionExpanded(el, acc.querySelector('[data-bs-target="#' + el.id + '"]'), false);
 				});
 			}
 

@@ -643,6 +643,7 @@ test("responsive legend follows chart width and updates when the chart resizes",
     window: { innerWidth: 1366, matchMedia: () => ({ matches: fitDashboard }) },
     appState: { charts: new Map() }, setTimeout: () => 0,
   };
+  vm.runInNewContext(readFileSync(new URL("../../app/static/js/charts/chart-config.js", import.meta.url), "utf8"), context);
   vm.runInNewContext(resetSrc, context);
   vm.runInNewContext(src, context);
   const canvas = { dataset: {}, parentElement: { clientWidth: 640 }, addEventListener() {}, removeEventListener() {} };

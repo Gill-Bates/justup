@@ -4,10 +4,6 @@
 # Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 #
 
-# app/services/ixp_import.py  # noqa: ERA001 - canonical file header, not code
-# Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
-#
-
 """Build a validated IXP prefix snapshot from PeeringDB tables (pure, no I/O).
 
 Inputs are the raw ``data`` lists of PeeringDB ``ix``, ``ixlan``, ``ixpfx``, ``ixfac`` and ``fac``.

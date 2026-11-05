@@ -20,6 +20,11 @@ from pydantic import BaseModel, Field, field_validator
 from app.utils.crypto import get_primary_key
 
 
+# Single source for the password length limits; templates render them as minlength/maxlength.
+PASSWORD_MIN_LENGTH = 8
+PASSWORD_MAX_LENGTH = 256
+
+
 def normalize_username(v: str) -> str:
     """Canonical username form: trimmed and lower-cased."""
     return v.strip().lower()
@@ -36,7 +41,7 @@ class UserCreate(BaseModel):
     """Request model for creating a user."""
 
     username: str = Field(min_length=1, max_length=64)
-    password: str = Field(min_length=8, max_length=256)
+    password: str = Field(min_length=PASSWORD_MIN_LENGTH, max_length=PASSWORD_MAX_LENGTH)
     is_admin: bool = False
     can_close_alerts: bool = False
 
@@ -70,7 +75,7 @@ class UserUpdate(BaseModel):
     username: str = Field(min_length=1, max_length=64)
     is_admin: bool = False
     can_close_alerts: bool = False
-    new_password: str | None = Field(default=None, min_length=8, max_length=256)
+    new_password: str | None = Field(default=None, min_length=PASSWORD_MIN_LENGTH, max_length=PASSWORD_MAX_LENGTH)
 
     @field_validator("username", mode="after")
     @classmethod
@@ -95,8 +100,8 @@ class LoginRequest(BaseModel):
 class PasswordChangeRequest(BaseModel):
     """Request body for changing a user's password."""
 
-    current_password: str = Field(min_length=8, max_length=256)
-    new_password: str = Field(min_length=8, max_length=256)
+    current_password: str = Field(min_length=PASSWORD_MIN_LENGTH, max_length=PASSWORD_MAX_LENGTH)
+    new_password: str = Field(min_length=PASSWORD_MIN_LENGTH, max_length=PASSWORD_MAX_LENGTH)
 
 
 class RequiredPasswordChangeRequest(BaseModel):
@@ -106,7 +111,7 @@ class RequiredPasswordChangeRequest(BaseModel):
     not re-entered; only the new password is required.
     """
 
-    new_password: str = Field(min_length=8, max_length=256)
+    new_password: str = Field(min_length=PASSWORD_MIN_LENGTH, max_length=PASSWORD_MAX_LENGTH)
 
 
 class TokenResponse(BaseModel):

@@ -33,9 +33,7 @@ _log = logging.getLogger(__name__)
 Location = dict[str, Any]
 
 
-# ---------------------------------------------------------------------------
 # Helper functions
-# ---------------------------------------------------------------------------
 
 
 # Shared normalizer (defined in pop_lookup to avoid a circular import).
@@ -76,9 +74,7 @@ def normalize_country(country: str) -> str:
     return _normalize_country(country)
 
 
-# ---------------------------------------------------------------------------
 # Sources and confidence levels
-# ---------------------------------------------------------------------------
 
 # Source identifiers (where did this entry come from?)
 SOURCE_PEERINGDB = "peeringdb"  # Imported from PeeringDB API
@@ -104,9 +100,7 @@ CONFIDENCE_LOW = 40  # HIGH/MEDIUM are imported from app.db.pop_lookup
 PRIORITY_CANONICAL = 0
 PRIORITY_ALIAS = 10
 
-# ---------------------------------------------------------------------------
 # Safety thresholds for retire logic
-# ---------------------------------------------------------------------------
 
 # Minimum records to process before allowing retire (prevents empty-run disasters)
 MIN_PROCESSED_FOR_RETIRE = 10
@@ -234,9 +228,7 @@ def _validate_seed_data() -> None:
 _validate_seed_data()
 
 
-# ---------------------------------------------------------------------------
 # Table management
-# ---------------------------------------------------------------------------
 
 
 def is_pop_table_empty(conn: sqlite3.Connection) -> bool:
@@ -298,18 +290,14 @@ def ensure_pop_locations(conn: sqlite3.Connection) -> None:
         bootstrap_pop_locations(conn)
 
 
-# ---------------------------------------------------------------------------
 # Lookup functions
-# ---------------------------------------------------------------------------
 
 lookup_pop_by_tokens = lkp_t
 lookup_pop_by_prefix = lkp_p
 lookup_pop_by_hostname = lkp_h
 
 
-# ---------------------------------------------------------------------------
 # Refresh / import functions
-# ---------------------------------------------------------------------------
 
 
 def _valid_coordinates(lat: object, lon: object) -> bool:
@@ -496,9 +484,7 @@ def list_pop_locations(
     return [dict(row) for row in rows]
 
 
-# ---------------------------------------------------------------------------
 # Import run management
-# ---------------------------------------------------------------------------
 
 
 def start_import_run(conn: sqlite3.Connection, source: str) -> str:

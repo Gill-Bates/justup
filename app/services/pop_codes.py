@@ -61,9 +61,7 @@ class Location(TypedDict, total=False):
     hostname: str
 
 
-# ---------------------------------------------------------------------------
 # Rate-limited logging for lookup misses (prevent log spam)
-# ---------------------------------------------------------------------------
 
 _MISS_LOG_INTERVAL_SECONDS = 60
 _MISS_SAMPLE_RATE = 100
@@ -95,9 +93,7 @@ def _log_lookup_miss_sampled(tokens: list[str], hostname: str) -> None:
         _lookup_miss_last_log = now
 
 
-# ---------------------------------------------------------------------------
 # Connection factory (set by app on startup)
-# ---------------------------------------------------------------------------
 
 _pop_get_conn: Callable[[], sqlite3.Connection] | None = None
 
@@ -188,9 +184,7 @@ def observe_unknown_pop(
         sqlite_db.close_connection(conn)
 
 
-# ---------------------------------------------------------------------------
 # Main lookup function
-# ---------------------------------------------------------------------------
 
 
 def lookup_pop_code(hostname: str, conn: sqlite3.Connection | None = None) -> Location | None:

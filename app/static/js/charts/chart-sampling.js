@@ -10,8 +10,6 @@
  * @module charts/chart-sampling
  */
 
-// Mobile breakpoint (Bootstrap md)
-const MOBILE_BREAKPOINT = 768;
 
 // Decimation configuration
 var DECIMATION_CONFIG = {

@@ -47,6 +47,24 @@ async function extractApiError(response, fallbackMessage) {
 	return msg;
 }
 
+// Request body shared by create (POST) and update (PATCH); a disabled channel sends null.
+function recipientPayload({ name, isEnabled, enableForAllTargets, signalEnabled, emailEnabled, phone, email }) {
+	return {
+		name,
+		is_enabled: isEnabled,
+		enable_for_all_targets: enableForAllTargets,
+		phone: signalEnabled ? phone : null,
+		email: emailEnabled ? email : null,
+	};
+}
+// Server warnings (e.g. phone not registered with Signal) replace the success toast.
+function toastSaveResult(data, successMessage) {
+	if (data.warnings && data.warnings.length > 0) {
+		for (const warning of data.warnings) recipientsToast(warning, 'warning');
+	} else {
+		recipientsToast(successMessage, 'success');
+	}
+}
 // Field errors for the add (prefix 'recipient-') and edit (prefix 'edit-recipient-') dialogs.
 function validateRecipientInput({ name, signalEnabled, emailEnabled, phone, email }, prefix) {
 	const errors = [];
@@ -480,13 +498,7 @@ async function addRecipient() {
 	errorDiv.classList.add('d-none');
 	
 	try {
-		const payload = { 
-			name, 
-			is_enabled: isEnabled,
-			enable_for_all_targets: enableForAllTargets,
-			phone: signalEnabled ? phone : null,
-			email: emailEnabled ? email : null
-		};
+		const payload = recipientPayload({ name, isEnabled, enableForAllTargets, signalEnabled, emailEnabled, phone, email });
 		
 		const response = await window.apiFetch('/recipients', {
 			method: 'POST',
@@ -506,14 +518,7 @@ async function addRecipient() {
 			clearRecipientSearch(false);
 			loadRecipients();
 			
-			// Show warning toast if phone not registered with Signal
-			if (data.warnings && data.warnings.length > 0) {
-				for (const warning of data.warnings) {
-					recipientsToast(warning, 'warning');
-				}
-			} else {
-				recipientsToast('Recipient added successfully', 'success');
-			}
+			toastSaveResult(data, 'Recipient added successfully');
 		} else {
 			const errorMsg = await extractApiError(response, 'Failed to add recipient');
 			errorDiv.textContent = errorMsg;
@@ -799,13 +804,7 @@ async function saveRecipient() {
 		}
 		btn.disabled = true;
 
-		const payload = {
-			name,
-			is_enabled: isEnabled,
-			enable_for_all_targets: enableForAllTargets,
-			phone: signalEnabled ? phone : null,
-			email: emailEnabled ? email : null
-		};
+		const payload = recipientPayload({ name, isEnabled, enableForAllTargets, signalEnabled, emailEnabled, phone, email });
 		
 		const response = await window.apiFetch(`/recipients/${recipientId}`, {
 			method: 'PATCH',
@@ -818,14 +817,7 @@ async function saveRecipient() {
 			bootstrap.Modal.getInstance(document.getElementById('editRecipientModal'))?.hide();
 			loadRecipients();
 			
-			// Show warning toast if phone not registered with Signal
-			if (data.warnings && data.warnings.length > 0) {
-				for (const warning of data.warnings) {
-					recipientsToast(warning, 'warning');
-				}
-			} else {
-				recipientsToast('Recipient updated successfully', 'success');
-			}
+			toastSaveResult(data, 'Recipient updated successfully');
 		} else {
 			const errorMsg = await extractApiError(response, 'Failed to update recipient');
 			errorDiv.textContent = errorMsg;

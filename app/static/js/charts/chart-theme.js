@@ -33,6 +33,21 @@ function getChartTheme() {
 }
 
 /**
+ * Set theme colors on a plugins options object (Chart.defaults.plugins or chart.options.plugins).
+ * @param {object} plugins - Plugin options container; legend and tooltip entries are created if missing
+ * @param {object} theme - Result of getChartTheme()
+ */
+function _applyPluginTheme(plugins, theme) {
+  if (!plugins.legend) plugins.legend = {};
+  if (!plugins.legend.labels) plugins.legend.labels = {};
+  plugins.legend.labels.color = theme.text;
+  if (!plugins.tooltip) plugins.tooltip = {};
+  plugins.tooltip.titleColor = theme.text;
+  plugins.tooltip.bodyColor = theme.text;
+  plugins.tooltip.backgroundColor = theme.bg;
+  plugins.tooltip.borderColor = theme.grid;
+}
+/**
  * Apply current Bootstrap theme to all charts and Chart.js defaults.
  * Called when user switches between light/dark mode.
  */
@@ -49,21 +64,7 @@ function applyChartTheme() {
   Chart.defaults.borderColor = theme.grid;
   Chart.defaults.font.family = "'IBM Plex Sans', sans-serif";
 
-  // Ensure default paths exist before setting
-  var defPlugins = Chart.defaults.plugins;
-  if (defPlugins) {
-    if (defPlugins.legend) {
-      if (!defPlugins.legend.labels) defPlugins.legend.labels = {};
-      defPlugins.legend.labels.color = theme.text;
-    }
-    if (defPlugins.tooltip) {
-      defPlugins.tooltip.titleColor = theme.text;
-      defPlugins.tooltip.bodyColor = theme.text;
-      defPlugins.tooltip.backgroundColor = theme.bg;
-      defPlugins.tooltip.borderColor = theme.grid;
-    }
-  }
-
+  if (Chart.defaults.plugins) _applyPluginTheme(Chart.defaults.plugins, theme);
   if (typeof appState === "undefined" || !appState.charts) return;
 
   appState.charts.forEach(function (ch) {
@@ -76,24 +77,14 @@ function applyChartTheme() {
       if (scale.grid) scale.grid.color = theme.grid;
     });
 
-    // Legend: create the path; optional chaining would skip a missing one
+    // Create the path; optional chaining would skip a missing one
     if (!ch.options.plugins) ch.options.plugins = {};
-    if (!ch.options.plugins.legend) ch.options.plugins.legend = {};
-    if (!ch.options.plugins.legend.labels)
-      ch.options.plugins.legend.labels = {};
-    ch.options.plugins.legend.labels.color = theme.text;
-
+    _applyPluginTheme(ch.options.plugins, theme);
     // Also update the resolved legend-plugin options directly (belt & suspenders)
     if (ch.legend && ch.legend.options) {
       if (!ch.legend.options.labels) ch.legend.options.labels = {};
       ch.legend.options.labels.color = theme.text;
     }
-
-    if (!ch.options.plugins.tooltip) ch.options.plugins.tooltip = {};
-    ch.options.plugins.tooltip.titleColor = theme.text;
-    ch.options.plugins.tooltip.bodyColor = theme.text;
-    ch.options.plugins.tooltip.backgroundColor = theme.bg;
-    ch.options.plugins.tooltip.borderColor = theme.grid;
 
     // Theme-aware dataset colors (TCP port colors)
     if (ch.data && ch.data.datasets) {

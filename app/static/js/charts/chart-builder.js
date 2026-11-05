@@ -14,8 +14,6 @@
  * @module charts/chart-builder
  */
 
-/** Mobile breakpoint for responsive legend placement. */
-var _MOBILE_BREAKPOINT = 768;
 
 /**
  * Return 'bottom' on narrow screens, 'right' on wider ones.
@@ -29,7 +27,7 @@ function _legendPosition(chartOrCanvas) {
   const fitDashboard =
     window.matchMedia &&
     window.matchMedia("(min-width: 1200px) and (min-height: 800px)").matches;
-  return width < _MOBILE_BREAKPOINT && !fitDashboard ? "bottom" : "right";
+  return width < MOBILE_BREAKPOINT && !fitDashboard ? "bottom" : "right";
 }
 
 /**

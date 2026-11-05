@@ -311,8 +311,7 @@
 	function _formatTime(isoStr) {
 		if (!isoStr) return '–';
 		try {
-			const normalized = /(?:Z|[+-]\d{2}:\d{2})$/i.test(isoStr) ? isoStr : isoStr.replace(' ', 'T') + 'Z';
-			const d = new Date(normalized);
+			const d = new Date(parseUtcTimestamp(isoStr));
 			if (isNaN(d.getTime())) return isoStr.substring(0, 19);
 			return d.toLocaleString(undefined, {
 				month: 'short', day: 'numeric',

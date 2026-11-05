@@ -887,8 +887,7 @@ function bindAutoSaveForm(form) {
             saveSetting(t.name, parseInt(t.value, 10));
         } else if (t.type === 'number') {
             if (t.value === '' || !t.checkValidity()) {
-                revealSettingsSection(t);
-                t.reportValidity();
+                reportInvalidField(t);
                 return;
             }
             saveSetting(t.name, parseInt(t.value, 10));
@@ -902,8 +901,7 @@ function bindAutoSaveForm(form) {
             if (!clearingApiKey) keyInput.disabled = false;
         } else if (t.type === 'text') {
             if (!t.checkValidity()) {
-                revealSettingsSection(t);
-                t.reportValidity();
+                reportInvalidField(t);
                 return;
             }
             saveSetting(t.name, t.value.trim());
@@ -927,6 +925,17 @@ function bindAutoSaveForm(form) {
             if (keyInput) keyInput.disabled = false;
         });
     }
+}
+
+/** True for fields inside a form or flow that saves itself, so the delegated settings handlers must skip them. */
+function isHandledElsewhere(target) {
+    return Boolean(target.closest('form[data-settings-autosave], #signal-setup-collapse, #signal-flow-link, #signal-flow-register'));
+}
+
+/** Show the section holding an invalid field and surface the browser's validation message. */
+function reportInvalidField(field) {
+    revealSettingsSection(field);
+    field.reportValidity();
 }
 
 /**
@@ -956,10 +965,7 @@ function initSettingsAutoSave() {
         if (target.name === 'smtp_test_recipient') return;
 
         // Skip elements handled elsewhere
-        if (target.closest('form[data-settings-autosave]')) return;
-        if (target.closest('#signal-setup-collapse')) return;
-        if (target.closest('#signal-flow-link')) return;
-        if (target.closest('#signal-flow-register')) return;
+        if (isHandledElsewhere(target)) return;
         if (target.name === 'auth_disabled') return;  // Handled by initAuthToggle with modal
         if (target.name === 'signal_enabled') return;  // Handled by initEnableToggle's signalSaveQueue
 
@@ -1033,10 +1039,7 @@ function initSettingsAutoSave() {
         if (target.name === 'smtp_test_recipient') return;
 
         // Skip elements handled elsewhere
-        if (target.closest('form[data-settings-autosave]')) return;
-        if (target.closest('#signal-setup-collapse')) return;
-        if (target.closest('#signal-flow-link')) return;
-        if (target.closest('#signal-flow-register')) return;
+        if (isHandledElsewhere(target)) return;
         // SMTP password: allow setting when user provides a value
         if (target.type === 'password' || target.autocomplete?.includes('password')) {
             if (target.name === 'smtp_password') {
@@ -1059,8 +1062,7 @@ function initSettingsAutoSave() {
             if (target.value !== lastValue) {
                 // An empty or invalid entry must not be saved as the clamped minimum
                 if (target.value === '' || !target.checkValidity()) {
-                    revealSettingsSection(target);
-                    target.reportValidity();
+                    reportInvalidField(target);
                     return;
                 }
                 // Clamp to valid range

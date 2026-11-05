@@ -10,8 +10,10 @@ import vm from 'node:vm';
 
 const window = {};
 vm.runInNewContext(readFileSync(new URL('../../app/static/js/dashboard-widgets.js', import.meta.url), 'utf8'), { window });
+vm.runInNewContext(readFileSync(new URL('../../app/static/js/utils/utc-time.js', import.meta.url), 'utf8'), { window });
+const parseUtcTimestamp = window.parseUtcTimestamp;
 vm.runInNewContext(readFileSync(new URL('../../app/static/js/dashboard-monitoring.js', import.meta.url), 'utf8'), {
-  window, document: { getElementById: () => null },
+  window, parseUtcTimestamp, document: { getElementById: () => null },
 });
 const { queueState } = window.JuDashboardMonitoring;
 const now = Date.parse('2026-11-01T12:00:00Z');

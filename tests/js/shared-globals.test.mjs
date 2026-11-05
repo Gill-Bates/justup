@@ -113,3 +113,12 @@ test("no first-party script redefines the shared helpers differently", () => {
     assert.doesNotMatch(read(file), /function\s+getCsrfToken\s*\(/, file);
   }
 });
+
+test("parseUtcTimestamp reads offset-less timestamps as UTC and keeps explicit offsets", () => {
+  const { parseUtcTimestamp } = load("static/js/utils/utc-time.js");
+  const expected = Date.parse("2026-11-01T12:00:00Z");
+  assert.equal(parseUtcTimestamp("2026-11-01 12:00:00"), expected);
+  assert.equal(parseUtcTimestamp("2026-11-01T12:00:00"), expected);
+  assert.equal(parseUtcTimestamp("2026-11-01T14:00:00+02:00"), expected);
+  assert.ok(Number.isNaN(parseUtcTimestamp("garbage")));
+});

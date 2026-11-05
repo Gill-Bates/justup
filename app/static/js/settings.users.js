@@ -44,15 +44,11 @@ function validateSmtpFields() {
 	for (const fieldId of SMTP_REQUIRED_FIELDS) {
 		const input = document.getElementById(fieldId);
 		if (input) {
-			input.classList.remove('is-invalid');
-			input.removeAttribute('aria-invalid');
+			window.JuFieldErrors.clear(input);
 			// Remove validation on input
 			if (!input.dataset.smtpValidation) {
 				input.dataset.smtpValidation = '1';
-				input.addEventListener('input', () => {
-					input.classList.remove('is-invalid');
-					input.removeAttribute('aria-invalid');
-				});
+				input.addEventListener('input', () => window.JuFieldErrors.clear(input));
 			}
 		}
 	}
@@ -148,10 +144,7 @@ function initSmtpTestHandlers(root) {
 	const recipientInput = scope.querySelector('#smtp_test_recipient');
 	if (recipientInput && !recipientInput.dataset.smtpValidation) {
 		recipientInput.dataset.smtpValidation = '1';
-		recipientInput.addEventListener('input', () => {
-			recipientInput.classList.remove('is-invalid');
-			recipientInput.removeAttribute('aria-invalid');
-		});
+		recipientInput.addEventListener('input', () => window.JuFieldErrors.clear(recipientInput));
 	}
 }
 

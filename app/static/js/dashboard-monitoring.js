@@ -14,8 +14,7 @@
 	const timestamp = (value) => {
 		if (value === null || value === undefined || value === '') return NaN;
 		if (typeof value === 'number') return value < 1e12 ? value * 1000 : value;
-		const text = String(value);
-		return Date.parse(/(?:Z|[+-]\d\d:\d\d)$/i.test(text) ? text : text.replace(' ', 'T') + 'Z');
+		return parseUtcTimestamp(value);
 	};
 	// Failed deliveries that still count as current: the server's 24 h window, else every stored failure.
 	const failedCount = (data) => (count(data.failed_recent) ? data.failed_recent : data.failed);

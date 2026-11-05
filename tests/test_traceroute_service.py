@@ -48,6 +48,7 @@ def test_silent_hops_keep_their_number_and_carry_no_value(monkeypatch: pytest.Mo
         ("permission_denied", "permission_denied"),
         ("timeout", "timeout"),
         ("no_trace", "no_trace"),
+        ("invalid_host", "invalid_target"),
         ("process_failed", "failed"),
     ],
 )

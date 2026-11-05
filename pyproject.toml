@@ -195,6 +195,8 @@ extend-immutable-calls = [
 # The startup banner writes to stdout, and its ASCII art is padded with
 # trailing spaces that keep the box aligned.
 "app/utils/banner.py" = ["T20", "W291"]
+# The canonical header path line (`# app/services/ixp_import.py`) parses as code.
+"app/services/ixp_import.py" = ["ERA001"]
 # Assertions are the direct contract checks in pytest cases.
 "tests/*.py" = ["S101"]
 # Repo tooling: writing to stdout is the whole point of these scripts.

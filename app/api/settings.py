@@ -344,9 +344,7 @@ async def send_signal_test(request: Request, conn=Depends(get_conn), _admin=Depe
     return {"ok": True, "message": "Test message queued"}
 
 
-# ============================================================================
 # Signal Template Management
-# ============================================================================
 
 
 class SignalTemplateResponse(BaseModel):
@@ -965,9 +963,7 @@ async def restore_backup(
     }
 
 
-# ============================================================================
 # Email Template Management
-# ============================================================================
 
 
 class EmailTemplateResponse(BaseModel):

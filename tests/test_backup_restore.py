@@ -1557,9 +1557,7 @@ class TestCoordinatedMaintenance:
         assert first_result == [200]
 
 
-# ---------------------------------------------------------------------------
 # Hardening of the manifest-based restore: versions, hostile databases, real v1 history
-# ---------------------------------------------------------------------------
 
 
 def _app_db_with(*statements: str) -> bytes:

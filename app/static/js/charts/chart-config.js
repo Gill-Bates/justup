@@ -9,6 +9,8 @@
  * @module charts/chart-config
  */
 
+// Mobile breakpoint (Bootstrap md), shared by chart sampling and legend placement
+const MOBILE_BREAKPOINT = 768;
 // SLA annotation styling
 const SLA_LINE_COLOR = "#f0ad4e";
 const SLA_LINE_WIDTH = 2;

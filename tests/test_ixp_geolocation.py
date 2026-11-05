@@ -92,9 +92,7 @@ def conn() -> sqlite3.Connection:
     c.close()
 
 
-# ---------------------------------------------------------------------------
 # Import: administrative seat vs. evidenced region (P2.4)
-# ---------------------------------------------------------------------------
 
 
 def test_metro_exchange_gets_a_region_from_facilities() -> None:
@@ -122,9 +120,7 @@ def test_ipv6_and_mapped_addresses_match_their_prefix() -> None:
     assert ixp_index.lookup("8.8.8.8") is None and ixp_index.lookup("not-an-ip") is None
 
 
-# ---------------------------------------------------------------------------
 # Hop presentation: table, route model, map points and PDF read one decision (P2.4, P2.5)
-# ---------------------------------------------------------------------------
 
 
 def _hop(n: int, ip: str) -> dict:
@@ -184,9 +180,7 @@ def test_ixp_source_label_is_one_display_contract() -> None:
     assert note is not None and note.startswith("IXP, source PeeringDB IXP prefix")
 
 
-# ---------------------------------------------------------------------------
 # Index: older loaders never overwrite a newer index (P2.2)
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture
@@ -291,9 +285,7 @@ def test_failed_reload_keeps_the_active_index_and_queues_a_retry(monkeypatch) ->
     assert ixp_index._index.lookup(ipaddress.ip_address(METRO_IP)).name == "Metro-IX"
 
 
-# ---------------------------------------------------------------------------
 # Refresh: fetch completeness and publication after commit (P2.1, P2.3)
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture

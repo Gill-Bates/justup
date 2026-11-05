@@ -55,6 +55,7 @@ from ..db import sqlite as sqlite_db
 from ..db import tsdb as tsdb_db
 from ..models.settings import SettingsUpdate
 from ..models.targets import target_row_to_dict
+from ..models.users import PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH
 from ..monitor.quality_probe import DEFAULT_QUALITY_TARGETS
 from ..services.route_timeline import (
     STATE_LABELS,
@@ -256,6 +257,8 @@ def _destination_kpis(
 templates.env.globals["version"] = f"v{VERSION}"
 templates.env.globals["build_info"] = BUILD_INFO
 templates.env.globals["now"] = lambda: datetime.now(UTC)
+templates.env.globals["password_min_length"] = PASSWORD_MIN_LENGTH
+templates.env.globals["password_max_length"] = PASSWORD_MAX_LENGTH
 
 templates.env.filters["format_percent"] = format_percent
 templates.env.filters["format_compact_count"] = format_compact_count

@@ -1216,6 +1216,8 @@
 			data.http_username = form.http_username.value.trim();
 		}
 
+		// Stays true after a complete save so the button remains locked until the redirect lands.
+		let saveComplete = false;
 		try {
 			const resp = await apiFetch(`/targets/${targetId}`, {
 				method: 'PATCH',
@@ -1273,15 +1275,24 @@
 				}
 			}
 
-			// Redirect after short delay to allow toast to be seen
+			saveComplete = true;
+			// Back to the targets overview after a short delay so the toast can be seen
 			setTimeout(() => {
-				window.location.href = `/ui/targets/${result.id}`;
+				window.location.href = '/ui/targets';
 			}, 800);
+			// A bfcache restore (browser Back) must not show a stuck "Saving..." button
+			window.addEventListener('pageshow', (event) => {
+				if (!event.persisted) return;
+				submitBtn.disabled = false;
+				submitBtn.innerHTML = originalSubmitHtml;
+			}, { once: true });
 		} catch (err) {
 			window.justUpToast?.error?.(err.message);
 		} finally {
-			submitBtn.disabled = false;
-			submitBtn.innerHTML = originalSubmitHtml;
+			if (!saveComplete) {
+				submitBtn.disabled = false;
+				submitBtn.innerHTML = originalSubmitHtml;
+			}
 		}
 	});
 

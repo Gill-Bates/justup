@@ -162,9 +162,7 @@ def test_run_full_refresh_returns_result_per_source_on_success(conn, monkeypatch
     assert unlocode.run_id
 
 
-# ---------------------------------------------------------------------------
 # validate_pop_record coordinate handling
-# ---------------------------------------------------------------------------
 
 
 def _validate(lat, lon):
@@ -190,9 +188,7 @@ def test_validate_accepts_numbers_and_numeric_strings(lat, lon) -> None:
     assert result.lat == float(lat) and result.lon == float(lon)
 
 
-# ---------------------------------------------------------------------------
 # _fetch_with_retry: bounded streaming reads
-# ---------------------------------------------------------------------------
 
 
 class _Chunks(httpx.SyncByteStream):

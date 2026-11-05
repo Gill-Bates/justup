@@ -277,8 +277,13 @@
 	function pointContainsHop(point, hop) {
 		if (!Number.isFinite(hop)) return false;
 		if (!point._hop_range) return Number(point.hop) === hop;
-		var bounds = point._hop_range.split('-').map(Number);
-		return bounds.length === 2 && hop >= bounds[0] && hop <= bounds[1];
+		var bounds = parseHopRange(point._hop_range);
+		return bounds !== null && hop >= bounds[0] && hop <= bounds[1];
+	}
+	/** Parse a "first-last" hop range string into [first, last]; null when malformed. */
+	function parseHopRange(text) {
+		var bounds = String(text).split('-').map(Number);
+		return bounds.length === 2 && isFinite(bounds[0]) && isFinite(bounds[1]) ? bounds : null;
 	}
 
 	/**
@@ -666,10 +671,8 @@
 		}
 
 		function hopSpan(point) {
-			if (point._hop_range) {
-				var bounds = point._hop_range.split('-').map(Number);
-				if (bounds.length === 2 && isFinite(bounds[0]) && isFinite(bounds[1])) return bounds;
-			}
+			var bounds = point._hop_range ? parseHopRange(point._hop_range) : null;
+			if (bounds) return bounds;
 			var n = Number(point.hop);
 			return isFinite(n) ? [n, n] : null;
 		}
@@ -678,7 +681,7 @@
 		var markerRecords = [];
 
 		function overlaps(spans, first, last) {
-			return spans.some(function (span) { return span[0] <= last && span[1] >= first; });
+			return spans.some(function (span) { return rangesOverlap(first, last, span[0], span[1]); });
 		}
 
 		function setLinkedRows(spans, on) {

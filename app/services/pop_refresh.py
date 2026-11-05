@@ -67,9 +67,7 @@ def _db_connection(get_conn):
         sqlite_db.close_connection(conn)
 
 
-# ---------------------------------------------------------------------------
 # Configuration
-# ---------------------------------------------------------------------------
 
 # HTTP settings
 HTTP_TIMEOUT_SECONDS = 30
@@ -101,9 +99,7 @@ CONTROL_CHAR_PATTERN = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 SAFE_PLACE_NAME_PATTERN = re.compile(r"^[\w\s\-\.,'()\u00C0-\u024F]+$", re.UNICODE)
 
 
-# ---------------------------------------------------------------------------
 # Error classification (for structured alerting)
-# ---------------------------------------------------------------------------
 
 
 class ErrorCategory:
@@ -116,9 +112,7 @@ class ErrorCategory:
     PARSE = "parse"  # JSON/data structure errors
 
 
-# ---------------------------------------------------------------------------
 # Run locking (prevents parallel imports for same source)
-# ---------------------------------------------------------------------------
 
 _import_locks: dict[str, threading.Lock] = {}
 _lock_registry = threading.Lock()
@@ -132,9 +126,7 @@ def _get_source_lock(source: str) -> threading.Lock:
         return _import_locks[source]
 
 
-# ---------------------------------------------------------------------------
 # Data validation
-# ---------------------------------------------------------------------------
 
 
 @dataclass
@@ -235,9 +227,7 @@ def validate_pop_record(
     )
 
 
-# ---------------------------------------------------------------------------
 # HTTP client with retry
-# ---------------------------------------------------------------------------
 
 
 def _read_bounded(response: Any, limit: int) -> bytes:
@@ -361,9 +351,7 @@ def _fetch_with_retry(
     raise RuntimeError(f"[{error_category}] Failed after {max_retries} retries: {last_error}")
 
 
-# ---------------------------------------------------------------------------
 # Result class
-# ---------------------------------------------------------------------------
 
 
 class PopRefreshResult:
@@ -402,9 +390,7 @@ class PopRefreshResult:
         )
 
 
-# ---------------------------------------------------------------------------
 # PeeringDB refresh
-# ---------------------------------------------------------------------------
 
 PEERINGDB_API = "https://api.peeringdb.com/api"
 IXP_TABLES = ("ix", "ixlan", "ixpfx", "ixfac")
@@ -929,9 +915,7 @@ def _apply_peeringdb_snapshot(
     )
 
 
-# ---------------------------------------------------------------------------
 # UN/LOCODE refresh (placeholder)
-# ---------------------------------------------------------------------------
 
 
 def refresh_from_unlocode(get_conn) -> PopRefreshResult:
@@ -996,9 +980,7 @@ def refresh_from_unlocode(get_conn) -> PopRefreshResult:
         lock.release()
 
 
-# ---------------------------------------------------------------------------
 # Self-managing refresh scheduling (state-based, driven by pop_import_runs)
-# ---------------------------------------------------------------------------
 #
 # justUp decides itself when the external POP data (PeeringDB) needs refreshing. The decision is
 # computed from the persisted import history, not from any user setting and not from the container
@@ -1137,9 +1119,7 @@ def plan_next_refresh(
     )
 
 
-# ---------------------------------------------------------------------------
 # Full refresh
-# ---------------------------------------------------------------------------
 
 
 def run_full_refresh(get_conn) -> list[PopRefreshResult]:

@@ -65,9 +65,8 @@ _KNOWN_CODES = {
     "permission_denied": ERROR_PERMISSION,
     "timeout": ERROR_TIMEOUT,
     "no_trace": ERROR_NO_TRACE,
-    "invalid_target": ERROR_INVALID_TARGET,
-    "invalid_request": ERROR_INVALID_TARGET,
-    "forbidden_target": ERROR_INVALID_TARGET,
+    # The worker reports a rejected or unresolvable host as "invalid_host".
+    "invalid_host": ERROR_INVALID_TARGET,
 }
 
 

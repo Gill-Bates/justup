@@ -506,9 +506,7 @@ def _create_baseline_schema(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_targets_identity_signature ON targets(identity_signature)")
 
 
-# ---------------------------------------------------------------------------
 # Schema versioning (PRAGMA user_version)
-# ---------------------------------------------------------------------------
 
 _RECIPIENT_PHONE_UNIQUE_DDL = (
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_recipients_phone ON recipients(phone) "

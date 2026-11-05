@@ -10,6 +10,7 @@ import vm from "node:vm";
 
 const src = readFileSync(new URL("../../app/static/js/settings.spooler.js", import.meta.url), "utf8");
 
+const parseUtcTimestamp = (() => { const w = {}; vm.runInNewContext(readFileSync(new URL("../../app/static/js/utils/utc-time.js", import.meta.url), "utf8"), { window: w }); return w.parseUtcTimestamp; })();
 function makeEl(extra = {}) {
   const listeners = {};
   return {
@@ -31,6 +32,7 @@ function build() {
   const ctx = vm.createContext({
     console: { error() {} },
     escapeHtml: (s) => String(s),
+    parseUtcTimestamp,
     URLSearchParams,
     AbortController,
     setInterval: (fn) => { intervals.set(nextTimer, fn); return nextTimer++; },
