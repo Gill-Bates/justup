@@ -43,6 +43,38 @@ async function openTargets(browser, app, adminState, viewport) {
 	return { context, page, problems };
 }
 
+// DESIGN.md "Focus indication": a text field shows focus by its border alone (no outline, no shadow).
+// Waits two frames so a running transition cannot be measured, then checks the real focus owner.
+async function expectFieldFocus(page, label) {
+	await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+	const state = await page.evaluate(() => {
+		const el = document.getElementById("targets-search");
+		const cs = getComputedStyle(el);
+		const probe = document.createElement("i");
+		probe.style.cssText = "position:absolute;visibility:hidden;border:1px solid var(--ju-focus-field-border)";
+		document.body.append(probe);
+		const token = getComputedStyle(probe).borderTopColor;
+		probe.remove();
+		const luminance = (value) => {
+			const [r, g, b] = /rgba?\(([^)]+)\)/.exec(value)[1].split(/[ ,/]+/).filter(Boolean).slice(0, 3).map((n) => {
+				const c = Number(n) / 255;
+				return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+			});
+			return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+		};
+		const [hi, lo] = [luminance(cs.borderTopColor), luminance(cs.backgroundColor)].sort((a, b) => b - a);
+		return {
+			active: document.activeElement === el, focusVisible: el.matches(":focus-visible"), border: cs.borderTopColor, token,
+			outline: cs.outlineStyle, shadow: cs.boxShadow, contrast: (hi + 0.05) / (lo + 0.05),
+		};
+	});
+	assert.equal(state.active, true, `${label}: the search field owns the focus`);
+	assert.equal(state.focusVisible, true, `${label}: the focus is keyboard-visible`);
+	assert.equal(state.border, state.token, `${label}: focus shows as the field border (${state.border} vs ${state.token})`);
+	assert.ok(state.outline === "none" && state.shadow === "none", `${label}: no outline or glow (${state.outline} ${state.shadow})`);
+	assert.ok(state.contrast >= 3, `${label}: focus border contrast ${state.contrast.toFixed(2)}:1 is below 3:1`);
+}
+
 const setTheme = async (page, theme) => {
 	await page.evaluate((mode) => document.documentElement.setAttribute("data-bs-theme", mode), theme);
 	await waitForVisualStability(page);
@@ -115,6 +147,7 @@ for (const viewport of VIEWPORTS) {
 				await page.keyboard.press("Escape");
 				assert.equal(await search.inputValue(), "", `${theme}: Escape clears the field`);
 				assert.equal(await page.evaluate(() => document.activeElement.id), "targets-search", `${theme}: focus stays in the field`);
+				await expectFieldFocus(page, `${theme} after Escape`);
 				assert.deepEqual(await groups(page), manual.map((group) => ({ ...group, badge: group.badge })), `${theme}: groups, badges and rows return to the state before the search`);
 				assert.equal(await clear.isHidden(), true);
 				assert.equal(await status.textContent(), "");
@@ -168,6 +201,10 @@ for (const viewport of VIEWPORTS) {
 				await page.evaluate(() => window.htmx.trigger(document.getElementById("targets-table"), "refresh"));
 				await page.waitForFunction(() => document.querySelectorAll("#targets-table tbody tr[data-search]").length >= 6, null, { timeout: 15000 });
 				assert.equal(await search.inputValue(), "luett", "the query survives the fragment swap");
+				await search.focus();
+				await page.evaluate(() => window.htmx.trigger(document.getElementById("targets-table"), "refresh"));
+				await page.waitForLoadState("networkidle");
+				await expectFieldFocus(page, "after the fragment swap");
 				const during = await visibleGroups(page);
 				assert.deepEqual(during.map((group) => [group.name, group.visibleRows, group.expanded]), [["Websites", 2, true]], "the new matching row shows, the non-matching one stays hidden");
 				// Row actions keep working while a filter is active.
@@ -212,15 +249,11 @@ for (const viewport of VIEWPORTS) {
 			assert.ok(geometry.fieldHeight >= 24 && geometry.clearW >= 24 && geometry.clearH >= 24, "touch targets are at least 24x24 CSS px");
 			assert.ok(geometry.clearInside, "the clear button sits inside the field");
 
-			// Keyboard: the field follows the page actions in tab order and shows a visible focus ring.
+			// Keyboard: the field follows the page actions in tab order and shows the quiet field focus.
 			await page.locator('a[href="/ui/targets/new"]').focus();
 			await page.keyboard.press("Tab");
-			const focus = await page.evaluate(() => {
-				const style = getComputedStyle(document.activeElement);
-				return { id: document.activeElement.id, outline: style.outlineStyle, width: parseFloat(style.outlineWidth), shadow: style.boxShadow };
-			});
-			assert.equal(focus.id, "targets-search", "Tab from New Target reaches the search field");
-			assert.ok((focus.outline !== "none" && focus.width >= 2) || focus.shadow !== "none", `visible keyboard focus (${focus.outline} ${focus.width}px ${focus.shadow})`);
+			assert.equal(await page.evaluate(() => document.activeElement.id), "targets-search", "Tab from New Target reaches the search field");
+			await expectFieldFocus(page, "after Tab");
 			assert.deepEqual(problems, [], "no console or page errors");
 		} finally {
 			await context.close();

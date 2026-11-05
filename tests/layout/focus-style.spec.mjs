@@ -24,6 +24,7 @@ const PAGE = `<!doctype html><html lang="en" data-bs-theme="light"><head><meta c
 <div class="p-2" id="w-search"><input id="search" class="form-control" type="search" aria-label="Search"></div>
 <div class="p-2" id="w-password"><input id="password" class="form-control" type="password" aria-label="Password"></div>
 <div class="p-2" id="w-select"><select id="select" class="form-select" aria-label="Select"><option>A</option><option>B</option></select></div>
+<div class="p-2" id="w-select-dis"><select id="select-dis" class="form-select" aria-label="Disabled select" disabled><option>A</option></select></div>
 <div class="p-2" id="w-textarea"><textarea id="textarea" class="form-control" aria-label="Textarea"></textarea></div>
 <div class="p-2" id="w-checkbox"><div class="form-check"><input id="checkbox" class="form-check-input" type="checkbox"><label class="form-check-label" for="checkbox">Check</label></div></div>
 <div class="p-2" id="w-radio"><div class="form-check"><input id="radio" class="form-check-input" type="radio" name="r"><label class="form-check-label" for="radio">Radio</label></div></div>
@@ -82,7 +83,11 @@ const tabTo = async (page, id) => {
 	await page.focus("#start");
 	for (let n = 0; n < 40; n += 1) {
 		await page.keyboard.press("Tab");
-		if (await page.evaluate((x) => document.activeElement?.id === x, id)) return;
+		if (await page.evaluate((x) => document.activeElement?.id === x, id)) {
+			// Reduced motion leaves a 0.01 ms transition: measure the settled state, not its first frame.
+			await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+			return;
+		}
 	}
 	throw new Error(`Tab never reached #${id}`);
 };
@@ -182,7 +187,8 @@ for (const theme of THEMES) {
 		for (const sel of ["#button", "#link", "#checkbox", "#switch", "#radio", "#sw-on", "label[for=switch]", "label[for=checkbox]", "label[for=radio]"]) {
 			assert.equal(await cursor(sel), "pointer", `${sel} should show a hand`);
 		}
-		for (const sel of ["#sw-off-dis", "#sw-on-dis", "label[for=sw-off-dis]", "label[for=sw-on-dis]"]) {
+		assert.equal(await cursor("#select"), "pointer", "an operable select shows a hand");
+		for (const sel of ["#select-dis", "#sw-off-dis", "#sw-on-dis", "label[for=sw-off-dis]", "label[for=sw-on-dis]"]) {
 			assert.equal(await cursor(sel), "not-allowed", `${sel} (disabled) should show not-allowed`);
 		}
 		for (const sel of ["#text", "#search", "#password", "#textarea"]) assert.ok(["text", "auto"].includes(await cursor(sel)), `${sel} keeps the native text cursor`);
@@ -209,7 +215,7 @@ for (const theme of THEMES) {
 					input.checked = checked;
 					out.switches.push({ id: input.id || input.name, dw: Math.abs(before.width - after.width), dh: Math.abs(before.height - after.height) });
 				}
-				const operable = "button:not(:disabled), a[href], summary, .form-check-input:not(:disabled), [role=tab], [role=button]:not([aria-disabled=true]), .form-check-input:not(:disabled) ~ .form-check-label, label.form-check-label[for]";
+				const operable = "button:not(:disabled), select:not(:disabled), a[href], summary, .form-check-input:not(:disabled), [role=tab], [role=button]:not([aria-disabled=true]), .form-check-input:not(:disabled) ~ .form-check-label, label.form-check-label[for]";
 				for (const el of document.querySelectorAll(operable)) {
 					if (el.matches(SPECIAL) || el.closest(SPECIAL)) continue;
 					if (el.matches(".form-check-label") && el.control?.disabled) continue;

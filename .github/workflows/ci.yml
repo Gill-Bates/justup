@@ -324,6 +324,12 @@ jobs:
           JUSTUP_LAYOUT_BROWSERS: chromium
           JUSTUP_LAYOUT_OUTPUT: ${{ runner.temp }}/layout-artifacts
         run: npx playwright test --config tests/layout/playwright.config.mjs --grep '@combined-zoom-reset|@public-hostname-ui|@target-endpoints|@portpicker|@endpoint-state'
+      - name: Run focus, cursor and targets search browser checks
+        env:
+          JUSTUP_LAYOUT_BROWSERS: chromium,webkit
+          JUSTUP_LAYOUT_OUTPUT: ${{ runner.temp }}/layout-artifacts
+        run: node tests/layout/run.mjs --focus
+
       - name: Run browser authentication flow
         env:
           JUSTUP_LAYOUT_BROWSERS: chromium

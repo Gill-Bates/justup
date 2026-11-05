@@ -89,7 +89,7 @@ ARG NMAP_VERSION
 ARG NMAP_SOURCE_SHA256
 COPY tools/nmap-release.py /usr/local/bin/nmap-release.py
 # Everything below exists only in this stage: compiler, headers, gpg, the source tree.
-RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get upgrade -y && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       ca-certificates gnupg bzip2 build-essential libssl-dev pkg-config zlib1g-dev libpcre2-dev \
  && rm -rf /var/lib/apt/lists/*
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
@@ -406,7 +406,7 @@ FROM ${PYTHON_BASE} AS jre-builder
 ARG JAVA_MAJOR
 
 # binutils: jlink --strip-debug calls objcopy. Build-only, never copied to the runtime.
-RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get upgrade -y && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
     gpg \

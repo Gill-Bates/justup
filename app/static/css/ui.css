@@ -2927,8 +2927,9 @@ summary:focus-visible,
 	background-image: var(--ju-switch-thumb-off);
 }
 
-/* Operable controls show a hand, disabled toggles not-allowed, text fields keep the I-beam. */
+/* Operable controls show a hand, disabled toggles and selects not-allowed, text fields keep the I-beam. */
 a[href],
+select:not(:disabled),
 summary,
 [role="tab"],
 .form-check-input:not(:disabled),
@@ -2937,6 +2938,7 @@ summary,
 	cursor: pointer;
 }
 
+select:disabled,
 .form-check-input:disabled,
 .form-check-input:disabled ~ .form-check-label {
 	cursor: not-allowed;
