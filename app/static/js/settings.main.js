@@ -91,7 +91,7 @@ function initRegisteredAccountDisplay(senderNumber) {
 
 document.addEventListener('DOMContentLoaded', () => {
     initTooltips();
-	initSettingsTabStrip();
+    initSettingsTabStrip();
 
     // Re-init modules after HTMX fragments load (tabs are lazy-loaded)
     document.body.addEventListener('htmx:afterSettle', () => {

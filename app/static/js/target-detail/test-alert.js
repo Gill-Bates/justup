@@ -55,12 +55,12 @@ async function sendTestAlert(targetId, elements) {
     // Check status before parsing JSON
     if (!response.ok) {
       let errorMsg = `Server error: ${response.status}`;
+      // A body can be read only once: take the text, then try it as JSON.
+      const text = await response.text().catch(() => "");
       try {
-        const errData = await response.json();
-        errorMsg = window.JuApiError.message(errData.detail, errorMsg);
+        errorMsg = window.JuApiError.message(JSON.parse(text).detail, errorMsg);
       } catch {
         // Non-JSON response (e.g. proxy error page)
-        const text = await response.text().catch(() => "");
         if (text) errorMsg += ` – ${text.substring(0, 100)}`;
       }
       throw new Error(errorMsg);

@@ -82,7 +82,8 @@ def _names_agree(a: str, b: str) -> bool:
     return bool(na and nb and (na in nb or nb in na))
 
 
-def _distance_km(a: tuple[float, float], b: tuple[float, float]) -> float:
+def great_circle_km(a: tuple[float, float], b: tuple[float, float]) -> float:
+    """Haversine distance in km between two (lat, lon) points in degrees."""
     lat1, lon1, lat2, lon2 = map(math.radians, (*a, *b))
     h = math.sin((lat2 - lat1) / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin((lon2 - lon1) / 2) ** 2
     return 12742.0 * math.asin(min(1.0, math.sqrt(h)))
@@ -144,7 +145,7 @@ def classify_exchange(
         return exchange(LOC_CONFLICTING)
     points = [(f[2], f[3]) for f in facilities]
     center = _centroid(points)
-    spread = max(_distance_km(p, center) for p in points)
+    spread = max(great_circle_km(p, center) for p in points)
     if spread > METRO_MAX_RADIUS_KM:
         return exchange(LOC_DISTRIBUTED, ref_country=fac_country)
     if city and not any(_names_agree(city, f[0]) for f in facilities):

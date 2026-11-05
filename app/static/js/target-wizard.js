@@ -476,7 +476,7 @@
     input.addEventListener('change', updatePortSummaries);
   }
   for (const button of form.querySelectorAll('[data-edit-ports]')) {
-    button.addEventListener('click', () => editPorts(button.dataset.editPorts));
+    button.addEventListener('click', editPorts);
   }
   fields.name.addEventListener('input', () => { fields.name.dataset.userEdited = 'true'; });
   fields.address.addEventListener('input', suggestName);

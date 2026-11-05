@@ -158,11 +158,12 @@
 
   /** A drawn peak never rises above this multiple of the series' highest median. */
   var PEAK_CAP_FACTOR = 3;
+  var MIN_FENCE_ROWS = 4;
 
   /**
    * Notable latency peaks of one series: isolated events, not a curve. The selection follows the
    * PDF report: a maximum counts when it exceeds the Tukey fence of all maxima (at least 1.5x the
-   * overall median), is >= 1.5x its own interval median and rises >= 1 ms above it. Intervals
+   * overall median; with fewer than four intervals only that median rule applies), is >= 1.5x its own interval median and rises >= 1 ms above it. Intervals
    * without a finite maximum (rollups, gaps) yield nothing; nothing is interpolated.
    * `y` is the plotted height on the response-time axis, capped so one extreme value cannot
    * flatten the normal curve; `max` is always the real value and `capped` marks the difference.
@@ -193,9 +194,14 @@
       .sort(function (a, b) {
         return a - b;
       });
-    var q1 = quantile(maxes, 0.25);
-    var q3 = quantile(maxes, 0.75);
-    var fence = Math.max(q3 + 1.5 * (q3 - q1), 1.5 * quantile(medians, 0.5));
+    var medianFence = 1.5 * quantile(medians, 0.5);
+    var fence = medianFence;
+    // Quartiles of fewer than MIN_FENCE_ROWS maxima say nothing about spread: use the median rule only.
+    if (maxes.length >= MIN_FENCE_ROWS) {
+      var q1 = quantile(maxes, 0.25);
+      var q3 = quantile(maxes, 0.75);
+      fence = Math.max(q3 + 1.5 * (q3 - q1), medianFence);
+    }
     var cap = medians[medians.length - 1] * PEAK_CAP_FACTOR;
     return rows
       .filter(function (r) {

@@ -1035,7 +1035,7 @@ def build_route_model(
 
 def _hop_ranges(hops: list[int]) -> str:
     """ "9–12, 14" for the hop numbers a segment crosses."""
-    parts: list[str] = []
+    parts: list[list[int]] = []
     for hop in sorted(set(hops)):
         if parts and parts[-1][1] == hop - 1:
             parts[-1][1] = hop

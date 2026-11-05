@@ -113,6 +113,14 @@ def test_multi_country_exchange_keeps_its_administrative_seat_but_evidences_no_c
     assert evidence.position() is None
 
 
+def test_malformed_prefix_protocol_is_excluded_instead_of_aborting_the_import() -> None:
+    tables = _tables()
+    tables["ixpfx"].append({"id": 300, "status": "ok", "ixlan_id": 10, "protocol": ["IPv4"], "prefix": "80.82.0.0/22"})
+    result = _build(tables)
+    assert result.excluded["pfx_inconsistent"] == 1
+    assert len(result.snapshot.prefixes) == 3
+
+
 def test_ipv6_and_mapped_addresses_match_their_prefix() -> None:
     ixp_index.install(_index())
     assert ixp_index.lookup(V6_IP).name == "Metro-IX"

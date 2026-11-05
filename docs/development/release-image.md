@@ -61,7 +61,7 @@ Consequence: two builds with the same base digest, run at different times, can c
 
 The Trivy scan of the built images and the digest recorded per architecture show what a given release actually contains.
 
-The release archives each architecture digest, `toolchain-<arch>.txt` (Python packages, signal-cli, libsignal, Java and Nmap versions, the Temurin package version, and the complete `dpkg-query -W` inventory), `nmap-provenance-<arch>.txt`, `nmap-sbom-<arch>.cdx.json`, `nmap-nvd-<arch>.json`, and the Trivy report. The Debian inventory and Temurin package version are recorded per architecture; unlike the shared toolchain inputs, their revisions need not match. The moving repository inputs (Debian and Adoptium repositories, `FLAG_ICONS_VERSION=main`) are not archived.
+The release archives each architecture digest, `toolchain-<arch>.txt` (Python packages, signal-cli, libsignal, Java and Nmap versions, the Temurin package version, and the complete `dpkg-query -W` inventory), `nmap-provenance-<arch>.txt`, `nmap-sbom-<arch>.cdx.json`, `nmap-nvd-<arch>.json`, and the Trivy report. The Debian inventory and Temurin package version are recorded per architecture; unlike the shared toolchain inputs, their revisions need not match. The moving repository inputs (Debian and Adoptium repositories) are not archived.
 
 The Trivy gate covers dpkg and language packages only. The libraries compiled into Nmap and Nmap itself are covered by the NVD gate below, to the extent NVD publishes CPEs for them.
 

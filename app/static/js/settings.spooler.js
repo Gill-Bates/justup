@@ -149,7 +149,7 @@
 			const timeStr = _formatTime(e.updated_at);
 			const recipientDisplay = escapeHtml(e.recipient_name || e.recipient_address);
 			const targetDisplay = e.target_name
-				? '<a href="/targets/' + e.target_id + '" class="text-decoration-none">' + escapeHtml(e.target_name) + '</a>'
+				? '<a href="/ui/targets/' + encodeURIComponent(e.target_id) + '" class="text-decoration-none">' + escapeHtml(e.target_name) + '</a>'
 				: '<span class="text-body-secondary">–</span>';
 
 			return '<tr>'

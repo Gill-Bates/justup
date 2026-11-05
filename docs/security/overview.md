@@ -18,7 +18,7 @@ Details: [Authentication](authentication.md), [Rate limiting](rate-limiting.md),
 
 - Secrets such as SMTP credentials are stored encrypted with a key from
   `SECRET_KEY` (or `SECRET_KEYS`). The key is never stored in the repository.
-- Passwords are hashed with Argon2id or PBKDF2-SHA256. Sign-in takes constant time
+- Passwords are hashed with PBKDF2-HMAC-SHA256. Sign-in takes constant time
   for unknown users.
 - The initial admin password is random, printed once per start until changed, and
   must be changed at first sign-in.
@@ -31,7 +31,7 @@ Details: [Authentication](authentication.md), [Rate limiting](rate-limiting.md),
   a key), only when GeoLite2 is not precise enough and the online fallback is on; the daily release check contacts api.github.com; flag images load from
   jsDelivr in the web UI and from flagcdn.com in PDF reports (country codes only; optional). See [Best practices](best-practices.md#external-services).
 - Settings > Network > Public outbound IPs connects directly (no proxy) to icanhazip.com and ipify.org over HTTPS, which sees the server's public address; nothing is stored. See [Network monitoring](../features/network-monitoring.md#public-outbound-ips).
-- justUp! sets no `Content-Security-Policy` header; see [Best practices](best-practices.md#content-security-policy).
+- justUp! enforces only `Content-Security-Policy: frame-ancestors 'self'` and sends a report-only policy for the rest; see [Best practices](best-practices.md#content-security-policy).
 
 ## Container
 

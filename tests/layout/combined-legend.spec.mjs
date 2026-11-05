@@ -180,7 +180,84 @@ test("combined chart draws every API point of a series after a reload @combined-
 		const apiPoints = await page.evaluate(async (url) => (await (await fetch(url)).json()).points.length, apiUrl);
 		assert.ok(apiPoints > 1, `the API returns more than one point (${apiPoints})`);
 		assert.equal(drawn.ms, apiPoints, "all API points reach the response-time line");
-		assert.equal(drawn.peak, apiPoints, "all API points reach the peak line");
+		assert.ok(drawn.peak >= 1 && drawn.peak < apiPoints, "only notable intervals become peaks, not every bucket maximum");
+	} finally {
+		await context.close();
+	}
+});
+
+test("peaks render as red triangles with solid stems to the median and no connecting line @combined-legend", async ({ browser, app, adminState }) => {
+	const { context, page, problems } = await openTarget(browser, app, adminState, VIEWPORTS[0]);
+	try {
+		for (const theme of THEMES) {
+			await setTheme(page, theme);
+			const config = await page.evaluate(() => {
+				const chart = window.Chart.getChart(document.getElementById("chart-combined"));
+				const token = getComputedStyle(document.documentElement).getPropertyValue("--ju-peak").trim().toLowerCase();
+				const peaks = chart.data.datasets.filter((d) => d._kind === "peak");
+				const ms = chart.data.datasets.filter((d) => d._kind === "ms");
+				return {
+					token, palette: chart._palette.peak.toLowerCase(), count: peaks.length,
+					noLine: peaks.every((d) => d.showLine === false),
+					triangles: peaks.every((d) => d.pointStyle === "triangle" && !d.pointRotation),
+					red: peaks.every((d) => d.pointBackgroundColor.toLowerCase() === token),
+					noNull: peaks.every((d) => d.data.every((p) => Number.isFinite(p.y) && Number.isFinite(p.median) && p.y > p.median)),
+					solid: ms.concat(peaks).every((d) => !d.borderDash || d.borderDash.length === 0),
+					singleAxis: Object.keys(chart.options.scales).includes("yPeak") === false && peaks.every((d) => d.yAxisID === "y"),
+					tooltip: chart.options.plugins.tooltip.callbacks.label({ dataset: peaks[0], raw: peaks[0].data[0], parsed: { y: peaks[0].data[0].y } }),
+					real: Math.round(peaks[0].data[0].max),
+				};
+			});
+			assert.ok(config.count >= 4, `${theme}: a peak dataset per series`);
+			assert.match(config.token, /^#[0-9a-f]{6}$/, `${theme}: --ju-peak is defined`);
+			assert.equal(config.palette, config.token, `${theme}: the chart follows the theme token`);
+			assert.ok(config.noLine && config.triangles && config.red, `${theme}: red upward triangles without a connecting line`);
+			assert.ok(config.noNull && config.solid && config.singleAxis, `${theme}: stems above their median on one axis, solid curves`);
+			assert.ok(config.tooltip.includes(`${config.real} ms`) && config.tooltip.includes("median"), `${theme}: tooltip keeps the real maximum and median (${config.tooltip})`);
+
+			// Canvas pixels: only the two-peak port stays visible, so the row between its stems must hold no peak color.
+			const pixels = await page.evaluate(() => {
+				const canvas = document.getElementById("chart-combined");
+				const chart = window.Chart.getChart(canvas);
+				chart.data.datasets.forEach((d, i) => chart.setDatasetVisibility(i, d._kind === "status" || d._srcKey === "tcp:8443"));
+				chart._showPeaks = true;
+				chart.update("none");
+				const probe = document.createElement("canvas").getContext("2d");
+				probe.fillStyle = chart._palette.peak;
+				probe.fillRect(0, 0, 1, 1);
+				const rgb = Array.from(probe.getImageData(0, 0, 1, 1).data.slice(0, 3));
+				const ratio = canvas.width / canvas.clientWidth;
+				const { data, width } = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height);
+				const isPeak = (x, y) => {
+					const i = (Math.round(y) * width + Math.round(x)) * 4;
+					return data[i + 3] > 200 && [0, 1, 2].every((k) => Math.abs(data[i + k] - rgb[k]) <= 24);
+				};
+				const peak = chart.data.datasets.find((d) => d._kind === "peak" && d._srcKey === "tcp:8443");
+				const ys = chart.scales.y;
+				const stems = peak.data.map((p) => ({ x: chart.scales.x.getPixelForValue(p.x), top: ys.getPixelForValue(p.y), bottom: ys.getPixelForValue(p.median) }));
+				const stemRun = stems.map((st) => {
+					let hit = 0, total = 0;
+					for (let y = st.top + 5; y < st.bottom - 1; y += 1 / ratio) { total += 1; if (isPeak(st.x * ratio, y * ratio)) hit += 1; }
+					return hit / Math.max(total, 1);
+				});
+				const [first, second] = stems;
+				const midY = (Math.min(first.top, second.top) + Math.min(first.bottom, second.bottom)) / 2;
+				let between = 0;
+				for (let x = first.x + 6; x < second.x - 6; x += 1 / ratio) if (isPeak(x * ratio, midY * ratio)) between += 1;
+				const area = chart.chartArea;
+				return { stemRun, between, count: stems.length, inside: stems.every((st) => st.top >= area.top - 1 && st.bottom <= area.bottom + 1) };
+			});
+			assert.equal(pixels.count, 2, `${theme}: two separate peaks`);
+			assert.ok(pixels.stemRun.every((share) => share > 0.8), `${theme}: each stem is drawn solid down to its median (${pixels.stemRun})`);
+			assert.equal(pixels.between, 0, `${theme}: no line connects the two peaks`);
+			assert.ok(pixels.inside, `${theme}: stems stay inside the plot area`);
+			await page.evaluate(() => {
+				const chart = window.Chart.getChart(document.getElementById("chart-combined"));
+				chart.data.datasets.forEach((d, i) => chart.setDatasetVisibility(i, true));
+				chart.update("none");
+			});
+		}
+		assert.deepEqual(problems, [], "no page or console errors");
 	} finally {
 		await context.close();
 	}

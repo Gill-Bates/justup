@@ -81,11 +81,6 @@ function _getCachedSignalRegistration(phone) {
 	const key = normalizePhoneForCache(phone);
 	if (!key) return undefined;
 	const entry = _signalStatusCache[key];
-	// Backwards-compat: previously allowed boolean
-	if (typeof entry === 'boolean') {
-		_signalStatusCache[key] = { registered: entry, cachedAt: Date.now() };
-		return entry;
-	}
 	if (!entry || typeof entry !== 'object') return undefined;
 	// Allow true, false, or null (unavailable)
 	if (entry.registered !== true && entry.registered !== false && entry.registered !== null) return undefined;

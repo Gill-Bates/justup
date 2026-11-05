@@ -200,6 +200,14 @@ def test_http_head_sends_a_bracketed_host_header_for_ipv6_literals(url, expected
     assert all(kw["headers"]["Host"] == expected for _, kw in seen)
 
 
+def test_http_head_does_not_send_ip_literals_to_the_public_dns_resolvers():
+    with mock.patch.object(checks, "_resolve_host_via_public_dns_first_answer", mock.AsyncMock()) as public_dns:
+        result, seen = _run_http_head("http://93.184.216.34/", _answers("93.184.216.34"))
+    public_dns.assert_not_called()
+    assert not result.ok
+    assert [httpx.URL(url).host for url, _ in seen] == ["93.184.216.34"]
+
+
 @pytest.mark.parametrize(
     "url",
     [

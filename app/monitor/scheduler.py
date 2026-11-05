@@ -1066,14 +1066,7 @@ class MonitorScheduler:
         try:
             for row in alert_rows:
                 tid = row[0]
-                started_at = row[2]
-                if started_at:
-                    if isinstance(started_at, str):
-                        started_at = datetime.fromisoformat(started_at).replace(tzinfo=UTC)
-                    elif isinstance(started_at, datetime):
-                        started_at = started_at.replace(tzinfo=UTC) if started_at.tzinfo is None else started_at
-                    else:
-                        started_at = None
+                started_at = _stored_datetime(row[2] or None)
                 open_alerts.setdefault(tid, []).append(
                     {
                         "alert_id": row[1],
@@ -2280,11 +2273,7 @@ class MonitorScheduler:
                     with self._db_conn() as conn:
                         alert_row = sqlite_db.get_alert(conn, rt.current_alert_id)
                         if alert_row and alert_row["started_at"]:
-                            db_started = alert_row["started_at"]
-                            if isinstance(db_started, str):
-                                started_at = datetime.fromisoformat(db_started).replace(tzinfo=UTC)
-                            elif isinstance(db_started, datetime):
-                                started_at = db_started.replace(tzinfo=UTC) if db_started.tzinfo is None else db_started
+                            started_at = _stored_datetime(alert_row["started_at"]) or now
                         duration_seconds = int((now - started_at).total_seconds())
                         sqlite_db.resolve_alert(conn, rt.current_alert_id, now, dispatch_outbox=True)
                         conn.commit()

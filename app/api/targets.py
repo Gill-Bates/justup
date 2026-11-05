@@ -55,6 +55,8 @@ _TSDB_LEFTOVER_DETAIL = (
 )
 
 _DELETE_COMMIT_FAILED_DETAIL = "Target could not be deleted; its metric data may be partly removed. Repeat the request"
+# Task status is returned to clients; the exception text stays in the server log.
+_NOTIFICATION_TASK_ERROR = "Notification task failed; see server log"
 router = APIRouter(prefix="/targets", tags=["targets"])
 
 
@@ -756,12 +758,12 @@ async def _safe_notify_recipients_background(
             target_name,
             recipient_ids,
         )
-    except Exception as e:  # noqa: BLE001 - best-effort/background boundary: log and continue so the request or task is not aborted
+    except Exception:  # noqa: BLE001 - best-effort/background boundary: log and continue so the request or task is not aborted
         _log.exception("Background notification task %s failed", task_id)
         task_status = _notification_tasks.get(target_id, {}).get(task_id)
         if task_status is not None:
             task_status["status"] = "failed"
-            task_status.setdefault("errors", []).append(str(e))
+            task_status.setdefault("errors", []).append(_NOTIFICATION_TASK_ERROR)
             task_status["updated_at"] = time.monotonic()
             task_status["completed_at"] = time.monotonic()
 
@@ -1087,10 +1089,10 @@ def _notify_recipients_background_in_section(
             # (queued notifications will be delivered later)
             task_status["success"] += 1
             task_status["updated_at"] = time.monotonic()
-    except Exception as e:  # noqa: BLE001 - best-effort/background boundary: log and continue so the request or task is not aborted
+    except Exception:  # noqa: BLE001 - best-effort/background boundary: log and continue so the request or task is not aborted
         _log.exception("Welcome notification task failed for target %d", target_id)
         task_status["status"] = "failed"
-        task_status["errors"].append(str(e))
+        task_status["errors"].append(_NOTIFICATION_TASK_ERROR)
         task_status["updated_at"] = time.monotonic()
         task_status["completed_at"] = time.monotonic()
     finally:

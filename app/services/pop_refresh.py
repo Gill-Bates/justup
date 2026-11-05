@@ -558,11 +558,8 @@ def city_code_for_country(city: object, country: object) -> str | None:
     return code if code and _SEED_COUNTRIES.get(code) == pop_locations.normalize_country(country) else None
 
 
-def _facility_distance_km(a: tuple[float, float], b: tuple[float, float]) -> float:
-    """Great-circle distance for detecting contradictory facility coordinates."""
-    lat1, lon1, lat2, lon2 = map(math.radians, (*a, *b))
-    angle = math.sin((lat2 - lat1) / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin((lon2 - lon1) / 2) ** 2
-    return 12742.0 * math.asin(min(1.0, math.sqrt(angle)))
+# Contradictory facility coordinates are detected with the same great-circle distance as the IXP import.
+_facility_distance_km = ixp_import.great_circle_km
 
 
 def _group_facilities(
@@ -831,7 +828,7 @@ def _apply_peeringdb_snapshot(
                         processed += len(records)
                     conn.commit()
 
-        # ─── PHASE: COMPLETE ─────────────────────────────────────
+        # Phase: complete
         phase = "complete"
         _log.info(
             "[%s] Processing complete: processed=%d, inserted=%d, updated=%d, skipped=%d, validation_errors=%d",
@@ -858,7 +855,7 @@ def _apply_peeringdb_snapshot(
     # A facility snapshot does not prove that a router alias has disappeared.
     retired = 0
 
-    # ─── PHASE: IXP PREFIXES ─────────────────────────────────────
+    # Phase: ixp prefixes
     if ixp_error:
         error_msg = f"{error_msg}; {ixp_error}" if error_msg else ixp_error
     elif ixp_result is not None:
@@ -884,7 +881,7 @@ def _apply_peeringdb_snapshot(
             _log.error("[%s] IXP snapshot not applied: %s", run_id, e)
             error_msg = f"{error_msg}; {ixp_msg}" if error_msg else ixp_msg
 
-    # ─── PHASE: FINALIZE ─────────────────────────────────────────
+    # Phase: finalize
     phase = "finalize"
     with _db_connection(get_conn) as conn:
         pop_locations.finish_import_run(

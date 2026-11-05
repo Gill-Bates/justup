@@ -2,6 +2,7 @@
 // app/static/js/utils/utc-time.js
 // Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 //
+
 /**
  * Classic script exposing parseUtcTimestamp(). The server stores naive timestamps ("YYYY-MM-DD HH:MM:SS"
  * or ISO without offset) in UTC, which Date.parse would read as local time.
