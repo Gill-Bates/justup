@@ -787,6 +787,41 @@ def test_udp_detection_uses_central_host_when_tcp_host_differs(db_path, tmp_path
     assert scheduled_hosts == ["udp.example"]
 
 
+@pytest.mark.parametrize(
+    ("interval", "elapsed", "due"),
+    [
+        (200, 200, False),  # below the 300 s UDP minimum the scan never starts one target cycle later
+        (200, 299.9, False),
+        (200, 300, True),
+        (60, 120, False),
+        (60, 300, True),
+        (300, 149, False),  # at or above the minimum the target cycle is the cadence
+        (300, 299, True),  # timing drift must not skip a cycle (would make the result stale)
+        (600, 450, True),
+    ],
+)
+def test_udp_scan_is_not_due_before_the_udp_minimum_interval(db_path, tmp_path, monkeypatch, interval, elapsed, due):
+    tid = _target(db_path, enable_udp_scan=True, udp_ports="53", interval_seconds=interval)
+    sched = _sched(db_path, tmp_path)
+    sched._refresh_targets(utcnow())
+    started = []
+
+    async def fake_udp_scan(*args):
+        started.append(args[1])
+
+    monkeypatch.setattr(sched, "_run_udp_scan", fake_udp_scan)
+
+    async def cycle():
+        now = utcnow()
+        rt = TargetRuntime(next_due=now, udp_seeded=True, udp_last_started=now - timedelta(seconds=elapsed))
+        await sched._udp_cycle(tid, sched._targets[tid], rt, now, None)
+        if rt.udp_task is not None:
+            await rt.udp_task
+
+    asyncio.run(cycle())
+    assert bool(started) is due
+
+
 # ── Alerts ─────────────────────────────────────────────────────────────────────
 
 

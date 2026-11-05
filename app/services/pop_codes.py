@@ -137,6 +137,11 @@ def set_pop_db_connection_factory(factory) -> None:
     _log.debug("POP codes: SQL lookup enabled (factory validated)")
 
 
+def open_pop_connection() -> sqlite3.Connection | None:
+    """A new connection from the factory, or None while no database is wired. The caller closes it."""
+    return _pop_get_conn() if _pop_get_conn is not None else None
+
+
 def _get_pop_conn():
     """Get a new connection from the factory."""
     if _pop_get_conn is None:

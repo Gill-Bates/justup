@@ -473,6 +473,9 @@ def _create_baseline_schema(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_pop_runs_source ON pop_import_runs(source)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_pop_runs_status ON pop_import_runs(status)")
 
+    for ddl in IXP_TABLE_DDL:
+        conn.execute(ddl)
+
     ensure_notification_queue_table(conn)
     ensure_notifications_tables(conn)
     ensure_alert_dispatch_outbox_table(conn)
@@ -548,13 +551,66 @@ def _ensure_unique_recipient_phone(conn: sqlite3.Connection) -> None:
 # MIGRATIONS that upgrades a database from ``version - 1``. _create_baseline_schema() must then
 # create the new current schema for fresh databases, so migrations only transform older ones.
 # Migrations run inside init_schema's transaction (an error rolls schema and user_version back).
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 # Dashboard summary (resolved / acknowledged in the last 24 h): range scans on their own timestamps instead of
 # reading every resolved alert. Shared by the baseline and migration 9, so both build the same layout.
 ALERT_SUMMARY_INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_alerts_status_ended ON alerts(status, ended_at)",
     "CREATE INDEX IF NOT EXISTS idx_alerts_acknowledged_at ON alerts(acknowledged_at) WHERE is_acknowledged = 1",
+)
+
+
+# IXP peering-LAN prefixes imported from PeeringDB (ix, ixlan, ixpfx, ixfac, fac). Shared by the baseline and
+# migration 10. They are NOT pop_locations aliases: a prefix proves IXP membership, never a router position.
+# Only status "ok" records are stored; a missing record means withdrawn. ``ixp_snapshot`` is the single row
+# of the last complete, validated import.
+IXP_TABLE_DDL = (
+    """
+    CREATE TABLE IF NOT EXISTS ixp_exchanges (
+        ix_id           INTEGER PRIMARY KEY,
+        name            TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND 128),
+        city            TEXT CHECK(city IS NULL OR length(city) <= 64),
+        country         TEXT CHECK(country IS NULL OR length(country) = 2),
+        location_class  TEXT NOT NULL
+            CHECK(location_class IN ('metro', 'distributed', 'conflicting', 'unknown')),
+        ref_city        TEXT CHECK(ref_city IS NULL OR length(ref_city) <= 64),
+        ref_country     TEXT CHECK(ref_country IS NULL OR length(ref_country) = 2),
+        ref_lat         REAL CHECK(ref_lat IS NULL OR ref_lat BETWEEN -90 AND 90),
+        ref_lon         REAL CHECK(ref_lon IS NULL OR ref_lon BETWEEN -180 AND 180),
+        ref_radius_km   REAL CHECK(ref_radius_km IS NULL OR ref_radius_km > 0),
+        facility_count  INTEGER NOT NULL DEFAULT 0 CHECK(facility_count >= 0),
+        source          TEXT NOT NULL,
+        import_run_id   TEXT NOT NULL,
+        updated_at      TEXT NOT NULL,
+        CHECK(location_class != 'metro' OR (
+            ref_city IS NOT NULL AND ref_country IS NOT NULL
+            AND ref_lat IS NOT NULL AND ref_lon IS NOT NULL AND ref_radius_km IS NOT NULL))
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS ixp_prefixes (
+        prefix          TEXT PRIMARY KEY,
+        ip_version      INTEGER NOT NULL CHECK(ip_version IN (4, 6)),
+        prefix_length   INTEGER NOT NULL CHECK(prefix_length BETWEEN 1 AND 128),
+        ix_id           INTEGER NOT NULL REFERENCES ixp_exchanges(ix_id) ON DELETE CASCADE,
+        ixlan_id        INTEGER NOT NULL,
+        source          TEXT NOT NULL,
+        import_run_id   TEXT NOT NULL,
+        updated_at      TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_ixp_prefixes_ix ON ixp_prefixes(ix_id)",
+    """
+    CREATE TABLE IF NOT EXISTS ixp_snapshot (
+        id              INTEGER PRIMARY KEY CHECK(id = 1),
+        import_run_id   TEXT NOT NULL,
+        completed_at    TEXT NOT NULL,
+        exchange_count  INTEGER NOT NULL CHECK(exchange_count >= 0),
+        prefix_count    INTEGER NOT NULL CHECK(prefix_count >= 0),
+        source          TEXT NOT NULL
+    )
+    """,
 )
 
 

@@ -46,11 +46,12 @@ from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
 from typing import Any
 
-from ..db import pop_locations
+from ..db import ixp_prefixes, pop_locations
 from ..db import sqlite as sqlite_db
 from ..db.pop_locations import SOURCE_PEERINGDB, SOURCE_UNLOCODE
 from ..utils import maintenance
 from ..utils.time import parse_utc, utcnow
+from . import ixp_import, ixp_index
 
 _log = logging.getLogger(__name__)
 
@@ -406,6 +407,11 @@ class PopRefreshResult:
 # ---------------------------------------------------------------------------
 
 PEERINGDB_FAC_URL = "https://api.peeringdb.com/api/fac"
+PEERINGDB_API = "https://api.peeringdb.com/api"
+IXP_TABLES = ("ix", "ixlan", "ixpfx", "ixfac")
+IXP_PAGE_SIZE = 2000
+IXP_MAX_PAGES = 50  # per table; a table that never ends is a broken or hostile response
+IXP_MAX_ROWS = 100_000
 # Batch size for DB operations (performance optimization)
 
 # ---------------------------------------------------------------------------
@@ -606,6 +612,35 @@ def _group_facilities(
     return groups, skipped, validation_errors
 
 
+def _fetch_peeringdb_table(table: str) -> list[dict]:
+    """Fetch every page of one PeeringDB table; any malformed, repeated or endless page raises."""
+    rows: list[dict] = []
+    first_ids: set[object] = set()
+    for page in range(IXP_MAX_PAGES):
+        payload = _fetch_with_retry(f"{PEERINGDB_API}/{table}?limit={IXP_PAGE_SIZE}&skip={page * IXP_PAGE_SIZE}")
+        data = payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(data, list):
+            raise RuntimeError(f"PeeringDB {table} response is malformed (no data list)")
+        marker = data[0].get("id") if data and isinstance(data[0], dict) else None
+        if marker is not None and marker in first_ids:
+            raise RuntimeError(f"PeeringDB {table} pagination repeats rows (limit/skip ignored)")
+        first_ids.add(marker)
+        rows.extend(data)
+        if len(rows) > IXP_MAX_ROWS:
+            raise RuntimeError(f"PeeringDB {table} exceeds {IXP_MAX_ROWS} rows")
+        if len(data) < IXP_PAGE_SIZE:
+            return rows
+    raise RuntimeError(f"PeeringDB {table} exceeds {IXP_MAX_PAGES} pages")
+
+
+def _fetch_ixp_snapshot(facilities: list[dict]) -> ixp_import.IxpBuildResult:
+    """Download and validate everything first; the database is only touched with a complete result."""
+    tables = {name: _fetch_peeringdb_table(name) for name in IXP_TABLES}
+    result = ixp_import.build_snapshot(tables["ix"], tables["ixlan"], tables["ixpfx"], tables["ixfac"], facilities)
+    ixp_prefixes.check_plausible(result.snapshot, 0)
+    return result
+
+
 def refresh_from_peeringdb(get_conn) -> PopRefreshResult:
     """
     Refresh POP locations from PeeringDB API.
@@ -651,9 +686,21 @@ def _do_peeringdb_refresh(get_conn) -> PopRefreshResult:
         # skipped as stale rather than written over freshly restored data.
         return _record_fetch_failure(get_conn, generation, error_msg)
 
+    # IXP prefixes are fetched and validated completely before any write. A failure keeps the active
+    # IXP snapshot and fails the run (so the normal backoff applies); the facility import still happens.
+    ixp_result: ixp_import.IxpBuildResult | None = None
+    ixp_error: str | None = None
+    try:
+        _log.info("Fetching PeeringDB IXP prefixes...")
+        ixp_result = _fetch_ixp_snapshot(facilities)
+    except Exception as e:  # noqa: BLE001 - source-fetch boundary; the active IXP snapshot must survive
+        category = ErrorCategory.VALIDATION if isinstance(e, ixp_prefixes.IxpSnapshotRejected) else ErrorCategory.NETWORK
+        ixp_error = f"[{category}][phase=fetch_ixp] {e}"
+        _log.error("PeeringDB IXP fetch failed; keeping the active IXP snapshot: %s", e)
+
     try:
         with maintenance.work_section(generation):
-            return _apply_peeringdb_snapshot(get_conn, facilities)
+            return _apply_peeringdb_snapshot(get_conn, facilities, ixp_result=ixp_result, ixp_error=ixp_error)
     except maintenance.MaintenanceActiveError:
         _log.info("PeeringDB import deferred because its data snapshot is stale or restore is active")
         return PopRefreshResult(
@@ -689,7 +736,12 @@ def _record_fetch_failure(get_conn, generation: int, error_msg: str) -> PopRefre
         return PopRefreshResult(run_id="", source=SOURCE_PEERINGDB, error="maintenance_in_progress")
 
 
-def _apply_peeringdb_snapshot(get_conn, facilities: list[dict]) -> PopRefreshResult:
+def _apply_peeringdb_snapshot(
+    get_conn,
+    facilities: list[dict],
+    ixp_result: ixp_import.IxpBuildResult | None = None,
+    ixp_error: str | None = None,
+) -> PopRefreshResult:
     """
     Import a fetched PeeringDB snapshot while a maintenance work section is held.
 
@@ -818,6 +870,32 @@ def _apply_peeringdb_snapshot(get_conn, facilities: list[dict]) -> PopRefreshRes
 
     # A facility snapshot does not prove that a router alias has disappeared.
     retired = 0
+
+    # ─── PHASE: IXP PREFIXES ─────────────────────────────────────
+    if ixp_error:
+        error_msg = f"{error_msg}; {ixp_error}" if error_msg else ixp_error
+    elif ixp_result is not None:
+        phase = "apply_ixp"
+        try:
+            with _db_connection(get_conn) as conn:
+                stats = ixp_prefixes.replace_snapshot(conn, ixp_result.snapshot, run_id)
+                # Only committed data may replace the runtime index; a failed import never reaches this.
+                ixp_index.reload_from_connection(conn)
+            processed += stats.prefixes
+            inserted += stats.inserted
+            updated += stats.updated
+            retired += stats.removed
+            if ixp_result.excluded:
+                _log.info("[%s] IXP records excluded during validation: %s", run_id, ixp_result.excluded)
+        except Exception as e:  # noqa: BLE001 - the transaction rolled back, so the previous snapshot is still active
+            category = (
+                ErrorCategory.VALIDATION
+                if isinstance(e, ixp_prefixes.IxpSnapshotRejected)
+                else ErrorCategory.DATABASE
+            )
+            ixp_msg = f"[{category}][phase=apply_ixp] {e}"
+            _log.error("[%s] IXP snapshot not applied: %s", run_id, e)
+            error_msg = f"{error_msg}; {ixp_msg}" if error_msg else ixp_msg
 
     # ─── PHASE: FINALIZE ─────────────────────────────────────────
     phase = "finalize"
@@ -1133,6 +1211,7 @@ def get_refresh_status(get_conn) -> dict:
             "total_locations": pop_locations.get_pop_location_count(conn),
             "last_peeringdb_run": pop_locations.get_last_import_run(conn, SOURCE_PEERINGDB),
             "last_unlocode_run": pop_locations.get_last_import_run(conn, SOURCE_UNLOCODE),
+            "ixp_snapshot": ixp_prefixes.snapshot_status(conn),
             "recent_runs": pop_locations.get_import_run_stats(conn, limit=5),
             "auto_refresh": {
                 **scheduler_state,

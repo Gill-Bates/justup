@@ -20,7 +20,6 @@ from fastapi.responses import FileResponse, Response
 from starlette.concurrency import run_in_threadpool
 
 from ..db import sqlite as sqlite_db
-from ..db import tsdb as tsdb_db
 from ..services.pdf_report import ReportData, generate_pdf_report
 from ..services.pdf_worker import (
     PDFJobRequest,
@@ -30,12 +29,9 @@ from ..services.pdf_worker import (
 )
 from ..utils.constants import VALID_PDF_PAGE_SIZES
 from ..utils.deps import get_conn, get_tsdb_dir
-from ..utils.metric_limits import choose_display_bucket_seconds, choose_points_limit
 from ..utils.rate_limit import RATE_LIMIT_PDF, rate_limit
-from ..utils.report_metrics import fetch_downtime_periods, fetch_metric_data, report_filename
-from ..utils.report_metrics import parse_tcp_ports as _parse_tcp_ports
+from ..utils.report_metrics import fetch_metric_data, report_filename
 from ..utils.time import parse_utc, utcnow
-from ..utils.uptime_metric import select_uptime_metric
 from .auth import get_current_user
 
 _log = logging.getLogger(__name__)
@@ -168,182 +164,17 @@ async def get_target_pdf_report(
     page_size = _validate_page_size(page_size)
 
     fetch_errors: list[str] = []
-    http_data = []
-    uptime_data = []
-    ping_data = []
-    tcp_data = []
-    cert_data = []
-    status_code_data = []
-
-    # Determine uptime metric (single source of truth)
-    uptime_metric = select_uptime_metric(target_dict)
-
-    if target_dict.get("enable_http_check"):
-        http_data = await _fetch_metric_data_async(
-            tsdb_dir,
-            target_id,
-            "http_ms",
-            from_date,
-            to_date,
-            limit=choose_points_limit(metric="http_ms", since=from_date, until=to_date, profile="pdf"),
-            errors=fetch_errors,
-        )
-        if uptime_metric == "http_up":
-            uptime_data = await _fetch_metric_data_async(
-                tsdb_dir,
-                target_id,
-                "http_up",
-                from_date,
-                to_date,
-                limit=choose_points_limit(metric="http_up", since=from_date, until=to_date, profile="pdf"),
-                errors=fetch_errors,
-            )
-        try:
-            status_result = await run_in_threadpool(
-                tsdb_db.query_display_series,
-                tsdb_dir,
-                target_id=target_id,
-                metric="http_status",
-                since=from_date,
-                until=to_date,
-                bucket_seconds=choose_display_bucket_seconds(since=from_date, until=to_date, plot_width=900),
-            )
-            status_code_data = [
-                {"value": int(code) if code != "Error" else 0, "count": count}
-                for code, count in status_result["status_counts"].items()
-            ]
-        except Exception:  # noqa: BLE001 - a partial report can omit unavailable status history
-            _log.exception("Status display query failed for target %d", target_id)
-            fetch_errors.append("http_status: data unavailable")
-
-    if target_dict.get("enable_ping"):
-        ping_data = await _fetch_metric_data_async(
-            tsdb_dir,
-            target_id,
-            "ping_ms",
-            from_date,
-            to_date,
-            limit=choose_points_limit(metric="ping_ms", since=from_date, until=to_date, profile="pdf"),
-            errors=fetch_errors,
-        )
-        if uptime_metric == "ping_up":
-            uptime_data = await _fetch_metric_data_async(
-                tsdb_dir,
-                target_id,
-                "ping_up",
-                from_date,
-                to_date,
-                limit=choose_points_limit(metric="ping_up", since=from_date, until=to_date, profile="pdf"),
-                errors=fetch_errors,
-            )
-
-    tcp_port_data = {}
-    if uptime_metric == "udp_up":  # UDP is the only enabled check: its availability drives the report
-        uptime_data = await _fetch_metric_data_async(
-            tsdb_dir,
-            target_id,
-            "udp_up",
-            from_date,
-            to_date,
-            limit=choose_points_limit(metric="udp_up", since=from_date, until=to_date, profile="pdf"),
-            errors=fetch_errors,
-        )
-    if target_dict.get("enable_tcp_connect"):
-        tcp_data = await _fetch_metric_data_async(
-            tsdb_dir,
-            target_id,
-            "tcp_ms",
-            from_date,
-            to_date,
-            limit=choose_points_limit(metric="tcp_ms", since=from_date, until=to_date, profile="pdf"),
-            errors=fetch_errors,
-        )
-        if uptime_metric == "tcp_up":
-            uptime_data = await _fetch_metric_data_async(
-                tsdb_dir,
-                target_id,
-                "tcp_up",
-                from_date,
-                to_date,
-                limit=choose_points_limit(metric="tcp_up", since=from_date, until=to_date, profile="pdf"),
-                errors=fetch_errors,
-            )
-
-        # Fetch per-port TCP data for multi-port chart
-        tcp_ports_str = target_dict.get("tcp_ports") or "80"
-        tcp_ports = _parse_tcp_ports(str(tcp_ports_str))
-        if len(tcp_ports) > 1:
-            for port in tcp_ports:
-                port_data = await _fetch_metric_data_async(
-                    tsdb_dir,
-                    target_id,
-                    f"tcp_ms_{port}",
-                    from_date,
-                    to_date,
-                    limit=choose_points_limit(metric="tcp_ms", since=from_date, until=to_date, profile="pdf"),
-                    errors=fetch_errors,
-                )
-                if port_data:
-                    tcp_port_data[port] = port_data
-
-    if target_dict.get("enable_cert_expiration"):
-        cert_data = await _fetch_metric_data_async(
-            tsdb_dir,
-            target_id,
-            "cert_days_left",
-            from_date,
-            to_date,
-            limit=choose_points_limit(metric="cert_days_left", since=from_date, until=to_date, profile="pdf"),
-            errors=fetch_errors,
-        )
-
+    inputs = await run_in_threadpool(
+        collect_report_inputs, tsdb_dir, target_id, target_dict, from_date, to_date, errors=fetch_errors
+    )
     if fetch_errors:
         _log.warning("Partial report for target %d; unavailable metrics: %s", target_id, ", ".join(fetch_errors))
 
-    display_data = {}
-    chart_metrics = [
-        metric
-        for metric, enabled in (
-            ("http_ms", target_dict.get("enable_http_check")),
-            ("ping_ms", target_dict.get("enable_ping")),
-            ("tcp_ms", target_dict.get("enable_tcp_connect")),
-        )
-        if enabled
-    ]
-    chart_metrics.extend(f"tcp_ms_{port}" for port in tcp_port_data)
-    bucket_seconds = choose_display_bucket_seconds(since=from_date, until=to_date, plot_width=900)
-    for metric in chart_metrics:
-        try:
-            result = await run_in_threadpool(
-                tsdb_db.query_display_series,
-                tsdb_dir,
-                target_id=target_id,
-                metric=metric,
-                since=from_date,
-                until=to_date,
-                bucket_seconds=bucket_seconds,
-            )
-            display_data[metric] = result["points"]
-        except Exception:  # noqa: BLE001 - KPI inputs still permit a partial report
-            _log.exception("Display query failed for metric %s target %d", metric, target_id)
-
-    downtime_periods = await run_in_threadpool(
-        fetch_downtime_periods, tsdb_dir, target_id, target_dict, from_date, to_date
-    )
     report_data = ReportData(
         target=target_dict,
         from_date=from_date,
         to_date=to_date,
-        http_data=http_data,
-        uptime_data=uptime_data,
-        ping_data=ping_data,
-        tcp_data=tcp_data,
-        cert_data=cert_data,
-        status_code_data=status_code_data,
-        tcp_port_data=tcp_port_data or None,
-        display_data=display_data,
-        status_counts_exact=True,
-        downtime_periods=downtime_periods,
+        **{**inputs, "tcp_port_data": inputs["tcp_port_data"] or None},
     )
 
     try:

@@ -109,4 +109,32 @@
 			else window.bootstrap.Modal.getOrCreateInstance(modalEl).show();
 		});
 	};
+
+	/**
+	 * Promise wrapper for a dedicated confirmation modal that is already in the page (for example the
+	 * Settings dialogs that need their own button style). Resolves true only on an explicit confirm.
+	 * @param {{modalId: string, confirmId: string, nameId: string, name: string}} spec
+	 * @returns {Promise<boolean>}
+	 */
+	window.confirmViaModal = function confirmViaModal(spec) {
+		var el = document.getElementById(spec.modalId);
+		var confirmBtn = document.getElementById(spec.confirmId);
+		var nameEl = document.getElementById(spec.nameId);
+		if (!el || !confirmBtn || !nameEl || !window.bootstrap || !window.bootstrap.Modal) return Promise.resolve(false);
+		nameEl.textContent = '"' + spec.name + '"';
+		var modal = window.bootstrap.Modal.getOrCreateInstance(el);
+		return new Promise(function (resolve) {
+			var confirmed = false;
+			function onConfirm() {
+				confirmed = true;
+				modal.hide();
+			}
+			confirmBtn.addEventListener('click', onConfirm, { once: true });
+			el.addEventListener('hidden.bs.modal', function () {
+				confirmBtn.removeEventListener('click', onConfirm);
+				resolve(confirmed);
+			}, { once: true });
+			modal.show();
+		});
+	};
 })();

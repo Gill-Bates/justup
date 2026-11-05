@@ -27,9 +27,8 @@ from pathlib import Path
 from typing import Any
 
 from ..utils import maintenance
-from ..utils.report_metrics import fetch_downtime_periods, fetch_metric_data, parse_tcp_ports, report_filename
+from ..utils.report_metrics import parse_tcp_ports, report_filename
 from ..utils.tcp_ports import DEFAULT_TCP_PORTS
-from ..utils.uptime_metric import select_uptime_metric
 
 _log = logging.getLogger(__name__)
 
@@ -231,8 +230,6 @@ class PDFWorker:
 
     async def run_loop(self, db_connector: Callable, *, stop_event: asyncio.Event | None = None) -> None:
         """Main worker loop that processes PDF generation jobs."""
-        from ..db import tsdb as tsdb_db
-        from ..utils.metric_limits import choose_display_bucket_seconds, choose_points_limit
         from .pdf_report import ReportData, generate_pdf_report
 
         stop = stop_event or self.stop_event
@@ -281,110 +278,10 @@ class PDFWorker:
                 await _set_status(status="processing", progress=PROGRESS_PROCESSING)
 
                 # Default args bind _job now; a plain closure would see a later loop value.
-                def fetch_metrics(_j=_job) -> dict[str, list[dict]]:
-                    http_data: list[dict] = []
-                    uptime_data: list[dict] = []
-                    ping_data: list[dict] = []
-                    tcp_data: list[dict] = []
-                    cert_data: list[dict] = []
-                    status_code_data: list[dict] = []
-                    tcp_port_data: dict[int, list[dict]] = {}
-
-                    def _fetch(metric: str, limit_metric: str | None = None) -> list[dict]:
-                        return fetch_metric_data(
-                            _j.tsdb_dir,
-                            _j.target_id,
-                            metric,
-                            _j.from_date,
-                            _j.to_date,
-                            limit=choose_points_limit(
-                                metric=limit_metric or metric,
-                                since=_j.from_date,
-                                until=_j.to_date,
-                                profile=_j.profile,
-                            ),
-                        )
-
-                    def _fetch_display(metric: str) -> dict:
-                        try:
-                            return tsdb_db.query_display_series(
-                                _j.tsdb_dir,
-                                target_id=_j.target_id,
-                                metric=metric,
-                                since=_j.from_date,
-                                until=_j.to_date,
-                                bucket_seconds=choose_display_bucket_seconds(
-                                    since=_j.from_date,
-                                    until=_j.to_date,
-                                    plot_width=900,
-                                ),
-                            )
-                        except Exception as e:  # noqa: BLE001 - keep a partial report usable
-                            _log.warning("Failed to fetch display metric %s: %s", metric, e)
-                            return {"points": [], "status_counts": {}}
-
-                    target = _j.target_dict
-
-                    # Same rules as the synchronous endpoint (app/api/reports.py): one uptime metric,
-                    # no fallback to another check when it has no data.
-                    uptime_metric = select_uptime_metric(target)
-
-                    if target.get("enable_http_check"):
-                        http_data = _fetch("http_ms")
-                        if uptime_metric == "http_up":
-                            uptime_data = _fetch("http_up")
-                        status_counts = _fetch_display("http_status")["status_counts"]
-                        status_code_data = [
-                            {"value": int(code) if code != "Error" else 0, "count": count}
-                            for code, count in status_counts.items()
-                        ]
-
-                    if target.get("enable_ping"):
-                        ping_data = _fetch("ping_ms")
-                        if uptime_metric == "ping_up":
-                            uptime_data = _fetch("ping_up")
-
-                    if target.get("enable_tcp_connect"):
-                        tcp_data = _fetch("tcp_ms")
-                        if uptime_metric == "tcp_up":
-                            uptime_data = _fetch("tcp_up")
-                        # Per-port TCP data for the multi-port chart
-                        tcp_ports = _report_tcp_ports(target)
-                        if len(tcp_ports) > 1:
-                            for port in tcp_ports:
-                                port_data = _fetch(f"tcp_ms_{port}", limit_metric="tcp_ms")
-                                if port_data:
-                                    tcp_port_data[port] = port_data
-                    if uptime_metric == "udp_up":
-                        uptime_data = _fetch("udp_up")
-                    if target.get("enable_cert_expiration"):
-                        cert_data = _fetch("cert_days_left")
-                    display_data = {}
-                    chart_metrics = ["http_ms", "ping_ms", "tcp_ms"]
-                    chart_metrics.extend(f"tcp_ms_{port}" for port in tcp_port_data)
-                    for metric in chart_metrics:
-                        if (
-                            (metric == "http_ms" and not target.get("enable_http_check"))
-                            or (metric == "ping_ms" and not target.get("enable_ping"))
-                            or (metric.startswith("tcp_ms") and not target.get("enable_tcp_connect"))
-                        ):
-                            continue
-                        display_data[metric] = _fetch_display(metric)["points"]
-
-                    return {
-                        "http_data": http_data,
-                        "uptime_data": uptime_data,
-                        "ping_data": ping_data,
-                        "tcp_data": tcp_data,
-                        "cert_data": cert_data,
-                        "status_code_data": status_code_data,
-                        "tcp_port_data": tcp_port_data or {},
-                        "display_data": display_data,
-                        "status_counts_exact": True,
-                        "downtime_periods": fetch_downtime_periods(
-                            _j.tsdb_dir, _j.target_id, target, _j.from_date, _j.to_date
-                        ),
-                    }
+                def fetch_metrics(_j=_job) -> dict[str, Any]:
+                    return collect_report_inputs(
+                        _j.tsdb_dir, _j.target_id, _j.target_dict, _j.from_date, _j.to_date, profile=_j.profile
+                    )
 
                 generation = maintenance.current_generation()
                 metrics = await loop.run_in_executor(

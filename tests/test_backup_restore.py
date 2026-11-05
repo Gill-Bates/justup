@@ -136,20 +136,10 @@ def _good(
     manifest_bytes = _manifest_bytes(
         db if manifest_db is None else manifest_db, app_version=app_version, build_id=build_id
     )
-    return _tar(
-        path,
-        [
-            ("data", None),
-            ("data/sqlite", None),
-            ("data/sqlite/justup.db", db),
-            ("data/tsdb", None),
-            ("data/backup-manifest.json", manifest_bytes),
-        ],
-    )
+    return _tar(path, _entries(db, manifest_bytes))
 
 
-class TestFilenameAndHmac:
-    def test_full_digest_is_signed_and_verified(self, tmp_path: Path):
+def test_full_digest_is_signed_and_verified(self, tmp_path: Path):
         archive = _good(tmp_path / "a.tar.bz2")
         digest = backup_mod.compute_backup_hmac(archive)
         assert len(digest) == 64
@@ -314,12 +304,23 @@ class TestArchiveValidation:
         with pytest.raises(BackupError, match="Links or special"):
             backup_mod.extract_backup(archive, tmp_path / "out")
 
-    @pytest.mark.parametrize("name", ["../evil", "data/../../evil", "/etc/passwd", "other/file", "data/unknown/x"])
-    def test_traversal_and_unexpected_paths_are_rejected(self, tmp_path: Path, name):
-        archive = _tar(tmp_path / "a.tar.bz2", [("data", None), (name, b"x")])
-        with pytest.raises(BackupError):
+    @pytest.mark.parametrize(
+        ("name", "reason"),
+        [
+            ("../evil", "Unsafe path"),
+            ("data/../../evil", "Unsafe path"),
+            ("/etc/passwd", "Unsafe path"),
+            ("other/file", "Unsafe path"),
+            ("data/unknown/x", "Unexpected content"),
+        ],
+    )
+    def test_traversal_and_unexpected_paths_are_rejected(self, tmp_path: Path, name, reason):
+        # A valid manifest and database are present, so only the path can cause the rejection.
+        archive = _tar(tmp_path / "a.tar.bz2", _entries(extra=[(name, b"x")]))
+        with pytest.raises(BackupError, match=reason):
             backup_mod.extract_backup(archive, tmp_path / "out")
         assert not (tmp_path / "evil").exists()
+        assert not (tmp_path / "out" / "evil").exists()
 
     def test_garbage_is_reported_as_corrupt(self, tmp_path: Path):
         bad = tmp_path / "bad.tar.bz2"
@@ -328,13 +329,17 @@ class TestArchiveValidation:
             backup_mod.extract_backup(bad, tmp_path / "out")
 
 
-def _entries(db: bytes = DB_BYTES, manifest_bytes: bytes | None = None) -> list[tuple[str, bytes | None]]:
+def _entries(
+    db: bytes = DB_BYTES, manifest_bytes: bytes | None = None, extra: Iterable[tuple[str, bytes | None]] = ()
+) -> list[tuple[str, bytes | None]]:
+    """The one definition of the required backup layout."""
     return [
         ("data", None),
         ("data/sqlite", None),
         ("data/sqlite/justup.db", db),
         ("data/tsdb", None),
         ("data/backup-manifest.json", manifest_bytes or _manifest_bytes(db)),
+        *extra,
     ]
 
 
@@ -1639,15 +1644,7 @@ def _app_db_with(*statements: str) -> bytes:
 
 def _archive(path: Path, db: bytes, *, app_version: str | None = None, extra=()) -> Path:
     """A signed-style archive whose manifest describes ``db`` exactly (what the export would write)."""
-    entries = [
-        ("data", None),
-        ("data/sqlite", None),
-        ("data/sqlite/justup.db", db),
-        ("data/tsdb", None),
-        ("data/backup-manifest.json", _manifest_bytes(db, app_version=app_version)),
-        *extra,
-    ]
-    return _tar(path, entries)
+    return _tar(path, _entries(db, _manifest_bytes(db, app_version=app_version), extra))
 
 
 def _assert_rejected(env, archive: Path, fragment: str, status: int = 400) -> None:

@@ -110,7 +110,7 @@ def test_new_file_is_initialised_as_baseline(db_path: Path):
     _init(db_path)
     conn = sqlite_db.connect(db_path)
     try:
-        assert sqlite_db.SCHEMA_VERSION == 9  # baseline plus schema migrations through the alert summary indexes
+        assert sqlite_db.SCHEMA_VERSION == 10  # baseline plus schema migrations through the IXP prefix tables
         assert sqlite_db.get_schema_version(conn) == sqlite_db.SCHEMA_VERSION
         tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         assert tables >= EXPECTED_TABLES
@@ -649,6 +649,7 @@ def test_upgrade_preserves_data_ids_and_integrity_across_restarts(db_path: Path,
         "Schema migration 6 -> 7 (UDP configuration and protocol-specific port metadata): ok",
         "Schema migration 7 -> 8 (raw port state, service identity and latency per network port): ok",
         "Schema migration 8 -> 9 (alert summary range indexes and planner statistics): ok",
+        "Schema migration 9 -> 10 (IXP peering-LAN prefixes with evidenced exchange regions): ok",
     ]
 
     conn = sqlite_db.connect(db_path)

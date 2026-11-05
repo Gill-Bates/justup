@@ -262,3 +262,32 @@ def test_report_filename_is_ascii_bounded_and_deterministic(name, expected):
     from app.utils.report_metrics import report_filename
 
     assert report_filename(name, datetime(2026, 1, 5, 12, tzinfo=UTC)) == expected
+
+
+_PARITY_TARGETS = {
+    "http_only": {"enable_http_check": 1},
+    "ping_multi_tcp": {"enable_ping": 1, "enable_tcp_connect": 1, "tcp_ports": "80,443,8080"},
+    "udp_only": {"enable_udp_scan": 1, "udp_ports": "53"},
+    "cert": {"enable_http_check": 1, "enable_cert_expiration": 1},
+}
+
+
+@pytest.mark.parametrize("flags", _PARITY_TARGETS.values(), ids=_PARITY_TARGETS.keys())
+def test_both_report_paths_pass_identical_report_inputs(flags, fake_tsdb, tmp_path, monkeypatch):
+    metrics = ("http_ms", "http_up", "ping_ms", "ping_up", "tcp_ms", "tcp_up", "udp_up", "cert_days_left")
+    series = {m: _points(3, 7.0) for m in (*metrics, "tcp_ms_80", "tcp_ms_443", "tcp_ms_8080")}
+    fake_tsdb(series)
+
+    def display(_dir, *, metric, **_kwargs):
+        counts = {"200": 3, "Error": 1} if metric == "http_status" else {}
+        return {"points": [{"metric": metric}], "status_counts": counts}
+
+    monkeypatch.setattr(tsdb_db, "query_display_series", display)
+    endpoint = _collect_via_endpoint(tmp_path / "a", monkeypatch, **flags)
+    worker = _collect_via_worker(tmp_path / "b", monkeypatch, **flags)
+    ep, wk = dict(vars(endpoint)), dict(vars(worker))
+    # The endpoint passes None for "no per-port data", the worker an empty dict; both mean the same.
+    assert (ep.pop("tcp_port_data") or {}) == (wk.pop("tcp_port_data") or {})
+    assert ep.pop("target")["id"] == wk.pop("target")["id"]
+    assert ep == wk
+    assert endpoint.status_counts_exact is True

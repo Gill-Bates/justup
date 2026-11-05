@@ -27,6 +27,7 @@ from .layout import (
 )
 from .schema import (
     ALERT_SUMMARY_INDEXES,
+    IXP_TABLE_DDL,
     SCHEMA_CORRUPT,
     SCHEMA_FUTURE,
     SCHEMA_MIGRATION_FAILED,
@@ -307,6 +308,11 @@ def _migrate_9_alert_summary_indexes(conn: sqlite3.Connection) -> None:
     conn.execute("ANALYZE alerts")
 
 
+def _migrate_10_ixp_prefixes(conn: sqlite3.Connection) -> None:
+    for ddl in IXP_TABLE_DDL:
+        conn.execute(ddl)
+
+
 # Ordered by version, contiguous from 2.
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(
@@ -321,6 +327,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(7, "UDP configuration and protocol-specific port metadata", _migrate_7_network_ports),
     Migration(8, "raw port state, service identity and latency per network port", _migrate_8_network_port_state),
     Migration(9, "alert summary range indexes and planner statistics", _migrate_9_alert_summary_indexes),
+    Migration(10, "IXP peering-LAN prefixes with evidenced exchange regions", _migrate_10_ixp_prefixes),
 )
 
 

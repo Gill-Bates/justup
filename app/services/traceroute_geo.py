@@ -35,6 +35,7 @@ from threading import Lock
 from typing import Any, TypedDict
 
 from app.services import geo_resolver as gr
+from app.services import ixp_index
 from app.services.geo_resolver import MAX_CITY_RADIUS_KM
 from app.services.ip_lookup import lookup_online_sources, public_ip
 from app.services.pop_codes import lookup_pop_code, observe_unknown_pop
@@ -96,6 +97,7 @@ CONFIDENCE_INTERPOLATED = "interpolated"  # Forward-filled from previous hop
 CONFIDENCE_DESTINATION = "destination"  # Injected destination point
 CONFIDENCE_FALLBACK = "fallback"  # Last known location used as fallback
 CONFIDENCE_ONLINE = "online"  # HTTPS lookup; provider is carried in source
+CONFIDENCE_IXP = "ixp"  # PeeringDB IXP prefix: exchange region (or membership only), never a router fix
 META_DECISION = "_decision"  # explainable resolver decision (sources, winner, reason)
 
 # --- Deduplication config ---
@@ -459,6 +461,7 @@ _SOURCE_CONFIDENCE = {
     gr.SRC_POP: CONFIDENCE_HOSTNAME,
     gr.SRC_IP_API_PRO: CONFIDENCE_ONLINE,
     gr.SRC_IPWHO: CONFIDENCE_ONLINE,
+    gr.SRC_IXP: CONFIDENCE_IXP,
 }
 
 
@@ -469,6 +472,13 @@ def _online_ttl_seconds() -> int:
         minimum=PROVIDER_LOOKUP_CACHE_TTL_MIN,
         maximum=PROVIDER_LOOKUP_CACHE_TTL_MAX,
     )
+
+
+_EXTRA_IXP = "_ixp"
+
+
+def _ixp_of(extras: Mapping[str, Any]) -> gr.IxpEvidence | None:
+    return (extras.get(_EXTRA_IXP) or {}).get("evidence")
 
 
 def _local_candidates(
@@ -511,6 +521,11 @@ def _local_candidates(
         if candidate:
             candidates.append(candidate)
             extras[gr.SRC_POP] = pop
+
+    # Verified prefix membership of an IXP peering LAN; offline, one in-memory probe, public IPs only.
+    ixp = ixp_index.lookup(ip) if public_ip(ip) else None
+    if ixp is not None:
+        extras[_EXTRA_IXP] = {"evidence": ixp}  # not a source key, so it never leaks into a location dict
     return candidates, considered, extras
 
 
@@ -560,7 +575,8 @@ def _prefetch_online(hops: list[dict]) -> dict[str, OnlineResult]:
             continue
         if hop.get(META_INTERPOLATED):
             continue
-        if gr.needs_online_fallback(_local_candidates(public, hop.get("hostname"))[0]):
+        local, _considered, local_extras = _local_candidates(public, hop.get("hostname"))
+        if gr.needs_online_fallback(local, ixp=_ixp_of(local_extras)):
             targets[public] = None
     if len(targets) < 2:  # a single lookup is already bounded by the provider timeout
         return {}
@@ -600,7 +616,7 @@ def _collect_candidates(
     """Local sources first; online sources only for a public IP without sufficient local quality."""
     candidates, considered, extras = _local_candidates(ip, hostname)
     public = public_ip(ip)  # private and non-global addresses never leave the host
-    if public and gr.needs_online_fallback(candidates) and _online_fallback_enabled():
+    if public and gr.needs_online_fallback(candidates, ixp=_ixp_of(extras)) and _online_fallback_enabled():
         attempted, online = _online_for(public)
         considered.extend(attempted)
         for source, info in online.items():
@@ -624,7 +640,7 @@ def resolve_location(ip: str, hostname: str | None = None) -> tuple[gr.GeoDecisi
     except ValueError:
         return gr.select([], []), {}
     candidates, considered, extras = _collect_candidates(ip, hostname)
-    return gr.select(candidates, considered), extras
+    return gr.select(candidates, considered, ixp=_ixp_of(extras)), extras
 
 
 def geolocate_with_hostname_hint(
@@ -635,7 +651,23 @@ def geolocate_with_hostname_hint(
     decision, extras = resolve_location(ip, hostname)
     chosen = decision.selected
     if chosen is None:
-        return None
+        if decision.ixp is None:
+            return None
+        # IXP membership without an evidenced position: the table may name the exchange (and a
+        # country only when the sources agree on one), the map gets nothing to plot.
+        return {
+            "lat": None,
+            "lon": None,
+            "city": None,
+            "position_city": None,
+            "country": decision.ixp.country,
+            "accuracy_radius_km": None,
+            "city_is_region": False,
+            META_CONFIDENCE: CONFIDENCE_IXP,
+            "accuracy_class": gr.ACCURACY_UNKNOWN,
+            "ixp": decision.ixp.as_dict(),
+            META_DECISION: decision.as_dict(),
+        }
     return {
         **extras.get(chosen.source, {}),
         "lat": chosen.latitude,
@@ -649,6 +681,7 @@ def geolocate_with_hostname_hint(
         "place_text_source": decision.place.source if decision.place else None,
         META_CONFIDENCE: _SOURCE_CONFIDENCE[chosen.source],
         "accuracy_class": decision.accuracy_class,
+        "ixp": decision.ixp.as_dict() if decision.ixp else None,
         META_DECISION: decision.as_dict(),
     }
 
@@ -675,6 +708,7 @@ MAP_ROLE_ESTIMATE = "estimate"  # approximate position: a chain node drawn hollo
 MAP_ROLE_NONE = "none"  # nothing to draw (no usable position)
 
 _SOURCE_LABEL = {
+    CONFIDENCE_IXP: "PeeringDB IXP prefix",
     CONFIDENCE_GEOIP: "GeoIP",
     CONFIDENCE_HOSTNAME: "hostname hint",
     CONFIDENCE_ONLINE: "online lookup",
@@ -684,12 +718,13 @@ _CONFIDENCE_TO_SOURCE = {
     CONFIDENCE_HOSTNAME: GeoSource.HOSTNAME,
     CONFIDENCE_GEOIP: GeoSource.GEOIP,
     CONFIDENCE_ONLINE: GeoSource.ONLINE,
+    CONFIDENCE_IXP: GeoSource.IXP,
     CONFIDENCE_DESTINATION: GeoSource.GEOIP,
 }
 
 
 def _coarse_source(source: GeoSource) -> GeoSource:
-    return GeoSource.ONLINE if source == GeoSource.ONLINE else GeoSource.GEOIP_COARSE
+    return source if source in (GeoSource.ONLINE, GeoSource.IXP) else GeoSource.GEOIP_COARSE
 
 
 def _has_coords(loc: dict[str, Any]) -> bool:
@@ -717,6 +752,8 @@ def _classify_location(loc: dict[str, Any] | None) -> tuple[GeoSource, GeoAccura
 
     has_coords = _has_coords(loc)
     source = _CONFIDENCE_TO_SOURCE.get(loc.get(META_CONFIDENCE), GeoSource.GEOIP)
+    if source == GeoSource.IXP:
+        return source, GeoAccuracy.APPROXIMATE  # an exchange region is never promoted to a router position
 
     if not has_coords:
         return _coarse_source(source), GeoAccuracy.APPROXIMATE
@@ -755,14 +792,16 @@ def location_view(loc: dict[str, Any] | None) -> dict[str, Any]:
     a region or country-only result names no city.
     """
     if not loc:
-        return {"city": None, "country": None, "precision": LOC_NONE}
+        return {"city": None, "country": None, "precision": LOC_NONE, "ixp": None}
     country = loc.get("country") or None
+    ixp = loc.get("ixp")
+    ixp_name = ixp.get("name") if isinstance(ixp, dict) else None
     if _classify_location(loc)[1] == GeoAccuracy.PRECISE:
-        return {"city": loc.get("city") or None, "country": country, "precision": LOC_PRECISE}
+        return {"city": loc.get("city") or None, "country": country, "precision": LOC_PRECISE, "ixp": ixp_name}
     city = loc.get("position_city") or None
     if city:
-        return {"city": city, "country": country, "precision": LOC_APPROXIMATE}
-    return {"city": None, "country": country, "precision": LOC_COUNTRY if country else LOC_NONE}
+        return {"city": city, "country": country, "precision": LOC_APPROXIMATE, "ixp": ixp_name}
+    return {"city": None, "country": country, "precision": LOC_COUNTRY if country else LOC_NONE, "ixp": ixp_name}
 
 
 @functools.lru_cache(maxsize=256)
@@ -803,6 +842,8 @@ def country_center(country: str) -> tuple[float, float] | None:
 def _map_location(loc: dict[str, Any] | None) -> dict[str, Any] | None:
     if not loc or location_view(loc)["precision"] != LOC_COUNTRY:
         return loc
+    if loc.get(META_CONFIDENCE) == CONFIDENCE_IXP:
+        return loc  # a country behind an IXP is a table fact, not a place to draw
     center = country_center(str(loc["country"]))
     if center is None:
         return loc
@@ -843,6 +884,13 @@ def location_note(loc: dict[str, Any] | None) -> str | None:
         return None
     if loc.get("_country_center"):
         return "Country center; exact location unknown"
+    if loc.get(META_CONFIDENCE) == CONFIDENCE_IXP:
+        ixp = loc.get("ixp") if isinstance(loc.get("ixp"), dict) else {}
+        note = f"{ixp.get('name') or 'IXP'}, source {_SOURCE_LABEL[CONFIDENCE_IXP]}"
+        radius = loc.get("accuracy_radius_km")
+        if isinstance(radius, int | float) and not isinstance(radius, bool) and math.isfinite(radius) and radius > 0:
+            note += f", exchange region radius about {radius:g} km"
+        return note + "; exact router location unknown"
     note = f"{_SOURCE_LABEL.get(loc.get(META_CONFIDENCE), 'Location')} estimate"
     radius = loc.get("accuracy_radius_km")
     if isinstance(radius, int | float) and not isinstance(radius, bool) and math.isfinite(radius) and radius > 0:
@@ -1163,6 +1211,7 @@ def route_hops_to_geo_points(
                 "country": destination_view["country"],
                 "accuracy_class": destination_geo.get("accuracy_class"),
                 "accuracy_radius_km": destination_geo.get("accuracy_radius_km"),
+                "ixp": destination_geo.get("ixp"),
                 META_DESTINATION: True,
                 META_IS_TERMINAL: True,
                 META_IS_PUBLIC: True,

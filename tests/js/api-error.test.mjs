@@ -37,3 +37,17 @@ test("nothing readable falls back to the caller's text", () => {
   }
   assert.equal(message(null), "");
 });
+
+test("fromBody prefers detail, then error, then message, then the fallback", () => {
+  const { fromBody } = sandbox.JuApiError;
+  assert.equal(fromBody({ detail: "from detail", error: "e", message: "m" }, "f"), "from detail");
+  assert.equal(fromBody({ detail: { message: "nested" } }, "f"), "nested");
+  assert.equal(fromBody({ error: "from error", message: "m" }, "f"), "from error");
+  assert.equal(fromBody({ message: "from message" }, "f"), "from message");
+  assert.equal(fromBody({ detail: [{ loc: ["x"] }] }, "f"), "Invalid input");
+  assert.equal(fromBody({ detail: [{ msg: "bad" }] }, "f"), "bad");
+  for (const empty of [null, undefined, "text", 42, {}, { detail: "  ", error: 5 }]) {
+    assert.equal(fromBody(empty, "Request failed"), "Request failed");
+  }
+  assert.equal(fromBody(null), "");
+});

@@ -67,6 +67,7 @@ class GeoSource(StrEnum):
     GEOIP = "geoip"  # MaxMind GeoLite2 with city-level coordinates
     GEOIP_COARSE = "geoip_coarse"  # GeoIP with country/region only, no precise coords
     ONLINE = "online"  # ip-api Pro / ipwho.is candidate (no published accuracy radius)
+    IXP = "ixp"  # PeeringDB IXP prefix: the exchange's evidenced region, not the router's position
     NONE = "none"  # No location could be determined
 
 

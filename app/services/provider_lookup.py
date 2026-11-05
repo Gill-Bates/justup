@@ -30,6 +30,7 @@ _GEO_LABELS = {
     gr.SRC_POP: "POP-Location-DB",
     gr.SRC_IP_API_PRO: "ip-api Pro",
     gr.SRC_IPWHO: "ipwho.is",
+    gr.SRC_IXP: "PeeringDB IXP prefix",
 }
 
 
@@ -42,6 +43,8 @@ def _accuracy_text(decision: gr.GeoDecision) -> str:
     chosen = decision.selected
     if chosen is None:
         return ""
+    if chosen.source == gr.SRC_IXP:
+        return "Approximate; IXP region, exact router location unknown"
     if decision.accuracy_class != gr.ACCURACY_PRECISE and decision.contradictions:
         return "Approximate; sources disagree"
     if chosen.source == gr.SRC_GEOLITE2 and chosen.accuracy_radius_km is not None:

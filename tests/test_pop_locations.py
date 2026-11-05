@@ -145,3 +145,27 @@ def test_invalid_coordinates_do_not_overwrite_an_existing_imported_row(conn) -> 
     assert _upsert(conn, 123.0, 8.0) is False
     row = conn.execute("SELECT lat, lon FROM pop_locations WHERE alias_code = 'zzz'").fetchone()
     assert (row[0], row[1]) == (50.0, 8.0)
+
+
+def _insert_learned(conn, *, retired: int) -> None:
+    conn.execute(
+        "INSERT INTO pop_locations (canonical_code, alias_code, city, country, lat, lon, source,"
+        " confidence, priority, created_at, updated_at, retired) VALUES ('fra', 'fra', 'Frankfurt', 'DE', 50.1, 8.6,"
+        " 'learned', 90, 5, 'x', 'x', ?)",
+        (retired,),
+    )
+
+
+def test_import_upsert_keeps_an_active_learned_row_unchanged(conn) -> None:
+    _insert_learned(conn, retired=0)
+    changed = pop_locations.upsert_pop_location(conn, "fra", "fra", "Other", "DE", 1.0, 2.0, "peeringdb", 90, 10)
+    assert changed is False
+    row = conn.execute("SELECT city, source, lat, lon, retired FROM pop_locations WHERE alias_code = 'fra'").fetchone()
+    assert tuple(row) == ("Frankfurt", "learned", 50.1, 8.6, 0)
+
+
+def test_import_reclaims_a_retired_learned_row(conn) -> None:
+    _insert_learned(conn, retired=1)
+    assert pop_locations.upsert_pop_location(conn, "fra", "fra", "Other", "DE", 1.0, 2.0, "peeringdb", 90, 10)
+    row = conn.execute("SELECT city, source, retired FROM pop_locations WHERE alias_code = 'fra'").fetchone()
+    assert tuple(row) == ("Other", "peeringdb", 0)

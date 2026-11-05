@@ -115,7 +115,7 @@ async function testSmtp() {
 		if (response.ok && result.ok !== false) {
 			window.justUpToast?.success?.(result.message || 'Test email queued');
 		} else {
-			const errorMsg = window.JuApiError.message(result.detail, '') || result.error || ERROR_MESSAGES.SMTP_TEST_FAILED;
+			const errorMsg = window.JuApiError.fromBody(result, ERROR_MESSAGES.SMTP_TEST_FAILED);
 			window.justUpToast?.error?.(errorMsg);
 		}
 	} catch (error) {
@@ -409,7 +409,7 @@ async function saveEditedUser() {
 			let errorMsg = ERROR_MESSAGES.UPDATE_USER_FAILED;
 			try {
 				const data = await response.json();
-				errorMsg = window.JuApiError.message(data.detail, '') || data.error || errorMsg;
+				errorMsg = window.JuApiError.fromBody(data, errorMsg);
 			} catch (e) { }
 			if (errorDiv) {
 				errorDiv.textContent = errorMsg;
@@ -452,7 +452,7 @@ async function toggleUserActive(userId, isActive, toggleBtn = null) {
 			let msg = ERROR_MESSAGES.TOGGLE_USER_FAILED;
 			try {
 				const data = await response.json();
-				msg = window.JuApiError.message(data.detail, '') || data.error || msg;
+				msg = window.JuApiError.fromBody(data, msg);
 			} catch (e) { }
 			usersToast(msg, 'danger');
 		}
@@ -472,6 +472,7 @@ async function createUser() {
 	const form = document.getElementById('create-user-form');
 
 	if (!btn || !errorDiv || !form) return;
+	if (btn.disabled) return;
 
 	const username = document.getElementById('new-user-username').value.trim();
 	const password = document.getElementById('new-user-password').value;
@@ -529,46 +530,12 @@ async function createUser() {
 
 // Ask for confirmation in a Bootstrap modal; resolves true only on explicit confirm.
 function confirmDeleteUser(username) {
-	const modalEl = document.getElementById('deleteUserModal');
-	const confirmBtn = document.getElementById('confirm-delete-user-btn');
-	if (!modalEl || !confirmBtn || !window.bootstrap?.Modal) return Promise.resolve(false);
-	document.getElementById('delete-user-name').textContent = `"${username}"`;
-	const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
-	return new Promise((resolve) => {
-		let confirmed = false;
-		const onConfirm = () => {
-			confirmed = true;
-			modal.hide();
-		};
-		confirmBtn.addEventListener('click', onConfirm, { once: true });
-		modalEl.addEventListener('hidden.bs.modal', () => {
-			confirmBtn.removeEventListener('click', onConfirm);
-			resolve(confirmed);
-		}, { once: true });
-		modal.show();
-	});
+	return window.confirmViaModal({ modalId: 'deleteUserModal', confirmId: 'confirm-delete-user-btn', nameId: 'delete-user-name', name: username });
 }
 
 // Ask for confirmation before ending all sessions of a user; resolves true only on explicit confirm.
 function confirmRevokeSessions(username) {
-	const modalEl = document.getElementById('revokeSessionsModal');
-	const confirmBtn = document.getElementById('confirm-revoke-sessions-btn');
-	if (!modalEl || !confirmBtn || !window.bootstrap?.Modal) return Promise.resolve(false);
-	document.getElementById('revoke-sessions-user-name').textContent = `"${username}"`;
-	const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
-	return new Promise((resolve) => {
-		let confirmed = false;
-		const onConfirm = () => {
-			confirmed = true;
-			modal.hide();
-		};
-		confirmBtn.addEventListener('click', onConfirm, { once: true });
-		modalEl.addEventListener('hidden.bs.modal', () => {
-			confirmBtn.removeEventListener('click', onConfirm);
-			resolve(confirmed);
-		}, { once: true });
-		modal.show();
-	});
+	return window.confirmViaModal({ modalId: 'revokeSessionsModal', confirmId: 'confirm-revoke-sessions-btn', nameId: 'revoke-sessions-user-name', name: username });
 }
 
 async function revokeUserSessions(userId, username) {
@@ -627,13 +594,7 @@ document.addEventListener('DOMContentLoaded', () => {
 		loadUsers();
 	}
 
-	// Create user button
-	const createUserBtn = document.getElementById('create-user-btn');
-	if (createUserBtn) {
-		createUserBtn.addEventListener('click', createUser);
-	}
-
-	// Form submit prevention
+	// The submit button is type="submit" form=..., so the form submit is the only entry point
 	const createUserForm = document.getElementById('create-user-form');
 	if (createUserForm) {
 		createUserForm.addEventListener('submit', (e) => {

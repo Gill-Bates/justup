@@ -21,6 +21,14 @@ const SIGNAL_ICONS = {
 	unavailable: 'cancel',  // Gray X for "no Signal account"
 };
 
+// Single mapping from a cached registration state (true|false|null|undefined) to its icon view.
+function signalView(registered) {
+	if (registered === true) return { icon: SIGNAL_ICONS.registered, cls: 'text-success', title: 'Registered with Signal' };
+	if (registered === false) return { icon: SIGNAL_ICONS.unregistered, cls: 'text-warning', title: 'Not registered with Signal' };
+	if (registered === null) return { icon: SIGNAL_ICONS.unavailable, cls: 'text-body-secondary', title: 'No Signal account linked' };
+	return { icon: SIGNAL_ICONS.pending, cls: 'text-body-secondary', title: 'Checking...' };
+}
+
 // Normalize phone for cache key lookup (strip whitespace only)
 // Note: Backend returns E.164 normalized phones, this just handles minor display variations
 function normalizePhoneForCache(phone) {
@@ -32,9 +40,7 @@ async function extractApiError(response, fallbackMessage) {
 	let msg = fallbackMessage;
 	try {
 		const data = await response.json();
-		const detail = data?.detail;
-		msg = window.JuApiError.message(detail, Array.isArray(detail) ? 'Invalid input' : '')
-			|| (typeof data?.error === 'string' && data.error) || msg;
+		msg = window.JuApiError.fromBody(data, msg);
 	} catch (e) {
 		// ignore parse errors
 	}
@@ -124,14 +130,8 @@ function applyCachedSignalStatus(recipients) {
 		// Skip if still pending (undefined)
 		if (cached === undefined) continue;
 
-		if (cached === true) {
-			_setSignalIcon(r.id, SIGNAL_ICONS.registered, 'text-success', 'Registered with Signal');
-		} else if (cached === false) {
-			_setSignalIcon(r.id, SIGNAL_ICONS.unregistered, 'text-warning', 'Not registered with Signal');
-		} else {
-			// null = unavailable (no Signal account linked)
-			_setSignalIcon(r.id, SIGNAL_ICONS.unavailable, 'text-body-secondary', 'No Signal account linked');
-		}
+		const view = signalView(cached);
+		_setSignalIcon(r.id, view.icon, view.cls, view.title);
 	}
 }
 
@@ -240,24 +240,7 @@ async function loadRecipients() {
 				
 				// Signal column - with placeholder for verification status
 				const cachedSignal = _getCachedSignalRegistration(r.phone);
-				let signalIcon, signalClass, signalTitle;
-				if (cachedSignal === true) {
-					signalIcon = SIGNAL_ICONS.registered;
-					signalClass = 'text-success';
-					signalTitle = 'Registered with Signal';
-				} else if (cachedSignal === false) {
-					signalIcon = SIGNAL_ICONS.unregistered;
-					signalClass = 'text-warning';
-					signalTitle = 'Not registered with Signal';
-				} else if (cachedSignal === null) {
-					signalIcon = SIGNAL_ICONS.unavailable;
-					signalClass = 'text-body-secondary';
-					signalTitle = 'No Signal account linked';
-				} else {
-					signalIcon = SIGNAL_ICONS.pending;
-					signalClass = 'text-body-secondary';
-					signalTitle = 'Checking...';
-				}
+				const { icon: signalIcon, cls: signalClass, title: signalTitle } = signalView(cachedSignal);
 				const signalCell = r.phone
 					? `<span class="d-flex align-items-center gap-1" id="signal-status-${r.id}">
 						<span class="material-icons signal-status-icon ${signalClass}" style="font-size: 16px;"
@@ -453,12 +436,9 @@ async function recheckSignalFromList(btn) {
 		const registered = data?.registered;
 		if (registered !== true && registered !== false && registered !== null) throw new Error('Unexpected response');
 		_setCachedSignalRegistration(phone, registered);
-		const label = registered === true ? 'Registered with Signal'
-			: registered === false ? 'Not registered with Signal' : 'No Signal account linked';
-		_setSignalIcon(recipientId,
-			registered === true ? SIGNAL_ICONS.registered : registered === false ? SIGNAL_ICONS.unregistered : SIGNAL_ICONS.unavailable,
-			registered === true ? 'text-success' : registered === false ? 'text-warning' : 'text-body-secondary',
-			label);
+		const view = signalView(registered);
+		const label = view.title;
+		_setSignalIcon(recipientId, view.icon, view.cls, label);
 		recipientsToast(`${name} · Signal: ${label}`, registered === true ? 'success' : 'warning');
 	} catch (error) {
 		console.warn('Signal re-check failed:', error?.name);
@@ -479,6 +459,7 @@ async function addRecipient() {
 	const form = document.getElementById('add-recipient-form');
 	
 	if (!btn || !errorDiv || !form) return;
+	if (btn.disabled) return;
 	
 	const originalBtnText = btn.innerHTML;
 	const name = document.getElementById('recipient-name').value.trim();
@@ -862,24 +843,7 @@ async function saveRecipient() {
 
 // Ask for confirmation in a Bootstrap modal; resolves true only on explicit confirm.
 function confirmDeleteRecipient(recipientName) {
-	const modalEl = document.getElementById('deleteRecipientModal');
-	const confirmBtn = document.getElementById('confirm-delete-recipient-btn');
-	if (!modalEl || !confirmBtn || !window.bootstrap?.Modal) return Promise.resolve(false);
-	document.getElementById('delete-recipient-name').textContent = `"${recipientName}"`;
-	const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
-	return new Promise((resolve) => {
-		let confirmed = false;
-		const onConfirm = () => {
-			confirmed = true;
-			modal.hide();
-		};
-		confirmBtn.addEventListener('click', onConfirm, { once: true });
-		modalEl.addEventListener('hidden.bs.modal', () => {
-			confirmBtn.removeEventListener('click', onConfirm);
-			resolve(confirmed);
-		}, { once: true });
-		modal.show();
-	});
+	return window.confirmViaModal({ modalId: 'deleteRecipientModal', confirmId: 'confirm-delete-recipient-btn', nameId: 'delete-recipient-name', name: recipientName });
 }
 
 // Delete Recipient
@@ -942,18 +906,6 @@ document.addEventListener('DOMContentLoaded', () => {
 		}
 	});
 	
-	// Add recipient button
-	const addRecipientBtn = document.getElementById('add-recipient-btn');
-	if (addRecipientBtn) {
-		addRecipientBtn.addEventListener('click', addRecipient);
-	}
-	
-	// Edit recipient button
-	const editRecipientBtn = document.getElementById('edit-recipient-btn');
-	if (editRecipientBtn) {
-		editRecipientBtn.addEventListener('click', saveRecipient);
-	}
-	
 	for (const id of ['addRecipientModal', 'editRecipientModal']) {
 		const dialog = document.getElementById(id);
 		if (!dialog) continue;
@@ -973,7 +925,7 @@ document.addEventListener('DOMContentLoaded', () => {
 			input.addEventListener('change', updateEditTestButtons);
 		}
 	}
-	// Form submit prevention
+	// The submit buttons are type="submit" form=..., so the form submit is the only entry point
 	const addRecipientForm = document.getElementById('add-recipient-form');
 	if (addRecipientForm) {
 		addRecipientForm.addEventListener('submit', (e) => {

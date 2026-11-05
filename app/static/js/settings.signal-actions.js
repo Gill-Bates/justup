@@ -89,7 +89,7 @@ export async function sendTestMessage() {
             notify('success', data.message || 'Test message queued');
         } else {
             const data = await resp.json().catch(() => ({}));
-            const msg = window.JuApiError.message(data.detail, 'Send failed');
+            const msg = window.JuApiError.fromBody(data, 'Send failed');
             notify('error', msg);
         }
     } catch (e) {
@@ -237,22 +237,8 @@ export async function unregisterPhone() {
 
                 refreshStatus();
             } else {
-                const error = await getErrorMessage(resp);
-
-                const isNotRegistered = error && (
-                    error.toLowerCase().includes('not registered') ||
-                    error.toLowerCase().includes('not found') ||
-                    error.toLowerCase().includes('unknown number')
-                );
-
-                if (isNotRegistered) {
-                    hideModal(DOM.unregisterPhoneModal());
-                    notify('info', 'Device was already unlinked');
-
-                    refreshStatus();
-                } else {
-                    showError(errorEl, error);
-                }
+                // The server answers 200 for an already unregistered account, so any error is real
+                showError(errorEl, await getErrorMessage(resp));
             }
         }, 'Unregistering...');
     } catch (e) {
@@ -559,7 +545,7 @@ async function saveSignalTemplates() {
                 notify('success', 'Signal templates saved');
             } else {
                 const data = await resp.json().catch(() => ({}));
-                notify('error', window.JuApiError.message(data.detail, '') || data.error || 'Failed to save templates');
+                notify('error', window.JuApiError.fromBody(data, 'Failed to save templates'));
             }
         }, 'Saving...');
     } catch (e) {
@@ -584,7 +570,7 @@ async function resetSignalTemplates() {
 
             if (!resp.ok) {
                 const data = await resp.json().catch(() => ({}));
-                notify('error', window.JuApiError.message(data.detail, '') || data.error || 'Failed to reset templates');
+                notify('error', window.JuApiError.fromBody(data, 'Failed to reset templates'));
                 return;
             }
 

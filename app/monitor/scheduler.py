@@ -1817,7 +1817,10 @@ class MonitorScheduler:
             rt.udp_seeded = True
             await asyncio.to_thread(self._seed_udp_result, target_id, rt)
         elapsed = (now - rt.udp_last_started).total_seconds() if rt.udp_last_started else None
-        due = elapsed is None or elapsed >= udp_interval - interval / 2
+        # Below the UDP minimum the scan waits for it strictly (next regular cycle after it). At or above it the
+        # target cycle is the cadence, so half a cycle only absorbs timing drift and avoids a skipped cycle.
+        drift_tolerance = interval / 2 if udp_interval == interval else 0
+        due = elapsed is None or elapsed >= udp_interval - drift_tolerance
         if rt.udp_task is not None and rt.udp_task.done():
             rt.udp_task = None
         if due and rt.udp_task is None:

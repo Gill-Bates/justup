@@ -214,9 +214,7 @@ export async function getErrorMessage(resp) {
         const text = await resp.text();
         try {
             const data = JSON.parse(text);
-            return formatErrorDetail(data?.detail)
-                || (typeof data?.message === 'string' ? data.message : '')
-                || text.trim() || 'Unknown error';
+            return window.JuApiError.fromBody(data, text.trim() || 'Unknown error');
         } catch {
             // Not JSON - use plain text error message
             return text.trim() || 'Unknown error';

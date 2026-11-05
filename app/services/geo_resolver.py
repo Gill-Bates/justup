@@ -19,15 +19,18 @@ from __future__ import annotations
 
 import math
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 SRC_GEOLITE2 = "geolite2"
 SRC_POP = "pop"
 SRC_IP_API_PRO = "ip-api-pro"
 SRC_IPWHO = "ipwho.is"
+SRC_IXP = "ixp"  # PeeringDB IXP prefix membership; its region is an estimate, never a router position
 
 # Tie-breaker only (lower index wins); the quality key decides first.
-SOURCE_PRIORITY = (SRC_GEOLITE2, SRC_POP, SRC_IP_API_PRO, SRC_IPWHO)
+SOURCE_PRIORITY = (SRC_GEOLITE2, SRC_POP, SRC_IP_API_PRO, SRC_IPWHO, SRC_IXP)
+
+IXP_LOCATION_METRO = "metro"  # structured sources agree on one metro region
 
 # PRODUCT DECISION, not an official MaxMind limit: MaxMind's accuracy_radius only states that the
 # true location lies inside the circle with roughly 67 % confidence. A GeoLite2 city result is
@@ -72,6 +75,49 @@ class GeoCandidate:
 
 
 @dataclass(frozen=True, slots=True)
+class IxpEvidence:
+    """Verified membership of an address in an IXP peering LAN plus what is evidenced about the region.
+
+    Membership is certain; the region is the exchange's, not the answering router's. Without
+    ``location_class == "metro"`` there is no position (``country`` may still be evidenced).
+    """
+
+    ix_id: int
+    name: str
+    prefix: str
+    location_class: str
+    city: str | None = None
+    country: str | None = None
+    latitude: float | None = None
+    longitude: float | None = None
+    radius_km: float | None = None
+
+    def position(self) -> GeoCandidate | None:
+        """The exchange region as an approximate candidate; None unless the region is evidenced."""
+        if self.location_class != IXP_LOCATION_METRO or not self.city or not self.country:
+            return None
+        return build_candidate(
+            SRC_IXP,
+            self.latitude,
+            self.longitude,
+            city=self.city,
+            country_code=self.country,
+            accuracy_radius_km=self.radius_km,
+            evidence="peeringdb_ixp_prefix",
+        )
+
+    def as_dict(self) -> dict:
+        return {
+            "id": self.ix_id,
+            "name": self.name,
+            "prefix": self.prefix,
+            "location_class": self.location_class,
+            "city": self.city,
+            "country": self.country,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class GeoDecision:
     """The selected candidate plus the traceable reasoning behind it."""
 
@@ -83,6 +129,7 @@ class GeoDecision:
     sources_succeeded: tuple[str, ...]
     contradictions: tuple[str, ...] = ()
     place: GeoCandidate | None = None  # text-only improvement of a coarse position (never moves it)
+    ixp: IxpEvidence | None = None  # verified IXP peering-LAN membership of the address, if any
 
     @property
     def place_name(self) -> str | None:
@@ -101,6 +148,7 @@ class GeoDecision:
             "sources_considered": list(self.sources_considered),
             "sources_succeeded": list(self.sources_succeeded),
             "contradictions": list(self.contradictions),
+            "ixp": self.ixp.as_dict() if self.ixp else None,
         }
 
 
@@ -186,11 +234,14 @@ def geolite2_quality(candidate: GeoCandidate | None) -> str:
     return QUALITY_COARSE if level == LEVEL_REGION else QUALITY_VERY_COARSE
 
 
-def needs_online_fallback(candidates: Iterable[GeoCandidate]) -> bool:
+def needs_online_fallback(candidates: Iterable[GeoCandidate], ixp: IxpEvidence | None = None) -> bool:
     """True unless a high-quality GeoLite2 result or a verified POP/CLLI location is available.
 
-    A city merely guessed from a hostname (unverified POP) is not equivalent evidence.
+    A city merely guessed from a hostname (unverified POP) is not equivalent evidence. An address of a
+    recognized IXP peering LAN never asks online sources: they would only describe the registrant.
     """
+    if ixp is not None:
+        return False
     return not any(
         geolite2_quality(c) == QUALITY_HIGH if c.source == SRC_GEOLITE2 else is_verified_pop(c) for c in candidates
     )
@@ -252,8 +303,82 @@ def _text_upgrade(winner: GeoCandidate, ranked: Sequence[GeoCandidate]) -> GeoCa
     return None
 
 
-def select(candidates: Iterable[GeoCandidate], considered: Sequence[str]) -> GeoDecision:
+def _select_for_ixp(
+    candidates: list[GeoCandidate], considered: Sequence[str], ixp: IxpEvidence
+) -> GeoDecision:
+    """Decision for an address inside an IXP peering LAN.
+
+    Prefix membership is evidence of its own. An evidenced exchange region beats ordinary GeoIP, which
+    only describes the registrant, but stays APPROXIMATE: it is not the router's position. A verified
+    POP/CLLI claim is independent router evidence and may still win. Without an evidenced region no
+    GeoIP or online position is used at all, so a wrong country cannot pose as the exchange location.
+    """
+    considered_t = tuple(s for s in SOURCE_PRIORITY if s in considered or s == SRC_IXP)
+    region = ixp.position()
+    verified = [c for c in candidates if is_verified_pop(c)]
+    ignored = [c for c in candidates if c not in verified]
+    if verified:
+        base = select(verified, [s for s in considered if s != SRC_IXP])
+        reason = f"{base.selection_reason}; IXP membership {ixp.name} noted, router position from verified POP"
+        contradictions = list(base.contradictions)
+        accuracy = base.accuracy_class
+        if region is not None and base.selected is not None:
+            gap = distance_km(base.selected, region)
+            if gap > CONTRADICTION_KM + (region.accuracy_radius_km or 0):
+                contradictions.append(f"{base.selected.source} vs ixp: {gap:.0f} km apart")
+                accuracy = ACCURACY_APPROXIMATE
+                reason += "; POP and IXP region disagree, position downgraded to approximate"
+        return replace(
+            base,
+            accuracy_class=accuracy,
+            selection_reason=reason,
+            contradictions=tuple(contradictions),
+            sources_considered=considered_t,
+            ixp=ixp,
+        )
+    succeeded = tuple(s for s in SOURCE_PRIORITY if s == SRC_IXP and region is not None)
+    noted = tuple(
+        f"{c.source} location {format_place(c.city, c.country_code) or 'unknown'} not used: "
+        f"address belongs to IXP {ixp.name}"
+        + (f" ({distance_km(c, region):.0f} km from its region)" if region is not None and c.latitude is not None else "")
+        for c in ignored
+    )
+    if region is None:
+        return GeoDecision(
+            None,
+            ACCURACY_UNKNOWN,
+            f"IXP {ixp.name} ({ixp.location_class} location): no evidenced router or region position; "
+            "GeoIP and online positions are not used",
+            False,
+            considered_t,
+            succeeded,
+            noted,
+            ixp=ixp,
+        )
+    flagged = tuple(
+        text
+        for c, text in zip(ignored, noted, strict=True)
+        if c.country_code != region.country_code or distance_km(c, region) > CONTRADICTION_KM
+    )
+    return GeoDecision(
+        region,
+        ACCURACY_APPROXIMATE,
+        f"IXP prefix {ixp.prefix} of {ixp.name}: evidenced exchange region, not the router position",
+        False,
+        considered_t,
+        succeeded,
+        flagged,
+        ixp=ixp,
+    )
+
+
+def select(
+    candidates: Iterable[GeoCandidate], considered: Sequence[str], ixp: IxpEvidence | None = None
+) -> GeoDecision:
     """Pick the best-evidenced candidate; the result is independent of input order."""
+    if ixp is not None:
+        local = sorted((c for c in candidates if c.source != SRC_IXP), key=quality_key, reverse=True)
+        return _select_for_ixp(local, considered, ixp)
     ranked = sorted(candidates, key=quality_key, reverse=True)
     considered_t = tuple(s for s in SOURCE_PRIORITY if s in considered)
     succeeded = tuple(s for s in SOURCE_PRIORITY if any(c.source == s for c in ranked))

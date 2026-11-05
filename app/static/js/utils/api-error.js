@@ -33,5 +33,20 @@
 			? detail.code
 			: null;
 	}
-	root.JuApiError = { message: message, code: code };
+	/**
+	 * Message for a parsed JSON error body: `detail`, then `error`, then `message`, then the fallback.
+	 * @param {*} body Parsed response body (any shape).
+	 * @param {string} [fallback]
+	 * @returns {string}
+	 */
+	function fromBody(body, fallback) {
+		var otherwise = typeof fallback === 'string' ? fallback : '';
+		if (!body || typeof body !== 'object') return otherwise;
+		var text = message(body.detail, Array.isArray(body.detail) ? 'Invalid input' : '');
+		if (text) return text;
+		if (typeof body.error === 'string' && body.error.trim()) return body.error;
+		if (typeof body.message === 'string' && body.message.trim()) return body.message;
+		return otherwise;
+	}
+	root.JuApiError = { message: message, code: code, fromBody: fromBody };
 })(typeof window !== 'undefined' ? window : globalThis);

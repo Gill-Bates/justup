@@ -385,6 +385,69 @@ def test_scan_host_change_discards_observations_but_keeps_ports_and_history(conn
     assert tsdb.query_latest(tmp_path, target_id=tid, metric="tcp_up_22") == history
 
 
+@pytest.mark.parametrize(
+    ("disabled", "kept", "flag"),
+    [("tcp", "udp", "enable_tcp_connect"), ("udp", "tcp", "enable_udp_scan")],
+)
+def test_disabling_a_protocol_drops_its_port_rows_but_keeps_history(conn, tmp_path: Path, disabled, kept, flag):
+    client = _app_client(conn, tmp_path)
+    created = client.post(
+        "/targets",
+        json={
+            "name": f"off-{disabled}",
+            "host": "off.example.com",
+            "enable_tcp_connect": True,
+            "tcp_host": "off.example.com",
+            "tcp_ports": "22",
+            "enable_udp_scan": True,
+            "udp_ports": "53",
+        },
+    )
+    assert created.status_code == 201, created.text
+    tid = created.json()["id"]
+    sqlite_db.sync_network_ports(
+        conn,
+        tid,
+        tcp_ports=[22],
+        udp_ports=[53],
+        scan_result=_scan(
+            _port("tcp", 22, name="ssh", method="probed", confidence=10),
+            _port("udp", 53, name="domain", method="probed", confidence=8),
+        ),
+    )
+    sqlite_db.update_network_port_status(conn, tid, "tcp", 22, "up", raw_state="open")
+    sqlite_db.update_network_port_status(conn, tid, "udp", 53, "up", raw_state="open")
+    conn.commit()
+    metrics = {"tcp": "tcp_up_22", "udp": "udp_up_53"}
+    for metric in metrics.values():
+        tsdb.append_point(tmp_path, target_id=tid, metric=metric, value=1, retention_days=30, at=utcnow())
+    history = {proto: tsdb.query_latest(tmp_path, target_id=tid, metric=m) for proto, m in metrics.items()}
+    assert all(history.values())
+    before_kept = {
+        (p["protocol"], p["port"]): p for p in sqlite_db.list_network_ports(conn, tid) if p["protocol"] == kept
+    }
+
+    off = client.patch(f"/targets/{tid}", json={flag: False})
+    assert off.status_code == 200, off.text
+    rows = sqlite_db.list_network_ports(conn, tid)
+    assert {p["protocol"] for p in rows} == {kept}
+    assert {(p["protocol"], p["port"]): p for p in rows} == before_kept
+    assert {p["protocol"] for p in off.json()["network_ports"]} == {kept}
+    for proto, metric in metrics.items():
+        assert tsdb.query_latest(tmp_path, target_id=tid, metric=metric) == history[proto]
+
+    # Re-enabling starts clean: configured ports return as manual rows without the old observations.
+    on = client.patch(f"/targets/{tid}", json={flag: True})
+    assert on.status_code == 200, on.text
+    back = [p for p in on.json()["network_ports"] if p["protocol"] == disabled]
+    assert [(p["port"], p["source"], p["service_name"]) for p in back] == [
+        (22 if disabled == "tcp" else 53, "manual", None)
+    ]
+    assert back[0]["status"] in (None, "unknown") and back[0]["checked_at"] is None
+    for proto, metric in metrics.items():
+        assert tsdb.query_latest(tmp_path, target_id=tid, metric=metric) == history[proto]
+
+
 def _observed_target(conn, tmp_path: Path, name: str):
     """A target with a separate tcp_host and one identified TCP and one identified UDP port."""
     client = _app_client(conn, tmp_path)

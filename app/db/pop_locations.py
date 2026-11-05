@@ -87,6 +87,7 @@ SOURCE_SEED = "seed"  # Built-in seed data (stable, curated)
 SOURCE_MANUAL = "manual"  # Manually added via admin API
 SOURCE_LEARNED = "learned"  # Approved through explicit candidate review (pop_candidates.review)
 _PROTECTED_SOURCES = (SOURCE_MANUAL, SOURCE_SEED)  # never overwritten or retired by imports
+_PROTECTED_PLACEHOLDERS = ", ".join("?" * len(_PROTECTED_SOURCES))
 
 # Confidence levels (how certain are we about this mapping?)
 # - HIGH (100): Authoritative source (manual, PeeringDB verified, seed)
@@ -387,7 +388,7 @@ def upsert_pop_location(
 
     try:
         conn.execute(
-            """
+            f"""
             INSERT INTO pop_locations
                 (canonical_code, alias_code, city, country, lat, lon,
                  source, confidence, priority, created_at, updated_at,
@@ -405,9 +406,9 @@ def upsert_pop_location(
                 last_seen_at = excluded.last_seen_at,
                 import_run_id = excluded.import_run_id,
                 retired = 0
-            WHERE pop_locations.source NOT IN ('manual', 'seed')
+            WHERE pop_locations.source NOT IN ({_PROTECTED_PLACEHOLDERS})
               AND NOT (pop_locations.source = 'learned' AND pop_locations.retired = 0)
-            """,
+            """,  # noqa: S608 - placeholders only
             (
                 canonical_code,
                 alias_code,
@@ -422,6 +423,7 @@ def upsert_pop_location(
                 now,
                 now,
                 import_run_id,
+                *_PROTECTED_SOURCES,
             ),
         )
         return True
@@ -769,7 +771,10 @@ def count_retired_pop_locations(conn: sqlite3.Connection) -> int:
 
 def count_external_pop_locations(conn: sqlite3.Connection) -> int:
     """Count POP locations from external sources (not seed/manual)."""
-    row = conn.execute("SELECT COUNT(*) FROM pop_locations WHERE source NOT IN ('seed', 'manual')").fetchone()
+    row = conn.execute(
+        f"SELECT COUNT(*) FROM pop_locations WHERE source NOT IN ({_PROTECTED_PLACEHOLDERS})",  # noqa: S608 - placeholders only
+        _PROTECTED_SOURCES,
+    ).fetchone()
     return row[0] if row else 0
 
 
