@@ -18,6 +18,23 @@ Release images are not bit-for-bit reproducible.
 
 Nmap is not pinned. The release workflow resolves the latest stable release once, verifies its PGP signature and source hash and builds both architectures from that same source (details: [Network monitoring with Nmap](../features/network-monitoring.md#docker-image-and-nmap-version)). A new Nmap release ships with the next justUp image build.
 
+### What the vulnerability scan sees of Nmap
+
+Trivy (`scanners: vuln`) reports only packages from a package database (dpkg) or a language lockfile. The Nmap binary is compiled from source and copied into the image, so it has no dpkg entry and **Trivy cannot report CVEs in Nmap itself**. Its libraries are handled in two groups:
+
+| Library | Origin in the image | Version source | Scanned by Trivy |
+|---|---|---|---|
+| OpenSSL (`libssl3t64`, `libcrypto`) | Debian package, dynamic | `system_libraries` in `PROVENANCE.txt` | yes |
+| PCRE2 (`libpcre2-8-0`) | Debian package, dynamic | `system_libraries` | yes |
+| zlib (`zlib1g`) | Debian package, dynamic | `system_libraries` | yes |
+| libpcap | bundled in the Nmap source, static | `bundled_libraries` | **no** |
+| libdnet (Nmap fork) | bundled, static | `bundled_libraries` | **no** |
+| liblinear | bundled, static | `bundled_libraries` | **no** |
+| libssh2 | not built (`--without-libssh2`; only NSE uses it, and NSE is not built) | n/a | n/a |
+| Nmap itself | compiled from the verified source | `nmap_version`, `source_sha256` | **no** |
+
+`/usr/share/doc/nmap/PROVENANCE.txt` in the image, the `nmap-provenance-<arch>.txt` release asset and the "Nmap composition" section of the release notes list the bundled library versions and the Debian packages. The bundled versions come from the signed source tarball, so they are identical on both architectures (`nmap_bundled_libraries` in `toolchain-<arch>.txt`, compared by the parity gate). When a CVE is published for libpcap, libdnet, liblinear or Nmap, compare it with these versions by hand; a green Trivy result says nothing about them. Moving libpcap to Debian was not done: Debian's libpcap is older than the bundled one and would add `libdbus-1-3` to the runtime image. Matching Nmap's components against NVD by CPE is a possible follow-up, not part of the release gate.
+
 ## Inputs that move with the build time
 
 The runtime and `signal-cli-dist` stages run `apt-get update && apt-get upgrade` during each build.

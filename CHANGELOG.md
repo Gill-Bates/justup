@@ -4,6 +4,7 @@
 - `Fix` The plain-text part of alert mails shows the URL of a link instead of dropping it.
 
 ## [Unreleased]
+- `Security` The bundled Nmap now uses the Debian PCRE2 and zlib packages, so the image scan covers them, and it no longer contains libssh2 (only used by the NSE scripts, which are not built). The remaining bundled libraries (libpcap, libdnet, liblinear) are listed with their versions in the image provenance and the release notes; the image scan cannot see them.
 - `Fix` A hanging DNS resolver can no longer stall a check indefinitely: every ping, HTTP, certificate and TCP check has an overall deadline (3x its timeout plus 10 s) and then fails as an ordinary timeout. System DNS lookups use their own bounded thread pool.
 - `New` Traceroute now uses Nmap through the worker instead of `mtr` (up to 30 hops, one round-trip time per hop). The Loss, Avg, Best and Worst columns are gone, silent hops show "No reply", and the Docker image no longer contains `mtr`. A host name that cannot be resolved is not traced.
 - `Change` The downtime card of the target details is compact: one figure row `Downtimes` / `Data gaps`, events in at most three lines with short dates (`4 Nov · 18:57–21:50`), exact times on hover, and compact empty states. The explanatory paragraph and info icon are gone from the card (the terms are explained in the documentation); a data gap is never shown as uptime.

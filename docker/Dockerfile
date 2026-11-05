@@ -90,7 +90,7 @@ ARG NMAP_SOURCE_SHA256
 COPY tools/nmap-release.py /usr/local/bin/nmap-release.py
 # Everything below exists only in this stage: compiler, headers, gpg, the source tree.
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      ca-certificates gnupg bzip2 build-essential libssl-dev pkg-config zlib1g-dev \
+      ca-certificates gnupg bzip2 build-essential libssl-dev pkg-config zlib1g-dev libpcre2-dev \
  && rm -rf /var/lib/apt/lists/*
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 RUN <<'EOF'
@@ -109,8 +109,10 @@ esac
 python3 /usr/local/bin/nmap-release.py fetch "$version" /tmp/nmap "$source_sha256"
 tar -xjf "/tmp/nmap/nmap-${version}.tar.bz2" -C /tmp/nmap
 cd "/tmp/nmap/nmap-${version}"
-./configure --prefix=/usr --with-libpcap=included --with-libpcre=included \
-  --with-libz=included --with-libssh2=included --with-liblinear=included \
+# PCRE2 and zlib come from Debian (dpkg-owned, so the image scan sees them). libssh2 only serves NSE,
+# which is not built. libpcap, libdnet and liblinear stay bundled (see docs/development/release-image.md).
+./configure --prefix=/usr --with-libpcap=included --with-libdnet=included --with-liblinear=included \
+  --without-libssh2 \
   --without-liblua --without-ncat --without-nping --without-ndiff --without-zenmap
 make -j"$(nproc)" nmap
 make DESTDIR=/out install-nmap
@@ -133,6 +135,16 @@ mkdir -p /out/usr/share/doc/nmap
 ldd /out/usr/bin/nmap > /out/usr/share/doc/nmap/DEPENDENCIES.txt
 ! grep -q 'not found' /out/usr/share/doc/nmap/DEPENDENCIES.txt
 ! grep -Eq '/tmp/|/out/|/build' /out/usr/share/doc/nmap/DEPENDENCIES.txt
+# A silent autodetect fallback to the bundled copies would hide them from the scan: fail instead.
+readelf -d /out/usr/bin/nmap | grep -q 'NEEDED.*libpcre2-8.so.0'
+! NMAPDIR=/out/usr/share/nmap /out/usr/bin/nmap --version | grep -Eq 'nmap-libz|nmap-libpcre2|libssh2'
+# Versions of the libraries compiled into the binary, read from the verified source tree.
+libpcap_version="$(cat libpcap/VERSION.txt)"
+libdnet_version="$(sed -n "s/^PACKAGE_VERSION='\(.*\)'$/\1/p" libdnet-stripped/configure)"
+liblinear_version="$(awk '/#define LIBLINEAR_VERSION/ {printf "%d.%02d", $3/100, $3%100}' liblinear/linear.h)"
+for v in "$libpcap_version" "$libdnet_version" "$liblinear_version"; do
+  [[ "$v" =~ ^[0-9]+(\.[0-9]+)+$ ]] || { echo "Cannot read a bundled library version (got '${v}')" >&2; exit 1; }
+done
 actual="$(NMAPDIR=/out/usr/share/nmap /out/usr/bin/nmap --version | sed -n 's/^Nmap version \([^ ]*\).*/\1/p')"
 [[ "$actual" == "$version" ]] || { echo "Built Nmap ${actual} differs from the resolved ${version}" >&2; exit 1; }
 
@@ -143,6 +155,8 @@ tar -xOf "/tmp/nmap/nmap-${version}.tar.bz2" "nmap-${version}/LICENSE" > /out/us
   printf 'architecture=%s\nbuild_method=verified-source\nbinary_sha256=%s\n' \
     "$TARGETARCH" "$(sha256sum /out/usr/bin/nmap | cut -d' ' -f1)"
   printf 'runtime_dependencies=%s\n' "$(awk '/=>/ {print $1}' /out/usr/share/doc/nmap/DEPENDENCIES.txt | sort | paste -sd, -)"
+  printf 'bundled_libraries=libdnet=%s,liblinear=%s,libpcap=%s\n' "$libdnet_version" "$liblinear_version" "$libpcap_version"
+  printf 'bundled_libraries_origin=compiled into the binary from the verified source tarball (invisible to package scanners)\n'
 } > /out/usr/share/doc/nmap/PROVENANCE.txt
 cat > /out/usr/share/doc/nmap/NOTICE.txt <<NOTICE
 This image redistributes Nmap ${version} (nmap binary, nmap-services, nmap-service-probes,
@@ -450,6 +464,7 @@ RUN apt-get update && apt-get upgrade -y && DEBIAN_FRONTEND=noninteractive apt-g
     libssl3 \
     libstdc++6 \
     libzstd1 \
+    libpcre2-8-0 \
     whatweb \
     gosu \
     iputils-ping \
@@ -489,6 +504,13 @@ RUN test -s /usr/share/nmap/nmap-services \
  && nmap --version \
  && ldd /usr/bin/nmap > /usr/share/doc/nmap/DEPENDENCIES.txt \
  && ! grep -q 'not found' /usr/share/doc/nmap/DEPENDENCIES.txt
+# Debian packages (name=version) that own every library the binary resolves here: the part of Nmap an image scan covers.
+RUN set -eu \
+ && libs="$(awk '/=>/ && $3 ~ /^\// {print $3}' /usr/share/doc/nmap/DEPENDENCIES.txt)" \
+ && pkgs="$(for lib in $libs; do dpkg-query -S "$(readlink -f "$lib")" | cut -d: -f1; done | sort -u)" \
+ && test -n "$pkgs" \
+ && printf 'system_libraries=%s\n' "$(dpkg-query -W -f='${binary:Package}=${Version}\n' $pkgs | sort | paste -sd, -)" \
+      >> /usr/share/doc/nmap/PROVENANCE.txt
 
 # Non-root user with dedicated home directory (security: avoid HOME=/tmp)
 RUN groupadd -r justup && useradd -r -g justup justup \

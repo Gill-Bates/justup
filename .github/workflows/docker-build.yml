@@ -398,6 +398,10 @@ jobs:
           shipped="$(docker run --rm --platform "$PLATFORM" --entrypoint sha256sum "$TEST_IMAGE" /usr/bin/nmap | cut -d' ' -f1)"
           grep -qx "binary_sha256=${shipped}" "nmap-provenance-${ARCH}.txt"
           grep -q '^runtime_dependencies=' "nmap-provenance-${ARCH}.txt"
+          # Composition: bundled libraries (invisible to Trivy) and the Debian packages Trivy does cover.
+          grep -Eq '^bundled_libraries=libdnet=[0-9.]+,liblinear=[0-9.]+,libpcap=[0-9.]+$' "nmap-provenance-${ARCH}.txt"
+          grep -q '^bundled_libraries_origin=' "nmap-provenance-${ARCH}.txt"
+          grep -Eq '^system_libraries=.*libpcre2-8-0=' "nmap-provenance-${ARCH}.txt"
           docker run --rm -i --platform "$PLATFORM" --entrypoint python "$TEST_IMAGE" - binary "$ARCH" < tools/verify-nmap-worker.py
           docker run --rm --platform "$PLATFORM" --entrypoint sh "$TEST_IMAGE" \
             -c 'test -s /usr/share/doc/nmap/LICENSE && test -s /usr/share/doc/nmap/NOTICE.txt'
@@ -504,6 +508,10 @@ jobs:
           nmap_source_sha256="$(docker run --rm --platform "${{ matrix.platform }}" --entrypoint cat \
             "${{ matrix.test_image }}" /usr/share/doc/nmap/PROVENANCE.txt | sed -n 's/^source_sha256=//p')"
           printf 'nmap_source_sha256=%s\n' "$nmap_source_sha256" >> "toolchain/${{ matrix.image_suffix }}.txt"
+          # Compiled into the binary from the same signed source, so identical on every architecture.
+          nmap_bundled_libraries="$(docker run --rm --platform "${{ matrix.platform }}" --entrypoint cat \
+            "${{ matrix.test_image }}" /usr/share/doc/nmap/PROVENANCE.txt | sed -n 's/^bundled_libraries=//p')"
+          printf 'nmap_bundled_libraries=%s\n' "$nmap_bundled_libraries" >> "toolchain/${{ matrix.image_suffix }}.txt"
 
           # COMPONENTS.txt mixes formats, so each value is extracted on its own.
           # Only arch-independent values belong here; library names and hashes differ by design.
@@ -1077,6 +1085,17 @@ jobs:
             const assetBase = `https://github.com/${context.repo.owner}/${context.repo.repo}/releases/download/${tagName}`;
             const trivyRows = archs.map(arch =>
               `| ${arch} | ${trivyStatus(arch)} | [trivy-${arch}.json](${assetBase}/trivy-${arch}.json) |`);
+            // Written by the image build (PROVENANCE.txt); a missing file or field fails the job.
+            function nmapField(arch, field) {
+              const text = fs.readFileSync(path.join('nmap-provenance', `nmap-provenance-${arch}.txt`), 'utf8');
+              const line = text.split('\n').find(l => l.startsWith(field + '='));
+              if (!line) {
+                throw new Error(`nmap-provenance-${arch}.txt lacks ${field}`);
+              }
+              return line.slice(field.length + 1).replace(/,/g, ', ');
+            }
+            const nmapRows = archs.map(arch =>
+              `| ${arch} | ${nmapField(arch, 'bundled_libraries')} | ${nmapField(arch, 'system_libraries')} |`);
 
             // The release title already carries the version, so the body starts with the image.
             const body = [
@@ -1094,6 +1113,15 @@ jobs:
               '| run | workflow details | [Actions Run](' + runUrl + ') |',
               '',
               '> Scanned with [Trivy](https://trivy.dev/) for HIGH and CRITICAL severity vulnerabilities (unfixed CVEs ignored).',
+              '',
+              '### Nmap composition',
+              '',
+              'Nmap is built from the signature-verified source, so Trivy sees only the Debian packages below. ' +
+                'The bundled libraries are compiled into the binary and are not covered by the scan; review their CVEs against these versions.',
+              '',
+              '| Architecture | Bundled libraries (not scanned) | Debian packages (scanned) |',
+              '|---|---|---|',
+              ...nmapRows,
               '',
               '### Changelog',
               changelogSection || '_No matching CHANGELOG entry found for this version._',

@@ -101,6 +101,7 @@ FIELDS = {
     "signal_cli": "0.14",
     "nmap": "7.993",
     "nmap_source_sha256": "a" * 64,
+    "nmap_bundled_libraries": "libdnet=1.18.2,liblinear=2.50,libpcap=1.10.7",
     "fastapi": "1",
 }
 
@@ -116,7 +117,16 @@ def test_parity_flags_difference_and_single_architecture():
 
 
 @pytest.mark.parametrize(
-    "field", ["java_version", "libsignal_client", "signal_cli", "nmap", "nmap_source_sha256", "python"]
+    "field",
+    [
+        "java_version",
+        "libsignal_client",
+        "signal_cli",
+        "nmap",
+        "nmap_source_sha256",
+        "nmap_bundled_libraries",
+        "python",
+    ],
 )
 def test_parity_requires_fields_even_when_missing_everywhere(field):
     gap = {k: v for k, v in FIELDS.items() if k != field}
@@ -401,10 +411,37 @@ def test_builder_writes_the_provenance_fields_the_release_contract_names():
         "build_method",
         "binary_sha256",
         "runtime_dependencies",
+        "bundled_libraries",
         "nmap_version",
         "source_sha256",
         "signing_key_fingerprint",
     }
+
+
+def nmap_builder_stage() -> str:
+    text = (ROOT / "docker" / "Dockerfile").read_text(encoding="utf-8")
+    return text[text.index("AS nmap-builder") : text.index("AS signal-cli-src")]
+
+
+def test_nmap_links_pcre2_and_zlib_from_debian_and_drops_the_unused_ssh2():
+    # Trivy only sees dpkg-owned libraries: every library that can come from Debian must.
+    stage = nmap_builder_stage()
+    assert "libpcre2-dev" in stage
+    assert "--with-libpcre=included" not in stage and "--with-libz=included" not in stage
+    assert "--without-libssh2" in stage  # libssh2 serves NSE only, and NSE is not built
+    # An autodetect fallback to the bundled copy must fail the build, not ship silently.
+    assert "libpcre2-8.so.0" in stage and "nmap-libz" in stage and "nmap-libpcre2" in stage
+
+
+def test_nmap_composition_is_recorded_for_bundled_and_system_libraries():
+    text = (ROOT / "docker" / "Dockerfile").read_text(encoding="utf-8")
+    stage = nmap_builder_stage()
+    assert "bundled_libraries=" in stage
+    for lib in ("libpcap", "libdnet", "liblinear"):
+        assert lib in stage[stage.index("bundled_libraries=") :]
+    runtime = text[text.index("AS runtime") :]
+    assert "system_libraries=" in runtime and "dpkg-query" in runtime
+    assert re.search(r"^\s+libpcre2-8-0 \\$", runtime, re.MULTILINE)  # explicit, not only inherited from the base
 
 
 def test_release_workflow_matches_the_nmap_release_tool_and_the_builder_contract():

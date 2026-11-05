@@ -32,6 +32,7 @@ REQUIRED_FIELDS = (
     "signal_cli",
     "nmap",
     "nmap_source_sha256",
+    "nmap_bundled_libraries",
 )
 
 
