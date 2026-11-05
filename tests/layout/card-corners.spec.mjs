@@ -10,6 +10,8 @@
 import assert from "node:assert/strict";
 import { test } from "./fixtures.mjs";
 
+// Fixed scale factor of the pixel probe: a quarter-pixel grid makes the samples independent of the host display.
+const DSF = 4;
 const VIEWPORTS = [{ name: "1280x720", width: 1280, height: 900 }, { name: "390x844", width: 390, height: 844 }];
 const PAGES = [
 	{ id: "target-form", path: "/ui/targets/1/edit", prepare: async (page) => { await page.click("#target-http-tab").catch(() => {}); } },
@@ -58,8 +60,13 @@ const GEOMETRY = (CLIPPING) => {
 for (const viewport of VIEWPORTS) {
 	for (const theme of ["light", "dark"]) {
 		test(`cards keep their rounded frame at ${viewport.name} ${theme} @card-corners`, async ({ browser, app, adminState }) => {
-			const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height }, storageState: adminState });
+			const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height }, deviceScaleFactor: DSF, reducedMotion: "reduce", storageState: adminState });
 			const page = await context.newPage();
+			await page.addInitScript(() => document.addEventListener("DOMContentLoaded", () => {
+				const style = document.createElement("style");
+				style.textContent = "*, *::before, *::after { transition: none !important; animation: none !important; }";
+				document.head.append(style);
+			}));
 			try {
 				for (const entry of PAGES) {
 					await page.goto(app.base + entry.path, { waitUntil: "load" });
@@ -90,40 +97,45 @@ for (const viewport of VIEWPORTS) {
 					return { header: getComputedStyle(header).backgroundColor, radius: parseFloat(getComputedStyle(el).borderTopLeftRadius), bodyHidden: getComputedStyle(el.querySelector(".check-body")).display === "none" };
 				});
 				assert.equal(info.bodyHidden, true, "the check body is collapsed");
+				// Deterministic sampling: a fixed device scale factor, the corner snapped to the device pixel grid and
+				// a clip on whole CSS pixels, so every sample sits at the same place in every run and engine.
+				const corner = await card.evaluate((el) => {
+					const dsf = devicePixelRatio, rect = el.getBoundingClientRect();
+					return { dsf, left: Math.round(rect.left * dsf) / dsf, bottom: Math.round(rect.bottom * dsf) / dsf, radius: parseFloat(getComputedStyle(el).borderBottomLeftRadius), border: parseFloat(getComputedStyle(el).borderBottomWidth) };
+				});
+				assert.equal(corner.dsf, DSF, "the device scale factor is fixed");
+				assert.ok(corner.radius > 0, "the card has a rounded frame");
 				const size = 16;
-				const clip = { x: box.x - 2, y: box.y + box.height - (size - 2), width: size, height: size };
-								const png = (await page.screenshot({ clip })).toString("base64");
-				const diagonal = await page.evaluate(async ({ png, size }) => {
+				const clip = { x: Math.floor(corner.left) - 2, y: Math.ceil(corner.bottom) - (size - 2), width: size, height: size };
+				const png = (await page.screenshot({ clip, animations: "disabled", caret: "hide", scale: "device" })).toString("base64");
+				const samples = await page.evaluate(async ({ png, size, clip, corner }) => {
 					const image = await createImageBitmap(await (await fetch(`data:image/png;base64,${png}`)).blob());
 					const canvas = new OffscreenCanvas(image.width, image.height);
-					const context2d = canvas.getContext("2d");
+					const context2d = canvas.getContext("2d", { willReadFrequently: true });
 					context2d.drawImage(image, 0, 0);
 					const scale = image.width / size;
-					// Walk the bottom-left corner diagonally from outside to inside: the curved border has to show up
-					// as a pixel unlike the header background (a square header would paint over it).
-					const found = [];
-					for (let i = 1; i <= 7; i++) {
-						for (let dy = -1; dy <= 1; dy++) {
-							const x = Math.round((2 + i) * scale), y = Math.round((size - 3 - i + dy) * scale);
-							found.push(Array.from(context2d.getImageData(x, y, 1, 1).data.slice(0, 3)));
+					const at = (dx, dy) => Array.from(context2d.getImageData(Math.floor((corner.left - clip.x + dx) * scale), Math.floor((corner.bottom - clip.y - dy) * scale), 1, 1).data.slice(0, 3));
+					// dx/dy: CSS px from the card's outer left/bottom edge. The arc centre sits (radius, radius) from the corner.
+					const grid = [];
+					for (let i = 0; i < 16; i++) grid.push(corner.border + 0.125 + i * 0.25);
+					const outside = [], arc = [];
+					for (const dx of grid) {
+						for (const dy of grid) {
+							const distance = Math.hypot(corner.radius - dx, corner.radius - dy);
+							if (dx <= corner.radius && dy <= corner.radius && distance > corner.radius + 0.75) outside.push(at(dx, dy));
+							if (Math.abs(dx - dy) < 0.01 && Math.abs(distance - (corner.radius - corner.border / 2)) < 0.3) arc.push(at(dx, dy));
 						}
 					}
-					// Pixels outside the rounded frame (more than the radius from the arc center) next to the corner.
-					const radius = 8, outer = [];
-					for (let dx = 1; dx <= 3; dx++) {
-						for (let dy = 1; dy <= 3; dy++) {
-							if (Math.hypot(radius - dx, radius - dy) < radius + 0.8) continue;
-							outer.push(Array.from(context2d.getImageData(Math.round((2 + dx) * scale), Math.round((size - 2 - dy) * scale), 1, 1).data.slice(0, 3)));
-						}
-					}
-					return { found, outer };
-				}, { png, size });
-				const { outer } = diagonal;
+					return { outside, arc, inside: at(corner.radius + 2, corner.radius + 2) };
+				}, { png, size, clip, corner });
 				const header = [255, 0, 255];
-				const arcVisible = diagonal.found.some((pixel) => pixel.some((value, i) => Math.abs(value - header[i]) >= 40));
-				assert.equal(arcVisible, true, `no border pixel on the corner diagonal differs from the header background ${header}: the arc is overpainted`);
-				// The pixel right at the outer corner lies outside the rounded frame: these show the page, never the header.
-				assert.ok(outer.length > 0 && !outer.some((pixel) => pixel.every((value, i) => Math.abs(value - header[i]) < 40)), `a pixel outside the rounded frame has the header color ${header}: a square header paints over it`);
+				const isHeader = (pixel) => pixel.every((value, i) => Math.abs(value - header[i]) < 40);
+				assert.ok(isHeader(samples.inside), `the header is not painted ${header} inside the card (got ${samples.inside}): the probe is blind`);
+				assert.ok(samples.outside.length >= 3, `only ${samples.outside.length} samples outside the rounded frame`);
+				// The pixels beyond the arc show the page, never the header: a square header paints over them.
+				assert.deepEqual(samples.outside.filter(isHeader), [], `a pixel outside the rounded frame has the header color ${header}: a square header paints over it`);
+				// The border arc stays visible: some pixel on the diagonal differs from the header background.
+				assert.ok(samples.arc.length > 0 && samples.arc.some((pixel) => !isHeader(pixel)), `no border pixel on the corner diagonal differs from the header background ${header}: the arc is overpainted`);
 			} finally {
 				await context.close();
 			}

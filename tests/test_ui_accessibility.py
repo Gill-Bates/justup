@@ -366,3 +366,16 @@ def test_floating_panels_use_the_shared_elevation_token_in_both_themes() -> None
     shadows = re.findall(r"box-shadow:\s*([^;]+);", notifications)
     assert "var(--ju-shadow-raised)" in shadows
     assert not [s for s in shadows if "rgb(" in s and "var(" not in s and "0 0 0 2px" not in s], shadows
+def test_port_picker_disclosures_chips_and_result_lists_have_accessible_names() -> None:
+    picker = (TEMPLATES / "fragments" / "network_scan_picker.html").read_text(encoding="utf-8")
+    for hook in ("data-scan-discover", "data-scan-other"):
+        tag = re.search(rf"<details\b[^>]*{hook}[^>]*>.*?<summary\b[^>]*>", picker, re.DOTALL)
+        assert tag, hook
+    assert "Discover ports with Nmap" in picker
+    for hook in ("data-port-chips", "data-scan-confirmed ", "data-scan-other-list"):
+        tag = re.search(rf"<ul\b[^>]*{hook}[^>]*>", picker)
+        assert tag and ("aria-labelledby=" in tag.group(0) or "aria-label=" in tag.group(0)), hook
+    # Decorative icons stay out of the accessibility tree; the manual input is described by its help and error text.
+    assert re.search(r'<span class="material-icons" aria-hidden="true">radar</span>', picker)
+    manual = re.search(r"<input\b[^>]*data-manual-input[^>]*>", picker).group(0)
+    assert "manual-help" in manual and "manual-ports-error" in manual

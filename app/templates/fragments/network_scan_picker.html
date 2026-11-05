@@ -37,14 +37,14 @@
           <button class="btn btn-outline-secondary" type="button" data-scan-action="cancel" hidden>Cancel scan</button>
         </div>
       </div>
-      <div role="status" aria-live="polite">
-        <p class="small text-danger mb-0" data-scan-unavailable hidden>
-          <span id="{{ scan_prefix }}-scan-unavailable" data-scan-unavailable-text></span>
-          <button class="btn btn-link btn-sm p-0 align-baseline" type="button" data-scan-action="recheck">Check again</button>
-        </p>
-      </div>
     </div>
   </details>
+  <div role="status" aria-live="polite">
+    <p class="small text-danger mt-2 mb-0" data-scan-unavailable hidden>
+      <span id="{{ scan_prefix }}-scan-unavailable" data-scan-unavailable-text></span>
+      <button class="btn btn-link btn-sm p-0 align-baseline" type="button" data-scan-action="recheck">Check again</button>
+    </p>
+  </div>
   <p class="small mt-2 mb-0 d-flex align-items-center gap-2" id="{{ scan_prefix }}-scan-status" data-scan-status role="status" aria-live="polite">
     <span class="spinner-border spinner-border-sm" aria-hidden="true" data-scan-spinner hidden></span><span data-scan-status-text></span>
   </p>
@@ -58,7 +58,7 @@
     </section>
     <details class="ju-port-other" data-scan-other hidden>
       <summary data-scan-other-summary></summary>
-      <p class="small text-body-secondary my-2">Nmap could not confirm these ports as open. Tick a port only if you want to monitor it anyway.</p>
+      <p class="small text-body-secondary my-2">These results are not confirmed open: Nmap found the port closed or could not determine its state. Tick a port only if you want to monitor it anyway.</p>
       <ul class="ju-port-list" data-scan-other-list aria-label="Other scan results"></ul>
     </details>
   </div>

@@ -52,14 +52,60 @@ def test_picker_announces_progress_politely_and_errors_assertively() -> None:
     assert 'aria-hidden="true"' in re.search(r"<span[^>]*data-scan-spinner[^>]*>", html).group(0)
 
 
-def test_picker_names_nmap_and_marks_uncertain_states_in_the_result_table() -> None:
+def test_picker_names_nmap_and_offers_discovery_as_a_collapsed_optional_disclosure() -> None:
     html = picker_html()
     assert "Nmap Security Scanner" in html
     assert 'rel="noopener noreferrer"' in re.search(r'<a href="https://nmap.org/"[^>]*>', html).group(0)
-    heads = re.findall(r'<th scope="col">([^<]+)</th>', html)
-    assert heads == ["Select", "Protocol", "Port", "Service", "Status"]
-    assert "<caption" in html
-    assert "never selected automatically" in html
+    discover = re.search(r"<details[^>]*data-scan-discover[^>]*>", html).group(0)
+    assert " open" not in discover, "discovery starts collapsed"
+    assert "Discover ports with Nmap" in re.search(r"<summary>.*?</summary>", html, re.DOTALL).group(0)
+    # Every scan control lives inside the disclosure: nothing about Nmap competes with the manual entry.
+    body = html[html.index("data-scan-discover") : html.index("</details>")]
+    for hook in (
+        'data-scan-protocol="tcp"',
+        'data-scan-protocol="udp"',
+        "data-scan-profile",
+        'data-scan-action="start"',
+        'data-scan-action="cancel"',
+    ):
+        assert hook in body, hook
+
+
+def test_picker_has_one_manual_input_and_chips_and_no_second_port_list() -> None:
+    html = picker_html()
+    assert html.count("data-manual-input") == 1
+    assert len(re.findall(r'<input\b[^>]*type="text"', html)) == 1
+    assert html.count("data-port-chips>") + html.count("data-port-chips ") == 1
+
+
+def test_picker_results_are_confirmed_first_and_others_collapsed_without_a_table() -> None:
+    html = picker_html()
+    assert "<table" not in html and "<th" not in html and "table-responsive" not in html
+    assert html.index("data-scan-confirmed ") < html.index("data-scan-other")
+    other = re.search(r"<details[^>]*data-scan-other[^>]*>", html).group(0)
+    assert " open" not in other, "other results start collapsed"
+    assert "not confirmed open" in html
+    assert "select-open" not in html, "the preselection replaces the bulk action"
+    apply = re.search(r"<button[^>]*data-scan-action=\"apply\"[^>]*>[^<]*</button>", html).group(0)
+    assert "Add selected ports (0)" in apply and "btn-primary" in apply
+    assert html.count("never selected automatically") == 0
+
+
+def test_wizard_shows_one_port_input_and_keeps_the_form_fields_as_hidden_backing() -> None:
+    text = (TEMPLATES / "target_wizard.html").read_text(encoding="utf-8")
+    assert re.search(r'<input id="wizard-ports" name="tcp_ports" type="hidden">', text)
+    assert re.search(r'<input id="wizard-udp-ports" name="udp_ports" type="hidden">', text)
+    step = text[text.index('data-step="1"') : text.index('data-step="2"')]
+    order = [
+        step.index(marker)
+        for marker in ('id="wizard-address"', 'id="wizard-name"', 'id="wizard-group"', "network_scan_picker.html")
+    ]
+    assert order == sorted(order), "address, name and group, then ports with discovery"
+    visible_text_inputs = re.findall(r'<input\b(?![^>]*type="hidden")[^>]*type="text"[^>]*>', step)
+    assert [re.search(r'id="([^"]+)"', tag).group(1) for tag in visible_text_inputs] == [
+        "wizard-address",
+        "wizard-name",
+    ]
 
 
 def test_picker_prefixes_keep_the_two_instances_apart() -> None:

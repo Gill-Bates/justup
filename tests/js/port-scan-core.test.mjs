@@ -123,3 +123,47 @@ test("the scanned protocols follow the active checks, TCP when none is on", () =
   assert.deepEqual(plain(core.defaultProtocols(true, true)), ["tcp", "udp"]);
   assert.deepEqual(plain(core.defaultProtocols(false, true)), ["udp"]);
 });
+const sixteen = () => [
+  { protocol: "tcp", port: 80, state: "open", service: { name: "http", method: "table" } },
+  { protocol: "tcp", port: 21, state: "closed" },
+  { protocol: "tcp", port: 23, state: "closed" },
+  ...[111, 135, 139, 445, 1433, 3306, 3389, 5900, 8080, 8443, 9100, 9200].map(port => ({ protocol: "tcp", port, state: "filtered" })),
+  { protocol: "udp", port: 161, state: "open|filtered", service: { name: "snmp", method: "table" } },
+];
+test("16 results with one confirmed open: counts keep closed and unclear apart", () => {
+  const rows = core.collectPorts(result(sixteen()));
+  assert.deepEqual(plain(core.summarizeRows(rows)), { total: 16, open: 1, closed: 2, unclear: 13 });
+  const split = core.splitResults(rows);
+  assert.deepEqual(plain(split.confirmed.map(row => `${row.protocol}:${row.port}`)), ["tcp:80"]);
+  assert.equal(split.other.length, 15);
+  assert.equal(split.other.some(row => row.info.confirmed), false);
+  const outcome = core.describeJob(job("completed", { result: result(sixteen()) }), ["tcp", "udp"]);
+  assert.equal(outcome.kind, "results");
+  assert.match(outcome.message, /16 ports found: 1 confirmed open, 2 closed, 13 unclear\./);
+});
+test("closed is confirmed closed and never described as uncertain", () => {
+  const closed = core.describeState("closed");
+  assert.equal(closed.tone, "closed");
+  assert.doesNotMatch(closed.note, /uncertain/);
+  for (const state of ["filtered", "open|filtered", "closed|filtered", "unfiltered", "unknown"]) {
+    assert.equal(core.describeState(state).tone, "uncertain", state);
+  }
+});
+test("zero confirmed open ports is stated factually and never claims every port is closed", () => {
+  const outcome = core.describeJob(job("completed", { result: result([{ protocol: "tcp", port: 22, state: "filtered" }, { protocol: "tcp", port: 23, state: "closed" }]) }), ["tcp"]);
+  assert.equal(outcome.kind, "uncertain-only");
+  assert.match(outcome.message, /2 ports found, none confirmed open \(1 closed, 1 unclear\)\./);
+  assert.doesNotMatch(outcome.message, /all .*closed/i);
+});
+test("only a port-table guess is flagged as a hint; a probed service is not", () => {
+  const rows = core.collectPorts(result([
+    { protocol: "tcp", port: 80, state: "open", service: { name: "http", method: "table" } },
+    { protocol: "tcp", port: 443, state: "open", service: { name: "https", method: "probed" } },
+    { protocol: "tcp", port: 25, state: "open" },
+  ]));
+  const byPort = Object.fromEntries(rows.map(row => [row.port, row]));
+  assert.equal(byPort[80].hint, true);
+  assert.equal(byPort[80].service, "http (table hint)");
+  assert.equal(byPort[443].hint, false);
+  assert.equal(byPort[25].hint, false);
+});

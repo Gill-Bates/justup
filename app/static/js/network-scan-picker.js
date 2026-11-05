@@ -80,7 +80,7 @@
     const scanId = form?.querySelector('[name="network_scan_id"]');
     const el_ = {
       start: q('[data-scan-action="start"]'), cancel: q('[data-scan-action="cancel"]'),
-      apply: q('[data-scan-action="apply"]'), discover: q('[data-scan-discover]'),
+      apply: q('[data-scan-action="apply"]'),
       recheck: q('[data-scan-action="recheck"]'), manualAdd: q('[data-scan-action="manual-add"]'),
       manualInput: q('[data-manual-input]'), manualError: q('[data-manual-error]'),
       chips: q('[data-port-chips]'), chipsEmpty: q('[data-port-chips-empty]'),
@@ -191,6 +191,7 @@
       el_.manualError.textContent = text;
       el_.manualError.hidden = !text;
       el_.manualInput.setAttribute('aria-invalid', text ? 'true' : 'false');
+      el_.manualInput.classList.toggle('is-invalid', Boolean(text));
     }
     function addManual() {
       const parsed = core.parseTypedPorts(el_.manualInput.value);
@@ -331,7 +332,6 @@
       el_.other.open = false;
       el_.other.hidden = other.length === 0;
       el_.results.hidden = !rows.length;
-      if (rows.length) el_.discover.open = true;
       updateSelection();
     }
     function finish(outcome) {

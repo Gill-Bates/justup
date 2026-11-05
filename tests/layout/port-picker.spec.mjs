@@ -3,8 +3,8 @@
 // Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 //
 
-// Port picker of the target wizard and the target form: manual and protocol-typed entry, scan, results,
-// selection, adoption, error states, stale answers and safe rendering. The scan API is stubbed; the
+// Port picker of the target wizard and the target form: manual and protocol-typed entry, collapsed Nmap discovery,
+// confirmed-first results, preselection, adoption, error states, stale answers and safe rendering. The scan API is stubbed; the
 // worker itself is covered by the backend tests. Every scenario ends without saving unless it says so.
 import assert from "node:assert/strict";
 import { test as baseTest } from "./fixtures.mjs";
@@ -20,6 +20,14 @@ const PORTS = [
 	{ protocol: "tcp", port: 22, state: "open", service: { name: "ssh", product: "OpenSSH", version: "9.2", method: "probed" } },
 	{ protocol: "tcp", port: 443, state: "open", service: { name: "https", method: "probed" } },
 	{ protocol: "udp", port: 53, state: "open", service: { name: "domain", method: "probed" } },
+	{ protocol: "udp", port: 161, state: "open|filtered", service: { name: "snmp", method: "table" } },
+];
+// 16 results, one confirmed open: the case the compact results exist for.
+const SIXTEEN = [
+	{ protocol: "tcp", port: 80, state: "open", service: { name: "http", method: "table" } },
+	{ protocol: "tcp", port: 21, state: "closed" },
+	{ protocol: "tcp", port: 23, state: "closed" },
+	...[111, 135, 139, 445, 1433, 3306, 3389, 5900, 8080, 8443, 9100, 9200].map((port) => ({ protocol: "tcp", port, state: "filtered" })),
 	{ protocol: "udp", port: 161, state: "open|filtered", service: { name: "snmp", method: "table" } },
 ];
 const job = (status, extra = {}) => ({ id: SCAN_ID, host: "mail.example.org", protocols: ["tcp", "udp"], profile: "quick", status, ...extra });
@@ -58,13 +66,20 @@ async function stubScan(page, overrides = {}) {
 	await page.route("**/network-scans/status", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(state.worker) }));
 	return { log, state };
 }
-async function openWizard(page, app, address = "mail.example.org") {
+// Nmap discovery is collapsed by default; tests that scan open it first.
+async function openDiscover(picker) {
+	const details = picker.locator("[data-scan-discover]");
+	if (!(await details.evaluate((node) => node.open))) await details.locator("summary").click();
+}
+async function openWizard(page, app, address = "mail.example.org", { discover = true } = {}) {
 	await page.goto(`${app.base}/ui/targets/new`);
 	await page.locator('input[name="profile"][value="custom"]').check({ force: true });
 	await page.getByRole("button", { name: "Continue" }).click();
 	await page.locator("#wizard-address").fill(address);
-	await page.locator("[data-network-scan-picker]").waitFor();
-	return page.locator("[data-network-scan-picker]");
+	const picker = page.locator("[data-network-scan-picker]");
+	await picker.waitFor();
+	if (discover) await openDiscover(picker);
+	return picker;
 }
 const scan = (picker) => picker.getByRole("button", { name: "Scan ports", exact: true });
 const chips = (picker) => picker.locator("[data-port-chips] .tag-input__text").allInnerTexts();
@@ -82,11 +97,23 @@ async function message(picker) {
 	return `status: ${(await picker.locator("[data-scan-status-text]").innerText()).trim()}`;
 }
 async function rowOf(picker, protocol, port) {
-	return picker.locator("[data-scan-rows] tr", { has: picker.page().locator(`input[data-protocol="${protocol}"][data-port="${port}"]`) });
+	return picker.locator("[data-scan-results] li", { has: picker.page().locator(`input[data-protocol="${protocol}"][data-port="${port}"]`) });
 }
+const ticked = (picker) => picker.locator("[data-scan-results] input:checked").evaluateAll((nodes) => nodes.map((node) => `${node.dataset.protocol}:${node.dataset.port}`).sort());
+const openOthers = async (picker) => {
+	const other = picker.locator("[data-scan-other]");
+	if (!(await other.evaluate((node) => node.open))) await other.locator("summary").click();
+};
 test("manual typed entry fills TCP and UDP, keeps chips removable and needs no scan @portpicker", async ({ app, page }) => {
 	const { log } = await stubScan(page);
-	const picker = await openWizard(page, app);
+	const picker = await openWizard(page, app, "mail.example.org", { discover: false });
+	// The wizard offers exactly one port input; wizard-ports and wizard-udp-ports are hidden backing fields.
+	assert.deepEqual(
+		await page.locator('[data-step="1"] :is(input, select, textarea):visible').evaluateAll((nodes) => nodes.map((node) => node.id)),
+		["wizard-address", "wizard-name", "wizard-group", "wizard-manual-ports"],
+	);
+	assert.deepEqual(await page.locator("#wizard-ports, #wizard-udp-ports").evaluateAll((nodes) => nodes.map((node) => node.type)), ["hidden", "hidden"]);
+	assert.equal(await picker.locator("[data-scan-discover]").evaluate((node) => node.open), false, "Nmap discovery starts collapsed");
 	await addManual(picker, "22, 443 udp:53 161/udp");
 	assert.equal(await page.locator("#wizard-ports").inputValue(), "22,443");
 	assert.equal(await page.locator("#wizard-udp-ports").inputValue(), "53,161");
@@ -140,6 +167,7 @@ test("protocols follow the active checks, ICMP is independent and HTTP is untouc
 	// The scan asks for exactly the protocols of the active checks.
 	await page.getByRole("button", { name: "Edit ports" }).first().click();
 	const picker = page.locator("[data-network-scan-picker]");
+	await openDiscover(picker);
 	assert.equal(await picker.locator('[data-scan-protocol="udp"]').isChecked(), true);
 	assert.equal(await picker.locator('[data-scan-protocol="tcp"]').isChecked(), false);
 	await scan(picker).click();
@@ -150,7 +178,7 @@ test("protocols follow the active checks, ICMP is independent and HTTP is untouc
 	assert.match(await message(picker), /error: Choose TCP or UDP/);
 	assert.equal(log.starts.length, 1, "no request without a protocol");
 });
-test("scan, results table, selection and adoption keep manual ports and save only on submit @portpicker", async ({ app, page }) => {
+test("scan, confirmed-first results, selection and adoption keep manual ports and save only on submit @portpicker", async ({ app, page }) => {
 	let gate = Promise.resolve();
 	await stubScan(page, { poll: async () => { await gate; return { status: 200, json: completed() }; } });
 	const writes = [];
@@ -170,27 +198,32 @@ test("scan, results table, selection and adoption keep manual ports and save onl
 	release();
 	await picker.locator("[data-scan-results]").waitFor({ state: "visible" });
 	assert.equal(await scan(picker).isEnabled(), true);
-	assert.match(await message(picker), /4 ports found, 3 confirmed open/);
-	// Table: columns, protocol, port, service, status; uncertain is never called open.
-	const heads = await picker.locator("[data-scan-results] thead th").evaluateAll((nodes) => nodes.map((node) => node.textContent));
-	assert.deepEqual(heads, ["Select", "Protocol", "Port", "Service", "Status"]);
+	assert.match(await message(picker), /4 ports found: 3 confirmed open, 1 unclear\./);
+	// No table: a compact confirmed list first, preselected, with the primary action showing the count.
+	assert.equal(await picker.locator("table").count(), 0);
+	assert.equal(await picker.locator("[data-scan-confirmed-title]").innerText(), "3 confirmed open ports");
 	const ssh = await (await rowOf(picker, "tcp", 22)).innerText();
-	assert.match(ssh, /TCP[\s\S]*22[\s\S]*ssh · OpenSSH · 9\.2[\s\S]*Open/);
+	assert.match(ssh, /TCP 22\s+ssh · OpenSSH · 9\.2\s+Open/);
+	assert.deepEqual(await ticked(picker), ["tcp:22", "tcp:443", "udp:53"], "confirmed open ports are preselected, nothing else");
+	assert.equal(await picker.locator("[data-scan-action=apply]").innerText(), "Add selected ports (3)");
+	assert.equal(await picker.getByRole("button", { name: "Select all confirmed open ports" }).count(), 0, "the preselection replaces the bulk action");
+	// The unclear port sits behind a collapsed disclosure and keeps its Nmap words; a table hint is no detection.
+	const other = picker.locator("[data-scan-other]");
+	assert.equal(await other.evaluate((node) => node.open), false);
+	assert.equal(await other.locator("summary").innerText(), "1 other result – not confirmed open");
+	await other.locator("summary").click();
 	const snmp = await (await rowOf(picker, "udp", 161)).innerText();
-	assert.match(snmp, /snmp \(table hint\)/);
-	assert.match(snmp, /Open or filtered/);
-	assert.match(snmp, /uncertain/i);
-	assert.doesNotMatch(snmp.replace(/open or filtered|open\|filtered|not confirmed open/gi, ""), /\bopen\b/i, "an uncertain UDP state is never labelled open");
-	// Single selection works, the bulk action selects only confirmed ports and adds to the selection.
-	await picker.getByRole("checkbox", { name: /Select UDP port 161/ }).check();
-	await picker.getByRole("button", { name: "Select all confirmed open ports" }).click();
-	assert.match(await message(picker), /3 confirmed open ports selected/);
-	const checked = await picker.locator("[data-scan-rows] input:checked").evaluateAll((nodes) => nodes.map((node) => `${node.dataset.protocol}:${node.dataset.port}`));
-	assert.deepEqual(checked.sort(), ["tcp:22", "tcp:443", "udp:161", "udp:53"], "the bulk action keeps the manual selection of the uncertain port");
-	await picker.getByRole("checkbox", { name: /Select TCP port 443/ }).uncheck();
+	assert.match(snmp, /UDP 161\s+snmp \(table hint\)\s+Open or filtered/);
+	assert.doesNotMatch(snmp.replace(/open or filtered|open\|filtered/gi, ""), /\bopen\b/i, "an unclear UDP state is never labelled open");
+	assert.doesNotMatch(snmp, /uncertain/i, "the shared note replaces the per-row repetition");
+	assert.match(await other.innerText(), /not confirmed open/);
+	// Selection changes the count; unclear ports can be ticked by hand.
+	await picker.getByRole("checkbox", { name: /UDP 161/ }).check();
+	await picker.getByRole("checkbox", { name: /TCP 443/ }).uncheck();
+	assert.equal(await picker.locator("[data-scan-action=apply]").innerText(), "Add selected ports (3)");
 	// Adoption: protocols apart, no duplicates, manual entries kept, form updated at once, nothing saved yet.
 	await addManual(picker, "22");
-	await picker.getByRole("button", { name: "Add selected ports" }).click();
+	await picker.getByRole("button", { name: "Add selected ports (3)" }).click();
 	assert.equal(await page.locator("#wizard-ports").inputValue(), "22,8080");
 	assert.equal(await page.locator("#wizard-udp-ports").inputValue(), "53,123,161");
 	assert.equal(await page.locator('[name="network_scan_id"]').inputValue(), SCAN_ID);
@@ -217,6 +250,54 @@ test("scan, results table, selection and adoption keep manual ports and save onl
 	assert.equal(body.enable_tcp_connect, true);
 	assert.equal(body.enable_udp_scan, true);
 });
+test("16 results with one open port: only that port is primary, 15 others are collapsed and unselected @portpicker", async ({ app, page }) => {
+	await stubScan(page, { poll: async () => ({ status: 200, json: completed(SIXTEEN) }) });
+	const picker = await openWizard(page, app);
+	await runScan(picker);
+	assert.match(await message(picker), /16 ports found: 1 confirmed open, 2 closed, 13 unclear\./);
+	assert.equal(await picker.locator("[data-scan-confirmed-title]").innerText(), "1 confirmed open port");
+	assert.deepEqual(await picker.locator("[data-scan-confirmed] li").allInnerTexts(), [(await (await rowOf(picker, "tcp", 80)).innerText())]);
+	assert.match(await (await rowOf(picker, "tcp", 80)).innerText(), /TCP 80\s+http \(table hint\)\s+Open/);
+	assert.equal(await picker.locator("[data-scan-confirmed] li").count(), 1);
+	assert.deepEqual(await ticked(picker), ["tcp:80"]);
+	assert.equal(await picker.locator("[data-scan-action=apply]").innerText(), "Add selected ports (1)");
+	const other = picker.locator("[data-scan-other]");
+	assert.equal(await other.evaluate((node) => node.open), false, "the other results start collapsed");
+	assert.equal(await other.locator("summary").innerText(), "15 other results – not confirmed open");
+	assert.equal(await picker.locator("[data-scan-other-list]").isVisible(), false, "collapsed rows are not rendered or focusable");
+	await other.locator("summary").click();
+	assert.equal(await picker.locator("[data-scan-other-list] li").count(), 15);
+	assert.equal(await picker.locator("[data-scan-other-list] input:checked").count(), 0, "unclear and closed ports are never preselected");
+	// Closed and unclear are told apart, in words, not only by colour.
+	assert.match(await (await rowOf(picker, "tcp", 21)).innerText(), /Closed/);
+	assert.match(await (await rowOf(picker, "tcp", 111)).innerText(), /Filtered/);
+	assert.match(await (await rowOf(picker, "udp", 161)).innerText(), /Open or filtered/);
+	assert.equal(await picker.locator("[data-scan-other-list]").evaluate((node) => (node.textContent.match(/uncertain/gi) || []).length), 0, "no per-row repetition");
+	// An unclear port can be chosen by hand and is adopted with the confirmed one.
+	await picker.getByRole("checkbox", { name: /TCP 111 / }).check();
+	assert.equal(await picker.locator("[data-scan-action=apply]").innerText(), "Add selected ports (2)");
+	await picker.getByRole("button", { name: "Add selected ports (2)" }).click();
+	assert.equal(await page.locator("#wizard-ports").inputValue(), "80,111");
+	assert.equal(await page.locator("#wizard-udp-ports").inputValue(), "");
+});
+test("zero confirmed open ports gets a factual message and nothing preselected @portpicker", async ({ app, page }) => {
+	await stubScan(page, { poll: async () => ({ status: 200, json: completed([{ protocol: "tcp", port: 22, state: "filtered" }, { protocol: "tcp", port: 23, state: "closed" }]) }) });
+	const picker = await openWizard(page, app);
+	await runScan(picker);
+	assert.match(await message(picker), /2 ports found, none confirmed open \(1 closed, 1 unclear\)\./);
+	assert.equal(await picker.locator("[data-scan-confirmed-title]").innerText(), "No confirmed open ports");
+	const empty = await picker.locator("[data-scan-confirmed-empty]").innerText();
+	assert.match(empty, /did not confirm any port as open/);
+	assert.doesNotMatch(`${empty} ${await message(picker)}`, /all .*closed/i, "never claims every scanned port is closed");
+	assert.equal(await picker.locator("[data-scan-confirmed] li").count(), 0);
+	assert.equal(await ticked(picker).then((list) => list.length), 0);
+	assert.equal(await picker.locator("[data-scan-action=apply]").isDisabled(), true);
+	await openOthers(picker);
+	await picker.getByRole("checkbox", { name: /TCP 22 / }).check();
+	assert.equal(await picker.locator("[data-scan-action=apply]").isEnabled(), true);
+	await picker.getByRole("button", { name: "Add selected ports (1)" }).click();
+	assert.equal(await page.locator("#wizard-ports").inputValue(), "22");
+});
 test("error and empty states say what happened while manual entry keeps working @portpicker", async ({ app, page }) => {
 	const { state, log } = await stubScan(page);
 	const picker = await openWizard(page, app);
@@ -229,7 +310,7 @@ test("error and empty states say what happened while manual entry keeps working 
 		["cancelled elsewhere", { poll: job("cancelled") }, /^status: Scan cancelled/],
 		["expired", { poll: job("expired") }, /^status: The scan result expired/],
 		["no open ports", { poll: completed([]) }, /^status: No open ports found/],
-		["unambiguous UDP missing", { poll: completed([PORTS[3]]) }, /^status: 1 port found, none confirmed open\. No UDP port could be confirmed open/],
+		["unambiguous UDP missing", { poll: completed([PORTS[3]]) }, /^status: 1 port found, none confirmed open \(1 unclear\)\. No UDP port could be confirmed open/],
 		["busy", { start: { status: 429, json: { detail: "Too many scans" } } }, /^error: A scan for this host is already running/],
 		["invalid host", { start: { status: 422, json: { detail: [{ msg: "Invalid host" }] } } }, /^error: This host cannot be scanned/],
 		["forbidden", { start: { status: 403, json: { detail: "Admin privileges required" } } }, /^error: Only administrators can scan/],
@@ -249,17 +330,16 @@ test("error and empty states say what happened while manual entry keeps working 
 		assert.match(await message(picker), /Added 1 TCP and 0 UDP port/, name);
 	}
 	assert.equal(log.starts.length, scenarios.length);
-	// Uncertain-only: the row is listed, never pre-selected, and the bulk action selects nothing.
+	// Unclear-only: nothing is preselected, the apply action is disabled until the user ticks a port.
 	state.start = async () => ({ status: 202, json: job("queued", { result: null }) });
 	state.poll = async () => ({ status: 200, json: completed([PORTS[3]]) });
 	await scan(picker).click();
 	await picker.locator("[data-scan-results]").waitFor({ state: "visible" });
-	assert.equal(await picker.locator("[data-scan-rows] input:checked").count(), 0);
-	await picker.getByRole("button", { name: "Select all confirmed open ports" }).click();
-	assert.equal(await picker.locator("[data-scan-rows] input:checked").count(), 0);
-	assert.match(await message(picker), /No confirmed open ports to select/);
-	await picker.getByRole("checkbox", { name: /Select UDP port 161/ }).check();
-	await picker.getByRole("button", { name: "Add selected ports" }).click();
+	assert.equal(await picker.locator("[data-scan-results] input:checked").count(), 0);
+	assert.equal(await picker.locator("[data-scan-action=apply]").isDisabled(), true);
+	await openOthers(picker);
+	await picker.getByRole("checkbox", { name: /UDP 161/ }).check();
+	await picker.getByRole("button", { name: "Add selected ports (1)" }).click();
 	assert.match(await page.locator("#wizard-udp-ports").inputValue(), /(?:^|,)161(?:,|$)/);
 	// A missing worker disables the scan with a visible reason; manual entry still works.
 	state.start = async () => ({ status: 503, json: { detail: { code: "unavailable", message: "Nmap scan worker is restarting" } } });
@@ -291,11 +371,11 @@ test("a stale answer never replaces a newer scan or a changed host @portpicker",
 	await picker.locator("[data-scan-results]").waitFor({ state: "visible" });
 	releaseFirst();
 	await page.waitForTimeout(400);
-	assert.deepEqual(await picker.locator("[data-scan-rows] input").evaluateAll((nodes) => nodes.map((node) => node.dataset.port)), ["2222"]);
+	assert.deepEqual(await picker.locator("[data-scan-results] input").evaluateAll((nodes) => nodes.map((node) => node.dataset.port)), ["2222"]);
 	assert.ok(log.deletes.includes(SCAN_ID), "the cancelled job was deleted");
 	// Changing the host invalidates the result and the job id that would be sent with the form.
-	await picker.getByRole("checkbox", { name: /Select TCP port 2222/ }).check();
-	await picker.getByRole("button", { name: "Add selected ports" }).click();
+	assert.deepEqual(await ticked(picker), ["tcp:2222"], "the confirmed port is preselected");
+	await picker.getByRole("button", { name: "Add selected ports (1)" }).click();
 	assert.equal(await page.locator('[name="network_scan_id"]').inputValue(), OTHER_ID);
 	await page.locator("#wizard-address").fill("b.example.org");
 	await picker.locator("[data-scan-results]").waitFor({ state: "hidden" });
@@ -312,7 +392,8 @@ test("scanner text is rendered as text, never as HTML @portpicker", async ({ app
 	});
 	const picker = await openWizard(page, app);
 	await runScan(picker);
-	assert.equal(await picker.locator("[data-scan-rows] img, [data-scan-rows] script, [data-scan-rows] b").count(), 0);
+	await openOthers(picker);
+	assert.equal(await picker.locator("[data-scan-results] img, [data-scan-results] script, [data-scan-results] b").count(), 0);
 	assert.match(await (await rowOf(picker, "tcp", 80)).innerText(), /<img src=x onerror="window.__pwn=1"> · <b>bold<\/b>/);
 	assert.equal(await page.evaluate(() => window.__pwn), undefined);
 	// Error text from the server is text as well.
@@ -324,7 +405,7 @@ test("scanner text is rendered as text, never as HTML @portpicker", async ({ app
 	assert.match(await picker.locator("[data-scan-error]").innerText(), /<img src=x/);
 	assert.equal(await page.evaluate(() => window.__pwn), undefined);
 });
-test("keyboard: Enter adds ports without submitting, rows toggle with Space, chips remove with Enter @portpicker", async ({ app, page }) => {
+test("keyboard: Enter adds ports without submitting, results toggle with Space, disclosures open with Enter @portpicker", async ({ app, page }) => {
 	await stubScan(page);
 	const picker = await openWizard(page, app);
 	const input = picker.locator("[data-manual-input]");
@@ -343,22 +424,39 @@ test("keyboard: Enter adds ports without submitting, rows toggle with Space, chi
 	assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("aria-label")), "Remove UDP port 53");
 	// Result rows are real checkboxes.
 	await runScan(picker);
-	const first = picker.locator("[data-scan-rows] input").first();
+	const first = picker.locator("[data-scan-confirmed] input").first();
+	assert.equal(await first.isChecked(), true, "confirmed ports start selected");
 	await first.focus();
 	await page.keyboard.press("Space");
-	assert.equal(await first.isChecked(), true);
-	await page.keyboard.press("Space");
 	assert.equal(await first.isChecked(), false);
+	await page.keyboard.press("Space");
+	assert.equal(await first.isChecked(), true);
+	// The disclosure of the other results works from the keyboard.
+	const summary = picker.locator("[data-scan-other] summary");
+	await summary.focus();
+	await page.keyboard.press("Enter");
+	assert.equal(await picker.locator("[data-scan-other]").evaluate((node) => node.open), true);
+	await page.keyboard.press("Enter");
+	assert.equal(await picker.locator("[data-scan-other]").evaluate((node) => node.open), false);
 });
+// Vertical scroll containers inside the picker, apart from the wizard step that owns scrolling.
+const nestedScrollers = () => {
+	const root = document.querySelector("[data-network-scan-picker]");
+	return [...root.querySelectorAll("*")]
+		.filter((node) => node.offsetParent !== null)
+		.filter((node) => ["auto", "scroll"].includes(getComputedStyle(node).overflowY) && node.scrollHeight > node.clientHeight + 1)
+		.map((node) => node.className || node.tagName);
+};
 for (const viewport of [{ name: "1280x720", width: 1280, height: 720 }, { name: "390x844", width: 390, height: 844 }, { name: "320x640", width: 320, height: 640 }]) {
 	for (const theme of ["light", "dark"]) {
-		test(`picker with results fits ${viewport.name} in ${theme} with usable targets @portpicker`, async ({ app, page }) => {
+		test(`picker with 16 results and many chips fits ${viewport.name} in ${theme} with one scroll region @portpicker`, async ({ app, page }) => {
 			await page.setViewportSize({ width: viewport.width, height: viewport.height });
-			await stubScan(page);
+			await stubScan(page, { poll: async () => ({ status: 200, json: completed(SIXTEEN) }) });
 			const picker = await openWizard(page, app);
 			await page.evaluate((mode) => document.documentElement.setAttribute("data-bs-theme", mode), theme);
-			await addManual(picker, "22 443 udp:53 udp:161 8080 8443");
+			await addManual(picker, Array.from({ length: 30 }, (_, index) => 1000 + index).join(" "));
 			await runScan(picker);
+			await openOthers(picker);
 			const result = await page.evaluate(() => {
 				const root = document.querySelector("[data-network-scan-picker]");
 				const rect = root.getBoundingClientRect();
@@ -367,17 +465,33 @@ for (const viewport of [{ name: "1280x720", width: 1280, height: 720 }, { name: 
 					.map((node) => ({ node: node.closest("label") || node }))
 					.map(({ node }) => ({ label: node.getAttribute("aria-label") || node.textContent.trim(), w: node.getBoundingClientRect().width, h: node.getBoundingClientRect().height }))
 					.filter((box) => box.w < 24 || box.h < 24);
-				const scroller = root.querySelector(".table-responsive");
+				const step = document.querySelector('.target-wizard-step:not([hidden])');
+				const overflowing = [...root.querySelectorAll("*")].filter((node) => node.offsetParent !== null && node.getBoundingClientRect().right > window.innerWidth + 1).map((node) => node.className || node.tagName);
 				return {
 					pageOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
 					inside: rect.left >= 0 && rect.right <= window.innerWidth + 1,
 					small,
-					tableScroll: scroller.scrollWidth > scroller.clientWidth,
+					overflowing,
+					stepScrolls: step.scrollHeight > step.clientHeight,
 				};
 			});
 			assert.equal(result.pageOverflow <= 0, true, `page overflows by ${result.pageOverflow}px`);
 			assert.equal(result.inside, true);
+			assert.deepEqual(result.overflowing, [], "nothing leaves the viewport horizontally");
 			assert.deepEqual(result.small, [], "every control is at least 24 x 24 CSS px");
+			assert.equal(result.stepScrolls, true, "the long expanded list is reached through the wizard step");
+			assert.deepEqual(await page.evaluate(nestedScrollers), [], "the results add no second vertical scroll region");
+			// Back and Continue stay reachable while the step scrolls.
+			for (const name of ["Back", "Continue"]) {
+				const box = await page.getByRole("button", { name }).boundingBox();
+				assert.ok(box && box.y >= 0 && box.y + box.height <= viewport.height + 1, `${name} stays inside the viewport`);
+			}
+			// The last result is reachable by scrolling the step only.
+			const last = picker.locator("[data-scan-other-list] li").last();
+			await last.scrollIntoViewIfNeeded();
+			const box = await last.boundingBox();
+			const actions = await page.locator(".wizard-actions").boundingBox();
+			assert.ok(box.y + box.height <= actions.y + 1, "the last result ends above the action bar");
 		});
 	}
 }
@@ -402,6 +516,7 @@ test.describe("target form", () => {
 		await page.locator("#target-network-tab").click();
 		const picker = page.locator("[data-network-scan-picker]");
 		await picker.waitFor();
+		await openDiscover(picker);
 		return picker;
 	}
 	test("edit: existing TCP and UDP ports are the starting point, scan adoption merges and the PATCH carries it @portpicker", async ({ app, page }) => {
@@ -411,8 +526,8 @@ test.describe("target form", () => {
 		assert.equal(await picker.locator('[data-scan-protocol="tcp"]').isChecked(), true);
 		assert.equal(await picker.locator('[data-scan-protocol="udp"]').isChecked(), true);
 		await runScan(picker);
-		await picker.getByRole("button", { name: "Select all confirmed open ports" }).click();
-		await picker.getByRole("button", { name: "Add selected ports" }).click();
+		assert.deepEqual(await ticked(picker), ["tcp:22", "tcp:443", "udp:53"], "the editor preselects confirmed open ports as well");
+		await picker.getByRole("button", { name: "Add selected ports (3)" }).click();
 		assert.equal(await page.locator("#tcp_ports").inputValue(), "22,443");
 		assert.equal(await page.locator("#udp_ports").inputValue(), "53,161");
 		assert.deepEqual(await page.locator("#tcp-ports-tags .tcp-port-tag").evaluateAll((tags) => tags.map((tag) => tag.firstChild.textContent)), ["22", "443"], "the TCP tag input follows the adoption");

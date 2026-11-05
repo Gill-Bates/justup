@@ -1568,11 +1568,87 @@ textarea.smtp-editor-frame {
 	}
 }
 
-/* Port picker: the select checkbox of a result row meets the target-size token (WCAG 2.5.8). */
-.ju-port-results .form-check-input {
+/* Port picker (DESIGN.md, "Port picker"): one manual input with chips, optional collapsed Nmap discovery,
+   compact results. Nothing here scrolls on its own; the page or wizard step owns the only vertical scroll. */
+.ju-port-picker .tag-input__list {
+	margin-top: 0.5rem;
+}
+
+.ju-port-discover {
+	margin-top: 0.75rem;
+	padding-top: 0.5rem;
+	border-top: 1px solid var(--bs-border-color);
+}
+
+.ju-port-discover>summary,
+.ju-port-other>summary {
+	padding-block: 0.375rem;
+	font-weight: 600;
+	cursor: pointer;
+}
+
+.ju-port-discover>summary .material-icons {
+	margin-inline-end: 0.4rem;
+	color: var(--bs-primary);
+	font-size: 1.2rem;
+	vertical-align: middle;
+}
+
+.ju-port-discover__body {
+	display: grid;
+	gap: 0.75rem;
+	padding-block: 0.5rem;
+}
+
+.ju-port-discover__options {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: flex-end;
+	gap: 0.75rem 1rem;
+}
+
+.ju-port-results {
+	display: grid;
+	gap: 0.75rem;
+	margin-top: 0.75rem;
+}
+
+.ju-port-list {
+	display: grid;
+	gap: 0.125rem;
+	margin: 0 0 0.5rem;
+	padding: 0;
+	list-style: none;
+}
+
+.ju-port-choice {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0.25rem 0.75rem;
+	min-height: var(--ui-target-min);
+	cursor: pointer;
+	overflow-wrap: anywhere;
+}
+
+.ju-port-choice .form-check-input {
+	flex: none;
 	width: var(--ui-target-min);
 	height: var(--ui-target-min);
 	margin: 0;
+}
+
+.ju-port-name {
+	font-weight: 600;
+}
+
+.ju-port-service {
+	color: var(--bs-secondary-color);
+}
+
+/* A port-table hint is a guess from the port number, so it reads differently from a detected service. */
+.ju-port-service--hint {
+	font-style: italic;
 }
 
 /* Compact badges in tables */
