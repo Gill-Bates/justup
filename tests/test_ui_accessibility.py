@@ -366,6 +366,8 @@ def test_floating_panels_use_the_shared_elevation_token_in_both_themes() -> None
     shadows = re.findall(r"box-shadow:\s*([^;]+);", notifications)
     assert "var(--ju-shadow-raised)" in shadows
     assert not [s for s in shadows if "rgb(" in s and "var(" not in s and "0 0 0 2px" not in s], shadows
+
+
 def test_port_picker_disclosures_chips_and_result_lists_have_accessible_names() -> None:
     picker = (TEMPLATES / "fragments" / "network_scan_picker.html").read_text(encoding="utf-8")
     for hook in ("data-scan-discover", "data-scan-other"):

@@ -99,9 +99,21 @@ for (const viewport of VIEWPORTS) {
 				assert.equal(info.bodyHidden, true, "the check body is collapsed");
 				// Deterministic sampling: a fixed device scale factor, the corner snapped to the device pixel grid and
 				// a clip on whole CSS pixels, so every sample sits at the same place in every run and engine.
+				// Fractional layout positions are snapped differently per engine: put the card on whole CSS pixels first.
+				await card.evaluate((el) => {
+					el.style.height = `${Math.round(el.getBoundingClientRect().height)}px`;
+					for (let i = 0; i < 4; i++) {
+						const frac = el.getBoundingClientRect().top % 1;
+						if (Math.abs(frac) < 0.01 || Math.abs(frac - 1) < 0.01) break;
+						el.style.position = "relative";
+						el.style.top = `${(parseFloat(el.style.top) || 0) + (1 - frac)}px`;
+					}
+				});
+				const aligned = await card.evaluate((el) => { const r = el.getBoundingClientRect(); return [r.top % 1, r.bottom % 1, r.left % 1].every((f) => f < 0.01 || f > 0.99); });
+				assert.ok(aligned, `the card sits on whole CSS pixels, so the corner pixels are deterministic: ${JSON.stringify(await card.evaluate((el) => el.getBoundingClientRect().toJSON()))}`);
 				const corner = await card.evaluate((el) => {
 					const dsf = devicePixelRatio, rect = el.getBoundingClientRect();
-					return { dsf, left: Math.round(rect.left * dsf) / dsf, bottom: Math.round(rect.bottom * dsf) / dsf, radius: parseFloat(getComputedStyle(el).borderBottomLeftRadius), border: parseFloat(getComputedStyle(el).borderBottomWidth) };
+					return { dsf, left: Math.round(rect.left), bottom: Math.round(rect.bottom), radius: parseFloat(getComputedStyle(el).borderBottomLeftRadius), border: parseFloat(getComputedStyle(el).borderBottomWidth) };
 				});
 				assert.equal(corner.dsf, DSF, "the device scale factor is fixed");
 				assert.ok(corner.radius > 0, "the card has a rounded frame");
@@ -135,7 +147,7 @@ for (const viewport of VIEWPORTS) {
 				// The pixels beyond the arc show the page, never the header: a square header paints over them.
 				assert.deepEqual(samples.outside.filter(isHeader), [], `a pixel outside the rounded frame has the header color ${header}: a square header paints over it`);
 				// The border arc stays visible: some pixel on the diagonal differs from the header background.
-				assert.ok(samples.arc.length > 0 && samples.arc.some((pixel) => !isHeader(pixel)), `no border pixel on the corner diagonal differs from the header background ${header}: the arc is overpainted`);
+				assert.ok(samples.arc.length > 0 && samples.arc.some((pixel) => !isHeader(pixel)), `no border pixel on the corner diagonal differs from the header background ${header}: the arc is overpainted (arc ${JSON.stringify(samples.arc)}, radius ${corner.radius})`);
 			} finally {
 				await context.close();
 			}

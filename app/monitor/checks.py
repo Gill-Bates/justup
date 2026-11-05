@@ -256,7 +256,7 @@ async def _resolve_host_via_public_dns_first_answer(
 
     async def _submit(nameserver: str, rdtype: str) -> str | None:
         async with sem:
-            return await loop.run_in_executor(_EXECUTOR, _blocking_resolve, nameserver, rdtype)
+            return await loop.run_in_executor(_DNS_EXECUTOR, _blocking_resolve, nameserver, rdtype)
 
     tasks: set[asyncio.Task[str | None]] = set()
     for ns, qtype in priority:

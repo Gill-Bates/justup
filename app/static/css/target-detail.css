@@ -8,6 +8,9 @@
 	--target-detail-gap: 1.5rem;
 	--target-detail-inner-gap: 1rem;
 	--td-radius: var(--bs-border-radius-lg);
+
+	/* Shared by the availability plot and the downtime list beside it, so both panels end on one line. */
+	--td-panel-plot-h: clamp(240px, 30vh, 340px);
 	--td-shadow: var(--ju-shadow);
 	--td-inset-bg: color-mix(in srgb, var(--bs-body-color) 4%, transparent);
 	--td-control-h: 2.5rem;
@@ -643,7 +646,7 @@ details[open]>summary .target-details-chevron {
 
 .target-availability-plot {
 	position: relative;
-	height: clamp(240px, 30vh, 340px);
+	height: var(--td-panel-plot-h);
 }
 
 .target-availability-plot[hidden] {
@@ -702,7 +705,7 @@ details[open]>summary .target-details-chevron {
 
 /* Only the list scrolls; the figures above stay in view. The cap matches the neighbouring availability plot. */
 .downtime-scroll {
-	max-height: calc(clamp(240px, 30vh, 340px) - 2.25rem);
+	max-height: calc(var(--td-panel-plot-h) - 2.25rem);
 	overflow-y: auto;
 	scrollbar-width: thin;
 }

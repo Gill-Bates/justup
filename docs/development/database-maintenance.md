@@ -104,7 +104,7 @@ take and verify a backup, stop writers, and run `VACUUM` once.
 ### Schema baseline and versioning
 
 The schema of v1.0.0 is the baseline (`PRAGMA user_version` 1). The current schema version is
-**6**. The SQLite layer is the package `app/db/sqlite/` (`from app.db import sqlite` still exposes
+**9**. The SQLite layer is the package `app/db/sqlite/` (`from app.db import sqlite` still exposes
 every function). `SCHEMA_VERSION` and `_create_baseline_schema()` live in `schema.py`
 (notification DDL in `schema_notifications.py`), the ordered `MIGRATIONS` registry,
 `check_schema_compatibility()` and `init_schema()` in `migrations.py`, and the layout comparison
@@ -118,6 +118,9 @@ behind the compatibility check in `layout.py`:
 | 4 | `3 -> 4` | `dashboard_layouts.height_mode` |
 | 5 | `4 -> 5` | `recipients.enable_for_all_targets` (existing recipients: off) |
 | 6 | `5 -> 6` | PoP candidate observations, city evidence, and explicit review metadata |
+| 7 | `6 -> 7` | `targets.enable_udp_scan`, `targets.udp_ports`, table `target_network_ports`; existing TCP ports are copied as manual rows |
+| 8 | `7 -> 8` | `target_network_ports.raw_state`, `service_identity`, `identity_changed_at`, `latency_ms` |
+| 9 | `8 -> 9` | range indexes for the alert summary and `ANALYZE alerts` (bounded sample) |
 
 A new database is created directly at the current version. A database at an older version is
 upgraded forward, step by step, on the next start. Migrations are forward-only: there is no
@@ -132,7 +135,7 @@ At start the application opens an existing database only if it is compatible:
 | State of the file | Result |
 | --- | --- |
 | No tables, `user_version` 0 (new or empty file) | created at the current version |
-| `user_version` 1–4 with a migration path | upgraded in one transaction, then opened |
+| `user_version` 1–8 with a migration path | upgraded in one transaction, then opened |
 | Current `user_version` and matching layout | opened |
 | Tables but `user_version` 0 (unversioned pre-release database) | refused (`unversioned_database`) |
 | `user_version` above the supported version | refused (`future_schema`) |

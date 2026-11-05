@@ -286,13 +286,15 @@ h6,
 }
 
 .card > :is(.card-header, .card-body, .card-footer, .ju-table-viewport):last-child,
+.card > .card-header:has(+ :is(.hidden, [hidden]):last-child),
 .x_panel > :last-child {
 	border-bottom-right-radius: var(--bs-card-inner-border-radius);
 	border-bottom-left-radius: var(--bs-card-inner-border-radius);
 }
 
-/* A header with nothing below it (collapsed card) has no divider line: the card frame closes it. */
+/* A header with nothing visible below it (collapsed card, hidden body) has no divider line: the card frame closes it. */
 .card > .card-header:last-child,
+.card > .card-header:has(+ :is(.hidden, [hidden]):last-child),
 .x_panel > .x_title:last-child {
 	border-bottom-width: 0;
 }

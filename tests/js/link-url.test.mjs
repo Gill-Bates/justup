@@ -36,3 +36,12 @@ test("script-capable schemes are refused, whatever the case or hidden characters
     assert.match(result.error, /not allowed/i);
   }
 });
+test("the template sanitiser's scheme check refuses the same schemes as the link dialog", () => {
+  const { isScriptUrl } = sandbox.JuLinkUrl;
+  for (const bad of ["javascript:alert(1)", "JAVASCRIPT:x", "java\tscript:x", "data:text/html,<b>x", "vbscript:x"]) {
+    assert.equal(isScriptUrl(bad), true, bad);
+  }
+  for (const ok of ["https://example.org", "mailto:ops@example.org", "/relative", "", null]) {
+    assert.equal(isScriptUrl(ok), false, String(ok));
+  }
+});

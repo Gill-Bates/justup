@@ -272,3 +272,29 @@ def test_deadline_does_not_mask_inner_timeout_errors():
 
     with pytest.raises(TimeoutError):
         asyncio.run(fn())
+
+
+def test_public_dns_resolver_runs_on_the_dns_executor(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+
+    names: list[tuple[str, str]] = []
+
+    class Recording(ThreadPoolExecutor):
+        def submit(self, fn, /, *args, **kwargs):
+            names.append((self._thread_name_prefix, fn.__name__))
+            return super().submit(fn, *args, **kwargs)
+
+    answer = mock.Mock(address="192.0.2.9")
+    resolver = mock.Mock()
+    resolver.resolve.return_value = [answer]
+    dns_pool, check_pool = Recording(1, thread_name_prefix="dns"), Recording(1, thread_name_prefix="chk")
+    monkeypatch.setattr(checks, "_DNS_EXECUTOR", dns_pool)
+    monkeypatch.setattr(checks, "_EXECUTOR", check_pool)
+    try:
+        with mock.patch("dns.resolver.Resolver", return_value=resolver):
+            result = asyncio.run(checks._resolve_host_via_public_dns_first_answer("dns-executor.example"))
+    finally:
+        dns_pool.shutdown()
+        check_pool.shutdown()
+    assert result == "192.0.2.9"
+    assert names and {prefix for prefix, _ in names} == {"dns"}

@@ -10,6 +10,9 @@
  */
 (function () {
 	'use strict';
+	// Single client copy of the theme cycle order and the rail storage contract; the server list stays authoritative.
+	window.JU_THEMES = ['system', 'light', 'dark'];
+	window.JuSidebarState = { KEY: 'ju-sidebar', COLLAPSED: 'collapsed' };
 
 
 	function readCssVar(name, fallback) {

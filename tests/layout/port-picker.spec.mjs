@@ -385,6 +385,50 @@ test("a stale answer never replaces a newer scan or a changed host @portpicker",
 	assert.match(await message(picker), /Host changed/);
 	assert.equal(await page.locator("#wizard-ports").inputValue(), "2222", "the ports already adopted stay in the form");
 });
+// Real visibility, not the attribute: a hidden result area has no box, and stale rows of an earlier scan or host are gone.
+async function assertNoStaleResults(picker, phase) {
+	const state = await picker.locator("[data-scan-results]").evaluate((node) => {
+		const box = node.getBoundingClientRect();
+		return { display: getComputedStyle(node).display, width: box.width, height: box.height, rows: node.querySelectorAll("input[type=checkbox]").length };
+	});
+	assert.equal(state.display, "none", `${phase}: results area is not displayed`);
+	assert.deepEqual([state.width, state.height], [0, 0], `${phase}: results area has no box`);
+	assert.equal(state.rows, 0, `${phase}: no stale result rows remain`);
+	assert.equal(await picker.locator("[data-scan-action=apply]").isVisible(), false, `${phase}: no adoption action`);
+}
+// Scan, then walk through new scan, cancel and host change; hostInput is the host field of the surrounding form.
+async function checkResultsLifecycle(page, picker, hostInput, gate) {
+	await assertNoStaleResults(picker, "before the first scan");
+	await runScan(picker);
+	assert.equal(await picker.locator("[data-scan-results]").isVisible(), true);
+	gate.close();
+	await scan(picker).click();
+	await picker.locator("[data-scan-spinner]").waitFor({ state: "visible" });
+	await assertNoStaleResults(picker, "during a new scan");
+	await picker.getByRole("button", { name: "Cancel scan" }).click();
+	await assertNoStaleResults(picker, "after cancel");
+	gate.open();
+	await page.waitForFunction(() => !document.querySelector("[data-scan-action=start]").disabled);
+	await runScan(picker);
+	await hostInput.fill("other.example.org");
+	await picker.locator("[data-scan-results]").waitFor({ state: "hidden" });
+	await assertNoStaleResults(picker, "after a host change");
+}
+function pollGate() {
+	let release = () => {};
+	let pending = Promise.resolve();
+	return {
+		wait: () => pending,
+		close: () => { pending = new Promise((resolve) => { release = resolve; }); },
+		open: () => release(),
+	};
+}
+test("results area is invisible and empty before a scan, during a new scan, after cancel and after a host change @portpicker", async ({ app, page }) => {
+	const gate = pollGate();
+	await stubScan(page, { poll: async () => { await gate.wait(); return { status: 200, json: completed() }; } });
+	const picker = await openWizard(page, app);
+	await checkResultsLifecycle(page, picker, page.locator("#wizard-address"), gate);
+});
 test("scanner text is rendered as text, never as HTML @portpicker", async ({ app, page }) => {
 	await stubScan(page, {
 		poll: async () => ({ status: 200, json: completed([
@@ -545,6 +589,13 @@ test.describe("target form", () => {
 		assert.equal(body.udp_ports, "53,161");
 		assert.equal(body.network_scan_id, SCAN_ID);
 		assert.equal(body.enable_ping, true, "ICMP is untouched");
+	});
+	test("edit: results area is invisible and empty before a scan, during a new scan, after cancel and after a host change @portpicker", async ({ app, page }) => {
+		const gate = pollGate();
+		await stubScan(page, { poll: async () => { await gate.wait(); return { status: 200, json: completed() }; } });
+		const picker = await openEdit(page, app);
+		const hostId = await picker.evaluate((root) => root.dataset.hostId);
+		await checkResultsLifecycle(page, picker, page.locator(`#${hostId}`), gate);
 	});
 	test("edit: the editor uses the same picker component as the wizard @portpicker", async ({ app, page }) => {
 		await stubScan(page);

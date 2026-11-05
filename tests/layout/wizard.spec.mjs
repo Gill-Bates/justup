@@ -403,6 +403,7 @@ test("target edit: scan button is disabled while the worker is down, manual port
 	await page.goto(`${app.base}/ui/targets/1/edit`);
 	await page.locator("#host-input").fill("mail.example.org");
 	await page.locator("#target-network-tab").click();
+	await page.locator("[data-scan-discover] > summary").click();
 	await page.locator('[data-scan-action="start"]:disabled').waitFor();
 	assert.equal(await page.locator("[data-scan-unavailable]").isVisible(), true);
 	const describedBy = await page.getByRole("button", { name: "Scan ports" }).getAttribute("aria-describedby");

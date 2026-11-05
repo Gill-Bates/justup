@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import logging
 import math
 import os
@@ -132,6 +133,12 @@ def _db_connection(db_connector: Callable, db_path: Path):
         sqlite_db.close_connection(conn)
 
 
+def _update_job_status(db_connector: Callable, db_path: Path, job_id: str, **fields) -> None:
+    """Write one job-status update on a short-lived connection (blocking; call it off the event loop)."""
+    with _db_connection(db_connector, db_path) as conn:
+        sqlite_db.update_report_job(conn, job_id, **fields)
+
+
 def _run_in_maintenance_section(generation: int, callback: Callable, *args, **kwargs):
     """Keep maintenance registered in the executor thread for its full callback lifetime."""
     with maintenance.work_section(generation):
@@ -222,7 +229,6 @@ class PDFWorker:
 
     async def run_loop(self, db_connector: Callable, *, stop_event: asyncio.Event | None = None) -> None:
         """Main worker loop that processes PDF generation jobs."""
-        from ..db import sqlite as sqlite_db
         from ..db import tsdb as tsdb_db
         from ..utils.metric_limits import choose_display_bucket_seconds, choose_points_limit
         from .pdf_report import ReportData, generate_pdf_report
@@ -256,6 +262,7 @@ class PDFWorker:
                 self.queue.task_done()  # shutting down while held back
                 continue
 
+            loop = asyncio.get_running_loop()
             try:
                 _log.info("Processing PDF job %s for target %d", _job.job_id, _job.target_id)
 
@@ -263,10 +270,13 @@ class PDFWorker:
                 if not isinstance(_job.target_dict, dict):
                     raise ValueError("target_dict must be a dict")
 
-                with _db_connection(db_connector, _job.db_path) as conn:
-                    sqlite_db.update_report_job(conn, _job.job_id, status="processing", progress=PROGRESS_PROCESSING)
+                async def _set_status(**fields) -> None:
+                    await loop.run_in_executor(
+                        self.io_executor,
+                        functools.partial(_update_job_status, db_connector, _job.db_path, _job.job_id, **fields),
+                    )
 
-                loop = asyncio.get_running_loop()
+                await _set_status(status="processing", progress=PROGRESS_PROCESSING)
 
                 # Default args bind _job now; a plain closure would see a later loop value.
                 def fetch_metrics(_j=_job) -> dict[str, list[dict]]:
@@ -381,8 +391,7 @@ class PDFWorker:
                     generation,
                     fetch_metrics,
                 )
-                with _db_connection(db_connector, _job.db_path) as conn:
-                    sqlite_db.update_report_job(conn, _job.job_id, progress=PROGRESS_METRICS_FETCHED)
+                await _set_status(progress=PROGRESS_METRICS_FETCHED)
 
                 report_data = ReportData(
                     target=_job.target_dict,
@@ -410,8 +419,7 @@ class PDFWorker:
                     _log.warning("PDF job %s timed out after 120s; render thread may still be running", _job.job_id)
                     raise RuntimeError(f"PDF generation timed out after 120s for target {_job.target_id}") from None
 
-                with _db_connection(db_connector, _job.db_path) as conn:
-                    sqlite_db.update_report_job(conn, _job.job_id, progress=PROGRESS_PDF_RENDERED)
+                await _set_status(progress=PROGRESS_PDF_RENDERED)
 
                 pdf_path = self.get_pdf_path(_job.job_id)
                 pdf_path.parent.mkdir(parents=True, exist_ok=True)
@@ -426,15 +434,7 @@ class PDFWorker:
 
                 filename = report_filename(_job.target_dict.get("name"), _job.from_date)
 
-                with _db_connection(db_connector, _job.db_path) as conn:
-                    sqlite_db.update_report_job(
-                        conn,
-                        _job.job_id,
-                        status="completed",
-                        progress=PROGRESS_DONE,
-                        filename=filename,
-                        completed=True,
-                    )
+                await _set_status(status="completed", progress=PROGRESS_DONE, filename=filename, completed=True)
 
                 _log.info("PDF job %s completed: %s (%d bytes)", _job.job_id, filename, len(pdf_bytes))
 
@@ -445,15 +445,19 @@ class PDFWorker:
                     error_msg = traceback.format_exception_only(type(e), e)
                     error_detail = "".join(error_msg).strip()[:1000]
 
-                    with _db_connection(db_connector, _job.db_path) as conn:
-                        sqlite_db.update_report_job(
-                            conn,
+                    await loop.run_in_executor(
+                        self.io_executor,
+                        functools.partial(
+                            _update_job_status,
+                            db_connector,
+                            _job.db_path,
                             _job.job_id,
                             status="failed",
                             progress=PROGRESS_DONE,  # Mark as complete even on failure
                             error=error_detail,
                             completed=True,
-                        )
+                        ),
+                    )
                 except Exception:  # noqa: BLE001 - worker-loop resilience: log and keep the loop alive on any job failure
                     # Ensure worker loop stays alive even if DB update fails
                     _log.exception("Failed to update failed status for PDF job %s", getattr(_job, "job_id", "?"))
