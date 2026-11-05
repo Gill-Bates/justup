@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from ..utils import maintenance
-from ..utils.report_metrics import parse_tcp_ports, report_filename
+from ..utils.report_metrics import collect_report_inputs, parse_tcp_ports, report_filename
 from ..utils.tcp_ports import DEFAULT_TCP_PORTS
 
 _log = logging.getLogger(__name__)

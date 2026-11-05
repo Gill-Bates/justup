@@ -3,6 +3,7 @@
 - `New` UDP monitoring: UDP ports are checked next to TCP and shown per endpoint (for example `TCP:53`, `UDP:53`). `closed` counts as down only after two confirming scans; uncertain results stay unknown.
 - `New` Port discovery with Nmap (TCP and/or UDP, Quick or Extended) in the target wizard and editor. Ports are entered once in one input with removable chips; confirmed open ports are listed first and preselected, other results stay collapsed. The wizard tile "TCP/UDP service" asks for ports on the address step.
 - `New` Traceroute runs on Nmap instead of `mtr` (up to 30 hops). Silent hops show "No reply"; the Loss, Avg, Best and Worst columns are gone.
+- `New` Traceroute recognizes internet-exchange (IXP) addresses by their PeeringDB prefix. The hop shows the exchange and, only when its facilities agree on one area, an estimated city and country; otherwise it names no location instead of a wrong one.
 - `New` Admins can re-detect the services of a target (**Detect services**). A preview lists service and version changes; nothing is stored until you confirm.
 - `New` Settings > General has a **Public hostname** field. Alert mails and Signal messages link to the target, and the "Open in justUp!" button now appears in mails.
 - `New` Settings > Recipients has a search field and a **Re-check Signal** button per recipient (limited to 5 checks per minute).

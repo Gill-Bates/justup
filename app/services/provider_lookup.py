@@ -30,7 +30,7 @@ _GEO_LABELS = {
     gr.SRC_POP: "POP-Location-DB",
     gr.SRC_IP_API_PRO: "ip-api Pro",
     gr.SRC_IPWHO: "ipwho.is",
-    gr.SRC_IXP: "PeeringDB IXP prefix",
+    gr.SRC_IXP: gr.IXP_SOURCE_LABEL,
 }
 
 

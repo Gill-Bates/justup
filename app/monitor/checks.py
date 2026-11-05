@@ -55,6 +55,7 @@ _SEMAPHORES: WeakKeyDictionary[asyncio.AbstractEventLoop, dict[str, asyncio.Sema
 # Maximum concurrent ping/tcp operations
 MAX_CONCURRENT_PINGS = 5
 MAX_CONCURRENT_TCP = 10
+MAX_CONCURRENT_TCP_PER_TARGET = 3
 MAX_CONCURRENT_DNS = 8
 
 # DNS negative cache max size (prevents unbounded memory growth)
@@ -819,9 +820,37 @@ async def cert_expiration(
         return await loop.run_in_executor(_EXECUTOR, _run)
 
 
+class ProbeHostResolution:
+    """Resolve and SSRF-check one host once; all port checks of a cycle share the pinned address.
+
+    The lookup runs as one shielded task, so a port whose deadline expires does not cancel it for the others.
+    """
+
+    def __init__(self, host: str, *, skip_ssrf_check: bool = False) -> None:
+        self._host = host
+        self._skip_ssrf_check = skip_ssrf_check
+        self._task: asyncio.Future[tuple[str | None, bool]] | None = None
+
+    async def connect_host(self) -> str | None:
+        """Validated address to connect to, or ``None`` when the host is blocked or cannot be resolved."""
+        if self._task is None:
+            self._task = asyncio.ensure_future(_resolve_probe_target(self._host, skip_ssrf_check=self._skip_ssrf_check))
+        return (await asyncio.shield(self._task))[0]
+
+    def close(self) -> None:
+        """Cancel a lookup that is still running (a hung resolver after the cycle ended)."""
+        if self._task is not None and not self._task.done():
+            self._task.cancel()
+
+
 @_with_deadline
 async def tcp_connect(
-    host: str, port: int, timeout_seconds: float = 5.0, *, skip_ssrf_check: bool = False
+    host: str,
+    port: int,
+    timeout_seconds: float = 5.0,
+    *,
+    skip_ssrf_check: bool = False,
+    resolution: ProbeHostResolution | None = None,
 ) -> CheckResult:
     """
     Check if a TCP port is open and measure connection time.
@@ -831,8 +860,12 @@ async def tcp_connect(
             port: TCP port
             timeout_seconds: Connection timeout
             skip_ssrf_check: If True, skip SSRF validation
+            resolution: Shared, already validated resolution of ``host``; resolved here when omitted
     """
-    connect_host, _ = await _resolve_probe_target(host, skip_ssrf_check=skip_ssrf_check)
+    if resolution is not None:
+        connect_host = await resolution.connect_host()
+    else:
+        connect_host, _ = await _resolve_probe_target(host, skip_ssrf_check=skip_ssrf_check)
     if connect_host is None:
         return CheckResult(ok=False, detail="blocked host")
 
@@ -852,6 +885,40 @@ async def tcp_connect(
     loop = asyncio.get_running_loop()
     async with sem:
         return await loop.run_in_executor(_EXECUTOR, _run)
+
+
+async def tcp_connect_ports(
+    host: str,
+    ports: list[int],
+    *,
+    start_delays: list[float] | None = None,
+    skip_ssrf_check: bool = False,
+) -> list[CheckResult]:
+    """Check several TCP ports of one host: one validated resolution, at most ``MAX_CONCURRENT_TCP_PER_TARGET`` at once.
+
+    Results keep the order of ``ports``; each port is measured and bounded by its own deadline.
+    ``start_delays`` staggers the connection starts (jitter) and is aligned with ``ports``.
+    """
+    resolution = ProbeHostResolution(host, skip_ssrf_check=skip_ssrf_check)
+    gate = asyncio.Semaphore(MAX_CONCURRENT_TCP_PER_TARGET)
+    delays = start_delays or [0.0] * len(ports)
+
+    async def one(port: int, delay: float) -> CheckResult:
+        if delay > 0:
+            await asyncio.sleep(delay)
+        async with gate:
+            return await tcp_connect(host, port, skip_ssrf_check=skip_ssrf_check, resolution=resolution)
+
+    try:
+        outcomes = await asyncio.gather(
+            *(one(p, d) for p, d in zip(ports, delays, strict=True)), return_exceptions=True
+        )
+    finally:
+        resolution.close()
+    for outcome in outcomes:
+        if isinstance(outcome, BaseException):
+            raise outcome
+    return list(outcomes)  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------

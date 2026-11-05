@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# app/services/ixp_import.py
+# app/services/ixp_import.py  # noqa: ERA001 - canonical file header, not code
 # Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 #
 
@@ -110,9 +110,7 @@ def _facilities(rows: Iterable[Any]) -> dict[int, tuple[str, str, float, float]]
             continue
         lat, lon = row.get("latitude"), row.get("longitude")
         city, country = _text(row.get("city"), MAX_CITY_LENGTH), _country(row.get("country"))
-        coords_ok = all(
-            isinstance(v, int | float) and not isinstance(v, bool) and math.isfinite(v) for v in (lat, lon)
-        )
+        coords_ok = all(isinstance(v, int | float) and not isinstance(v, bool) and math.isfinite(v) for v in (lat, lon))
         if fac_id in seen:
             dropped.add(fac_id)  # two active records with one id contradict each other
             continue

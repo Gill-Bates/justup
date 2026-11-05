@@ -1454,15 +1454,19 @@ class MonitorScheduler:
                         latency_count = 0
                         num_ports = len(tcp_ports)
 
-                        for i, port in enumerate(tcp_ports):
+                        # Connection starts stay staggered by the same jitter as before; the host is resolved once.
+                        start_delays: list[float] = []
+                        stagger_ms = 0
+                        for i in range(num_ports):
                             if i > 0:
-                                jitter_ms = TCP_PORT_JITTER_BASE_MS + random.randint(  # noqa: S311 - scheduling jitter, not security-sensitive
+                                stagger_ms += TCP_PORT_JITTER_BASE_MS + random.randint(  # noqa: S311 - scheduling jitter, not security-sensitive
                                     0,
                                     min(TCP_PORT_JITTER_MAX_MS, 50 * num_ports),
                                 )
-                                await asyncio.sleep(jitter_ms / 1000.0)
+                            start_delays.append(stagger_ms / 1000.0)
+                        port_results = await checks.tcp_connect_ports(t_host, tcp_ports, start_delays=start_delays)
 
-                            res = await checks.tcp_connect(t_host, port)
+                        for port, res in zip(tcp_ports, port_results, strict=True):
                             port_ok = bool(res.ok)
                             lat_ms = float(res.latency_ms) if (res and res.latency_ms is not None) else None
 

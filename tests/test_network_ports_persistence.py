@@ -495,7 +495,7 @@ def test_tcp_host_change_resets_only_tcp_observations(conn, tmp_path: Path):
     changed = client.patch(f"/targets/{tid}", json={"tcp_host": "other.example.com"})
     assert changed.status_code == 200, changed.text
     assert _names(changed) == {"tcp": None, "udp": "domain"}
-    assert sqlite_db.get_target_status(conn, tid)["overall_status"] == "down"
+    assert sqlite_db.get_target_status(conn, tid) is None
 
 
 def _stub_job(monkeypatch, *, host: str, result: NmapScanResult | None, owner_ok: bool = True):

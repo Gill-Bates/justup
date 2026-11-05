@@ -45,6 +45,8 @@ def conn(monkeypatch) -> sqlite3.Connection:
         yield c
 
     monkeypatch.setattr(pop_refresh, "_db_connection", _same)
+    # These tests cover POP city evidence; the IXP snapshot has its own tests (test_ixp_geolocation.py).
+    monkeypatch.setattr(pop_refresh, "_fetch_ixp_snapshot", lambda facilities: None)
     return c
 
 

@@ -402,12 +402,13 @@ def test_model_and_geo_points_agree_destination_reached(monkeypatch: pytest.Monk
 def test_location_view_names_a_city_only_for_the_candidate_that_owns_the_position() -> None:
     view = traceroute_geo.location_view
     precise = {"lat": 50.1, "lon": 8.7, "city": "Frankfurt", "country": "DE", "accuracy_class": "precise"}
-    assert view(precise) == {"city": "Frankfurt", "country": "DE", "precision": "precise"}
+    assert view(precise) == {"city": "Frankfurt", "country": "DE", "precision": "precise", "ixp": None}
     # ``city`` is a text-only upgrade from another source: the position's own place is unknown.
     upgraded = {"lat": 50.6, "lon": 9.2, "city": "Kettenhausen", "country": "DE", "accuracy_class": "approximate"}
-    assert view({**upgraded, "position_city": None}) == {"city": None, "country": "DE", "precision": "country"}
+    country_only = {"city": None, "country": "DE", "precision": "country", "ixp": None}
+    assert view({**upgraded, "position_city": None}) == country_only
     assert view({**upgraded, "position_city": "Fulda"})["precision"] == "approximate"
-    assert view(None) == {"city": None, "country": None, "precision": "none"}
+    assert view(None) == {"city": None, "country": None, "precision": "none", "ixp": None}
 
 
 # --- Map chain: every located hop is a node; estimated ends and unknown stretches are dashed---

@@ -292,9 +292,137 @@ def test_public_dns_resolver_runs_on_the_dns_executor(monkeypatch):
     monkeypatch.setattr(checks, "_EXECUTOR", check_pool)
     try:
         with mock.patch("dns.resolver.Resolver", return_value=resolver):
-            result = asyncio.run(checks._resolve_host_via_public_dns_first_answer("dns-executor.example"))
+            result = asyncio.run(
+                checks._resolve_host_via_public_dns_first_answer("dns-executor.example")  # noqa: SLF001 - executor boundary under test
+            )
     finally:
         dns_pool.shutdown()
         check_pool.shutdown()
     assert result == "192.0.2.9"
     assert names and {prefix for prefix, _ in names} == {"dns"}
+
+
+# ── TCP ports of one target: one validated resolution, bounded parallel connects ──
+
+
+def _stub_resolution(monkeypatch, answer: str | None, counter: list[str]):
+    async def first_answer(host, **_kwargs):
+        counter.append(host)
+        return answer
+
+    async def not_blocked(_host):
+        return False
+
+    monkeypatch.setattr(checks, "_resolve_host_via_public_dns_first_answer", first_answer)
+    monkeypatch.setattr(checks, "_is_host_blocked_async", not_blocked)
+
+
+def test_tcp_ports_resolve_once_and_connect_to_the_pinned_ip(monkeypatch):
+    import time
+
+    lookups: list[str] = []
+    _stub_resolution(monkeypatch, "203.0.113.7", lookups)
+    seen: list[tuple[str, int]] = []
+
+    def fake_connect(address, **_kwargs):
+        seen.append(address)
+        time.sleep(0.02 * (address[1] % 10))  # distinct per-port latency
+        return contextlib.nullcontext()
+
+    monkeypatch.setattr(checks.socket, "create_connection", fake_connect)
+    ports = [1, 2, 3, 4, 5]
+    results = asyncio.run(checks.tcp_connect_ports("mon.example", ports))
+
+    assert lookups == ["mon.example"]  # one lookup for five ports
+    assert sorted(seen) == [("203.0.113.7", p) for p in ports]  # nothing re-resolves after the check
+    assert all(r.ok for r in results)
+    latencies = [r.latency_ms for r in results]
+    assert latencies == sorted(latencies) and latencies[-1] - latencies[0] > 50  # measured per port, in port order
+
+
+@pytest.mark.parametrize("answer", ["127.0.0.1", "::1", "169.254.169.254"])
+def test_tcp_ports_of_a_blocked_resolution_are_all_blocked_without_connecting(monkeypatch, answer):
+    lookups: list[str] = []
+    _stub_resolution(monkeypatch, answer, lookups)
+    connect = mock.Mock()
+    monkeypatch.setattr(checks.socket, "create_connection", connect)
+
+    results = asyncio.run(checks.tcp_connect_ports("rebind.example", [22, 80, 443]))
+
+    assert [r.detail for r in results] == ["blocked host"] * 3 and not any(r.ok for r in results)
+    assert lookups == ["rebind.example"] and not connect.called
+
+
+def test_tcp_ports_with_unvalidated_fallback_answer_are_blocked(monkeypatch):
+    lookups: list[str] = []
+    _stub_resolution(monkeypatch, None, lookups)  # public DNS has no answer: the pinned fallback decides
+    monkeypatch.setattr(checks, "resolve_validated", lambda *_a, **_k: None)  # mixed records with a blocked address
+    connect = mock.Mock()
+    monkeypatch.setattr(checks.socket, "create_connection", connect)
+
+    results = asyncio.run(checks.tcp_connect_ports("mixed.example", [22, 80]))
+
+    assert [r.detail for r in results] == ["blocked host"] * 2 and not connect.called
+
+
+def test_tcp_ports_run_at_most_three_at_once_and_a_hanging_port_only_costs_its_own_deadline(monkeypatch):
+    import threading
+    import time
+
+    _stub_resolution(monkeypatch, "203.0.113.7", [])
+    monkeypatch.setattr(checks, "CHECK_DEADLINE_FACTOR", 0.0)
+    monkeypatch.setattr(checks, "CHECK_DEADLINE_MARGIN_SECONDS", 0.4)
+    release = threading.Event()
+    active = peak = 0
+    guard = threading.Lock()
+
+    def fake_connect(address, **_kwargs):
+        nonlocal active, peak
+        with guard:
+            active += 1
+            peak = max(peak, active)
+        try:
+            if address[1] == 1:
+                release.wait(5)  # hangs past the per-check deadline
+            else:
+                time.sleep(0.1)
+        finally:
+            with guard:
+                active -= 1
+        return contextlib.nullcontext()
+
+    monkeypatch.setattr(checks.socket, "create_connection", fake_connect)
+    started = time.monotonic()
+    try:
+        results = asyncio.run(checks.tcp_connect_ports("mon.example", [1, 2, 3, 4, 5, 6]))
+    finally:
+        release.set()
+
+    assert time.monotonic() - started < 2.0  # the hanging port is cut at its own deadline, not waited for
+    assert [r.ok for r in results] == [False, True, True, True, True, True]
+    assert results[0].detail == "timeout"
+    assert peak <= checks.MAX_CONCURRENT_TCP_PER_TARGET == 3
+
+
+def test_tcp_ports_hung_resolver_times_out_every_port_with_one_lookup(monkeypatch):
+    import time
+
+    lookups: list[str] = []
+
+    async def hung(host, **_kwargs):
+        lookups.append(host)
+        await asyncio.sleep(30)
+
+    async def not_blocked(_host):
+        return False
+
+    monkeypatch.setattr(checks, "_resolve_host_via_public_dns_first_answer", hung)
+    monkeypatch.setattr(checks, "_is_host_blocked_async", not_blocked)
+    monkeypatch.setattr(checks, "CHECK_DEADLINE_FACTOR", 0.0)
+    monkeypatch.setattr(checks, "CHECK_DEADLINE_MARGIN_SECONDS", 0.3)
+
+    started = time.monotonic()
+    results = asyncio.run(checks.tcp_connect_ports("slow.example", [1, 2, 3]))
+
+    assert time.monotonic() - started < 3
+    assert [r.detail for r in results] == ["timeout"] * 3 and lookups == ["slow.example"]

@@ -30,7 +30,7 @@ from ..services.pdf_worker import (
 from ..utils.constants import VALID_PDF_PAGE_SIZES
 from ..utils.deps import get_conn, get_tsdb_dir
 from ..utils.rate_limit import RATE_LIMIT_PDF, rate_limit
-from ..utils.report_metrics import fetch_metric_data, report_filename
+from ..utils.report_metrics import collect_report_inputs, fetch_metric_data, report_filename
 from ..utils.time import parse_utc, utcnow
 from .auth import get_current_user
 

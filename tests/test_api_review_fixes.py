@@ -234,7 +234,7 @@ def test_report_pdf_tsdb_access_runs_off_event_loop(conn, monkeypatch):
         time.sleep(0.01)
         return []
 
-    monkeypatch.setattr(reports.tsdb_db, "query_auto_resolution", fake_query)
+    monkeypatch.setattr(report_metrics.tsdb_db, "query_auto_resolution", fake_query)
     monkeypatch.setattr(reports, "generate_pdf_report", lambda *_a, **_k: b"%PDF-1.4")
     client = _client(conn, reports.router, user=_mk_user(conn, "u", admin=False))
     resp = client.get(

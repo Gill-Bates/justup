@@ -406,12 +406,11 @@ class PopRefreshResult:
 # PeeringDB refresh
 # ---------------------------------------------------------------------------
 
-PEERINGDB_FAC_URL = "https://api.peeringdb.com/api/fac"
 PEERINGDB_API = "https://api.peeringdb.com/api"
 IXP_TABLES = ("ix", "ixlan", "ixpfx", "ixfac")
-IXP_PAGE_SIZE = 2000
-IXP_MAX_PAGES = 50  # per table; a table that never ends is a broken or hostile response
-IXP_MAX_ROWS = 100_000
+PEERINGDB_PAGE_SIZE = 2000
+PEERINGDB_MAX_PAGES = 50  # per table; a table that never ends is a broken or hostile response
+PEERINGDB_MAX_ROWS = 100_000
 # Batch size for DB operations (performance optimization)
 
 # ---------------------------------------------------------------------------
@@ -613,11 +612,16 @@ def _group_facilities(
 
 
 def _fetch_peeringdb_table(table: str) -> list[dict]:
-    """Fetch every page of one PeeringDB table; any malformed, repeated or endless page raises."""
+    """Fetch every page of one PeeringDB table (``fac`` included); a malformed, repeated or endless page raises.
+
+    A response without a ``data`` list is never read as an empty table: a partial table would make the
+    caller trust incomplete evidence.
+    """
     rows: list[dict] = []
     first_ids: set[object] = set()
-    for page in range(IXP_MAX_PAGES):
-        payload = _fetch_with_retry(f"{PEERINGDB_API}/{table}?limit={IXP_PAGE_SIZE}&skip={page * IXP_PAGE_SIZE}")
+    for page in range(PEERINGDB_MAX_PAGES):
+        skip = page * PEERINGDB_PAGE_SIZE
+        payload = _fetch_with_retry(f"{PEERINGDB_API}/{table}?limit={PEERINGDB_PAGE_SIZE}&skip={skip}")
         data = payload.get("data") if isinstance(payload, dict) else None
         if not isinstance(data, list):
             raise RuntimeError(f"PeeringDB {table} response is malformed (no data list)")
@@ -626,15 +630,17 @@ def _fetch_peeringdb_table(table: str) -> list[dict]:
             raise RuntimeError(f"PeeringDB {table} pagination repeats rows (limit/skip ignored)")
         first_ids.add(marker)
         rows.extend(data)
-        if len(rows) > IXP_MAX_ROWS:
-            raise RuntimeError(f"PeeringDB {table} exceeds {IXP_MAX_ROWS} rows")
-        if len(data) < IXP_PAGE_SIZE:
+        if len(rows) > PEERINGDB_MAX_ROWS:
+            raise RuntimeError(f"PeeringDB {table} exceeds {PEERINGDB_MAX_ROWS} rows")
+        if len(data) < PEERINGDB_PAGE_SIZE:
             return rows
-    raise RuntimeError(f"PeeringDB {table} exceeds {IXP_MAX_PAGES} pages")
+    raise RuntimeError(f"PeeringDB {table} exceeds {PEERINGDB_MAX_PAGES} pages")
 
 
 def _fetch_ixp_snapshot(facilities: list[dict]) -> ixp_import.IxpBuildResult:
     """Download and validate everything first; the database is only touched with a complete result."""
+    if not facilities:
+        raise RuntimeError("PeeringDB fac table is empty; exchange regions cannot be evidenced")
     tables = {name: _fetch_peeringdb_table(name) for name in IXP_TABLES}
     result = ixp_import.build_snapshot(tables["ix"], tables["ixlan"], tables["ixpfx"], tables["ixfac"], facilities)
     ixp_prefixes.check_plausible(result.snapshot, 0)
@@ -645,8 +651,8 @@ def refresh_from_peeringdb(get_conn) -> PopRefreshResult:
     """
     Refresh POP locations from PeeringDB API.
 
-    Fetches PeeringDB facility locations (data centers, POPs); IX records are not fetched.
-    Uses locking to prevent parallel runs.
+    Fetches PeeringDB facility locations (data centers, POPs) as city evidence, plus the ix, ixlan,
+    ixpfx and ixfac tables for the IXP prefix snapshot. Uses locking to prevent parallel runs.
 
     Args:
         get_conn: Connection factory callable
@@ -675,8 +681,7 @@ def _do_peeringdb_refresh(get_conn) -> PopRefreshResult:
     generation = maintenance.current_generation()
     try:
         _log.info("Fetching PeeringDB facilities...")
-        fac_data = _fetch_with_retry(PEERINGDB_FAC_URL)
-        facilities = fac_data.get("data", [])
+        facilities = _fetch_peeringdb_table("fac")
     except Exception as e:  # noqa: BLE001 - source-fetch boundary; never write POP data after a failed fetch
         error_msg = f"[network][phase=fetch_facilities] {e}"
         _log.error("PeeringDB refresh failed during fetch: %s", e)
@@ -694,7 +699,8 @@ def _do_peeringdb_refresh(get_conn) -> PopRefreshResult:
         _log.info("Fetching PeeringDB IXP prefixes...")
         ixp_result = _fetch_ixp_snapshot(facilities)
     except Exception as e:  # noqa: BLE001 - source-fetch boundary; the active IXP snapshot must survive
-        category = ErrorCategory.VALIDATION if isinstance(e, ixp_prefixes.IxpSnapshotRejected) else ErrorCategory.NETWORK
+        rejected = isinstance(e, ixp_prefixes.IxpSnapshotRejectedError)
+        category = ErrorCategory.VALIDATION if rejected else ErrorCategory.NETWORK
         ixp_error = f"[{category}][phase=fetch_ixp] {e}"
         _log.error("PeeringDB IXP fetch failed; keeping the active IXP snapshot: %s", e)
 
@@ -879,7 +885,7 @@ def _apply_peeringdb_snapshot(
         try:
             with _db_connection(get_conn) as conn:
                 stats = ixp_prefixes.replace_snapshot(conn, ixp_result.snapshot, run_id)
-                # Only committed data may replace the runtime index; a failed import never reaches this.
+                # replace_snapshot() has COMMITted by now; a failed or rolled-back import raises before this.
                 ixp_index.reload_from_connection(conn)
             processed += stats.prefixes
             inserted += stats.inserted
@@ -890,7 +896,7 @@ def _apply_peeringdb_snapshot(
         except Exception as e:  # noqa: BLE001 - the transaction rolled back, so the previous snapshot is still active
             category = (
                 ErrorCategory.VALIDATION
-                if isinstance(e, ixp_prefixes.IxpSnapshotRejected)
+                if isinstance(e, ixp_prefixes.IxpSnapshotRejectedError)
                 else ErrorCategory.DATABASE
             )
             ixp_msg = f"[{category}][phase=apply_ixp] {e}"

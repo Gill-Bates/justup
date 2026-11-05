@@ -7,7 +7,8 @@
 """Persistence of the IXP peering-LAN prefix snapshot (ixp_exchanges, ixp_prefixes, ixp_snapshot).
 
 A snapshot replaces the previous one in ONE transaction: a failure rolls everything back, so the last
-complete snapshot stays active. Prefixes are not POP aliases; they prove IXP membership only.
+complete snapshot stays active. ``replace_snapshot`` COMMITs itself before it returns, so callers may
+publish derived in-memory state right after it. Prefixes are not POP aliases; they prove IXP membership only.
 """
 
 from __future__ import annotations
@@ -69,7 +70,7 @@ class IxpApplyStats:
     details: dict[str, int] = field(default_factory=dict)
 
 
-class IxpSnapshotRejected(ValueError):
+class IxpSnapshotRejectedError(ValueError):
     """The snapshot is implausible (empty, oversized or shrunk too far); the active one is kept."""
 
 
@@ -96,30 +97,55 @@ def snapshot_status(conn: sqlite3.Connection) -> dict | None:
     }
 
 
-def check_plausible(snapshot: IxpSnapshot, previous_prefix_count: int) -> None:
-    """Reject an empty, oversized or abruptly shrunk snapshot before it touches the database."""
+def located_exchange_count(snapshot: IxpSnapshot) -> int:
+    """Exchanges whose region is evidenced by facilities; the rest only prove prefix membership."""
+    return sum(1 for e in snapshot.exchanges if e.location_class == LOC_METRO)
+
+
+def _stored_located_count(conn: sqlite3.Connection) -> int:
+    return conn.execute("SELECT COUNT(*) FROM ixp_exchanges WHERE location_class = ?", (LOC_METRO,)).fetchone()[0]
+
+
+def check_plausible(snapshot: IxpSnapshot, previous_prefix_count: int, previous_located_count: int = 0) -> None:
+    """Reject an empty, oversized, abruptly shrunk or geographically incomplete snapshot.
+
+    The facility evidence is the only source of exchange regions. A snapshot that lost it would turn
+    every known exchange location into "unknown", so it must not replace a complete one.
+    """
     count = len(snapshot.prefixes)
     if count == 0:
-        raise IxpSnapshotRejected("snapshot contains no valid IXP prefix")
+        raise IxpSnapshotRejectedError("snapshot contains no valid IXP prefix")
     if count > MAX_IXP_PREFIXES or len(snapshot.exchanges) > MAX_IXP_EXCHANGES:
-        raise IxpSnapshotRejected(f"snapshot exceeds the size limits ({count} prefixes)")
+        raise IxpSnapshotRejectedError(f"snapshot exceeds the size limits ({count} prefixes)")
     if previous_prefix_count >= MIN_PREVIOUS_FOR_SHRINK_GUARD and count < previous_prefix_count * MIN_RETAINED_FRACTION:
-        raise IxpSnapshotRejected(
+        raise IxpSnapshotRejectedError(
             f"snapshot shrank from {previous_prefix_count} to {count} prefixes; treated as incomplete"
+        )
+    located = located_exchange_count(snapshot)
+    if located == 0:
+        raise IxpSnapshotRejectedError("snapshot evidences no exchange region; facility data treated as incomplete")
+    if (
+        previous_located_count >= MIN_PREVIOUS_FOR_SHRINK_GUARD
+        and located < previous_located_count * MIN_RETAINED_FRACTION
+    ):
+        raise IxpSnapshotRejectedError(
+            f"exchange regions shrank from {previous_located_count} to {located}; facility data treated as incomplete"
         )
 
 
 def replace_snapshot(conn: sqlite3.Connection, snapshot: IxpSnapshot, run_id: str) -> IxpApplyStats:
     """Atomically make *snapshot* the active one; any error rolls back and keeps the previous snapshot."""
     previous = snapshot_status(conn)
-    check_plausible(snapshot, previous["prefix_count"] if previous else 0)
+    check_plausible(snapshot, previous["prefix_count"] if previous else 0, _stored_located_count(conn))
     now = utcnow().isoformat()
     stats = IxpApplyStats(exchanges=len(snapshot.exchanges), prefixes=len(snapshot.prefixes))
     if conn.in_transaction:
         conn.commit()
     conn.execute("BEGIN IMMEDIATE")
     try:
-        old_prefixes = {row[0]: (row[1], row[2]) for row in conn.execute("SELECT prefix, ix_id, ixlan_id FROM ixp_prefixes")}
+        old_prefixes = {
+            row[0]: (row[1], row[2]) for row in conn.execute("SELECT prefix, ix_id, ixlan_id FROM ixp_prefixes")
+        }
         new_prefixes = {p.prefix: p for p in snapshot.prefixes}
         for gone in sorted(set(old_prefixes) - set(new_prefixes)):
             conn.execute("DELETE FROM ixp_prefixes WHERE prefix = ?", (gone,))
@@ -159,7 +185,10 @@ def replace_snapshot(conn: sqlite3.Connection, snapshot: IxpSnapshot, run_id: st
                     ip_version = excluded.ip_version, prefix_length = excluded.prefix_length,
                     ix_id = excluded.ix_id, ixlan_id = excluded.ixlan_id,
                     import_run_id = excluded.import_run_id, updated_at = excluded.updated_at""",
-                (prefix, item.ip_version, item.prefix_length, item.ix_id, item.ixlan_id, SOURCE_PEERINGDB_IXP, run_id, now),
+                (
+                    prefix, item.ip_version, item.prefix_length, item.ix_id, item.ixlan_id,
+                    SOURCE_PEERINGDB_IXP, run_id, now,
+                ),
             )  # fmt: skip
             if existed is None:
                 stats.inserted += 1

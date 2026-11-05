@@ -653,8 +653,8 @@ def geolocate_with_hostname_hint(
     if chosen is None:
         if decision.ixp is None:
             return None
-        # IXP membership without an evidenced position: the table may name the exchange (and a
-        # country only when the sources agree on one), the map gets nothing to plot.
+        # IXP membership without an evidenced position: the table may name the exchange. ``country`` is
+        # the facility-evidenced one (None for a multi-country exchange), never the exchange's admin seat.
         return {
             "lat": None,
             "lon": None,
@@ -708,7 +708,7 @@ MAP_ROLE_ESTIMATE = "estimate"  # approximate position: a chain node drawn hollo
 MAP_ROLE_NONE = "none"  # nothing to draw (no usable position)
 
 _SOURCE_LABEL = {
-    CONFIDENCE_IXP: "PeeringDB IXP prefix",
+    CONFIDENCE_IXP: gr.IXP_SOURCE_LABEL,
     CONFIDENCE_GEOIP: "GeoIP",
     CONFIDENCE_HOSTNAME: "hostname hint",
     CONFIDENCE_ONLINE: "online lookup",

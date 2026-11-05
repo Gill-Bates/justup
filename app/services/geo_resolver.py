@@ -6,13 +6,18 @@
 
 """Pure, deterministic selection of the best-evidenced location for one IP.
 
-No I/O here: callers collect candidates (GeoLite2, POP/hostname, ip-api Pro, ipwho.is),
-this module validates, ranks and explains. Best available evidence wins; GeoLite2 wins
+No I/O here: callers collect candidates (GeoLite2, POP/hostname, ip-api Pro, ipwho.is) and, for an
+address inside an IXP peering LAN, the verified ``IxpEvidence`` (PeeringDB prefix); this module validates,
+ranks and explains. Best available evidence wins; GeoLite2 wins
 ties; contradictory precise claims are downgraded to approximate instead of guessed.
 
 Online sources have no evidenced accuracy, so they never replace a local (GeoLite2 or POP)
 position. They are only queried when the local result is not good enough
 (``needs_online_fallback``) and may then improve the place NAME of a coarse local result.
+
+An IXP peering-LAN address is decided by ``IxpEvidence`` first: a verified POP still wins, otherwise the
+exchange region is an approximate estimate, and without an evidenced region no position and no GeoIP or
+online country is used (``_select_for_ixp``).
 """
 
 from __future__ import annotations
@@ -26,6 +31,7 @@ SRC_POP = "pop"
 SRC_IP_API_PRO = "ip-api-pro"
 SRC_IPWHO = "ipwho.is"
 SRC_IXP = "ixp"  # PeeringDB IXP prefix membership; its region is an estimate, never a router position
+IXP_SOURCE_LABEL = "PeeringDB IXP prefix"  # the one display name of SRC_IXP (table, map, PDF, provider lookup)
 
 # Tie-breaker only (lower index wins); the quality key decides first.
 SOURCE_PRIORITY = (SRC_GEOLITE2, SRC_POP, SRC_IP_API_PRO, SRC_IPWHO, SRC_IXP)
@@ -79,7 +85,9 @@ class IxpEvidence:
     """Verified membership of an address in an IXP peering LAN plus what is evidenced about the region.
 
     Membership is certain; the region is the exchange's, not the answering router's. Without
-    ``location_class == "metro"`` there is no position (``country`` may still be evidenced).
+    ``location_class == "metro"`` there is no position. ``city`` and ``country`` come from the facility
+    evidence (``ref_*``), never from the administrative seat of the ``ix`` record; ``country`` is set
+    only when the facilities lie in one country, so a multi-country exchange carries none.
     """
 
     ix_id: int
@@ -303,9 +311,7 @@ def _text_upgrade(winner: GeoCandidate, ranked: Sequence[GeoCandidate]) -> GeoCa
     return None
 
 
-def _select_for_ixp(
-    candidates: list[GeoCandidate], considered: Sequence[str], ixp: IxpEvidence
-) -> GeoDecision:
+def _select_for_ixp(candidates: list[GeoCandidate], considered: Sequence[str], ixp: IxpEvidence) -> GeoDecision:
     """Decision for an address inside an IXP peering LAN.
 
     Prefix membership is evidence of its own. An evidenced exchange region beats ordinary GeoIP, which
@@ -340,7 +346,11 @@ def _select_for_ixp(
     noted = tuple(
         f"{c.source} location {format_place(c.city, c.country_code) or 'unknown'} not used: "
         f"address belongs to IXP {ixp.name}"
-        + (f" ({distance_km(c, region):.0f} km from its region)" if region is not None and c.latitude is not None else "")
+        + (
+            f" ({distance_km(c, region):.0f} km from its region)"
+            if region is not None and c.latitude is not None
+            else ""
+        )
         for c in ignored
     )
     if region is None:

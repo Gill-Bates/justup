@@ -13,6 +13,7 @@ import json
 import sqlite3
 import tarfile
 import threading
+from collections.abc import Iterable
 from datetime import timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -139,7 +140,8 @@ def _good(
     return _tar(path, _entries(db, manifest_bytes))
 
 
-def test_full_digest_is_signed_and_verified(self, tmp_path: Path):
+class TestFilenameAndHmac:
+    def test_full_digest_is_signed_and_verified(self, tmp_path: Path):
         archive = _good(tmp_path / "a.tar.bz2")
         digest = backup_mod.compute_backup_hmac(archive)
         assert len(digest) == 64

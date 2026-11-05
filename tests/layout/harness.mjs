@@ -1533,7 +1533,7 @@ async function auditSelfTest(browser) {
 			<div class="card" id="availability-card"><div class="card-body"><div class="target-availability-plot"><canvas id="chart-uptime"></canvas></div></div></div>
 			<div id="downtime-history-card"><div class="card-body"><div class="target-empty-state"></div></div></div>
 			<div data-widget-id="delivery-queue"><div class="dashboard-monitor-body" style="height:10px;overflow-y:auto"><div style="height:40px"></div></div></div>
-			<div id="ghost-bar" style="width:100px;height:40px;overflow-x:auto"><div style="width:200px;height:44px"></div></div>
+			<div id="ghost-bar" style="width:100px;height:40px;overflow-x:auto"><div style="width:80px;height:44px"></div></div>
 			<div class="ju-notif-swipe-item is-dismiss-revealed"><div class="ju-notif-swipe-content"></div><div class="ju-notif-dismiss-action"></div></div>
 		</main>`);
 		await page.evaluate(() => {

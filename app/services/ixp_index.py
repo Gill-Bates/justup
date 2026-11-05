@@ -8,7 +8,9 @@
 
 Lookups never touch the network and never scan the table: one dict probe per distinct prefix length.
 The index is an immutable object swapped atomically, so parallel traceroutes read a consistent
-snapshot while a refresh replaces it. A failed (re)load keeps the active index.
+snapshot while a refresh replaces it. A failed (re)load keeps the active index. Every loader takes a
+request token before it reads the database and may install its result only while that token is
+current, so an older loader can never overwrite a newer index.
 """
 
 from __future__ import annotations
@@ -63,9 +65,7 @@ class IxpIndex:
             slot[int(network.network_address)] = evidence
             count += 1
         self._by_len = by_len
-        self._lengths = {
-            v: sorted((plen for (ver, plen) in by_len if ver == v), reverse=True) for v in (4, 6)
-        }
+        self._lengths = {v: sorted((plen for (ver, plen) in by_len if ver == v), reverse=True) for v in (4, 6)}
         self.exchange_count = len(by_ix)
         self.prefix_count = count
 
@@ -83,7 +83,8 @@ class IxpIndex:
 _lock = threading.Lock()  # guards swaps and the load state, never held during a DB read
 _load_lock = threading.Lock()  # one loader at a time
 _index: IxpIndex | None = None
-_generation = 0
+_generation = 0  # replaced-index counter (public, see current_generation)
+_request_gen = 0  # bumped by every invalidation, explicit reload and install; a loader's token
 _dirty = True  # True until a load succeeded or after an invalidation
 _last_failure = float("-inf")
 
@@ -93,19 +94,47 @@ def current_generation() -> int:
     return _generation
 
 
-def install(index: IxpIndex | None) -> None:
-    """Make *index* the active one (None = no IXP data) and mark it current."""
+def _swap(index: IxpIndex | None) -> None:
     global _index, _generation, _dirty
+    _index = index
+    _generation += 1
+    _dirty = False
+
+
+def install(index: IxpIndex | None) -> None:
+    """Make *index* the active one (None = no IXP data) and mark it current.
+
+    Loaders that began earlier hold an older token and discard their result.
+    """
+    global _request_gen
     with _lock:
-        _index = index
-        _generation += 1
-        _dirty = False
+        _request_gen += 1
+        _swap(index)
+
+
+def _begin_load(*, explicit: bool) -> int:
+    """Token for one load; an explicit reload also outdates every loader that is already running."""
+    global _request_gen
+    with _lock:
+        if explicit:
+            _request_gen += 1
+        return _request_gen
+
+
+def _install_if_current(index: IxpIndex, token: int) -> bool:
+    """Install *index* unless an invalidation, explicit reload or install happened since *token*."""
+    with _lock:
+        if token != _request_gen:
+            return False
+        _swap(index)
+        return True
 
 
 def invalidate() -> None:
     """Request a reload from the database at the next lookup; the active index keeps serving meanwhile."""
-    global _dirty, _last_failure
+    global _dirty, _last_failure, _request_gen
     with _lock:
+        _request_gen += 1  # a loader that read before this point must not install its (older) data
         _dirty = True
         _last_failure = float("-inf")
 
@@ -116,15 +145,19 @@ def load_from_connection(conn) -> IxpIndex:
 
 
 def reload_from_connection(conn) -> bool:
-    """Rebuild the index from committed data. On failure the active index stays and a lazy retry is queued."""
+    """Rebuild the index from data the caller has already committed.
+
+    On failure the active index stays and a lazy retry is queued. Returns False as well when a newer
+    reload or invalidation superseded this one; the newer state then wins.
+    """
+    token = _begin_load(explicit=True)
     try:
         index = load_from_connection(conn)
     except Exception:  # noqa: BLE001 - a reload problem must never break lookups or the import result
         _log.warning("IXP index reload failed; keeping the active index", exc_info=True)
         invalidate()
         return False
-    install(index)
-    return True
+    return _install_if_current(index, token)
 
 
 def _lazy_load() -> None:
@@ -137,6 +170,7 @@ def _lazy_load() -> None:
     try:
         from .pop_codes import open_pop_connection
 
+        token = _begin_load(explicit=False)
         conn = open_pop_connection()
         if conn is None:
             return  # no database wired (unit tests, early startup): no IXP data, no retry storm
@@ -144,7 +178,8 @@ def _lazy_load() -> None:
             index = load_from_connection(conn)
         finally:
             sqlite_db.close_connection(conn)
-        install(index)
+        if not _install_if_current(index, token):
+            _log.debug("IXP index load superseded by a newer reload; result discarded")
     except Exception:  # noqa: BLE001 - lookups degrade to "no IXP data"
         _last_failure = time.monotonic()
         _log.warning("IXP index load failed; retrying in %.0f s", LOAD_RETRY_SECONDS, exc_info=True)
@@ -169,6 +204,7 @@ def lookup(ip: str) -> gr.IxpEvidence | None:
 
 
 def reset_for_tests() -> None:
-    global _index, _generation, _dirty, _last_failure
+    global _index, _generation, _dirty, _last_failure, _request_gen
     with _lock:
         _index, _generation, _dirty, _last_failure = None, _generation + 1, True, float("-inf")
+        _request_gen += 1

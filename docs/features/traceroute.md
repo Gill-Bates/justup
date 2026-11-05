@@ -165,6 +165,15 @@ only a fallback (see [Online fallback](#online-fallback)). Sources:
 - **GeoLite2-City** (offline). Without the database, traceroute still works, but
   such hops stay off the map. A GeoLite2 point is plotted only when its accuracy
   radius is at most 25 km; otherwise the location stays approximate.
+- **PeeringDB IXP prefixes** (offline, refreshed with the PeeringDB data). A hop
+  inside the peering LAN of an internet exchange is recognized by its prefix and
+  never asks online services. A verified POP still gives the router position. Without
+  one, the exchange region from its facilities is shown as an estimate (city and
+  country, marked "PeeringDB IXP prefix", never a router position). When the
+  facilities do not agree on one area, the hop names the exchange but shows no city,
+  and a country only when all facilities lie in one country; the administrative
+  country of the exchange record is never used. A refresh whose facility data is
+  incomplete does not replace the last complete snapshot.
 - **ipwho.is** and, with a key, **ip-api Pro** (online fallback only). Their
   coordinates have no published accuracy and are never plotted as precise points.
 
