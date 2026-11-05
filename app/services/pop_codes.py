@@ -210,7 +210,7 @@ def lookup_pop_code(hostname: str, conn: sqlite3.Connection | None = None) -> Lo
 
     h = hostname.lower()
 
-    # ── Strategy 0: Provider-specific parser (highest confidence) ──
+    # Strategy 0: Provider-specific parser (highest confidence)
     from .pop_codes_providers import clli_city, parse_provider_hostname
 
     provider_result = parse_provider_hostname(h)
@@ -256,7 +256,7 @@ def lookup_pop_code(hostname: str, conn: sqlite3.Connection | None = None) -> Lo
             if owns_db and db is not None:
                 sqlite_db.close_connection(db)
 
-    # ── Generic token extraction for DB lookup ──
+    # Generic token extraction for DB lookup
     tokens = extract_pop_tokens(h)  # longest first, deterministic
 
     if not tokens:

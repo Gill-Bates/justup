@@ -1649,7 +1649,7 @@ class MonitorScheduler:
                     uptime_percent = await _compute_uptime_percent(hours=24)
                     uptime_percent_30d = await _compute_uptime_percent(hours=24 * 30)
 
-                # --- per-service down-since tracking ---
+                # per-service down-since tracking
                 now_ts = now
 
                 def _update_service(service: str, is_ok: int | None) -> None:
@@ -2156,7 +2156,7 @@ class MonitorScheduler:
             now = utcnow()
             metrics_timeout_seconds = int(max(1, self._metrics_timeout_minutes)) * 60
 
-            # --- per-service alert decision ---
+            # per-service alert decision
             alerting_services: set[str] = set()
             for svc, since in rt.down_since_by_service.items():
                 if since and (now - since).total_seconds() >= metrics_timeout_seconds:
@@ -2189,7 +2189,7 @@ class MonitorScheduler:
             elif alerting_services:
                 rt.failed_services = alerting_services
 
-            # --- Execution ---
+            # Execution
             rt.last_overall_ok = not bool(alerting_services)
 
             # Rate-limit DOWN alerts to prevent flapping spam

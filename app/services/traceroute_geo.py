@@ -56,16 +56,16 @@ from app.utils.runtime_settings import get_ip_api_key, get_runtime_bool_fail_clo
 
 _log = logging.getLogger(__name__)
 
-# --- Re-export segment types for backward compatibility ---
+# Re-export segment types for backward compatibility
 # Use SegmentType.SOLID/.DASHED directly where possible
 SEGMENT_SOLID = SegmentType.SOLID
 SEGMENT_DASHED = SegmentType.DASHED
 
-# --- Re-export hop status for backward compatibility ---
+# Re-export hop status for backward compatibility
 # Use HopStatus.OK/.TIMEOUT/.INTERPOLATED directly where possible
 STATUS_INTERPOLATED = HopStatus.INTERPOLATED
 
-# --- Metadata key constants (avoid magic strings) ---
+# Metadata key constants (avoid magic strings)
 META_PRIVATE_IP = "_private_ip"
 META_IS_PUBLIC = "_is_public"
 META_DESTINATION = "_destination"
@@ -81,13 +81,13 @@ META_SEGMENT_NOTE = "segment_note"  # hops the segment to the next point crosses
 META_MAP_RADIUS_KM = "map_radius_km"  # accuracy radius a renderer may draw around an approximate position
 MAX_MAP_RADIUS_KM = 250.0  # larger radii would cover the map and are not drawn
 
-# --- IPv6 specific constants ---
+# IPv6 specific constants
 # IPv6 addresses are long and cause layout issues in PDFs/tables
 # We shorten them for display while keeping the full address for tooltips
 IPV6_DISPLAY_MAX_LENGTH = 24  # Optimal for PDF column width
 IPV6_TRUNCATION_SUFFIX = "\u2026"  # Ellipsis character
 
-# --- Confidence levels for geolocation ---
+# Confidence levels for geolocation
 # These values indicate HOW a location was determined.
 # UI can use these for: tooltips, legend, debug overlay, trust indicators.
 # Higher precision: hostname > geoip > online > fallback > interpolated
@@ -100,10 +100,10 @@ CONFIDENCE_ONLINE = "online"  # HTTPS lookup; provider is carried in source
 CONFIDENCE_IXP = "ixp"  # PeeringDB IXP prefix: exchange region (or membership only), never a router fix
 META_DECISION = "_decision"  # explainable resolver decision (sources, winner, reason)
 
-# --- Deduplication config ---
+# Deduplication config
 GEO_DEDUP_DECIMALS = 4  # 4 decimals ≈ 11m precision (configurable for campus/DC)
 
-# --- IPv6 Helper Functions ---
+# IPv6 Helper Functions
 
 
 def is_ipv6_address(ip: str) -> bool:
@@ -529,7 +529,7 @@ def _local_candidates(
     return candidates, considered, extras
 
 
-# --- Online fallback (only when the local sources are not precise enough) ---
+# Online fallback (only when the local sources are not precise enough)
 OnlineResult = tuple[tuple[str, ...], Mapping[str, Any]]
 _NO_ONLINE: OnlineResult = ((), {})
 # Distinct IPs of one route are looked up concurrently; the whole online phase of a route is capped.
@@ -686,7 +686,7 @@ def geolocate_with_hostname_hint(
     }
 
 
-# --- Shared business route model (single source of truth for web UI and PDF) ---
+# Shared business route model (single source of truth for web UI and PDF)
 # Node keys (stable contract consumed by frontend.py, pdf_report.py, and the
 # map renderer). Confidence/source stay separate so the UI can distinguish real
 # geolocation, hostname/POP inference, coarse GeoIP, and a missing location.
@@ -1235,14 +1235,6 @@ def route_hops_to_geo_points(
         if point.get("_approximate") and isinstance(radius, int | float) and 0 < radius <= MAX_MAP_RADIUS_KM:
             point[META_MAP_RADIUS_KM] = float(radius)
     return points
-
-
-def _first_hop(point: dict) -> int:
-    """First hop number a point stands for (start of its `_hop_range`), for hop-order sorting."""
-    try:
-        return int(str(point.get(META_HOP_RANGE) or point.get("hop")).split("-", 1)[0])
-    except ValueError:
-        return 0
 
 
 def route_map_features(points: list[dict]) -> dict[str, bool]:

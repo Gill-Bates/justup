@@ -807,10 +807,12 @@ function showPublicHostname(value, sent) {
     const hint = document.getElementById('public_hostname_missing_hint');
     if (hint) hint.hidden = value !== '';
 }
+
 /** Best guess at the public hostname: the address this page is loaded from, IPv6 brackets stripped. */
 function detectPublicHostname() {
     return String(window.location.hostname || '').replace(/^\[|\]$/g, '');
 }
+
 async function applyDetectedPublicHostname() {
     const input = DOM.publicHostname();
     if (!input) return;
@@ -828,6 +830,7 @@ async function applyDetectedPublicHostname() {
             + window.location.origin + ', so check that the link works.');
     }
 }
+
 function formatDurationSeconds(value) {
     const seconds = Number.parseInt(value, 10);
     if (!Number.isFinite(seconds) || seconds < 0) return '';

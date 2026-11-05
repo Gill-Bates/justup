@@ -60,8 +60,8 @@ values are [environment variables](environment.md).
 - **Public outbound IPs** (read-only card, no setting): shows the IPv4 and IPv6 address that
   external services see for this server. See
   [Public outbound IPs](../features/network-monitoring.md#public-outbound-ips).
-- **GeoLite DB auto-update** (`geoip_auto_update`): checks for a newer MaxMind
-  GeoLite2 database at start.
+- **GeoLite DB auto-update** (`geoip_auto_update`): checks for a newer GeoLite2
+  database (P3TERX GitHub mirror) at start.
 - **Disable Authentication** (Users tab): every page and API call then runs as
   administrator. It needs the admin password and writes a CRITICAL log line. Use
   it only on a network you fully trust.

@@ -201,6 +201,7 @@ h6,
 	--bs-btn-disabled-border-color: var(--bs-link-color);
 }
 
+/* !important: Bootstrap's .text-bg-primary / .bg-primary set their color with !important. */
 .text-bg-primary,
 .bg-primary,
 .nav-pills .nav-link.active,

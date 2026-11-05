@@ -170,12 +170,12 @@ A changed service never turns a port down and never raises a DOWN alert.
 An administrator can run a fresh service detection (`-sV`) for a target with **Detect services**
 in the network diagnostics of the target page. Nothing is stored by the scan itself.
 
-1. **Preview** (`POST /api/network-scans/services/{id}/preview`) scans the configured ports and
+1. **Preview** (`POST /network-scans/services/{id}/preview`) scans the configured ports and
    lists what would change, grouped as **Service changed** (new or changed service name or product)
    and **Version only**. Nothing is stored. Only one detection per target runs at a time; a second
    request meanwhile answers `409`.
 2. **Apply changes** asks in the shared confirmation dialog; Cancel and Escape send nothing and keep
-   the preview. **Confirm** (`POST /api/network-scans/services/{id}/confirm`) stores the previewed result. A new
+   the preview. **Confirm** (`POST /network-scans/services/{id}/confirm`) stores the previewed result. A new
    service or a changed service name or product becomes the stored identity (a change then
    becomes the new `SERVICE_IDENTIFIED` base). A version-only change only updates the stored version.
 

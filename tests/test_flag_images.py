@@ -127,30 +127,23 @@ class _SlowStream(httpx.SyncByteStream):
 
     def __init__(self, clock):
         self.clock = clock
+        self.chunks = 0
 
     def __iter__(self):
         for _ in range(100):
             self.clock[0] += 1.0
+            self.chunks += 1
             yield b"\x89PNG"
 
 
 def test_slowly_streaming_server_is_cut_off_within_the_budget(monkeypatch):
     clock = [1000.0]
     monkeypatch.setattr(flag_images, "time", SimpleNamespace(monotonic=lambda: clock[0]))
-    chunks = []
     stream = _SlowStream(clock)
-    original = stream.__iter__
-
-    def counting():
-        for chunk in original():
-            chunks.append(chunk)
-            yield chunk
-
-    stream.__iter__ = counting
     _Net(monkeypatch, lambda _r: httpx.Response(200, headers={"content-type": "image/png"}, stream=stream))
     assert flag_images.load_flags(["DE"]) == {}
     assert clock[0] - 1000.0 <= flag_images.REPORT_BUDGET_S + 1.0
-    assert len(chunks) < 10
+    assert 0 < stream.chunks < 10
 
 
 def test_each_code_is_downloaded_once_per_call_and_again_on_the_next(monkeypatch):

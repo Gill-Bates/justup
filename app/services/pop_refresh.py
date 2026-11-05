@@ -828,7 +828,6 @@ def _apply_peeringdb_snapshot(
                         processed += len(records)
                     conn.commit()
 
-        # Phase: complete
         phase = "complete"
         _log.info(
             "[%s] Processing complete: processed=%d, inserted=%d, updated=%d, skipped=%d, validation_errors=%d",
@@ -855,7 +854,7 @@ def _apply_peeringdb_snapshot(
     # A facility snapshot does not prove that a router alias has disappeared.
     retired = 0
 
-    # Phase: ixp prefixes
+    # IXP prefix snapshot
     if ixp_error:
         error_msg = f"{error_msg}; {ixp_error}" if error_msg else ixp_error
     elif ixp_result is not None:
@@ -881,7 +880,6 @@ def _apply_peeringdb_snapshot(
             _log.error("[%s] IXP snapshot not applied: %s", run_id, e)
             error_msg = f"{error_msg}; {ixp_msg}" if error_msg else ixp_msg
 
-    # Phase: finalize
     phase = "finalize"
     with _db_connection(get_conn) as conn:
         pop_locations.finish_import_run(

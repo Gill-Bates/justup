@@ -134,9 +134,7 @@ def _clean_site_title(raw: Any, font_name: str) -> str:
     return text
 
 
-# ─── PDF Generation Lock ──────────────────────────────────────────────────
-# matplotlib is not thread-safe for parallel plot generation.
-# Serialize all PDF generation to prevent chart/font corruption.
+# matplotlib is not thread-safe for parallel plot generation: serialize all PDF generation.
 _PDF_LOCK = threading.Lock()
 
 # Constants
@@ -540,16 +538,14 @@ def _setup_matplotlib_style() -> None:
         font_manager.fontManager.addfont(str(FONT_DIR / "IBMPlexSans-Regular.ttf"))
         font_manager.fontManager.addfont(str(FONT_DIR / "IBMPlexSans-Bold.ttf"))
 
-        # 2. Apply base style (with fallback for matplotlib version changes)
+        # Base style, with a fallback for matplotlib versions that renamed it.
         try:
             plt.style.use("seaborn-v0_8-whitegrid")
         except OSError:
             _log.debug("seaborn-v0_8-whitegrid not available, using default style")
             plt.style.use("default")
 
-        # IMPORTANT: seaborn resets rcParams → force IBM Plex Sans AFTER style
-
-        # 3. Set rcParams AFTER style (style resets rcParams!)
+        # The style resets rcParams, so set them (incl. IBM Plex Sans) afterwards.
         font_config = {
             "font.family": "sans-serif",
             "font.sans-serif": ["IBM Plex Sans"],
@@ -2555,7 +2551,7 @@ class PDFReportBuilder:
 
         canvas.restoreState()
 
-    # ─── Shared building blocks ──────────────────────────────────────────────
+    # Shared building blocks
 
     def _chapter_header(self, title: str, subtitle: str = "", *, chapter: str | None = None) -> None:
         """Chapter title, optional subtitle and a navy rule."""
@@ -2618,7 +2614,7 @@ class PDFReportBuilder:
         para.keepWithNext = 1
         self.elements.append(para)
 
-    # ─── Cover ───────────────────────────────────────────────────────────────
+    # Cover
 
     def _is_low_coverage(self) -> bool:
         cov = self.kpis.coverage_pct
@@ -2995,7 +2991,7 @@ class PDFReportBuilder:
         self.elements.append(Paragraph("SLA Compliance", self.styles["group"]))
         self.elements.append(table)
 
-    # ─── Technical Summary ───────────────────────────────────────────────────
+    # Technical Summary
 
     def _add_technical_summary(self):
         """Technical Summary: Target Information, Certificate, TLS & Security, technology stack."""
@@ -3409,7 +3405,7 @@ class PDFReportBuilder:
             self._group_title("Cipher Suites by Protocol (technical detail)")
             self.elements.append(self._kv_table(detail))
 
-    # ─── Network Path ────────────────────────────────────────────────────────
+    # Network Path
 
     @staticmethod
     def _route_summary(display_hops: list[dict[str, Any]]) -> dict[str, Any]:
@@ -3713,7 +3709,7 @@ class PDFReportBuilder:
         self._route_cache[cache_key] = result
         return result
 
-    # ─── Availability & Performance ──────────────────────────────────────────
+    # Availability & Performance
 
     def _chart_width_in(self) -> float:
         return self.content_width / 72.0
@@ -4026,7 +4022,7 @@ class PDFReportBuilder:
         block.append(Paragraph(_esc(note) if note else "", self.styles["chart_note"]))
         self.elements.append(KeepTogether(block))
 
-    # ─── Downtime Log ────────────────────────────────────────────────────────
+    # Downtime Log
 
     def _build_downtime_page(self):
         """Build the stand-alone Downtime Log chapter."""

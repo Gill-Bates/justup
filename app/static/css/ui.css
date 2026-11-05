@@ -508,7 +508,8 @@ textarea.smtp-editor-frame {
 	vertical-align: middle;
 }
 
-/* Material icons in buttons should inherit button color */
+/* Material icons in buttons should inherit button color.
+   !important beats the icon-font color utilities (.text-*) set on the icon itself. */
 .btn .material-icons {
 	color: inherit !important;
 }
@@ -634,7 +635,8 @@ textarea.smtp-editor-frame {
 	z-index: 1080;
 }
 
-/* Mobile: center toast with consistent width and rounded corners */
+/* Mobile: center toast with consistent width and rounded corners.
+   !important beats the Bootstrap position utilities (.end-0, .p-3) on the container. */
 @media (width <=576px) {
 	.ui-toast-container {
 		left: 50% !important;
@@ -928,7 +930,8 @@ textarea.smtp-editor-frame {
 	line-height: 1;
 	flex: 0 0 auto;
 
-	/* Minimal look: no visible "frame" around icon buttons */
+	/* Minimal look: no visible "frame" around icon buttons.
+	   !important beats the .btn-outline-* border-color/width in the markup. */
 	border: 0 !important;
 
 	--bs-btn-border-width: 0;
@@ -2355,9 +2358,6 @@ textarea.smtp-editor-frame {
 
 .signal-step:last-of-type {
 	margin-top: 0;
-}
-
-.signal-step:last-of-type {
 	margin-bottom: 0;
 }
 
