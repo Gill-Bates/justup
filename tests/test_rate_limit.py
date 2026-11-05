@@ -60,7 +60,7 @@ GENERIC_429 = {"detail": "Too many requests. Please try again later."}
 def _env(monkeypatch):
     monkeypatch.setenv("SECRET_KEY", Fernet.generate_key().decode("ascii"))
     monkeypatch.setattr(crypto, "_primary_key", None)
-    monkeypatch.delenv("UPMON_TRUSTED_PROXIES", raising=False)
+    monkeypatch.delenv("TRUSTED_PROXIES", raising=False)
 
 
 class FakeClock:
@@ -286,7 +286,7 @@ def test_forged_forwarding_headers_from_untrusted_peers_do_not_create_buckets():
 
 
 def test_trusted_proxy_forwards_the_real_client(monkeypatch):
-    monkeypatch.setenv("UPMON_TRUSTED_PROXIES", PROXY)
+    monkeypatch.setenv("TRUSTED_PROXIES", PROXY)
     chain = [("X-Forwarded-For", "6.6.6.6, 198.51.100.7")]
     assert rate_limit_key(_request(PROXY, chain)) == "198.51.100.7"  # the left side is client-controlled
     assert rate_limit_key(_request("203.0.113.9", chain)) == "203.0.113.9"
@@ -294,7 +294,7 @@ def test_trusted_proxy_forwards_the_real_client(monkeypatch):
 
 
 def test_trusted_proxy_clients_get_separate_counters(monkeypatch):
-    monkeypatch.setenv("UPMON_TRUSTED_PROXIES", PROXY)
+    monkeypatch.setenv("TRUSTED_PROXIES", PROXY)
     app = _app()
 
     @app.get("/a", dependencies=[Depends(rate_limit("1/minute"))])

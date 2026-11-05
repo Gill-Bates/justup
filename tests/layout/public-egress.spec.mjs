@@ -90,6 +90,25 @@ for (const viewport of VIEWPORTS) {
 			await page.keyboard.press("Enter");
 			await page.waitForFunction(() => document.querySelector("[data-egress-live]").textContent === "IPv6 address copied.");
 			assert.deepEqual(await page.evaluate(() => window.__copied), [LONG_V6]);
+			// Stale and failed refreshes keep the address visible but never copyable; cached results are labelled.
+			await page.evaluate(() => {
+				const stale = { ...window.__data("93.184.216.34") };
+				stale.ipv4 = { status: "stale", address: "93.184.216.34", observed_at: "2026-11-05T19:00:00Z", sources: ["a"], observed: ["93.184.216.34"], reason: "timeout" };
+				stale.cached = true;
+				window.__next = stale;
+			});
+			await page.click("[data-egress-refresh]");
+			await page.waitForSelector('[data-egress-family="ipv4"][data-egress-state="stale"]');
+			assert.equal(await text(page, '[data-egress-family="ipv4"] [data-egress-address]'), "93.184.216.34");
+			assert.equal(await page.locator('[data-egress-family="ipv4"] [data-egress-copy]').isDisabled(), true);
+			assert.match(await text(page, '[data-egress-family="ipv4"] [data-egress-detail]'), /Last confirmed/);
+			assert.equal(await page.locator("[data-egress-cached]").isVisible(), true);
+			await page.evaluate(() => { window.apiFetch = async () => ({ ok: false, status: 500, json: async () => ({}) }); });
+			await page.click("[data-egress-refresh]");
+			await page.waitForFunction(() => document.querySelector("[data-egress-live]").textContent === "Public address lookup failed.");
+			assert.equal(await text(page, '[data-egress-family="ipv6"] [data-egress-address]'), LONG_V6);
+			assert.equal(await page.locator('[data-egress-family="ipv6"]').getAttribute("data-egress-state"), "stale");
+			assert.equal(await page.locator('[data-egress-family="ipv6"] [data-egress-copy]').isDisabled(), true);
 			// Geometry: no overflow, long value stays inside the card, desktop position right of Geolocation.
 			const geometry = await page.evaluate(() => {
 				const de = document.documentElement;

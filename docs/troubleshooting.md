@@ -23,7 +23,7 @@ docker logs -f justup
 ## Wrong client IP in rate limits or audit log
 
 ??? question "The proxy IP appears instead of the client IP"
-    Set `UPMON_TRUSTED_PROXIES` to the proxy address as the container sees it.
+    Set `TRUSTED_PROXIES` to the proxy address as the container sees it.
     See [Reverse proxy](configuration/reverse-proxy.md).
 
 ## Sign-in fails

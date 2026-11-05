@@ -48,7 +48,7 @@ signed with it is needed. See [Backup & restore](../features/backup.md).
 | --- | --- | --- |
 | `JUSTUP_HOST` | `0.0.0.0` | Bind address in the container |
 | `JUSTUP_PORT` | `8000` | Bind port in the container; an invalid value falls back to `8000` with a warning |
-| `UPMON_TRUSTED_PROXIES` | empty | Proxy addresses trusted for `X-Forwarded-For`, `X-Real-IP`, and `X-Forwarded-Proto` |
+| `TRUSTED_PROXIES` | empty | Proxy addresses trusted for `X-Forwarded-For`, `X-Real-IP`, and `X-Forwarded-Proto` |
 | `LOG_LEVEL` | `INFO` | Log level (`CRITICAL`, `ERROR`, `WARNING`, `INFO`, `DEBUG`); access lines appear only at `DEBUG`. An invalid value falls back to `INFO` with a warning |
 
 justUp! supports exactly one app process per data directory. There is no

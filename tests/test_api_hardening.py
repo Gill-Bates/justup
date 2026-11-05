@@ -59,18 +59,18 @@ def _request(peer: str | None, headers: dict[str, str] | None = None, scheme: st
 
 class TestClientIp:
     def test_untrusted_peer_cannot_spoof_headers(self, monkeypatch):
-        monkeypatch.delenv("UPMON_TRUSTED_PROXIES", raising=False)
+        monkeypatch.delenv("TRUSTED_PROXIES", raising=False)
         req = _request("203.0.113.9", {"X-Forwarded-For": "1.2.3.4", "X-Real-IP": "5.6.7.8"})
         assert resolve_trusted_client_ip(req) == "203.0.113.9"
         assert audit_client_ip(req) == "203.0.113.9"
 
     def test_trusted_proxy_forwards_first_xff_entry(self, monkeypatch):
-        monkeypatch.setenv("UPMON_TRUSTED_PROXIES", "10.0.0.0/8")
+        monkeypatch.setenv("TRUSTED_PROXIES", "10.0.0.0/8")
         req = _request("10.1.2.3", {"X-Forwarded-For": "198.51.100.7, 10.1.2.3"})
         assert resolve_trusted_client_ip(req) == "198.51.100.7"
 
     def test_trusted_proxy_ipv6_client_and_fallbacks(self, monkeypatch):
-        monkeypatch.setenv("UPMON_TRUSTED_PROXIES", "127.0.0.1,::1")
+        monkeypatch.setenv("TRUSTED_PROXIES", "127.0.0.1,::1")
         assert resolve_trusted_client_ip(_request("::1", {"X-Forwarded-For": "2001:db8::5"})) == "2001:db8::5"
         assert resolve_trusted_client_ip(_request("127.0.0.1", {"X-Real-IP": "192.0.2.4"})) == "192.0.2.4"
         assert resolve_trusted_client_ip(_request("127.0.0.1", {"Forwarded": 'for="192.0.2.60:4711";proto=https'})) == (
@@ -78,29 +78,29 @@ class TestClientIp:
         )
 
     def test_invalid_header_falls_back_to_peer(self, monkeypatch):
-        monkeypatch.setenv("UPMON_TRUSTED_PROXIES", "127.0.0.1")
+        monkeypatch.setenv("TRUSTED_PROXIES", "127.0.0.1")
         assert resolve_trusted_client_ip(_request("127.0.0.1", {"X-Forwarded-For": "not-an-ip"})) == "127.0.0.1"
         assert resolve_trusted_client_ip(_request("127.0.0.1")) == "127.0.0.1"
 
     def test_invalid_trusted_entries_fail_closed(self, monkeypatch):
-        monkeypatch.setenv("UPMON_TRUSTED_PROXIES", "*,garbage")
+        monkeypatch.setenv("TRUSTED_PROXIES", "*,garbage")
         req = _request("203.0.113.9", {"X-Forwarded-For": "1.2.3.4"})
         assert resolve_trusted_client_ip(req) == "203.0.113.9"
 
     def test_missing_or_unparsable_peer(self, monkeypatch):
-        monkeypatch.delenv("UPMON_TRUSTED_PROXIES", raising=False)
+        monkeypatch.delenv("TRUSTED_PROXIES", raising=False)
         assert resolve_trusted_client_ip(_request(None)) == "unknown"
         assert audit_client_ip(_request("testclient")) == "unknown"
 
     def test_secure_flag_trusts_proto_header_only_from_trusted_peer(self, monkeypatch):
-        monkeypatch.setenv("UPMON_TRUSTED_PROXIES", "127.0.0.1")
+        monkeypatch.setenv("TRUSTED_PROXIES", "127.0.0.1")
         assert request_is_https(_request("127.0.0.1", {"X-Forwarded-Proto": "https"})) is True
         assert request_is_https(_request("203.0.113.9", {"X-Forwarded-Proto": "https"})) is False
         assert request_is_https(_request("203.0.113.9", scheme="https")) is True
         assert request_is_https(_request("127.0.0.1", {"X-Forwarded-Proto": "http"}, scheme="https")) is False
 
     def test_proto_uses_the_closest_proxy_value_like_the_forwarded_for_walk(self, monkeypatch):
-        monkeypatch.setenv("UPMON_TRUSTED_PROXIES", "127.0.0.1")
+        monkeypatch.setenv("TRUSTED_PROXIES", "127.0.0.1")
         # A client-forged left value must not beat the value appended by the trusted proxy.
         assert request_is_https(_request("127.0.0.1", {"X-Forwarded-Proto": "https, http"})) is False
         assert request_is_https(_request("127.0.0.1", {"X-Forwarded-Proto": "http, https"})) is True
@@ -109,7 +109,7 @@ class TestClientIp:
         assert request_is_https(request) is False
 
     def test_ipv4_mapped_ipv6_peer_and_chain_hops_match_ipv4_trusted_networks(self, monkeypatch):
-        monkeypatch.setenv("UPMON_TRUSTED_PROXIES", "10.0.0.0/8")
+        monkeypatch.setenv("TRUSTED_PROXIES", "10.0.0.0/8")
         mapped_peer = _request("::ffff:10.0.0.2", {"X-Forwarded-For": "198.51.100.7", "X-Forwarded-Proto": "https"})
         assert resolve_trusted_client_ip(mapped_peer) == "198.51.100.7"
         assert request_is_https(mapped_peer) is True
@@ -819,7 +819,7 @@ def test_server_launch_does_not_let_uvicorn_trust_arbitrary_proxy_headers(monkey
 
 
 def test_forged_forwarded_chain_is_ignored_unless_peer_is_trusted(monkeypatch):
-    monkeypatch.setenv("UPMON_TRUSTED_PROXIES", "10.0.0.0/8")
+    monkeypatch.setenv("TRUSTED_PROXIES", "10.0.0.0/8")
     forged = {"X-Forwarded-For": "6.6.6.6, 198.51.100.7, 10.0.0.2, 10.0.0.3"}
     assert resolve_trusted_client_ip(_request("10.0.0.4", forged)) == "198.51.100.7"
     assert resolve_trusted_client_ip(_request("203.0.113.9", forged)) == "203.0.113.9"

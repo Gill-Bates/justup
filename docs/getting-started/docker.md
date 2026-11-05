@@ -51,8 +51,8 @@ docker compose --env-file .env -f docker/docker-compose.yml up -d
     cannot be decrypted and all sessions end, because the session-token hashes
     are keyed with it. Mount the data volume persistently as well.
 
-!!! warning "Behind a reverse proxy, set UPMON_TRUSTED_PROXIES"
-    Add `UPMON_TRUSTED_PROXIES` with the proxy address as the container sees it.
+!!! warning "Behind a reverse proxy, set TRUSTED_PROXIES"
+    Add `TRUSTED_PROXIES` with the proxy address as the container sees it.
     Without it, the login rate limit and audit log record the proxy IP for every
     client. See [Reverse proxy](../configuration/reverse-proxy.md).
 

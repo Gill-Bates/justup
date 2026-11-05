@@ -1029,7 +1029,8 @@ def test_low_coverage_never_shows_a_green_operational_status(monkeypatch):
     assert "of recorded checks successful" in detail and "remaining 94.0%" in detail
     text = _all_text(b)
     assert "RECORDED CHECKS SUCCESSFUL" in text and "120/120 measurements · data coverage 6%" in text
-    assert "None detected" in text and "in observed checks" in text and "≈ 0 min" not in text
+    assert "ESTIMATED DOWNTIME" in text and "None detected" not in text
+    assert "in observed checks" in text and "≈ 0 min" not in text
     assert "AVAILABILITY" not in text
 
 

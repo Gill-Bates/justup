@@ -15,7 +15,7 @@ from functools import lru_cache
 
 from starlette.requests import Request
 
-TRUSTED_PROXIES_ENV = "UPMON_TRUSTED_PROXIES"
+TRUSTED_PROXIES_ENV = "TRUSTED_PROXIES"
 _NODE_PORT_RE = re.compile(r":(?:[0-9]{1,5}|_[A-Za-z0-9._-]+)")
 
 

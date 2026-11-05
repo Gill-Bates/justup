@@ -28,6 +28,7 @@ const REASONS = {
     non_public_address: 'An echo service returned a non-public address; it was discarded.',
     blocked_target: 'An echo service resolved to a non-public address and was not contacted.',
     providers_disagree: 'Independent echo services report different addresses.',
+    busy: 'Earlier lookups are still running; try again shortly.',
 };
 
 const BADGES = {
@@ -46,25 +47,40 @@ export function formatObserved(iso) {
     return date.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'medium' });
 }
 
+function hasText(value) {
+    return typeof value === 'string' && value !== '';
+}
+
+function stateView(status, extra) {
+    const [badgeText, badgeClass] = BADGES[status];
+    return { status, badgeText, badgeClass, address: '', detail: '', canCopy: false, observedAt: '', ...extra };
+}
+
+function staleDetail(observedAt, reason) {
+    const seen = formatObserved(observedAt);
+    return 'Last confirmed' + (seen ? ' ' + seen : '') + '; not confirmed now.' + (reason ? ' ' + reason : '');
+}
+
 /**
  * Turn one family entry of the API response into display state. `family` may be missing or malformed;
- * that is a failed lookup, never an address.
+ * that is a failed lookup, never an address. Only an `available` address can be copied.
  */
 export function describeFamily(label, family) {
-    const status = family && typeof family.status === 'string' && BADGES[family.status] ? family.status : 'failed';
-    const reason = (family && REASONS[family.reason]) || '';
-    const [badgeText, badgeClass] = BADGES[status];
-    const view = { status, badgeText, badgeClass, address: '', detail: '', canCopy: false };
+    let status = 'failed';
+    if (family && typeof family.status === 'string' && Object.hasOwn(BADGES, family.status)) status = family.status;
+    if ((status === 'available' || status === 'stale') && !hasText(family.address)) status = 'failed';
+    const reason = (family && typeof family.reason === 'string' && Object.hasOwn(REASONS, family.reason) && REASONS[family.reason]) || '';
+    const view = stateView(status);
     if (status === 'available') {
         view.address = family.address;
-        view.canCopy = typeof family.address === 'string' && family.address !== '';
+        view.canCopy = true;
+        view.observedAt = hasText(family.observed_at) ? family.observed_at : '';
         const sources = Array.isArray(family.sources) ? family.sources.length : 0;
         view.detail = sources > 1 ? 'Confirmed by ' + sources + ' independent services.' : 'Reported by one service.';
     } else if (status === 'stale') {
         view.address = family.address;
-        view.canCopy = typeof family.address === 'string' && family.address !== '';
-        const seen = formatObserved(family.observed_at);
-        view.detail = 'Last confirmed' + (seen ? ' ' + seen : '') + '; not confirmed now. ' + reason;
+        view.observedAt = hasText(family.observed_at) ? family.observed_at : '';
+        view.detail = staleDetail(view.observedAt, reason);
     } else if (status === 'inconsistent') {
         const seen = Array.isArray(family.observed) ? family.observed.filter((a) => typeof a === 'string') : [];
         view.detail = reason + (seen.length ? ' Observed: ' + seen.join(', ') + '.' : '');
@@ -74,6 +90,26 @@ export function describeFamily(label, family) {
         view.detail = reason || 'The lookup failed.';
     }
     return view;
+}
+
+/** While a refresh runs, keep the last known address visible but not copyable. */
+export function describeLoading(previous) {
+    if (previous && hasText(previous.address)) {
+        return stateView('loading', { address: previous.address, observedAt: previous.observedAt, detail: 'Checking\u2026' });
+    }
+    return stateView('loading');
+}
+
+/** The request itself failed: show the last known address as stale (not copyable), else a failed lookup. */
+export function describeRequestFailure(previous, reason) {
+    if (previous && hasText(previous.address)) {
+        return stateView('stale', {
+            address: previous.address,
+            observedAt: previous.observedAt,
+            detail: staleDetail(previous.observedAt, reason),
+        });
+    }
+    return stateView('failed', { detail: reason });
 }
 
 function familyLabel(key) {
@@ -123,6 +159,8 @@ export function initPublicEgress(root = document) {
     card.dataset.egressBound = '1';
 
     const rows = Array.from(card.querySelectorAll('[data-egress-family]'));
+    const cachedNote = card.querySelector('[data-egress-cached]');
+    const known = {}; // last view that carried an address, per family
     const refreshBtn = card.querySelector('[data-egress-refresh]');
     const checked = card.querySelector('[data-egress-checked]');
     const proxyNote = card.querySelector('[data-egress-proxy]');
@@ -130,8 +168,9 @@ export function initPublicEgress(root = document) {
     const apiFetch = window.apiFetch || ((url, options) => fetch(url, { credentials: 'same-origin', ...options }));
     let busy = false;
 
-    const showAll = (status) => {
-        rows.forEach((row) => renderFamily(row, describeFamily(familyLabel(row.dataset.egressFamily), { status })));
+    const show = (row, view) => {
+        if (view.address && (view.status === 'available' || view.status === 'stale')) known[row.dataset.egressFamily] = view;
+        renderFamily(row, view);
     };
 
     async function load(refresh) {
@@ -139,7 +178,8 @@ export function initPublicEgress(root = document) {
         busy = true;
         refreshBtn.setAttribute('aria-disabled', 'true');
         refreshBtn.setAttribute('aria-busy', 'true');
-        showAll('loading');
+        card.setAttribute('aria-busy', 'true');
+        rows.forEach((row) => renderFamily(row, describeLoading(known[row.dataset.egressFamily])));
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
         let failureReason = '';
@@ -154,11 +194,12 @@ export function initPublicEgress(root = document) {
                 const data = await resp.json();
                 rows.forEach((row) => {
                     const key = row.dataset.egressFamily;
-                    renderFamily(row, describeFamily(familyLabel(key), data && data[key]));
+                    show(row, describeFamily(familyLabel(key), data && data[key]));
                 });
                 const when = formatObserved(data && data.checked_at);
                 checked.textContent = when || 'unknown';
                 if (data && data.checked_at) checked.setAttribute('datetime', data.checked_at);
+                if (cachedNote) cachedNote.hidden = !(data && data.cached === true);
                 if (proxyNote) proxyNote.hidden = !(data && data.proxy_env);
             }
         } catch (_error) {
@@ -168,13 +209,10 @@ export function initPublicEgress(root = document) {
             busy = false;
             refreshBtn.removeAttribute('aria-disabled');
             refreshBtn.removeAttribute('aria-busy');
+            card.removeAttribute('aria-busy');
         }
         if (failureReason) {
-            showAll('failed');
-            rows.forEach((row) => {
-                row.querySelector('[data-egress-detail]').textContent = failureReason;
-            });
-            checked.textContent = 'not checked';
+            rows.forEach((row) => show(row, describeRequestFailure(known[row.dataset.egressFamily], failureReason)));
             live.textContent = 'Public address lookup failed.';
         } else {
             live.textContent = 'Public address lookup finished.';
@@ -205,6 +243,5 @@ export function initPublicEgress(root = document) {
         }
     });
 
-    showAll('loading');
     load(false);
 }

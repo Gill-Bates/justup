@@ -18,7 +18,7 @@ services:
       # Optional rotation list (new key first); empty = SECRET_KEY alone. Not forwarded unless listed here.
       SECRET_KEYS: ${SECRET_KEYS:-}
       # Optional: reverse-proxy address(es) as the container sees them; empty = trust no proxy header
-      UPMON_TRUSTED_PROXIES: ${UPMON_TRUSTED_PROXIES:-}
+      TRUSTED_PROXIES: ${UPMON_TRUSTED_PROXIES:-}
     volumes:
       - ./:/app/data
     tmpfs:

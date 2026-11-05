@@ -20,7 +20,7 @@ background service. Exceeding a limit answers HTTP `429` with a `Retry-After` he
 
 The bucket key is the client IP from `resolve_trusted_client_ip`: `X-Forwarded-For`,
 `X-Real-IP`, or `Forwarded` are honoured only when the direct sender is in
-`UPMON_TRUSTED_PROXIES`; see [Reverse proxy](../configuration/reverse-proxy.md). Forged
+`TRUSTED_PROXIES`; see [Reverse proxy](../configuration/reverse-proxy.md). Forged
 headers from other peers create no new buckets.
 
 - IPv6 clients share one counter per `/64`; IPv4-mapped IPv6 addresses use their IPv4 bucket.

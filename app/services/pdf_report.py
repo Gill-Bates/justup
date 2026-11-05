@@ -2896,7 +2896,7 @@ class PDFReportBuilder:
             ),
             (
                 "ESTIMATED DOWNTIME",
-                "None detected" if quiet_low_coverage else f"≈ {kpis.downtime_minutes:,} min" if has_checks else "n/a",
+                "n/a" if quiet_low_coverage or not has_checks else f"≈ {kpis.downtime_minutes:,} min",
                 COLORS["muted"] if quiet_low_coverage or not has_checks else down_color,
                 "in observed checks"
                 if quiet_low_coverage

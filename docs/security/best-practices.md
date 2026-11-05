@@ -18,7 +18,7 @@
 ## HTTPS
 
 Terminate TLS at a reverse proxy and enter its direct address in
-`UPMON_TRUSTED_PROXIES`. See [Reverse proxy](../configuration/reverse-proxy.md).
+`TRUSTED_PROXIES`. See [Reverse proxy](../configuration/reverse-proxy.md).
 
 ## Users
 

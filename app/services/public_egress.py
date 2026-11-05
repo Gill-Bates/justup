@@ -18,6 +18,8 @@ Contract:
 - No redirects, no proxy: the lookup is direct from this process. Environment proxies that HTTP
   monitors may use (``HTTPS_PROXY`` ...) are NOT used here and are reported as ``proxy_env``.
 - Independent providers that disagree are reported as ``inconsistent``, never silently resolved.
+- Resolver and fetch work runs in small pools behind hard pending limits: a hung ``getaddrinfo`` can pin at
+  most ``MAX_PENDING_DNS`` threads, and while the limit is reached new lookups fail fast with reason ``busy``.
 - Results are cached in memory only (never persisted); concurrent callers share one lookup.
 """
 
@@ -32,7 +34,9 @@ import socket
 import ssl
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, wait
+from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor, wait
+from concurrent.futures import TimeoutError as FutureTimeout
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Literal, TypedDict
@@ -50,6 +54,9 @@ MIN_REFRESH_INTERVAL_SECONDS = 10.0  # a forced refresh inside this window reuse
 STALE_MAX_AGE_SECONDS = 86400.0  # a last good value older than this is dropped, not shown as stale
 CONNECT_TIMEOUT_SECONDS = 4.0
 OVERALL_BUDGET_SECONDS = 8.0
+DNS_TIMEOUT_SECONDS = 3.0  # getaddrinfo cannot be interrupted; the caller stops waiting after this
+MAX_PENDING_DNS = 4  # lookups (running or hung) allowed at once; more are refused, never queued
+MAX_PENDING_FETCHES = 8
 MAX_RESPONSE_BYTES = 256
 MAX_ADDRESSES_PER_HOST = 2
 HTTPS_PORT = 443
@@ -146,7 +153,7 @@ _NO_RECORD_GAI = {
 }
 
 
-def _resolve(host: str, family: Family) -> list[str]:
+def _resolve_blocking(host: str, family: Family) -> list[str]:
     """Resolve ``host`` for exactly ``family`` and return validated, globally routable addresses."""
     try:
         infos = socket.getaddrinfo(host, HTTPS_PORT, _FAMILIES[family], socket.SOCK_STREAM)
@@ -167,6 +174,32 @@ def _resolve(host: str, family: Family) -> list[str]:
     if not addresses:
         raise EchoLookupError("dns_failed", unavailable=True)
     return addresses[:MAX_ADDRESSES_PER_HOST]
+
+
+def _submit_bounded(
+    executor: ThreadPoolExecutor, slots: threading.BoundedSemaphore, func: Callable, *args: object
+) -> Future | None:
+    """Submit unless ``slots`` is exhausted; a slot is freed when the task really ends, not when waiting stops."""
+    if not slots.acquire(blocking=False):
+        return None
+    try:
+        future = executor.submit(func, *args)
+    except BaseException:
+        slots.release()
+        raise
+    future.add_done_callback(lambda _f: slots.release())
+    return future
+
+
+def _resolve(host: str, family: Family) -> list[str]:
+    """``_resolve_blocking`` with a hard wait limit and a bound on lookups that are still pinned."""
+    future = _submit_bounded(_dns_executor, _dns_slots, _resolve_blocking, host, family)
+    if future is None:
+        raise EchoLookupError("busy")
+    try:
+        return future.result(timeout=DNS_TIMEOUT_SECONDS)
+    except FutureTimeout:
+        raise EchoLookupError("timeout") from None
 
 
 def _open_tls(family: Family, address: str, host: str, timeout: float) -> ssl.SSLSocket:
@@ -244,7 +277,10 @@ def _fetch_one(provider: Provider, family: Family) -> str:
 # Combination, cache, single flight
 # ─────────────────────────────────────────────────────────────────────────────
 
-_executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="public-egress")
+_executor = ThreadPoolExecutor(max_workers=MAX_PENDING_FETCHES, thread_name_prefix="public-egress")
+_fetch_slots = threading.BoundedSemaphore(MAX_PENDING_FETCHES)
+_dns_executor = ThreadPoolExecutor(max_workers=MAX_PENDING_DNS, thread_name_prefix="public-egress-dns")
+_dns_slots = threading.BoundedSemaphore(MAX_PENDING_DNS)
 _lock = threading.Lock()
 _cached: tuple[float, EgressResult] | None = None
 _last_good: dict[Family, tuple[float, str, list[str]]] = {}  # family -> (monotonic time, address, sources)
@@ -305,11 +341,11 @@ def _combine(
 
 def _lookup_all() -> EgressResult:
     futures = {
-        (family, provider): _executor.submit(_fetch_one, provider, family)
+        (family, provider): _submit_bounded(_executor, _fetch_slots, _fetch_one, provider, family)
         for family, providers in PROVIDERS.items()
         for provider in providers
     }
-    wait(list(futures.values()), timeout=OVERALL_BUDGET_SECONDS)
+    wait([f for f in futures.values() if f is not None], timeout=OVERALL_BUDGET_SECONDS)
     now_mono = time.monotonic()
     now = datetime.now(UTC)
     results: dict[Family, FamilyResult] = {}
@@ -318,6 +354,9 @@ def _lookup_all() -> EgressResult:
             outcomes: list[tuple[Provider, str | EchoLookupError]] = []
             for provider in PROVIDERS[family]:
                 future = futures[(family, provider)]
+                if future is None:
+                    outcomes.append((provider, EchoLookupError("busy")))
+                    continue
                 if not future.done():
                     future.cancel()
                     outcomes.append((provider, EchoLookupError("timeout")))

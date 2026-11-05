@@ -106,7 +106,7 @@ def main() -> None:
         app,
         host=cfg.host,
         port=cfg.port,
-        # Proxy headers are resolved by utils.client_ip (UPMON_TRUSTED_PROXIES); uvicorn
+        # Proxy headers are resolved by utils.client_ip (TRUSTED_PROXIES); uvicorn
         # would otherwise rewrite client/scheme from any peer's headers.
         proxy_headers=False,
         log_level=cfg.log_level.lower(),

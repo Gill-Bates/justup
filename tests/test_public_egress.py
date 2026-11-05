@@ -231,6 +231,48 @@ def test_overall_budget_bounds_a_hanging_provider(net, monkeypatch):
     assert (result["ipv6"]["status"], result["ipv6"]["reason"]) == ("failed", "timeout")
 
 
+def _threads(prefix: str) -> int:
+    return sum(1 for t in threading.enumerate() if t.name.startswith(prefix))
+
+
+def test_hanging_dns_cannot_pile_up_threads_or_block_the_service(net, monkeypatch):
+    release = threading.Event()
+    started = []
+    real = net._getaddrinfo
+
+    def hanging(host, port, family=0, *args, **kwargs):
+        started.append(host)
+        release.wait(10)
+        return real(host, port, family, *args, **kwargs)
+
+    monkeypatch.setattr(pe.socket, "getaddrinfo", hanging)
+    monkeypatch.setattr(pe, "DNS_TIMEOUT_SECONDS", 0.2)
+    monkeypatch.setattr(pe, "OVERALL_BUDGET_SECONDS", 2.0)
+    monkeypatch.setattr(pe, "MIN_REFRESH_INTERVAL_SECONDS", 0.0)
+    net.set_family("ipv4", V4)
+    net.set_family("ipv6", V6)
+    try:
+        for _ in range(6):  # repeated refreshes while all four resolver calls stay blocked
+            began = time.monotonic()
+            result = pe.get_public_egress(refresh=True)
+            assert time.monotonic() - began < 2.0
+            assert result["ipv4"]["status"] == result["ipv6"]["status"] == "failed"
+        assert result["ipv4"]["reason"] == "busy"  # later refreshes are refused, not queued
+        assert len(started) == 4  # only the first refresh reached the resolver
+        assert _threads("public-egress-dns") <= pe.MAX_PENDING_DNS
+        assert _threads("public-egress_") <= pe.MAX_PENDING_FETCHES
+    finally:
+        release.set()
+    monkeypatch.setattr(pe.socket, "getaddrinfo", real)
+    deadline = time.monotonic() + 5
+    while True:  # slots are freed by the released threads; the service then works again
+        recovered = pe.get_public_egress(refresh=True)
+        if recovered["ipv4"]["status"] == "available" or time.monotonic() > deadline:
+            break
+        time.sleep(0.05)
+    assert recovered["ipv4"]["address"] == V4 and recovered["ipv6"]["address"] == V6
+
+
 # ─── 10-12: wrong or non-public answers ──────────────────────────────────────
 
 
