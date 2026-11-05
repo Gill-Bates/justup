@@ -98,6 +98,37 @@ def client(stub):
 
 
 ADMIN = {"X-Test-User": "admin:1"}
+
+
+def test_service_detection_requires_admin_and_explicit_confirmation(client):
+    class DetectionScheduler:
+        def __init__(self):
+            self.previews = 0
+            self.confirmations = 0
+
+        async def preview_service_detection(self, target_id, owner_id):
+            self.previews += 1
+            assert (target_id, owner_id) == (7, 1)
+            return {"token": "a" * 32, "changes": []}
+
+        def confirm_service_detection(self, target_id, owner_id, token):
+            self.confirmations += 1
+            assert (target_id, owner_id, token) == (7, 1, "a" * 32)
+            return []
+
+    scheduler = DetectionScheduler()
+    client.app.state.scheduler = scheduler
+    path = "/api/network-scans/services/7"
+    assert client.post(f"{path}/preview").status_code == 401
+    assert client.post(f"{path}/preview", headers={"X-Test-User": "user:2"}).status_code == 403
+    assert scheduler.previews == 0
+    response = client.post(f"{path}/preview", headers=ADMIN)
+    assert response.status_code == 200 and response.json()["token"] == "a" * 32
+    assert scheduler.previews == 1 and scheduler.confirmations == 0
+    assert client.post(f"{path}/confirm", headers={"X-Test-User": "user:2"}, json={"token": "a" * 32}).status_code == 403
+    assert scheduler.confirmations == 0
+    response = client.post(f"{path}/confirm", headers=ADMIN, json={"token": "a" * 32})
+    assert response.status_code == 200 and scheduler.confirmations == 1
 OTHER_ADMIN = {"X-Test-User": "admin:2"}
 PLAIN_USER = {"X-Test-User": "user:3"}
 

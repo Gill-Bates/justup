@@ -8,8 +8,8 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from pydantic import BaseModel, Field
 
 from app.services.nmap_client import availability
 from app.services.nmap_jobs import NmapScanJob, NmapScanRequest, cancel_job, create_job, get_job
@@ -30,9 +30,69 @@ class NmapAvailability(BaseModel):
     detail: str = ""
 
 
+class ServiceDetectionChange(BaseModel):
+    protocol: str
+    port: int
+    kind: str
+    previous_name: str | None
+    previous_product: str | None
+    previous_version: str | None
+    name: str | None
+    product: str | None
+    version: str | None
+
+
+class ServiceDetectionPreview(BaseModel):
+    token: str | None
+    changes: list[ServiceDetectionChange]
+
+
+class ServiceDetectionConfirmation(BaseModel):
+    token: str = Field(min_length=32, max_length=32, pattern=r"^[0-9a-f]{32}$")
+
+
 @router.get("/status", response_model=NmapAvailability, dependencies=[Depends(rate_limit("60/minute"))])
 async def worker_availability(_admin=Depends(require_admin)) -> dict:
     return await availability()
+
+
+@router.post(
+    "/services/{target_id}/preview",
+    response_model=ServiceDetectionPreview,
+    dependencies=[Depends(rate_limit("5/minute")), Depends(rate_limit_user("2/minute", require_admin))],
+)
+async def preview_service_detection(target_id: int, request: Request, admin=Depends(require_admin)) -> dict:
+    scheduler = getattr(request.app.state, "scheduler", None)
+    if scheduler is None:
+        raise HTTPException(status_code=503, detail="Monitoring is unavailable")
+    try:
+        return await scheduler.preview_service_detection(target_id, int(admin["id"]))
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except NmapScannerError as exc:
+        code = 429 if exc.error.code == "busy" else 503
+        raise HTTPException(status_code=code, detail=exc.error.message) from exc
+
+
+@router.post(
+    "/services/{target_id}/confirm",
+    response_model=list[ServiceDetectionChange],
+    dependencies=[Depends(rate_limit("10/minute")), Depends(rate_limit_user("5/minute", require_admin))],
+)
+def confirm_service_detection(
+    target_id: int, payload: ServiceDetectionConfirmation, request: Request, admin=Depends(require_admin)
+) -> list[dict]:
+    scheduler = getattr(request.app.state, "scheduler", None)
+    if scheduler is None:
+        raise HTTPException(status_code=503, detail="Monitoring is unavailable")
+    try:
+        return scheduler.confirm_service_detection(target_id, int(admin["id"]), payload.token)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post(

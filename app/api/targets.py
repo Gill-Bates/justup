@@ -548,6 +548,9 @@ def _patch_locked(target_id: int, payload: TargetUpdate, conn, owner_id: int | N
 
     if patch_db:
         sqlite_db.update_target(conn, target_id=target_id, patch=patch_db, manage_transaction=False)
+    host_changed = effective["host"] != existing["host"]
+    if host_changed:
+        sqlite_db.delete_target_status(conn, target_id)
     scan_result = (
         _scan_result_for_target(payload.network_scan_id, owner_id, effective["host"])
         if payload.network_scan_id and owner_id is not None
@@ -559,6 +562,7 @@ def _patch_locked(target_id: int, payload: TargetUpdate, conn, owner_id: int | N
         tcp_ports=parse_port_list(effective["tcp_ports"]) if effective["enable_tcp_connect"] else [],
         udp_ports=parse_port_list(effective["udp_ports"]) if effective["enable_udp_scan"] else [],
         scan_result=scan_result,
+        reset_observations=host_changed,
     )
     row = sqlite_db.get_target(conn, target_id)
     return _row_to_target_public(row, conn)

@@ -20,6 +20,7 @@ from fastapi.testclient import TestClient
 from app.api import targets
 from app.api.auth import get_current_user
 from app.db import sqlite as sqlite_db
+from app.db import tsdb
 from app.db.sqlite import migrations
 from app.services import target_identity
 from app.services.nmap_scanner import (
@@ -312,6 +313,77 @@ def test_unchanged_ports_keep_their_metadata_when_saved_again(conn):
     sqlite_db.sync_network_ports(conn, tid, tcp_ports=[22], udp_ports=[])
     (port,) = sqlite_db.list_network_ports(conn, tid)
     assert (port["port"], port["service_name"], port["source"]) == (22, "ssh", "discovered")
+
+
+def test_host_change_discards_observations_but_keeps_ports_and_history(conn, tmp_path: Path):
+    client = _app_client(conn, tmp_path)
+    created = client.post(
+        "/targets",
+        json={
+            "name": "host-reset",
+            "host": "old.example.com",
+            "enable_tcp_connect": True,
+            "tcp_host": "old.example.com",
+            "tcp_ports": "22",
+            "enable_udp_scan": True,
+            "udp_ports": "53",
+        },
+    )
+    assert created.status_code == 201, created.text
+    tid = created.json()["id"]
+    scan = _scan(
+        _port("tcp", 22, name="ssh", product="OpenSSH", version="9.6", method="probed", confidence=10),
+        _port("udp", 53, name="domain", method="probed", confidence=8),
+    )
+    sqlite_db.sync_network_ports(conn, tid, tcp_ports=[22], udp_ports=[53], scan_result=scan)
+    sqlite_db.update_network_port_status(conn, tid, "tcp", 22, "up", raw_state="open", latency_ms=2.5)
+    sqlite_db.update_network_port_status(conn, tid, "udp", 53, "down", raw_state="closed")
+    sqlite_db.record_service_observation(conn, tid, "tcp", 22, identity="changed", detail="old host service")
+    conn.execute(
+        "INSERT INTO target_status(target_id, overall_status, updated_at) VALUES (?, 'down', ?)",
+        (tid, utcnow()),
+    )
+    conn.commit()
+    tsdb.append_point(tmp_path, target_id=tid, metric="tcp_up_22", value=1, retention_days=30, at=utcnow())
+    history = tsdb.query_latest(tmp_path, target_id=tid, metric="tcp_up_22")
+
+    renamed = client.patch(f"/targets/{tid}", json={"name": "host-reset-renamed"})
+    assert renamed.status_code == 200, renamed.text
+    assert renamed.json()["network_ports"][0]["service_name"] == "ssh"
+    assert sqlite_db.get_target_status(conn, tid)["overall_status"] == "down"
+
+    changed = client.patch(f"/targets/{tid}", json={"host": "new.example.com"})
+    assert changed.status_code == 200, changed.text
+    result = changed.json()
+    assert (result["tcp_ports"], result["udp_ports"], result["enable_tcp_connect"], result["enable_udp_scan"]) == (
+        "22",
+        "53",
+        True,
+        True,
+    )
+    assert {(port["protocol"], port["port"]) for port in result["network_ports"]} == {("tcp", 22), ("udp", 53)}
+    for port in result["network_ports"]:
+        assert port["source"] == "manual"
+        assert port["status"] == "unknown" and port["service_identity"] == "unknown"
+        assert all(
+            port[key] is None
+            for key in (
+                "service_name",
+                "service_product",
+                "service_version",
+                "method",
+                "confidence",
+                "discovered_at",
+                "checked_at",
+                "last_up_at",
+                "detail",
+                "raw_state",
+                "identity_changed_at",
+                "latency_ms",
+            )
+        )
+    assert sqlite_db.get_target_status(conn, tid) is None
+    assert tsdb.query_latest(tmp_path, target_id=tid, metric="tcp_up_22") == history
 
 
 def _stub_job(monkeypatch, *, host: str, result: NmapScanResult | None, owner_ok: bool = True):

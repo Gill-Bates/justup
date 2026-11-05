@@ -620,37 +620,87 @@ def _redetect(db_path, tmp_path, monkeypatch, service):
     sched = _sched(db_path, tmp_path)
     sched._refresh_targets(utcnow())
     calls = _fake_scan(monkeypatch, _scan_result({25: "open"}, service, tcp=True))
-    judged = asyncio.run(sched.redetect_services(tid))
-    return tid, judged, calls
+    preview = asyncio.run(sched.preview_service_detection(tid, owner_id=1))
+    return tid, sched, preview, calls
 
 
 def test_changed_version_after_an_update_changes_neither_status_nor_alerts(db_path, tmp_path, monkeypatch):
-    tid, judged, calls = _redetect(db_path, tmp_path, monkeypatch, _svc(version="3.9"))
+    tid, sched, preview, calls = _redetect(db_path, tmp_path, monkeypatch, _svc(version="3.9"))
+    assert preview["changes"][0]["kind"] == "version_changed"
+    assert _ports(db_path, tid)[("tcp", 25)]["service_version"] == "3.7"
+    sched.confirm_service_detection(tid, 1, preview["token"])
     port = _ports(db_path, tid)[("tcp", 25)]
-    assert judged == {"tcp:25": "identified"} and calls[0]["detect_services"] is True
+    assert calls[0]["detect_services"] is True
     assert port["status"] == "up" and port["service_identity"] == "identified"
     assert port["service_version"] == "3.9" and "version changed" in port["detail"]
     assert _alert_ids(db_path) == []
 
 
 def test_changed_identity_is_a_diagnostic_event_and_not_a_port_outage(db_path, tmp_path, monkeypatch, caplog):
-    tid, judged, _calls = _redetect(db_path, tmp_path, monkeypatch, _svc(name="http", product="nginx", version="1"))
+    tid, sched, preview, _calls = _redetect(db_path, tmp_path, monkeypatch, _svc(name="http", product="nginx", version="1"))
+    assert preview["changes"][0]["kind"] == "service_changed"
+    assert _ports(db_path, tid)[("tcp", 25)]["service_name"] == "smtp"
+    sched.confirm_service_detection(tid, 1, preview["token"])
     port = _ports(db_path, tid)[("tcp", 25)]
-    assert judged == {"tcp:25": "changed"}
-    assert port["service_identity"] == "changed" and port["identity_changed_at"] is not None
+    assert port["service_identity"] == "identified"
     assert port["status"] == "up"  # identity is not availability
-    assert port["service_name"] == "smtp"  # the base stays until it is re-adopted
+    assert port["service_name"] == "http"
     assert _alert_ids(db_path) == []
-    assert "identity changed" in caplog.text
 
 
 def test_failed_redetection_changes_nothing(db_path, tmp_path, monkeypatch):
-    tid, _judged, _calls = _redetect(db_path, tmp_path, monkeypatch, _svc())
+    tid, _sched_instance, _preview, _calls = _redetect(db_path, tmp_path, monkeypatch, _svc())
     _fake_scan(monkeypatch, NmapScannerError("unavailable", "down"))
     sched = _sched(db_path, tmp_path)
     sched._refresh_targets(utcnow())
-    assert asyncio.run(sched.redetect_services(tid)) == {}
+    with pytest.raises(NmapScannerError):
+        asyncio.run(sched.preview_service_detection(tid, owner_id=1))
     assert _ports(db_path, tid)[("tcp", 25)]["service_identity"] == "identified"
+
+
+def test_service_detection_confirmation_is_owner_bound_and_single_use(db_path, tmp_path, monkeypatch):
+    tid, sched, preview, _calls = _redetect(db_path, tmp_path, monkeypatch, _svc(name="http", product="nginx"))
+    with pytest.raises(LookupError):
+        sched.confirm_service_detection(tid, 2, preview["token"])
+    assert _ports(db_path, tid)[("tcp", 25)]["service_name"] == "smtp"
+    sched.confirm_service_detection(tid, 1, preview["token"])
+    with pytest.raises(LookupError):
+        sched.confirm_service_detection(tid, 1, preview["token"])
+
+
+def test_service_detection_rejects_stale_target_before_confirmation(db_path, tmp_path, monkeypatch):
+    tid, sched, preview, _calls = _redetect(db_path, tmp_path, monkeypatch, _svc(name="http", product="nginx"))
+    conn = sqlite_db.connect(db_path)
+    conn.execute("UPDATE targets SET updated_at = '2099-01-01T00:00:00' WHERE id = ?", (tid,))
+    conn.commit()
+    sqlite_db.close_connection(conn)
+    with pytest.raises(ValueError, match="Target changed"):
+        sched.confirm_service_detection(tid, 1, preview["token"])
+    assert _ports(db_path, tid)[("tcp", 25)]["service_name"] == "smtp"
+
+
+def test_udp_detection_uses_central_host_when_tcp_host_differs(db_path, tmp_path, monkeypatch):
+    tid = _target(
+        db_path, host="udp.example", tcp_host="tcp.example", enable_tcp_connect=True, tcp_ports="25",
+        enable_udp_scan=True, udp_ports="53",
+    )
+    sched = _sched(db_path, tmp_path)
+    sched._refresh_targets(utcnow())
+    calls = []
+
+    async def fake_request_scan(host, **kwargs):
+        calls.append((host, kwargs))
+        if kwargs.get("tcp_ports"):
+            return _scan_result({25: "open"}, _svc(), tcp=True)
+        return _scan_result({53: "open"}, _svc(), tcp=False)
+
+    monkeypatch.setattr(nmap_client, "request_scan", fake_request_scan)
+    preview = asyncio.run(sched.preview_service_detection(tid, owner_id=1))
+    assert [(host, kwargs.get("tcp_ports"), kwargs.get("udp_ports")) for host, kwargs in calls] == [
+        ("tcp.example", [25], None), ("udp.example", None, [53]),
+    ]
+    assert {change["protocol"] for change in preview["changes"]} == {"tcp", "udp"}
+    assert sched._udp_scan_target(sched._targets[tid]) == ("udp.example", True)
 
 
 # ── Alerts ─────────────────────────────────────────────────────────────────────
@@ -823,6 +873,7 @@ def test_redetection_result_is_discarded_when_the_target_changed_meanwhile(db_pa
         return _scan_result({25: "open"}, _svc(name="http", product="nginx", version="1"), tcp=True)
 
     _fake_scan(monkeypatch, change_target)
-    assert asyncio.run(sched.redetect_services(tid)) == {}
+    with pytest.raises(ValueError):
+        asyncio.run(sched.preview_service_detection(tid, owner_id=1))
     if change == "edited":
         assert _ports(db_path, tid)[("tcp", 25)]["service_identity"] == before

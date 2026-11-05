@@ -21,16 +21,14 @@ from typing import Literal
 
 from defusedxml import ElementTree
 from defusedxml.common import DefusedXmlException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
+from app.models.network_scan import NmapHostResult, NmapPortResult, NmapScanResult, NmapServiceInfo, ScanState
 from app.models.targets import validate_host
 from app.services.route_model import MAX_HOPS, RequestedProbeProtocol, Route, RouteHop
 from app.utils.ssrf import resolve_validated
 from app.utils.tcp_ports import parse_port_list
 from app.utils.time import utcnow
-
-Protocol = Literal["tcp", "udp"]
-ScanState = Literal["open", "closed", "filtered", "open|filtered", "unfiltered", "closed|filtered", "unknown"]
 
 QUICK_TCP_PORTS = (21, 22, 25, 53, 80, 110, 143, 443, 465, 587, 993, 995, 3306, 5432, 8080, 8443)
 QUICK_UDP_PORTS = (53, 67, 68, 123, 161, 162, 500, 514, 1900)
@@ -59,35 +57,6 @@ _scan_slots = asyncio.Semaphore(MAX_CONCURRENT_SCANS)
 _nmap_slots = asyncio.Semaphore(MAX_CONCURRENT_NMAP)
 _resolve_gate: tuple[asyncio.AbstractEventLoop, asyncio.Semaphore] | None = None
 _target_locks: dict[str, asyncio.Lock] = {}
-
-
-class NmapServiceInfo(BaseModel):
-    name: str | None = None
-    product: str | None = None
-    version: str | None = None
-    method: Literal["probed", "table"] | None = None
-    confidence: int | None = Field(default=None, ge=0, le=10)
-
-
-class NmapPortResult(BaseModel):
-    protocol: Protocol
-    port: int = Field(ge=1, le=65535)
-    state: ScanState
-    reason: str | None = None
-    service: NmapServiceInfo | None = None
-
-
-class NmapHostResult(BaseModel):
-    address: str
-    status: str | None = None
-    ports: list[NmapPortResult] = Field(default_factory=list)
-
-
-class NmapScanResult(BaseModel):
-    hosts: list[NmapHostResult] = Field(default_factory=list)
-    started_at: datetime
-    completed_at: datetime
-    complete: bool
 
 
 class NmapScanError(BaseModel):

@@ -95,6 +95,38 @@ class QualityState:
     DOWN: str = "down"
 
 
+@dataclass(frozen=True)
+class ServiceDetectionCandidate:
+    protocol: str
+    port: int
+    kind: str
+    previous: tuple[str | None, str | None, str | None, str | None]
+    service: Any
+    assessment: checks.IdentityAssessment
+
+    def public(self) -> dict[str, Any]:
+        return {
+            "protocol": self.protocol,
+            "port": self.port,
+            "kind": self.kind,
+            "previous_name": self.previous[0],
+            "previous_product": self.previous[1],
+            "previous_version": self.previous[2],
+            "name": self.service.name,
+            "product": self.service.product,
+            "version": self.service.version,
+        }
+
+
+@dataclass(frozen=True)
+class PendingServiceDetection:
+    owner_id: int
+    target_id: int
+    target_updated_at: str | None
+    created_at: datetime
+    candidates: tuple[ServiceDetectionCandidate, ...]
+
+
 MAX_JITTER_SECONDS = 10
 TOKEN_CLEANUP_RETRY_SECONDS = 300
 DB_MAINTENANCE_INTERVAL_SECONDS = 3600
@@ -435,6 +467,8 @@ class MonitorScheduler:
         self._epoch_lock = threading.Lock()
         self._threads_active = 0
         self._stale_logged_epoch = -1
+        self._service_previews: dict[str, PendingServiceDetection] = {}
+        self._service_previews_lock = threading.Lock()
 
     @contextmanager
     def _db_conn(self):
@@ -1148,7 +1182,7 @@ class MonitorScheduler:
     @staticmethod
     def _udp_scan_target(cfg: dict[str, Any]) -> tuple[str, bool]:
         """What a UDP scan result belongs to: the scanned host and whether UDP scanning is on."""
-        return str(cfg.get("host") or cfg.get("tcp_host") or ""), bool(cfg.get("enable_udp_scan"))
+        return str(cfg.get("host") or ""), bool(cfg.get("enable_udp_scan"))
 
     @staticmethod
     def _drop_udp_scan(rt: TargetRuntime) -> None:
@@ -1887,59 +1921,109 @@ class MonitorScheduler:
         except Exception as exc:  # noqa: BLE001 - persistence failure is logged, the in-memory result stays
             _log.warning("Target %s: could not store UDP port status: %s", target_id, exc)
 
-    async def redetect_services(self, target_id: int, generation: int | None = None) -> dict[str, str]:
-        """Explicit service re-detection (``-sV``) for the configured ports of one target.
-
-        Compares each probed service with the stored base identity: a changed version is only noted,
-        a different service is SERVICE_CHANGED. The port status is never touched. Returns
-        ``{"<protocol>:<port>": identity}`` for the ports that could be judged.
-        """
+    async def preview_service_detection(self, target_id: int, owner_id: int) -> dict[str, Any]:
+        """Scan configured ports and return proposed changes without storing observations."""
         cfg = self._targets.get(target_id)
         if not cfg:
-            return {}
-        host = str(cfg.get("tcp_host") or cfg.get("host") or "")
+            raise LookupError("Target not found in the monitoring snapshot")
+        tcp_host = str(cfg.get("tcp_host") or cfg.get("host") or "")
+        udp_host = str(cfg.get("host") or "")
         tcp = list(cfg.get("tcp_ports") or []) if cfg.get("enable_tcp_connect") else []
         udp = list(cfg.get("udp_ports") or []) if cfg.get("enable_udp_scan") else []
-        if not host or not (tcp or udp):
-            return {}
+        if (tcp and not tcp_host) or (udp and not udp_host):
+            raise ValueError("Target has no scan host")
+        if not (tcp or udp):
+            return {"token": None, "changes": []}
         from app.services.nmap_client import request_scan
 
-        try:
-            result = await request_scan(host, tcp_ports=tcp or None, udp_ports=udp or None, detect_services=True)
-        except Exception as exc:  # noqa: BLE001 - a failed detection says nothing about the target
-            _log.warning(
-                "Target %s: service re-detection failed: %s",
-                target_id,
-                getattr(getattr(exc, "error", None), "code", type(exc).__name__),
+        results = []
+        if tcp and udp and tcp_host == udp_host:
+            results.append(await request_scan(tcp_host, tcp_ports=tcp, udp_ports=udp, detect_services=True))
+        else:
+            if tcp:
+                results.append(await request_scan(tcp_host, tcp_ports=tcp, detect_services=True))
+            if udp:
+                results.append(await request_scan(udp_host, udp_ports=udp, detect_services=True))
+        observed = {(p.protocol, p.port): p for result in results for h in result.hosts for p in h.ports}
+        generation = maintenance.current_generation()
+
+        def compare() -> tuple[ServiceDetectionCandidate, ...]:
+            with maintenance.work_section(generation), self._db_conn() as conn:
+                if not self._target_matches_snapshot(conn, target_id, cfg):
+                    raise ValueError("Target changed during service detection")
+                stored = {(r["protocol"], r["port"]): r for r in sqlite_db.list_network_ports(conn, target_id)}
+                candidates = []
+                for key, found in observed.items():
+                    previous = stored.get(key)
+                    if previous is None:
+                        continue
+                    assessment = checks.assess_service_identity(previous, found.service)
+                    if assessment.identity == checks.SERVICE_CHANGED:
+                        kind = "service_changed"
+                    elif assessment.adopt:
+                        kind = "identified"
+                    elif assessment.detail and assessment.detail.startswith("version changed:"):
+                        kind = "version_changed"
+                    else:
+                        continue
+                    candidates.append(
+                        ServiceDetectionCandidate(
+                            key[0], key[1], kind,
+                            tuple(previous.get(field) for field in ("service_name", "service_product", "service_version", "service_identity")),
+                            found.service, assessment,
+                        )
+                    )
+                return tuple(sorted(candidates, key=lambda item: (item.protocol, item.port)))
+
+        candidates = await asyncio.to_thread(compare)
+        if not candidates:
+            return {"token": None, "changes": []}
+        token = uuid.uuid4().hex
+        with self._service_previews_lock:
+            now = utcnow()
+            self._service_previews = {
+                key: value for key, value in self._service_previews.items()
+                if now - value.created_at < timedelta(minutes=5)
+            }
+            if len(self._service_previews) >= 64:
+                oldest = min(self._service_previews, key=lambda key: self._service_previews[key].created_at)
+                del self._service_previews[oldest]
+            self._service_previews[token] = PendingServiceDetection(
+                owner_id, target_id, cfg.get("_updated_at"), now, candidates
             )
-            return {}
-        observed = {(p.protocol, p.port): p for h in result.hosts for p in h.ports}
-        judged: dict[str, str] = {}
-        generation = maintenance.current_generation() if generation is None else generation
+        return {"token": token, "changes": [candidate.public() for candidate in candidates]}
+
+    def confirm_service_detection(self, target_id: int, owner_id: int, token: str) -> list[dict[str, Any]]:
+        """Apply one owner-bound preview after rechecking its target and stored baseline."""
+        with self._service_previews_lock:
+            pending = self._service_previews.get(token)
+            if pending is None or pending.owner_id != owner_id or pending.target_id != target_id:
+                raise LookupError("Service detection preview not found")
+            del self._service_previews[token]
+        if utcnow() - pending.created_at >= timedelta(minutes=5):
+            raise ValueError("Service detection preview expired")
+        generation = maintenance.current_generation()
         with maintenance.work_section(generation), self._db_conn() as conn:
-            if not self._target_matches_snapshot(conn, target_id, cfg):
-                return {}  # target edited or deleted while the scan ran: the result belongs to the old state
+            current = sqlite_db.get_target(conn, target_id)
+            if current is None or current["updated_at"] != pending.target_updated_at:
+                raise ValueError("Target changed after service detection")
             stored = {(r["protocol"], r["port"]): r for r in sqlite_db.list_network_ports(conn, target_id)}
-            for key, found in observed.items():
-                assessment = checks.assess_service_identity(stored.get(key), found.service)
-                if assessment.identity is None:
-                    continue
+            for candidate in pending.candidates:
+                row = stored.get((candidate.protocol, candidate.port))
+                if row is None or tuple(row.get(field) for field in ("service_name", "service_product", "service_version", "service_identity")) != candidate.previous:
+                    raise ValueError("Service metadata changed after detection")
+            for candidate in pending.candidates:
+                adopt = candidate.kind in {"service_changed", "identified"}
                 sqlite_db.record_service_observation(
-                    conn,
-                    target_id,
-                    key[0],
-                    key[1],
-                    identity=assessment.identity,
-                    detail=assessment.detail,
-                    service=found.service,
-                    adopt=assessment.adopt,
-                    version=assessment.version,
+                    conn, target_id, candidate.protocol, candidate.port,
+                    identity=checks.SERVICE_IDENTIFIED,
+                    detail=candidate.assessment.detail,
+                    service=candidate.service,
+                    adopt=adopt,
+                    version=candidate.assessment.version,
                 )
-                judged[f"{key[0]}:{key[1]}"] = assessment.identity
-                if assessment.identity == checks.SERVICE_CHANGED:
-                    _log.warning("Target %s: %s (port %s/%s)", target_id, assessment.detail, key[0], key[1])
             conn.commit()
-        return judged
+        return [candidate.public() for candidate in pending.candidates]
 
     def _write_metric_points(
         self,

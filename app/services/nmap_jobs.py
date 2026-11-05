@@ -18,9 +18,10 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.models.network_scan import NmapScanResult
 from app.models.targets import validate_host
 from app.services.nmap_client import request_scan
-from app.services.nmap_scanner import NmapScanError, NmapScannerError, NmapScanResult
+from app.services.nmap_scanner import NmapScanError, NmapScannerError
 from app.utils.ssrf import resolve_validated
 from app.utils.time import utcnow
 

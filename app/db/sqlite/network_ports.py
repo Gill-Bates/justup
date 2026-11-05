@@ -11,7 +11,7 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Iterable
 
-from app.services.nmap_scanner import NmapScanResult
+from app.models.network_scan import NmapScanResult
 from app.utils.tcp_ports import parse_port_list
 from app.utils.time import utcnow
 
@@ -67,8 +67,20 @@ def sync_network_ports(
     tcp_ports: Iterable[int],
     udp_ports: Iterable[int],
     scan_result: NmapScanResult | None = None,
+    reset_observations: bool = False,
 ) -> None:
-    """Reconcile configured pairs while preserving metadata for unchanged manual ports."""
+    """Reconcile configured pairs; drop observations when the target host changes."""
+    if reset_observations:
+        conn.execute(
+            """UPDATE target_network_ports
+               SET source = 'manual', service_name = NULL, service_product = NULL,
+                   service_version = NULL, service_method = NULL, confidence = NULL,
+                   discovered_at = NULL, status = 'unknown', checked_at = NULL,
+                   last_up_at = NULL, detail = NULL, raw_state = NULL,
+                   service_identity = 'unknown', identity_changed_at = NULL, latency_ms = NULL
+               WHERE target_id = ?""",
+            (target_id,),
+        )
     tcp = parse_port_list(list(tcp_ports))
     udp = parse_port_list(list(udp_ports))
     selected = {("tcp", port) for port in tcp} | {("udp", port) for port in udp}

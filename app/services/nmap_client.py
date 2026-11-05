@@ -14,7 +14,8 @@ import os
 from contextlib import suppress
 from pathlib import Path
 
-from app.services.nmap_scanner import NmapScannerError, NmapScanResult
+from app.models.network_scan import NmapScanResult
+from app.services.nmap_scanner import NmapScannerError
 from app.services.route_model import RequestedProbeProtocol, Route
 
 SOCKET_PATH = os.environ.get("JUSTUP_NMAP_SOCKET", "/run/justup/nmap.sock")

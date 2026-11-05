@@ -52,8 +52,9 @@ function initSettingsTabStrip() {
     tabs.addEventListener('scroll', updateEdges, { passive: true });
     window.addEventListener('resize', updateEdges);
     tabs.addEventListener('shown.bs.tab', (e) => revealTab(e.target));
+    // Keyboard focus only: scrolling on a mouse press moves the tab away before mouseup and the click is lost.
     tabs.addEventListener('focusin', (e) => {
-        if (e.target.matches?.('[role="tab"]')) revealTab(e.target);
+        if (e.target.matches?.('[role="tab"]:focus-visible')) revealTab(e.target);
     });
     updateEdges();
     // Initial tab may have been restored from the URL hash.

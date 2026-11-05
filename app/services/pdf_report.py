@@ -19,7 +19,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, tzinfo
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 from xml.sax.saxutils import escape as _xml_escape
 
@@ -88,7 +88,7 @@ from app.services.traceroute_service import (
     analyze_route,
     trace_sync,
 )
-from app.utils.availability_rules import MIN_DOWNTIME_SECONDS, effective_interval_seconds, measured_outages
+from app.utils.availability_rules import MIN_DOWNTIME_SECONDS, measured_outages
 from app.utils.cert_target import resolve_cert_target
 from app.utils.ssrf import redact_url
 from app.utils.status_palette import STATUS_PALETTE
@@ -99,6 +99,9 @@ from app.utils.version import BUILD_INFO, VERSION
 from app.utils.whatweb_parser import run_whatweb
 
 _log = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from app.db.tsdb import DowntimePeriod
 
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 
@@ -338,6 +341,7 @@ class ReportData:
     tcp_port_data: dict[int, list[dict]] | None = None  # Per-port TCP data: {port: [points]}
     display_data: dict[str, list[dict]] | None = None
     status_counts_exact: bool = False
+    downtime_periods: list[DowntimePeriod] | None = None
 
 
 @dataclass
@@ -1488,7 +1492,9 @@ def _coverage_pct(report_data: ReportData, total_checks: int, interval_seconds: 
     return round(min(100.0, total_checks * interval_seconds / window * 100), 1)
 
 
-def _downtime_minutes(uptime_data: list[dict], interval_seconds: float) -> int:
+def _downtime_minutes(
+    uptime_data: list[dict], interval_seconds: float, events: list[DowntimeEvent] | None = None
+) -> int:
     """Whole minutes of the downtime table; an ongoing outage counts up to its last sample."""
     stamps = []
     for p in uptime_data or []:
@@ -1498,7 +1504,7 @@ def _downtime_minutes(uptime_data: list[dict], interval_seconds: float) -> int:
             continue
     last = max(stamps, default=None)
     total = 0
-    for event in _extract_downtime_events(uptime_data, interval_seconds):
+    for event in events if events is not None else _extract_downtime_events(uptime_data, interval_seconds):
         if event.end is not None:
             total += event.duration_minutes or 0
         elif last is not None:
@@ -1524,7 +1530,9 @@ def _compute_kpis(report_data: ReportData) -> KPIMetrics:
         uptime_percent=_availability_pct(up_count, total_checks),
         avg_response_ms=round(sum(response) / len(response)) if response else None,
         max_response_ms=round(max(response)) if response else None,
-        downtime_minutes=_downtime_minutes(report_data.uptime_data, interval_seconds),
+        downtime_minutes=_downtime_minutes(
+            report_data.uptime_data, interval_seconds, _report_downtime_events(report_data)
+        ),
         total_checks=total_checks,
         up_count=up_count,
         down_count=down_count,
@@ -1556,20 +1564,31 @@ def _extract_downtime_events(
         value = p.get("value")
         points.append((ts, value if value in (0, 1) else None))
 
-    # The report series is resampled or rolled up: its regular spacing, not the check interval, is the unit.
-    gap_interval = effective_interval_seconds((ts for ts, _v in points), interval_seconds)
     events = [
         DowntimeEvent(
             start=o.start,
             end=o.end,
             duration_minutes=None if o.end is None else int((o.seconds() or 0) / 60),
         )
-        for o in measured_outages(points, interval_seconds=interval_seconds, gap_interval_seconds=gap_interval, now=now)
+        for o in measured_outages(points, interval_seconds=interval_seconds, now=now)
         if o.end is None or (o.seconds() or 0) >= MIN_DOWNTIME_SECONDS
     ]
     if skipped_count > 0:
         _log.warning("Downtime extraction: skipped %d datapoints with invalid/missing timestamps", skipped_count)
     return events
+
+
+def _report_downtime_events(report_data: ReportData) -> list[DowntimeEvent]:
+    if report_data.downtime_periods is not None:
+        return [
+            DowntimeEvent(
+                start=period.start,
+                end=period.end,
+                duration_minutes=None if period.duration_seconds is None else period.duration_seconds // 60,
+            )
+            for period in reversed(report_data.downtime_periods)
+        ]
+    return _extract_downtime_events(report_data.uptime_data, report_data.target.get("interval_seconds") or 60)
 
 
 # ---------------------------------------------------------------------------
@@ -2302,10 +2321,7 @@ class PDFReportBuilder:
         self.styles = self._create_styles()
         self.elements: list = []
         self.kpis = _compute_kpis(report_data)
-        self.downtime_events = _extract_downtime_events(
-            report_data.uptime_data,
-            report_data.target.get("interval_seconds") or 60,
-        )
+        self.downtime_events = _report_downtime_events(report_data)
         self.chapter_pages: dict[str, int] = {}
         self.page_count = 0
         self.content_pages: set[int] = set()

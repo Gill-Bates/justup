@@ -23,6 +23,8 @@
 - `Fix` The chart of a target without an HTTP check no longer shows the note "No HTTP status codes: the HTTP check is not enabled."
 - `Fix` The tab bar of Edit Target (General, HTTP / TLS, Network, Alerts & SLA) no longer scrolls vertically by one pixel (ghost scroll under the tabs).
 - `Fix` Native select fields show a hand cursor while operable and `not-allowed` while disabled.
+- `Fix` On the About page the cards no longer push the page sideways on very narrow screens (320 px).
+- `Fix` A mouse click on a Settings tab could be lost: pressing the tab scrolled the tab bar under the pointer before the button was released. The bar now scrolls to a tab only on keyboard focus.
 - `Fix` "Insert link" in the mail template editor no longer opens a browser popup: the address is typed into a field of the editor, and a blocked address (for example `javascript:`) is shown as an error at that field.
 - `Fix` "Reset metrics" and "Delete target" ask in the application's own dialog (naming the target and the consequence) instead of the browser's native popup.
 - `Fix` The target preview suggests HTTPS only when the final settings really check an https:// URL; an `http://` override or a switched-off HTTP check no longer gets the suggestion.
