@@ -16,7 +16,7 @@ import time
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -45,7 +45,7 @@ from ..utils.deps import get_conn, get_tsdb_dir
 from ..utils.http_status import DEFAULT_HTTP_SUCCESS_CODES
 from ..utils.public_url import get_public_base_url, target_url
 from ..utils.rate_limit import rate_limit
-from ..utils.tcp_ports import parse_port_list
+from ..utils.tcp_ports import parse_port_list, protocol_scan_hosts
 from .auth import get_current_user, require_admin
 
 _log = logging.getLogger(__name__)
@@ -143,13 +143,19 @@ def _validate_udp_ports(ports: str | None) -> str:
     return ",".join(str(port) for port in parsed)
 
 
-def _scan_result_for_target(scan_id: str | None, owner_id: int, host: str):
+def _scan_result_for_target(scan_id: str | None, owner_id: int, target) -> tuple[Any, tuple[str, ...]]:
+    """Return the scan result and the protocols whose scan host the job covers (empty without a scan id)."""
     if scan_id is None:
-        return None
+        return None, ()
     job = completed_job(scan_id, owner_id)
-    if job is None or _norm_host(job.host) != _norm_host(host):
+    covered = (
+        tuple(p for p, h in protocol_scan_hosts(target).items() if h and _norm_host(h) == _norm_host(job.host))
+        if job is not None
+        else ()
+    )
+    if not covered:
         raise HTTPException(status_code=422, detail="Network scan is unavailable or belongs to another host")
-    return job.result
+    return job.result, covered
 
 
 def _encrypt_password(password: str | object | None) -> str | None:
@@ -358,7 +364,7 @@ def get_one(target_id: int, conn=Depends(get_conn), _user=Depends(get_current_us
 def create(payload: TargetCreate, request: Request, conn=Depends(get_conn), _user=Depends(require_admin)):
     """Create a new target."""
     values_db = _prepare_create_values(payload)
-    scan_result = _scan_result_for_target(payload.network_scan_id, int(_user["id"]), values_db["host"])
+    scan_result, scan_protocols = _scan_result_for_target(payload.network_scan_id, int(_user["id"]), values_db)
     recipient_ids = payload.alert_recipient_ids
     with sqlite_db.immediate_transaction(conn):
         for rid in set(recipient_ids):
@@ -372,6 +378,7 @@ def create(payload: TargetCreate, request: Request, conn=Depends(get_conn), _use
             tcp_ports=parse_port_list(values_db["tcp_ports"]) if values_db["enable_tcp_connect"] else [],
             udp_ports=parse_port_list(values_db["udp_ports"]) if values_db["enable_udp_scan"] else [],
             scan_result=scan_result,
+            scan_protocols=scan_protocols,
         )
         if recipient_ids:
             sqlite_db.set_target_recipients(conn, new_id, list(dict.fromkeys(recipient_ids)), manage_transaction=False)
@@ -552,15 +559,12 @@ def _patch_locked(target_id: int, payload: TargetUpdate, conn, owner_id: int | N
     if host_changed:
         sqlite_db.delete_target_status(conn, target_id)
     # TCP scans tcp_host (falling back to host); UDP scans host only, so each protocol resets on its own host.
-    reset_protocols = set()
-    if (effective["tcp_host"] or effective["host"]) != (existing["tcp_host"] or existing["host"]):
-        reset_protocols.add("tcp")
-    if host_changed:
-        reset_protocols.add("udp")
-    scan_result = (
-        _scan_result_for_target(payload.network_scan_id, owner_id, effective["host"])
+    old_hosts, new_hosts = protocol_scan_hosts(existing), protocol_scan_hosts(effective)
+    reset_protocols = {p for p, h in new_hosts.items() if h != old_hosts[p]}
+    scan_result, scan_protocols = (
+        _scan_result_for_target(payload.network_scan_id, owner_id, effective)
         if payload.network_scan_id and owner_id is not None
-        else None
+        else (None, ())
     )
     sqlite_db.sync_network_ports(
         conn,
@@ -569,6 +573,7 @@ def _patch_locked(target_id: int, payload: TargetUpdate, conn, owner_id: int | N
         udp_ports=parse_port_list(effective["udp_ports"]) if effective["enable_udp_scan"] else [],
         scan_result=scan_result,
         reset_protocols=reset_protocols,
+        scan_protocols=scan_protocols,
     )
     row = sqlite_db.get_target(conn, target_id)
     return _row_to_target_public(row, conn)
@@ -581,6 +586,17 @@ def delete(target_id: int, request: Request, conn=Depends(get_conn), user=Depend
     if target is None:
         raise HTTPException(status_code=404, detail="Target not found")
 
+    # TSDB files cannot join the SQLite transaction: delete them last, inside it, so leftovers
+    # roll the target delete back and the request can simply be repeated.
+    try:
+        with sqlite_db.transaction(conn):
+            sqlite_db.delete_target(conn, target_id)
+            if not tsdb_db.delete_target(get_tsdb_dir(request), target_id):
+                raise HTTPException(status_code=500, detail=_TSDB_LEFTOVER_DETAIL)
+    except sqlite3.Error:
+        # Files may already be gone while the row stays; repeating the request converges.
+        _log.exception("Target %d delete failed at commit; metric data may already be removed", target_id)
+        raise HTTPException(status_code=500, detail=_DELETE_COMMIT_FAILED_DETAIL) from None
     client_ip = _get_client_ip(request)
     target_name = target["name"]
     _log.info(
@@ -596,17 +612,6 @@ def delete(target_id: int, request: Request, conn=Depends(get_conn), user=Depend
         },
     )
 
-    # TSDB files cannot join the SQLite transaction: delete them last, inside it, so leftovers
-    # roll the target delete back and the request can simply be repeated.
-    try:
-        with sqlite_db.transaction(conn):
-            sqlite_db.delete_target(conn, target_id)
-            if not tsdb_db.delete_target(get_tsdb_dir(request), target_id):
-                raise HTTPException(status_code=500, detail=_TSDB_LEFTOVER_DETAIL)
-    except sqlite3.Error:
-        # Files may already be gone while the row stays; repeating the request converges.
-        _log.exception("Target %d delete failed at commit; metric data may already be removed", target_id)
-        raise HTTPException(status_code=500, detail=_DELETE_COMMIT_FAILED_DETAIL) from None
     # Best-effort: notify scheduler
     scheduler = getattr(request.app.state, "scheduler", None)
     if scheduler is not None:
@@ -1026,6 +1031,7 @@ def _notify_recipients_background_in_section(
             if email and smtp_enabled:
                 subject = f"🎉 justUp! – You were added: {target_name}"
 
+                has_link = system_url.lower().startswith(("http://", "https://"))
                 safe_recipient_name = html.escape(str(recipient_name or ""))
                 safe_target_name = html.escape(str(target_name or ""))
                 safe_message = html.escape(str(email_message or ""))
@@ -1044,7 +1050,7 @@ def _notify_recipients_background_in_section(
                     f"{email_message}\n\n"
                     f"From now on, you will receive notifications when the target '{target_name}' "
                     f"goes down or comes back up.\n\n"
-                    + (f"Open justUp!: {system_url}\n\n" if system_url.startswith("https://") else "")
+                    + (f"Open justUp!: {system_url}\n\n" if has_link else "")
                     + "This message was sent automatically.\n\n"
                     f"justUp! © 2026 Gill-Bates · GitHub: {github_url}\n"
                 )

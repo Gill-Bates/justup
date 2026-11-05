@@ -16,7 +16,8 @@ docker logs -f justup
     See [Environment variables](configuration/environment.md).
 
 ??? failure "Entrypoint aborts"
-    The entrypoint exits if `PUID`/`PGID` are not numeric or are `0`, if `gosu`
+    The entrypoint exits if `PUID`/`PGID` are not numeric, are `0` or equal the reserved Nmap worker id
+    `10001`, if `gosu`
     is missing, or if `/app/data` is not writable by that user.
 
 ## Wrong client IP in rate limits or audit log

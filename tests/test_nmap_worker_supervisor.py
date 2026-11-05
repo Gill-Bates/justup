@@ -102,6 +102,14 @@ def test_worker_that_ends_after_being_ready_is_restarted_with_backoff_then_given
     assert status["restarts"] == 2
 
 
+def test_invalid_limit_fails_closed_without_launching_a_worker(tmp_path):
+    result, status, launches = run_supervisor(tmp_path, bind=True, lifetime=0, ready_timeout="abc")
+    assert result.returncode == 1
+    assert launches == 0
+    assert status["state"] == "failed"
+    assert "NMAP_WORKER_READY_TIMEOUT" in status["detail"]
+
+
 def test_status_detail_is_sanitised_and_file_is_world_readable(tmp_path):
     _, status, _ = run_supervisor(tmp_path, bind=False, lifetime=0, max_failures=1)
     assert set(status) == {"state", "detail", "restarts", "since"}

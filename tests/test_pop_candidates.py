@@ -76,6 +76,32 @@ def test_unconfirmed_candidate_is_inert_and_repeated_measurement_is_deduplicated
     assert tuple(row) == (4, 2, 70)
 
 
+@pytest.mark.parametrize(
+    ("lat", "lon"),
+    [(True, 8.6), (50.1, False), ("50.1", 8.6), (float("nan"), 8.6), (50.1, float("inf")), (90.5, 8.6), (50.1, -181)],
+)
+def test_invalid_coordinates_are_dropped_on_observe_and_refused_on_review(conn, lat, lon) -> None:
+    assert pop_candidates.observe(
+        conn,
+        code="bad",
+        hostname="core.bad.example.net",
+        public_ip="8.8.4.4",
+        provider="generic",
+        measurement_key=_key("route-invalid"),
+        proposal={"city": "Frankfurt", "country": "DE", "lat": lat, "lon": lon},
+    )
+    row = conn.execute(
+        "SELECT proposal_lat, proposal_lon, proposal_source FROM pop_alias_candidates WHERE alias_code = 'bad'"
+    ).fetchone()
+    assert tuple(row) == (None, None, None)
+    _observe(conn, "8.8.8.8", "route-a")
+    _observe(conn, "1.1.1.1", "route-b")
+    with pytest.raises(ValueError, match="observed country or coordinates"):
+        pop_candidates.review(
+            conn, "xyz", action="approve", actor="a", evidence="e", city="Frankfurt", country="DE", lat=lat, lon=lon
+        )
+
+
 def test_approval_revocation_and_review_audit(conn) -> None:
     _observe(conn, "8.8.8.8", "route-a")
     _observe(conn, "1.1.1.1", "route-b")

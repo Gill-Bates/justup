@@ -59,6 +59,13 @@ def _validate_http_codes(v) -> str | None:
     return s
 
 
+def _normalize_group(v):
+    """Empty or blank group means ungrouped (None); create and update share this rule."""
+    if v is None or (isinstance(v, str) and v.strip() == ""):
+        return None
+    return v
+
+
 _HOST_LABEL_RE = re.compile(r"^(?!-)[A-Za-z0-9-]{1,63}(?<!-)$")
 
 
@@ -182,9 +189,7 @@ class TargetBase(BaseModel):
     @classmethod
     def normalize_group(cls, v):
         """Normalize empty group to None for consistency with name min_length."""
-        if v is None or (isinstance(v, str) and v.strip() == ""):
-            return None
-        return v
+        return _normalize_group(v)
 
     @field_validator("tcp_ports", mode="before")
     @classmethod
@@ -343,9 +348,7 @@ class TargetUpdate(BaseModel):
     @classmethod
     def normalize_group(cls, v):
         """Normalize empty group to None for consistency."""
-        if v is None or (isinstance(v, str) and v.strip() == ""):
-            return None
-        return v
+        return _normalize_group(v)
 
     @field_validator("tcp_ports", mode="before")
     @classmethod

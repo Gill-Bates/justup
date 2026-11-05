@@ -10,15 +10,17 @@ from __future__ import annotations
 
 import hashlib
 import ipaddress
-import math
 import re
 import sqlite3
 
 from app.db import sqlite as sqlite_db
+from app.db.pop_locations import _valid_coordinates
 from app.utils.time import utcnow
 
 MAX_CANDIDATES = 5000
 MAX_OBSERVATIONS_PER_CANDIDATE = 20
+# Observed and proposed/reviewed positions farther apart than this conflict.
+LOCATION_CONFLICT_KM = 250
 _CODE = re.compile(r"^[a-z][a-z0-9]{1,4}$")
 _HOST = re.compile(r"^[a-z0-9.-]{1,253}$")
 
@@ -54,14 +56,7 @@ def observe(
     if not city.isprintable():
         city = ""
     lat, lon = guess.get("lat"), guess.get("lon")
-    if (
-        isinstance(lat, bool)
-        or isinstance(lon, bool)
-        or not isinstance(lat, (int, float))
-        or not isinstance(lon, (int, float))
-        or not (math.isfinite(lat) and math.isfinite(lon))
-        or not (-90 <= lat <= 90 and -180 <= lon <= 180)
-    ):
+    if not _valid_coordinates(lat, lon):
         lat = lon = None
     source = "geolite2-coarse" if city and country and lat is not None else None
     canonical_guess = guess.get("canonical_guess") if source else None
@@ -108,7 +103,7 @@ def observe(
             if lat is not None and prior_lat is not None and prior_lon is not None:
                 from app.services.pop_refresh import _facility_distance_km
 
-                conflict |= int(_facility_distance_km((lat, lon), (prior_lat, prior_lon)) > 250)
+                conflict |= int(_facility_distance_km((lat, lon), (prior_lat, prior_lon)) > LOCATION_CONFLICT_KM)
         count = conn.execute(
             "SELECT COUNT(*) FROM pop_candidate_observations WHERE candidate_id = ?", (candidate_id,)
         ).fetchone()[0]
@@ -219,18 +214,13 @@ def review(
                 country != guess_country
                 or not re.fullmatch(r"[A-Z]{2}", country)
                 or not (1 <= len(city) <= 64 and city.isprintable())
-                or isinstance(lat, bool)
-                or isinstance(lon, bool)
-                or not isinstance(lat, (int, float))
-                or not isinstance(lon, (int, float))
-                or not (math.isfinite(lat) and math.isfinite(lon))
-                or not (-90 <= lat <= 90 and -180 <= lon <= 180)
+                or not _valid_coordinates(lat, lon)
             ):
                 raise ValueError("Reviewed location conflicts with the observed country or coordinates")
             if guess_lat is not None and guess_lon is not None:
                 from app.services.pop_refresh import _facility_distance_km
 
-                if _facility_distance_km((lat, lon), (guess_lat, guess_lon)) > 250:
+                if _facility_distance_km((lat, lon), (guess_lat, guess_lon)) > LOCATION_CONFLICT_KM:
                     raise ValueError("Reviewed coordinates conflict with the observed location")
             if conn.execute("SELECT 1 FROM pop_locations WHERE alias_code = ? AND retired = 0", (code,)).fetchone():
                 raise ValueError("An active location already owns this alias")

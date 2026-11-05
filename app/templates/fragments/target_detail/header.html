@@ -41,14 +41,14 @@
 			<p class="target-run-again-status" id="pdf-export-status" role="status" aria-live="polite" hidden></p>
 			<button type="button" class="btn btn-outline-secondary btn-icon" id="export-pdf-btn" title="Export PDF report" aria-label="Export PDF report">
 				<i class="material-icons" id="pdf-icon" aria-hidden="true">picture_as_pdf</i>
-				<span class="spinner-border spinner-border-sm d-none" id="pdf-spinner"></span>
+				<span class="spinner-border spinner-border-sm d-none" id="pdf-spinner" aria-hidden="true"></span>
 			</button>
 			{% if user and user.is_admin %}
 			<button type="button" class="btn btn-outline-info btn-icon" id="test-alert-btn"
 				{% if not has_recipients %}disabled{% endif %}
 				title="{% if has_recipients %}Send test alert to all configured recipients{% else %}No recipients configured - add recipients in target settings{% endif %}" aria-label="{% if has_recipients %}Send test alert to all configured recipients{% else %}No recipients configured - add recipients in target settings{% endif %}">
 				<i class="material-icons" id="test-alert-icon" aria-hidden="true">notifications_active</i>
-				<span class="spinner-border spinner-border-sm d-none" id="test-alert-spinner"></span>
+				<span class="spinner-border spinner-border-sm d-none" id="test-alert-spinner" aria-hidden="true"></span>
 			</button>
 			{% endif %}
 			<button type="button" class="btn btn-outline-secondary btn-icon target-run-again" id="traceroute-run-again" hidden

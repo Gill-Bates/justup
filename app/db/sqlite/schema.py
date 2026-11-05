@@ -58,7 +58,7 @@ def ensure_target_network_ports_table(conn: sqlite3.Connection) -> None:
 
 
 def _create_baseline_schema(conn: sqlite3.Connection) -> None:
-    """Create every table and index of the v1.0.0 baseline schema (idempotent, no transaction handling)."""
+    """Create every table and index of the current schema (SCHEMA_VERSION; idempotent, no transaction handling)."""
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS users (
@@ -541,7 +541,7 @@ def _ensure_unique_recipient_phone(conn: sqlite3.Connection) -> None:
     conn.execute(_RECIPIENT_PHONE_UNIQUE_DDL)
 
 
-# SCHEMA_VERSION 1 is the v1.0.0 baseline: the schema _create_baseline_schema() builds. Pre-release
+# SCHEMA_VERSION 1 was the v1.0.0 baseline; _create_baseline_schema() now builds the current version. Pre-release
 # databases (user_version 0 with tables, or the former 2..7 lineage) are NOT migrated; they are
 # refused (IncompatibleSchemaError) and never touched or deleted.
 # A future release bumps SCHEMA_VERSION and appends one Migration (version = the new number) to

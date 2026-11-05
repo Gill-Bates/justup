@@ -4,9 +4,6 @@
 //
 
 /**
- * app/static/js/utils/confirm-dialog.js
- * Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
- *
  * Shared confirmation dialog for destructive actions (replaces native confirm()).
  *
  *   if (!(await window.confirmAction({ title, message, confirmLabel }))) return;

@@ -53,7 +53,7 @@
         <div class="row g-3">
           <div class="col-12">
             <label for="wizard-address" class="form-label" id="wizard-address-label">Full URL or domain *</label>
-            <input id="wizard-address" name="address" class="form-control" type="text" required maxlength="2048" autocomplete="url" aria-describedby="wizard-address-help wizard-address-error">
+            <input id="wizard-address" name="address" class="form-control" type="text" required maxlength="2048" autocomplete="url" autocapitalize="none" spellcheck="false" aria-describedby="wizard-address-help wizard-address-error">
             <div id="wizard-address-help" class="form-text">A domain without a scheme suggests HTTPS. Enter http:// explicitly to keep HTTP.</div>
             <div id="wizard-address-error" class="invalid-feedback" role="alert"></div>
           </div>
@@ -65,7 +65,7 @@
           </div>
           <div class="col-12 col-md-6 wizard-kind" data-kinds="tcp custom" data-ports-on-demand hidden>
             <label for="wizard-udp-ports" class="form-label">UDP ports</label>
-            <input id="wizard-udp-ports" name="udp_ports" class="form-control" type="text" inputmode="numeric" maxlength="200" placeholder="e.g. 53,161" aria-describedby="wizard-udp-ports-help">
+            <input id="wizard-udp-ports" name="udp_ports" class="form-control" type="text" maxlength="200" placeholder="e.g. 53,161" aria-describedby="wizard-udp-ports-help">
             <div id="wizard-udp-ports-help" class="form-text">Enter ports manually or add them from a scan.</div>
           </div>
           <div class="col-12 wizard-kind" data-kinds="tcp custom" data-ports-on-demand hidden>

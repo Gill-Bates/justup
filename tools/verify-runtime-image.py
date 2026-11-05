@@ -209,7 +209,8 @@ def layer_violations(image_tar: Path) -> list[str]:
             layer_file = image.extractfile(layer_name)
             with tarfile.open(fileobj=layer_file, mode="r|*") as layer:
                 for entry in layer:
-                    path = "/" + entry.name.lstrip("./").rstrip("/")
+                    # removeprefix, not lstrip("./"): lstrip would turn "./.git" into "/git" and hide it.
+                    path = "/" + entry.name.removeprefix("./").strip("/")
                     if PurePosixPath(path).name.startswith(".wh."):
                         continue
                     if path.startswith(("/tmp/", "/var/tmp/")) and not entry.isdir():  # noqa: S108 # paths inside the audited image

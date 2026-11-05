@@ -73,9 +73,8 @@ _lookup_miss_last_log: float = 0.0
 
 
 def _log_lookup_miss_sampled(tokens: list[str], hostname: str) -> None:
-    # NOTE: counters are intentionally racy; duplicate logs are acceptable
-    # and cheaper than synchronization in hot paths.
     """Log a lookup miss with rate limiting (sampling-based)."""
+    # Counters are intentionally racy: an occasional duplicate log is cheaper than a lock in this hot path.
     global _lookup_miss_count, _lookup_miss_last_log
 
     _lookup_miss_count += 1
@@ -104,8 +103,6 @@ _pop_get_conn: Callable[[], sqlite3.Connection] | None = None
 
 
 def set_pop_db_connection_factory(factory) -> None:
-    # NOTE: This setter is expected to be called during single-threaded startup.
-    # Subsequent lookups assume the factory reference is stable.
     """
     Set the database connection factory for SQL-based POP lookups.
 
@@ -120,6 +117,7 @@ def set_pop_db_connection_factory(factory) -> None:
     Raises:
         RuntimeError: If factory is None or doesn't return a connection
     """
+    # Called during single-threaded startup; later lookups assume the factory reference is stable.
     global _pop_get_conn
 
     if factory is None:

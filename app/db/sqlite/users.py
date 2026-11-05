@@ -16,6 +16,11 @@ from ...utils.time import utcnow
 from .connection import run_after_commit, transaction
 
 
+def _can_close_alerts_value(*, is_admin: bool, can_close_alerts: bool) -> int:
+    """Stored can_close_alerts flag: admins always hold the permission."""
+    return 1 if is_admin or can_close_alerts else 0
+
+
 def create_user(
     conn: sqlite3.Connection,
     *,
@@ -27,8 +32,7 @@ def create_user(
 ) -> int:
     """Create a user and return the new user id."""
     with transaction(conn):
-        # Admins always have can_close_alerts permission
-        can_close_value = 1 if is_admin or can_close_alerts else 0
+        can_close_value = _can_close_alerts_value(is_admin=is_admin, can_close_alerts=can_close_alerts)
         cur = conn.execute(
             "INSERT INTO users(username, password_hash, is_admin, can_close_alerts, is_active, "
             "must_change_password, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -103,8 +107,7 @@ def update_user(
 ) -> None:
     """Update a user's basic fields."""
     with transaction(conn):
-        # Admins always have can_close_alerts permission
-        can_close_value = 1 if is_admin or can_close_alerts else 0
+        can_close_value = _can_close_alerts_value(is_admin=is_admin, can_close_alerts=can_close_alerts)
         conn.execute(
             "UPDATE users SET username = ?, is_admin = ?, can_close_alerts = ? WHERE id = ?",
             (username.lower(), 1 if is_admin else 0, can_close_value, user_id),

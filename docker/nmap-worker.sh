@@ -107,8 +107,22 @@ stop_worker() {
     worker_pid=""
 }
 
+# A non-numeric limit would abort the arithmetic under set -u and leave the status at "starting".
+limits_valid() {
+    local name value
+    for name in READY_TIMEOUT MAX_BACKOFF MAX_FAILURES STABLE_AFTER; do
+        value=${!name}
+        if ! [[ "$value" =~ ^[1-9][0-9]*$ ]]; then
+            write_status failed "invalid NMAP_WORKER_${name}=${value}"
+            log "ERROR: NMAP_WORKER_${name} must be a positive integer, got '${value}'; port scans stay unavailable"
+            return 1
+        fi
+    done
+}
+
 supervise() {
     local failures=0 delay=1 started reason code
+    limits_valid || return 1
     trap 'stop_worker; exit 0' TERM INT
     while :; do
         write_status starting

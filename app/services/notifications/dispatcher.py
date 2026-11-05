@@ -192,10 +192,11 @@ class NotificationDispatcher:
             (alert.target_id,),
         ).fetchone()
 
+        # Same fallbacks as the email context, so a placeholder renders alike on both channels.
         target_data = {
-            "name": target_row["name"] if target_row else alert.target_name,
-            "host": target_row["host"] if target_row else "N/A",
-            "group": target_row["group_name"] if target_row else "Default",
+            "name": (target_row["name"] if target_row else None) or alert.target_name,
+            "host": (target_row["host"] if target_row else None) or "N/A",
+            "group": (target_row["group_name"] if target_row else None) or "Default",
             "check_type": alert.failed_service or "N/A",
         }
 

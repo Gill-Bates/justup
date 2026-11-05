@@ -4,9 +4,6 @@
 //
 
 /**
- * app/static/js/utils/modal-focus.js
- * Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
- *
  * One focus lifecycle for every Bootstrap modal (static and dynamically created).
  * The HTML `autofocus` attribute is not used: Bootstrap 5.3 modals are not focused by it.
  *

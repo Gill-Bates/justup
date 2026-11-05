@@ -105,6 +105,7 @@
 			a.className = 'text-decoration-none text-reset fw-semibold';
 			const icon = document.createElement('span');
 			icon.className = 'material-icons text-danger me-1';
+			icon.setAttribute('aria-hidden', 'true');
 			icon.textContent = 'error';
 			a.appendChild(icon);
 			a.appendChild(document.createTextNode(target.name));

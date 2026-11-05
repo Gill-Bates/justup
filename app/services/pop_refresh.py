@@ -284,7 +284,8 @@ def _fetch_with_retry(
                     error_category = ErrorCategory.RATELIMIT
                     retry_after = response.headers.get("retry-after", "60")
                     try:
-                        wait_seconds = min(int(retry_after), int(HTTP_BACKOFF_MAX * 2))
+                        # A negative Retry-After would make time.sleep() raise ValueError.
+                        wait_seconds = max(0, min(int(retry_after), int(HTTP_BACKOFF_MAX * 2)))
                     except ValueError:
                         wait_seconds = int(HTTP_BACKOFF_MAX)
                     _log.warning("Rate limited (429), waiting %ds (Retry-After: %s)", wait_seconds, retry_after)

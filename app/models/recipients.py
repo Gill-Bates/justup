@@ -13,13 +13,16 @@ from typing import Literal
 
 from pydantic import BaseModel, EmailStr, Field, model_validator
 
+# Create and update must accept exactly the same numbers.
+_E164_PATTERN = r"^\+[1-9]\d{7,14}$"
+
 
 class RecipientBase(BaseModel):
     """Base recipient model."""
 
     name: str = Field(min_length=1, max_length=100, description="Display name for the recipient")
     phone: str | None = Field(
-        default=None, max_length=32, pattern=r"^\+[1-9]\d{7,14}$", description="Phone number in E.164 format"
+        default=None, max_length=32, pattern=_E164_PATTERN, description="Phone number in E.164 format"
     )
     email: EmailStr | None = Field(default=None, description="Email address")
     is_enabled: bool = Field(default=True, description="Whether alerts are sent to this recipient")
@@ -48,7 +51,7 @@ class RecipientUpdate(BaseModel):
     """
 
     name: str | None = Field(default=None, min_length=1, max_length=100)
-    phone: str | None = Field(default=None, max_length=32, pattern=r"^\+[1-9]\d{7,14}$")
+    phone: str | None = Field(default=None, max_length=32, pattern=_E164_PATTERN)
     email: EmailStr | None = Field(default=None)
     is_enabled: bool | None = None
     enable_for_all_targets: bool | None = None

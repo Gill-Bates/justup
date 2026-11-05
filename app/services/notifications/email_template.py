@@ -37,6 +37,7 @@ from typing import Any
 
 from ...utils.formatters import format_duration
 from ...utils.status_palette import STATUS_PALETTE
+from ...utils.time import assume_utc
 
 _log = logging.getLogger(__name__)
 
@@ -712,19 +713,7 @@ def _format_sla(value: float | str | None) -> str:
 # Status display mapping: status -> (emoji, color, text)
 # Used for visual distinction in email subject and HTML header. Colours match the app
 # status palette; status is never conveyed by colour alone (text + short label carry it).
-STATUS_DISPLAY_MAP: dict[str, tuple[str, str, str]] = {
-    "DOWN": ("🔴", STATUS_PALETTE["danger"].text, "Service DOWN"),
-    "OPEN": ("🔴", STATUS_PALETTE["danger"].text, "Service DOWN"),
-    "UP": ("🟢", STATUS_PALETTE["success"].text, "Service UP"),
-    "RESOLVED": ("🟢", STATUS_PALETTE["success"].text, "Service RESOLVED"),
-    "WARN": ("🟡", STATUS_PALETTE["warning"].text, "Degraded"),
-    "WARNING": ("🟡", STATUS_PALETTE["warning"].text, "Degraded"),
-    "UNKNOWN": ("⚪", STATUS_PALETTE["neutral"].text, "Unknown"),
-}
-
-# Default fallback for unknown status values
-_DEFAULT_STATUS_DISPLAY = ("⚪", STATUS_PALETTE["neutral"].text, "Unknown")
-
+# Status -> palette variant: the one place that decides every status colour of the mail.
 _STATUS_VARIANTS = {
     "DOWN": "danger",
     "OPEN": "danger",
@@ -734,6 +723,24 @@ _STATUS_VARIANTS = {
     "WARNING": "warning",
     "UNKNOWN": "neutral",
 }
+
+_STATUS_EMOJI_TEXT: dict[str, tuple[str, str]] = {
+    "DOWN": ("🔴", "Service DOWN"),
+    "OPEN": ("🔴", "Service DOWN"),
+    "UP": ("🟢", "Service UP"),
+    "RESOLVED": ("🟢", "Service RESOLVED"),
+    "WARN": ("🟡", "Degraded"),
+    "WARNING": ("🟡", "Degraded"),
+    "UNKNOWN": ("⚪", "Unknown"),
+}
+
+STATUS_DISPLAY_MAP: dict[str, tuple[str, str, str]] = {
+    status: (emoji, STATUS_PALETTE[_STATUS_VARIANTS[status]].text, text)
+    for status, (emoji, text) in _STATUS_EMOJI_TEXT.items()
+}
+
+# Default fallback for unknown status values
+_DEFAULT_STATUS_DISPLAY = STATUS_DISPLAY_MAP["UNKNOWN"]
 
 # Short, upper-case status word for the redundant text pill (never colour alone).
 STATUS_LABEL_MAP: dict[str, str] = {
@@ -883,8 +890,9 @@ def build_alert_context(alert_data: dict[str, Any], target_data: dict[str, Any])
     if started_at_raw and resolved_at_raw:
         # Alert resolved: calculate full duration
         try:
-            started = datetime.fromisoformat(str(started_at_raw))
-            resolved = datetime.fromisoformat(str(resolved_at_raw))
+            # Naive values are UTC by convention (see _to_utc); mixing them with aware ones raised TypeError.
+            started = assume_utc(datetime.fromisoformat(str(started_at_raw)))
+            resolved = assume_utc(datetime.fromisoformat(str(resolved_at_raw)))
             duration_seconds = int((resolved - started).total_seconds())
             duration = format_duration(duration_seconds)
         except (ValueError, AttributeError, TypeError):
@@ -892,7 +900,7 @@ def build_alert_context(alert_data: dict[str, Any], target_data: dict[str, Any])
     elif started_at_raw:
         # Alert still active: calculate duration from start until now
         try:
-            started = datetime.fromisoformat(str(started_at_raw))
+            started = assume_utc(datetime.fromisoformat(str(started_at_raw)))
             now = datetime.now(UTC)
             duration_seconds = int((now - started).total_seconds())
             duration = f"{format_duration(duration_seconds)} (ongoing)"

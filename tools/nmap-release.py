@@ -30,6 +30,7 @@ PROJECT_KEY = "436D66AB9A798425FDA0E3F801AF9F036B9355D0"
 BAD_STATUS = ("[GNUPG:] EXPKEYSIG", "[GNUPG:] REVKEYSIG", "[GNUPG:] EXPSIG", "[GNUPG:] BADSIG", "[GNUPG:] ERRSIG")
 VERSION_RE = re.compile(r"^[0-9]+(?:\.[0-9]+)+$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+GPG_TIMEOUT = 120
 SOURCE_RE = re.compile(rf"^{re.escape(DIST)}/nmap-([0-9]+(?:\.[0-9]+)+)\.tar\.bz2$")
 
 
@@ -104,6 +105,7 @@ def verify_signature(artifact: Path, signature: Path, keyfile: Path, homedir: Pa
         capture_output=True,
         text=True,
         check=False,
+        timeout=GPG_TIMEOUT,
     )
     if imported.returncode:
         raise ValueError("could not import the Nmap signing key")
@@ -123,6 +125,7 @@ def verify_signature(artifact: Path, signature: Path, keyfile: Path, homedir: Pa
         capture_output=True,
         text=True,
         check=False,
+        timeout=GPG_TIMEOUT,
     )
     # VALIDSIG ends with the primary key fingerprint, also when a subkey signed.
     valid_signers = [line.split()[-1] for line in result.stdout.splitlines() if line.startswith("[GNUPG:] VALIDSIG ")]
@@ -169,7 +172,7 @@ def main(argv: list[str]) -> int:
         if len(argv) in (3, 4) and argv[0] == "fetch":
             fetch(argv[1], Path(argv[2]), argv[3] if len(argv) == 4 else None)
             return 0
-    except (OSError, UnicodeError, ValueError, urllib.error.URLError) as error:
+    except (OSError, UnicodeError, ValueError, urllib.error.URLError, subprocess.TimeoutExpired) as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 1
     print("Usage: nmap-release.py latest | fetch VERSION OUTPUT_DIR [SOURCE_SHA256]", file=sys.stderr)

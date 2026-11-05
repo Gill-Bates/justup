@@ -155,9 +155,14 @@ def _extract_bearer_token(request: Request) -> str | None:
     return None
 
 
+def session_cookie_name(request: Request) -> str:
+    """Name of the session cookie: the ``__Host-`` prefix requires a secure (HTTPS) request."""
+    return "__Host-token" if request_is_https(request) else "token"
+
+
 def _extract_cookie_token(request: Request, *, cookie_name: str | None = None) -> str | None:
     if cookie_name is None:
-        cookie_name = "__Host-token" if request_is_https(request) else "token"
+        cookie_name = session_cookie_name(request)
     token = request.cookies.get(cookie_name)
     if not token:
         return None

@@ -12,7 +12,6 @@ import sqlite3
 
 import pytest
 
-from app.api.targets import _build_welcome_email_html
 from app.db import pop_locations
 from app.db import sqlite as sqlite_db
 from tests import _support  # noqa: F401 - imported for its sys.path side effect
@@ -61,19 +60,6 @@ def test_list_pop_locations_rejects_unlisted_sort_column(conn) -> None:
         pop_locations.list_pop_locations(conn, sort_by="city; DROP TABLE pop_locations")
 
 
-def test_welcome_email_links_http_system_url() -> None:
-    html_body = _build_welcome_email_html(
-        "Ann", "T", "msg", system_url="https://up.example/?a=1&amp;b=2", github_url="https://g.example"
-    )
-    assert 'href="https://up.example/?a=1&amp;b=2"' in html_body
-
-
-@pytest.mark.parametrize("url", ["#", "", "javascript:alert(1)"])
-def test_welcome_email_omits_link_for_non_http_system_url(url) -> None:
-    html_body = _build_welcome_email_html("Ann", "T", "msg", system_url=url, github_url="https://g.example")
-    assert "Open justUp!" not in html_body
-
-
 def test_count_pop_locations_uses_the_list_filters(conn) -> None:
     conn.execute("UPDATE pop_locations SET retired = 1 WHERE canonical_code = 'AAA'")
     conn.execute("UPDATE pop_locations SET source = 'other' WHERE canonical_code = 'BBB'")
@@ -106,7 +92,10 @@ def test_import_upsert_keeps_curated_rows_unchanged(conn, source) -> None:
         conn, "fra", "fra", "Frankfurt am Main", "DE", 1.0, 2.0, "peeringdb", 90, 10, import_run_id="run-1"
     )
     assert changed is False
-    assert _row(conn, "fra") == (source, 50.1, 8.6, 0, 100, _row(conn, "fra")[5], "run-1")
+    row = _row(conn, "fra")
+    assert row[:5] == (source, 50.1, 8.6, 0, 100)
+    assert row[5] is not None
+    assert row[6] == "run-1"
     assert conn.execute("SELECT city FROM pop_locations WHERE alias_code = 'fra'").fetchone()[0] == "Frankfurt"
 
 

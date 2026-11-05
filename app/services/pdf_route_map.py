@@ -23,7 +23,6 @@ import math
 import threading
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 from reportlab.lib import colors
@@ -33,7 +32,9 @@ from reportlab.pdfgen.canvas import FILL_EVEN_ODD
 from reportlab.platypus import Flowable
 
 from app.services.route_map_rules import (
+    BASEMAP_FILE,
     DASH_ARRAY,
+    LABELS_FILE,
     LINE_HALO_PX,
     LINE_WEIGHT_PX,
     MARKER_GAP_PX,
@@ -41,6 +42,9 @@ from app.services.route_map_rules import (
     MIN_ARROW_SEGMENT_PX,
     PALETTE,
     select_labels,
+)
+from app.services.route_map_rules import (
+    GEO_DIR as GEO_DIR,  # re-export: the dataset provenance test reads it from this module
 )
 from app.services.route_timeline import logical_hop_count, mapped_hop_numbers, route_start_is_mapped
 from app.services.traceroute_geo import (
@@ -50,10 +54,6 @@ from app.services.traceroute_geo import (
     SEGMENT_DASHED,
     route_map_features,
 )
-
-GEO_DIR = Path(__file__).resolve().parent.parent / "static" / "vendor" / "geo"
-BASEMAP_FILE = GEO_DIR / "world-110m.geojson"
-LABELS_FILE = GEO_DIR / "labels.json"
 
 MIN_EXTENT_DEG = 3.0  # smallest visible span, so a single region stays recognisable
 KM_PER_DEG_LAT = 111.19
@@ -116,19 +116,10 @@ _basemap: Basemap | None = None
 _basemap_lock = threading.Lock()
 
 
-def _polygon_parts(geometry: dict[str, Any]) -> list[list[list[list[float]]]]:
-    kind, coords = geometry.get("type"), geometry.get("coordinates") or []
-    if kind == "Polygon":
-        return [coords]
-    if kind == "MultiPolygon":
-        return list(coords)
-    return []
-
-
 def _parse_basemap(world: dict[str, Any], labels: dict[str, Any]) -> Basemap:
     polygons = []
     for feature in world.get("features", []):
-        for rings in _polygon_parts(feature.get("geometry") or {}):
+        for rings in polygon_parts(feature.get("geometry") or {}):
             parsed = tuple(tuple((float(p[0]), float(p[1])) for p in ring) for ring in rings if len(ring) >= 3)
             if not parsed:
                 continue
@@ -240,8 +231,8 @@ def _contains_hop(point: dict[str, Any], hop: int) -> bool:
 def is_approximate(point: dict[str, Any]) -> bool:
     return bool(
         point.get("_approximate")
-        or point.get("accuracy_class") == "approximate"
-        or point.get("loc_precision") in ("approximate", "country")
+        or point.get("accuracy_class") == ACCURACY_APPROXIMATE
+        or point.get("loc_precision") in (LOC_APPROXIMATE, LOC_COUNTRY)
     )
 
 

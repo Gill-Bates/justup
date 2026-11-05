@@ -147,6 +147,7 @@ def create_target(conn: sqlite3.Connection, values: dict[str, Any], *, manage_tr
                     max_retries, ping_timeout_minutes,
                     auto_close_alert,
                     sla_enabled, sla_availability_pct, sla_response_time_ms, sla_ping_latency_ms,
+                    enable_udp_scan, udp_ports,
                     identity_signature, created_at, updated_at
                 ) VALUES(
                     ?, ?, ?,
@@ -158,6 +159,7 @@ def create_target(conn: sqlite3.Connection, values: dict[str, Any], *, manage_tr
                     ?, ?,
                     ?,
                     ?, ?, ?, ?,
+                    ?, ?,
                     ?, ?, ?
                 )
                 """,
@@ -192,17 +194,14 @@ def create_target(conn: sqlite3.Connection, values: dict[str, Any], *, manage_tr
                 values.get("sla_availability_pct"),
                 values.get("sla_response_time_ms"),
                 values.get("sla_ping_latency_ms"),
+                1 if values.get("enable_udp_scan", False) else 0,
+                str(values.get("udp_ports") or ""),
                 identity_signature(values),
                 now,
                 now,
             ),
         )
-        target_id = int(cur.lastrowid)
-        conn.execute(
-            "UPDATE targets SET enable_udp_scan = ?, udp_ports = ? WHERE id = ?",
-            (1 if values.get("enable_udp_scan", False) else 0, str(values.get("udp_ports") or ""), target_id),
-        )
-        return target_id
+        return int(cur.lastrowid)
 
 
 def update_target(

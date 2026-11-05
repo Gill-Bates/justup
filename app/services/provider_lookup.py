@@ -25,17 +25,16 @@ from app.utils.runtime_settings import get_ip_api_key, get_runtime_bool_fail_clo
 _log = logging.getLogger(__name__)
 
 
-def _source_label(value: str | None) -> str:
-    names = {"ip-api-pro": "ip-api Pro", "ipwho.is": "ipwho.is"}
-    return " + ".join(names.get(part, part) for part in value.split(" + ")) if value else ""
-
-
 _GEO_LABELS = {
     gr.SRC_GEOLITE2: "GeoLite2",
     gr.SRC_POP: "POP-Location-DB",
     gr.SRC_IP_API_PRO: "ip-api Pro",
     gr.SRC_IPWHO: "ipwho.is",
 }
+
+
+def _source_label(value: str | None) -> str:
+    return " + ".join(_GEO_LABELS.get(part, part) for part in value.split(" + ")) if value else ""
 
 
 def _accuracy_text(decision: gr.GeoDecision) -> str:

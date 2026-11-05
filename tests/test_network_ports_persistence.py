@@ -272,9 +272,8 @@ def test_tcp_and_udp_rows_with_the_same_number_coexist(conn):
 def test_invalid_state_values_are_rejected(conn):
     tid = sqlite_db.create_target(conn, _values("bad"))
     sqlite_db.sync_network_ports(conn, tid, tcp_ports=[22], udp_ports=[])
-    for kwargs in ({"raw_state": "weird"}, {"service_identity": "nope"}):
-        with pytest.raises(ValueError):
-            sqlite_db.update_network_port_status(conn, tid, "tcp", 22, "up", **kwargs)
+    with pytest.raises(ValueError):
+        sqlite_db.update_network_port_status(conn, tid, "tcp", 22, "up", raw_state="weird")
 
 
 # ─── service metadata is derived on the server only ───────────────────────────
@@ -517,3 +516,50 @@ def test_authorized_scan_metadata_is_persisted_from_the_job(conn, tmp_path: Path
     ports = {(p["protocol"], p["port"]): p for p in resp.json()["network_ports"]}
     assert ports[("tcp", 22)]["service_name"] == "ssh" and ports[("tcp", 22)]["source"] == "discovered"
     assert ports[("udp", 53)]["service_name"] == "domain" and ports[("udp", 53)]["confidence"] == 8
+
+
+def _split_host_body() -> dict:
+    return {
+        "name": "split",
+        "host": "udp.example.com",
+        "enable_tcp_connect": True,
+        "tcp_host": "tcp.example.com",
+        "tcp_ports": "22",
+        "enable_udp_scan": True,
+        "udp_ports": "53",
+        "network_scan_id": "scan-1",
+    }
+
+
+def test_scan_of_host_does_not_become_tcp_baseline_when_tcp_host_differs(conn, tmp_path: Path, monkeypatch):
+    client = _app_client(conn, tmp_path)
+    scan = _scan(
+        _port("tcp", 22, name="ssh", method="probed", confidence=10),
+        _port("udp", 53, name="domain", method="probed", confidence=8),
+    )
+    _stub_job(monkeypatch, host="udp.example.com", result=scan)
+    resp = client.post("/targets", json=_split_host_body())
+    assert resp.status_code == 201, resp.text
+    ports = {(p["protocol"], p["port"]): p for p in resp.json()["network_ports"]}
+    assert ports[("tcp", 22)]["service_name"] is None and ports[("tcp", 22)]["source"] == "manual"
+    assert ports[("udp", 53)]["service_name"] == "domain"
+
+
+def test_scan_of_tcp_host_is_accepted_and_sets_only_tcp(conn, tmp_path: Path, monkeypatch):
+    client = _app_client(conn, tmp_path)
+    scan = _scan(
+        _port("tcp", 22, name="ssh", method="probed", confidence=10),
+        _port("udp", 53, name="domain", method="probed", confidence=8),
+    )
+    _stub_job(monkeypatch, host="TCP.example.com.", result=scan)
+    resp = client.post("/targets", json=_split_host_body())
+    assert resp.status_code == 201, resp.text
+    ports = {(p["protocol"], p["port"]): p for p in resp.json()["network_ports"]}
+    assert ports[("tcp", 22)]["service_name"] == "ssh"
+    assert ports[("udp", 53)]["service_name"] is None
+
+
+def test_scan_of_unrelated_host_is_rejected_for_split_hosts(conn, tmp_path: Path, monkeypatch):
+    client = _app_client(conn, tmp_path)
+    _stub_job(monkeypatch, host="other.example.com", result=_scan())
+    assert client.post("/targets", json=_split_host_body()).status_code == 422

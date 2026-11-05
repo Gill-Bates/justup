@@ -112,10 +112,10 @@ def check_binary(arch: str) -> None:
     require(header[:4] == b"\x7fELF" and header[4] == 2 and header[5] == 1, "nmap is not a little-endian ELF64")
     require(struct.unpack_from("<H", header, 18)[0] == ELF_MACHINE[arch], f"nmap is not built for {arch}")
     require(not {DT_RPATH, DT_RUNPATH} & dynamic_tags(image), "nmap carries an RPATH/RUNPATH")
-    libs = subprocess.run(["ldd", "/usr/bin/nmap"], capture_output=True, text=True, check=False)
+    libs = subprocess.run(["ldd", "/usr/bin/nmap"], capture_output=True, text=True, check=False, timeout=30)
     require(libs.returncode == 0 and "not found" not in libs.stdout, libs.stdout + libs.stderr)
     require(not re.search(r"/(tmp|build|out)/", libs.stdout), libs.stdout)
-    version = subprocess.run(["/usr/bin/nmap", "--version"], capture_output=True, text=True, check=False)
+    version = subprocess.run(["/usr/bin/nmap", "--version"], capture_output=True, text=True, check=False, timeout=30)
     require(version.returncode == 0 and "nmap-service-probes" not in version.stderr, version.stderr)
     for data in ("nmap-services", "nmap-service-probes", "nmap-protocols", "nmap-rpc"):
         require(Path("/usr/share/nmap", data).stat().st_size > 0, data)
@@ -167,7 +167,7 @@ async def check_scan() -> None:
         require(states.get(("tcp", tcp_port)) == "open", states)
         require(states.get(("udp", 9)) in UDP_STATES, states)
         detected = await request_scan(address, tcp_ports=[tcp_port], timeout=60, detect_services=True)
-        service = next(p.service for h in detected.hosts for p in h.ports if p.port == tcp_port)
+        service = next((p.service for h in detected.hosts for p in h.ports if p.port == tcp_port), None)
         require(service is not None and service.method == "probed" and service.name == "http", service)
     print(f"TCP connect scan, UDP scan and -sV through the worker: {states}, service {service.name}")
 

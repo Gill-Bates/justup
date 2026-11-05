@@ -27,6 +27,8 @@ function el(id) {
     appendChild(child) { this.children.push(child); return child; },
     addEventListener(name, callback) { (listeners[name] ||= []).push(callback); },
     dispatch(name, event) { (listeners[name] || []).forEach(callback => callback(event)); },
+    setAttribute(name, value) { this.attributes[name] = String(value); },
+    attributes: {},
     dataset: {},
   };
 }

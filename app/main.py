@@ -476,13 +476,8 @@ def create_app() -> FastAPI:
         raise SystemExit(1) from e
     _setup_logging(cfg.log_level)
 
-    # Validate runtime configuration (non-blocking warnings)
-    try:
-        validate_runtime_config()
-    except ConfigValidationError as e:
-        # ConfigValidationError indicates issues that don't prevent startup
-        # but should be addressed (e.g., deprecated settings, suboptimal config)
-        _log.warning("Configuration validation warnings: %s", e)
+    # Raises only MissingEncryptionKeyError, which validate_encryption_key() above already ruled out.
+    validate_runtime_config()
 
     app = FastAPI(title="justUp", version=get_version(), lifespan=_lifespan)
     app.state.cfg = cfg

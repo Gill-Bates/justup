@@ -9,7 +9,7 @@ never moved to "Ungrouped" implicitly; reassign or delete them first.
 
 ## Creating targets
 
-A four-step wizard suggests checks by profile and shows a summary before saving.
+A five-step wizard (type, address, checks, recipients, review) suggests checks by profile and shows a summary before saving.
 
 | Profile | Suggested checks |
 | --- | --- |
@@ -92,7 +92,7 @@ apply without a restart.
 ## Searching targets
 
 The search field on the Targets page filters while you type. It matches a part of the
-name, host, HTTP URL, TCP port or group name, ignoring case and accents. Groups without
+name, host, HTTP URL, TCP or UDP port or group name, ignoring case and accents. Groups without
 a hit disappear, groups with hits open while you search, and the badge shows hits
 against the total (`2 / 5`). Clearing the field (the clear button or `Esc`) restores the
 groups as they were. Without a match the page says `No targets match "..."`.
@@ -101,8 +101,8 @@ groups as they were. Without a match the page says `No targets match "..."`.
 
 Each target has a status per service and an overall status (`up`, `down`,
 `degraded`, `unknown`), plus uptime for 24 h and 30 days. Uptime follows the overall
-status: a check cycle counts as up only if every enabled check (HTTP, ping, TCP)
-is up. Admins can reset a target's measurements and send a test alert.
+status: a check cycle counts as up only if every enabled check (HTTP, ping, TCP, UDP)
+is up; an unconfirmed UDP result makes the cycle `unknown`, a confirmed failure `down`. Admins can reset a target's measurements and send a test alert.
 
 SLA targets (availability %, HTTP response time, ping latency) are set per target.
 They affect charts and reports only and never raise alerts. Without an

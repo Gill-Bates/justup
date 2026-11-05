@@ -71,6 +71,15 @@ def _serialize_points(points):
     return [{"ts": p.ts, "value": p.value} for p in points]
 
 
+def _utc_range(since: datetime | None, until: datetime | None) -> tuple[datetime | None, datetime | None]:
+    """Read naive bounds as UTC and reject an inverted range (400), the contract of every metrics route."""
+    since = assume_utc(since) if since else since
+    until = assume_utc(until) if until else until
+    if since and until and since > until:
+        raise HTTPException(status_code=400, detail="'since' must be <= 'until'")
+    return since, until
+
+
 @router.get("/targets/{target_id}/metrics/{metric}")
 async def get_metric(
     target_id: int,
@@ -95,17 +104,13 @@ async def get_metric(
     plot_width: int = Query(default=900, ge=120, le=2400),
 ):
     """Query metric time series points for a target."""
-    if sqlite_db.get_target(conn, target_id) is None:
+    if await run_in_threadpool(sqlite_db.get_target, conn, target_id) is None:
         raise HTTPException(status_code=404, detail="Target not found")
 
     if not _is_allowed_metric(metric):
         raise HTTPException(status_code=400, detail="Unknown or unsupported metric")
 
-    since = assume_utc(since) if since else since
-    until = assume_utc(until) if until else until
-
-    if since and until and since > until:
-        raise HTTPException(status_code=400, detail="'since' must be <= 'until'")
+    since, until = _utc_range(since, until)
 
     if display:
         if since is None or until is None:
@@ -167,14 +172,10 @@ async def get_all_uptime(
     limit: int = Query(default=500, ge=1, le=10_000),
 ):
     """Get uptime data for all targets for dashboard chart."""
-    targets = sqlite_db.list_targets(conn)
+    targets = await run_in_threadpool(sqlite_db.list_targets, conn)
     tsdb_dir = get_tsdb_dir(request)
 
-    since = assume_utc(since) if since else since
-    until = assume_utc(until) if until else until
-
-    if since and until and since > until:
-        raise HTTPException(status_code=400, detail="'since' must be <= 'until'")
+    since, until = _utc_range(since, until)
 
     meta = []  # (target_id, target_name)
 
@@ -262,14 +263,10 @@ async def get_downtime_targets(
     until: datetime | None = Query(default=None),
 ):
     """Per-service downtime summary for enabled targets with at least one incident in the range."""
-    targets = sqlite_db.list_targets(conn)
+    targets = await run_in_threadpool(sqlite_db.list_targets, conn)
     tsdb_dir = get_tsdb_dir(request)
 
-    since = assume_utc(since) if since else since
-    until = assume_utc(until) if until else until
-
-    if since and until and since > until:
-        raise HTTPException(status_code=400, detail="'since' must be <= 'until'")
+    since, until = _utc_range(since, until)
 
     now = utcnow()
     # Without a lower bound the oldest points would fill the point limit and hide current outages.

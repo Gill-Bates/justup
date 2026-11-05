@@ -4,9 +4,6 @@
 //
 
 /**
- * app/static/js/utils/field-errors.js
- * Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
- *
  * Inline field errors for forms and modals (DESIGN.md, "Validation and error display").
  *
  *   JuFieldErrors.show(root, [{ id: 'recipient-name', message: 'Please enter a name' }]) // true if any

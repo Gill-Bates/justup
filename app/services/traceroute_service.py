@@ -27,6 +27,7 @@ from typing import Any
 from app.services import nmap_client
 from app.services.nmap_scanner import NmapScannerError
 from app.services.route_model import Route
+from app.utils.constants import HopStatus
 
 _log = logging.getLogger(__name__)
 
@@ -37,10 +38,10 @@ DEFAULT_TIMEOUT_S = 30
 HOSTNAME_DISPLAY_MAX_LENGTH = 50
 HOSTNAME_TRUNCATION_SUFFIX = "\u2026"
 
-# Hop dictionary states (shared with traceroute_geo and route_interpolator).
-STATUS_OK = "ok"
-STATUS_PARTIAL = "partial"  # only used for the synthetic destination row
-STATUS_TIMEOUT = "timeout"
+# Hop dictionary states; traceroute_geo and route_interpolator import them from here.
+STATUS_OK = HopStatus.OK
+STATUS_PARTIAL = "partial"  # not a HopStatus member (aggregate concept); synthetic destination row only
+STATUS_TIMEOUT = HopStatus.TIMEOUT
 
 # Controlled failure codes handed to the UI and the PDF.
 ERROR_UNAVAILABLE = "unavailable"

@@ -41,6 +41,8 @@ from ..models.users import verify_password
 from ..services.notifications.email_template import (
     DEFAULT_HTML_TEMPLATE,
     DEFAULT_SUBJECT,
+    EMAIL_TEMPLATE_HTML_KEY,
+    EMAIL_TEMPLATE_SUBJECT_KEY,
 )
 from ..services.notifications.smtp_settings import load_public_smtp_settings
 from ..utils import maintenance
@@ -132,6 +134,14 @@ def _encrypt_ip_api_key(value: str | None, encrypt):
     except Exception as e:
         _log.error("Failed to encrypt ip-api key: %s", type(e).__name__)
         raise HTTPException(status_code=500, detail="Failed to encrypt key") from e
+
+
+def _request_spooler(request: Request):
+    """Spooler singleton with a fresh-connection factory; a request-scoped conn would be closed under it."""
+    from ..services.notifications.spooler import get_spooler
+
+    db_path = request.app.state.db_path
+    return get_spooler(lambda: sqlite_db.connect(db_path))
 
 
 @router.get("", response_model=Settings)
@@ -292,13 +302,12 @@ async def send_signal_test(request: Request, conn=Depends(get_conn), _admin=Depe
         ChannelType,
         NotificationType,
         SignalQueueLimitError,
-        get_spooler,
     )
 
     backend = get_signal_backend()
 
     # Get valid sender from signal-cli (THE authority), not from DB
-    configured_sender = sqlite_db.get_setting(conn, SettingKeys.SIGNAL_API_SENDER_NUMBER)
+    configured_sender = await run_in_threadpool(sqlite_db.get_setting, conn, SettingKeys.SIGNAL_API_SENDER_NUMBER)
     try:
         sender_number = await run_in_threadpool(backend.get_valid_sender, configured_sender)
     except SignalNotRegistered as exc:
@@ -309,13 +318,12 @@ async def send_signal_test(request: Request, conn=Depends(get_conn), _admin=Depe
 
     # Store the sender on first setup (no silent switch away from a configured sender)
     if not configured_sender:
-        sqlite_db.set_setting(conn, SettingKeys.SIGNAL_API_SENDER_NUMBER, sender_number)
+        await run_in_threadpool(sqlite_db.set_setting, conn, SettingKeys.SIGNAL_API_SENDER_NUMBER, sender_number)
 
     test_message = "🔔 justUp Signal Test\n\nIf you receive this message, your Signal integration is working correctly!"
 
     # Enqueue to spooler (all notifications go through spooler)
-    db_path = request.app.state.db_path
-    spooler = get_spooler(lambda: sqlite_db.connect(db_path))
+    spooler = _request_spooler(request)
 
     try:
         queue_id = await run_in_threadpool(
@@ -450,13 +458,13 @@ async def _resolve_signal_sender(conn, admin: dict, password: str, backend) -> s
     from ..services.notifications.signal_errors import SignalTimeout, SignalUnavailable
 
     await run_in_threadpool(_verify_admin_password, conn, admin, password)
-    configured_sender = sqlite_db.get_setting(conn, SettingKeys.SIGNAL_API_SENDER_NUMBER)
+    configured_sender = await run_in_threadpool(sqlite_db.get_setting, conn, SettingKeys.SIGNAL_API_SENDER_NUMBER)
     try:
         accounts = await run_in_threadpool(backend.list_accounts)
     except (SignalUnavailable, SignalTimeout) as e:
         raise HTTPException(status_code=503, detail="Unable to inspect Signal accounts") from e
     if not accounts:
-        sqlite_db.set_setting(conn, SettingKeys.SIGNAL_API_SENDER_NUMBER, None)
+        await run_in_threadpool(sqlite_db.set_setting, conn, SettingKeys.SIGNAL_API_SENDER_NUMBER, None)
         return None
     if not configured_sender or configured_sender not in accounts:
         raise HTTPException(status_code=409, detail="Configured Signal sender does not match a local account")
@@ -507,7 +515,7 @@ async def unregister_phone(
         await run_in_threadpool(lambda: backend.unregister(sender_number=sender_number))
 
         # Clear the sender number from database after successful unregister
-        sqlite_db.set_setting(conn, SettingKeys.SIGNAL_API_SENDER_NUMBER, None)
+        await run_in_threadpool(sqlite_db.set_setting, conn, SettingKeys.SIGNAL_API_SENDER_NUMBER, None)
 
         _log.info("Phone number %s successfully unregistered from signal-cli", mask_phone(sender_number))
         return {"ok": True, "message": "Phone number successfully unregistered"}
@@ -515,7 +523,7 @@ async def unregister_phone(
     except SignalNotRegistered:
         # Account already not registered - still clear sender number and return success
         # (the desired end state is achieved)
-        sqlite_db.set_setting(conn, SettingKeys.SIGNAL_API_SENDER_NUMBER, None)
+        await run_in_threadpool(sqlite_db.set_setting, conn, SettingKeys.SIGNAL_API_SENDER_NUMBER, None)
         _log.info("Phone number %s was already unregistered", mask_phone(sender_number))
         return {"ok": True, "message": "Account was already unregistered"}
 
@@ -567,14 +575,14 @@ async def unlink_device(
         await run_in_threadpool(lambda: backend.unlink_device(sender_number=sender_number, delete_cache=True))
 
         # Clear the sender number from database
-        sqlite_db.set_setting(conn, SettingKeys.SIGNAL_API_SENDER_NUMBER, None)
+        await run_in_threadpool(sqlite_db.set_setting, conn, SettingKeys.SIGNAL_API_SENDER_NUMBER, None)
 
         _log.info("Device unlinked: %s", mask_phone(sender_number))
         return {"ok": True, "message": "Local Signal data removed; revoke the device in Signal on your primary phone"}
 
     except SignalNotRegistered:
         # Already unlinked - still clear sender and return success
-        sqlite_db.set_setting(conn, SettingKeys.SIGNAL_API_SENDER_NUMBER, None)
+        await run_in_threadpool(sqlite_db.set_setting, conn, SettingKeys.SIGNAL_API_SENDER_NUMBER, None)
         return {"ok": True, "message": "Device was already unlinked"}
 
     except (SignalUnavailable, SignalTimeout, SignalSendFailed) as e:
@@ -985,10 +993,10 @@ def update_email_template(payload: EmailTemplateUpdate, conn=Depends(get_conn), 
     with sqlite_db.transaction(conn):
         if payload.subject is not None:
             subject_save = payload.subject.replace(LOGO_URL_PREVIEW, "{{logo_url}}")
-            sqlite_db.set_setting(conn, "smtp_mail_template_subject", subject_save, auto_commit=False)
+            sqlite_db.set_setting(conn, EMAIL_TEMPLATE_SUBJECT_KEY, subject_save, auto_commit=False)
         if payload.html is not None:
             html_save = payload.html.replace(LOGO_URL_PREVIEW, "{{logo_url}}")
-            sqlite_db.set_setting(conn, "smtp_mail_template_html", html_save, auto_commit=False)
+            sqlite_db.set_setting(conn, EMAIL_TEMPLATE_HTML_KEY, html_save, auto_commit=False)
 
     return {"ok": True}
 
@@ -1001,8 +1009,8 @@ def reset_email_template(conn=Depends(get_conn), _admin=Depends(require_admin)):
     never changed: the NULL does not record whether the user once accepted the default.
     """
     with sqlite_db.transaction(conn):
-        sqlite_db.set_setting(conn, "smtp_mail_template_subject", None, auto_commit=False)
-        sqlite_db.set_setting(conn, "smtp_mail_template_html", None, auto_commit=False)
+        sqlite_db.set_setting(conn, EMAIL_TEMPLATE_SUBJECT_KEY, None, auto_commit=False)
+        sqlite_db.set_setting(conn, EMAIL_TEMPLATE_HTML_KEY, None, auto_commit=False)
 
     return EmailTemplateResponse(
         subject=DEFAULT_SUBJECT,
@@ -1095,16 +1103,15 @@ async def send_test_email(
     from ..services.notifications.spooler import (
         ChannelType,
         NotificationType,
-        get_spooler,
     )
 
-    readiness = smtp_readiness(conn)
+    readiness = await run_in_threadpool(smtp_readiness, conn)
     if readiness is SmtpReadiness.DISABLED:
         raise HTTPException(status_code=400, detail="SMTP is not enabled")
     if readiness is SmtpReadiness.INCOMPLETE:
         raise HTTPException(status_code=400, detail="SMTP not configured (missing host or from address)")
 
-    stored = load_email_templates(conn)
+    stored = await run_in_threadpool(load_email_templates, conn)
     subject_template, html_template = stored["subject"], stored["html"]
 
     test_alert_data, test_target_data = build_test_alert_sample()
@@ -1116,8 +1123,7 @@ async def send_test_email(
     text_body = html_to_text(html_body)
 
     # Enqueue to spooler (all notifications go through spooler)
-    db_path = request.app.state.db_path
-    spooler = get_spooler(lambda: sqlite_db.connect(db_path))
+    spooler = _request_spooler(request)
 
     queue_id = await run_in_threadpool(
         spooler.enqueue,
@@ -1156,16 +1162,7 @@ async def get_notification_queue_stats(
     Shows the current state of the notification spooler (retry queue).
     Includes time dimension for debugging: oldest entry, max retry count, etc.
     """
-    from ..services.notifications.spooler import get_spooler
-
-    # Factory must create fresh connections - do NOT return a request-scoped conn
-    # because the singleton would hold a reference to a closed connection
-    db_path = request.app.state.db_path
-
-    def _get_db():
-        return sqlite_db.connect(db_path)
-
-    spooler = get_spooler(_get_db)
+    spooler = _request_spooler(request)
     detailed = await run_in_threadpool(spooler.get_queue_stats_detailed)
 
     return {
@@ -1200,14 +1197,7 @@ async def get_notification_queue_log(
 
     Supports pagination and optional filtering by status/channel.
     """
-    from ..services.notifications.spooler import get_spooler
-
-    db_path = request.app.state.db_path
-
-    def _get_db():
-        return sqlite_db.connect(db_path)
-
-    spooler = get_spooler(_get_db)
+    spooler = _request_spooler(request)
     return await run_in_threadpool(
         spooler.get_log,
         limit=limit,
@@ -1228,14 +1218,7 @@ async def flush_notification_queue(
     This is useful when Signal is rate-limited or broken and you want
     to clear the backlog instead of waiting for retries.
     """
-    from ..services.notifications.spooler import get_spooler
-
-    db_path = request.app.state.db_path
-
-    def _get_db():
-        return sqlite_db.connect(db_path)
-
-    spooler = get_spooler(_get_db)
+    spooler = _request_spooler(request)
     deleted = await run_in_threadpool(spooler.flush_queue)
     _log.info("Flushed %d notifications from queue", deleted)
     return {"deleted": deleted, "message": f"Flushed {deleted} notifications"}
@@ -1250,14 +1233,7 @@ async def clear_notification_log(
 
     Keeps pending, processing and failed entries intact.
     """
-    from ..services.notifications.spooler import get_spooler
-
-    db_path = request.app.state.db_path
-
-    def _get_db():
-        return sqlite_db.connect(db_path)
-
-    spooler = get_spooler(_get_db)
+    spooler = _request_spooler(request)
     deleted = await run_in_threadpool(spooler.clear_log)
     _log.info("Cleared %d sent notifications from log", deleted)
     return {"deleted": deleted, "message": f"Cleared {deleted} log entries"}

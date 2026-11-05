@@ -861,6 +861,27 @@ def test_signal_removal_prechecks_are_shared_by_unlink_and_unregister(conn, sign
     assert sqlite_db.get_setting(conn, env.key) is None
 
 
+@pytest.mark.parametrize("path", ["/settings/signal/unregister", "/settings/signal/unlink"])
+@pytest.mark.parametrize("accounts", [[], ["+4915112345678"]])
+def test_signal_removal_settings_access_runs_off_event_loop(conn, signal_env, monkeypatch, path, accounts):
+    # A write waits up to busy_timeout for the writer lock; on the loop it would stall every request.
+    real_get, real_set = sqlite_db.get_setting, sqlite_db.set_setting
+
+    def checked(real):
+        def wrapper(*args, **kwargs):
+            _assert_off_event_loop()
+            return real(*args, **kwargs)
+
+        return wrapper
+
+    monkeypatch.setattr(sqlite_db, "get_setting", checked(real_get))
+    monkeypatch.setattr(sqlite_db, "set_setting", checked(real_set))
+    signal_env.accounts = accounts
+    resp = _post(signal_env, path, {"password": "pw"})
+    assert resp.status_code == 200, resp.text
+    assert real_get(conn, signal_env.key) is None
+
+
 # --- metrics: downtime detection over long windows ---------------------------------------------
 def _seed_http_up(tsdb_dir: Path, target_id: int, values: list[int], start: datetime) -> None:
     from app.db import tsdb

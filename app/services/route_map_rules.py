@@ -108,7 +108,8 @@ def _load(name: str, path: Path) -> Any:
         return _cache[name]
 
 
-def _polygons(geometry: dict[str, Any]) -> list[list[list[list[float]]]]:
+def polygon_parts(geometry: dict[str, Any]) -> list[list[list[list[float]]]]:
+    """Rings of every polygon of a GeoJSON Polygon/MultiPolygon geometry; other types yield none."""
     kind, coords = geometry.get("type"), geometry.get("coordinates") or []
     if kind == "Polygon":
         return [coords]
@@ -138,7 +139,7 @@ def country_names() -> dict[str, str]:
     for feature in world.get("features", []):
         iso = str((feature.get("properties") or {}).get("iso") or "").upper()
         shapes.extend(
-            (iso, rings[0]) for rings in _polygons(feature.get("geometry") or {}) if rings and len(rings[0]) >= 3
+            (iso, rings[0]) for rings in polygon_parts(feature.get("geometry") or {}) if rings and len(rings[0]) >= 3
         )
     names: dict[str, str] = {}
     for name, lat, lon, *_ in labels.get("countries", []):

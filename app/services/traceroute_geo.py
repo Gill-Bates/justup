@@ -38,6 +38,7 @@ from app.services import geo_resolver as gr
 from app.services.geo_resolver import MAX_CITY_RADIUS_KM
 from app.services.ip_lookup import lookup_online_sources, public_ip
 from app.services.pop_codes import lookup_pop_code, observe_unknown_pop
+from app.services.traceroute_service import STATUS_OK, STATUS_PARTIAL, STATUS_TIMEOUT
 from app.utils.constants import (
     DEFAULT_ONLINE_GEO_FALLBACK_ENABLED,
     GEOIP_DB_RELPATH,
@@ -61,9 +62,6 @@ SEGMENT_DASHED = SegmentType.DASHED
 
 # --- Re-export hop status for backward compatibility ---
 # Use HopStatus.OK/.TIMEOUT/.INTERPOLATED directly where possible
-STATUS_OK = HopStatus.OK
-STATUS_PARTIAL = "partial"  # Not in HopStatus (aggregate concept)
-STATUS_TIMEOUT = HopStatus.TIMEOUT
 STATUS_INTERPOLATED = HopStatus.INTERPOLATED
 
 # --- Metadata key constants (avoid magic strings) ---
@@ -349,6 +347,17 @@ def _to_geo_location(ip: str, record: dict[str, Any]) -> GeoLocation | None:
     }
 
 
+def _not_in_geoip(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """Non-routable addresses (private incl. CGN, loopback, link-local, reserved, multicast) are never looked up."""
+    return (
+        address.is_private
+        or address.is_loopback
+        or address.is_link_local
+        or address.is_reserved
+        or address.is_multicast
+    )
+
+
 def geolocate_ip(ip: str) -> GeoLocation | None:
     """
     Geolocate an IP address to lat/lon/city/country with the local GeoLite2 database.
@@ -369,7 +378,7 @@ def geolocate_ip(ip: str) -> GeoLocation | None:
     except ValueError:
         _log.debug("Invalid IP format for geolocation: %s", ip)
         return None
-    if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local or ip_obj.is_reserved or ip_obj.is_multicast:
+    if _not_in_geoip(ip_obj):
         return None
 
     for _attempt in range(_MAX_READER_ATTEMPTS):
@@ -413,13 +422,7 @@ def geolocate_country(ip: str) -> str | None:
         address = ipaddress.ip_address(ip)
     except ValueError:
         return None
-    if (
-        address.is_private
-        or address.is_loopback
-        or address.is_link_local
-        or address.is_reserved
-        or address.is_multicast
-    ):
+    if _not_in_geoip(address):
         return None
     for _attempt in range(_MAX_READER_ATTEMPTS):
         reader = _get_reader()
@@ -716,9 +719,9 @@ def _classify_location(loc: dict[str, Any] | None) -> tuple[GeoSource, GeoAccura
     source = _CONFIDENCE_TO_SOURCE.get(loc.get(META_CONFIDENCE), GeoSource.GEOIP)
 
     if not has_coords:
-        return (GeoSource.ONLINE if source == GeoSource.ONLINE else GeoSource.GEOIP_COARSE), GeoAccuracy.APPROXIMATE
+        return _coarse_source(source), GeoAccuracy.APPROXIMATE
     if not loc.get("city") or loc.get("city_is_region"):
-        return (GeoSource.ONLINE if source == GeoSource.ONLINE else GeoSource.GEOIP_COARSE), GeoAccuracy.APPROXIMATE
+        return _coarse_source(source), GeoAccuracy.APPROXIMATE
     explicit = loc.get("accuracy_class")
     if explicit is not None:  # the resolver already weighed evidence and contradictions
         if explicit == gr.ACCURACY_PRECISE:
@@ -735,7 +738,7 @@ def _classify_location(loc: dict[str, Any] | None) -> tuple[GeoSource, GeoAccura
         and 0 <= radius <= MAX_CITY_RADIUS_KM
     ):
         return source, GeoAccuracy.PRECISE
-    return (GeoSource.ONLINE if source == GeoSource.ONLINE else GeoSource.GEOIP_COARSE), GeoAccuracy.APPROXIMATE
+    return _coarse_source(source), GeoAccuracy.APPROXIMATE
 
 
 LOC_PRECISE = "precise"  # city, country and map position share one evidenced candidate
@@ -765,8 +768,10 @@ def location_view(loc: dict[str, Any] | None) -> dict[str, Any]:
 @functools.lru_cache(maxsize=256)
 def country_center(country: str) -> tuple[float, float] | None:
     """Area centroid of the country's largest Natural Earth land polygon."""
-    path = Path(__file__).resolve().parent.parent / "static" / "vendor" / "geo" / "world-110m.geojson"
-    world = json.loads(path.read_text(encoding="utf-8"))
+    # Deferred import: route_map_rules imports this module at load time.
+    from app.services.route_map_rules import BASEMAP_FILE
+
+    world = json.loads(BASEMAP_FILE.read_text(encoding="utf-8"))
     for feature in world.get("features", []):
         if (feature.get("properties") or {}).get("iso") != country.upper():
             continue
@@ -807,7 +812,7 @@ def _map_location(loc: dict[str, Any] | None) -> dict[str, Any] | None:
         "lon": center[1],
         "city": None,
         "position_city": None,
-        "accuracy_class": "approximate",
+        "accuracy_class": gr.ACCURACY_APPROXIMATE,
         "accuracy_radius_km": None,
         "_country_center": True,
     }

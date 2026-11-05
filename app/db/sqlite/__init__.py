@@ -16,7 +16,7 @@ Layout (imports only point downwards, domain modules never import ``migrations``
 - ``layout``: structural schema layout reading and comparison
 - ``migrations``: ``MIGRATIONS`` registry, ``check_schema_compatibility``, ``init_schema``
 - domain modules: settings, target_status, auth_tokens, users, targets, groups, login_attempts,
-  recipients, alerts, monitor_quality, report_jobs, scheduler_runs, bootstrap
+  recipients, alerts, monitor_quality, report_jobs, network_ports, scheduler_runs, bootstrap
 
 Monkeypatching ``sqlite_db.<name>`` keeps working for internal callers: the package module forwards
 an assignment to every submodule that holds the name (see ``_SqliteModule``).

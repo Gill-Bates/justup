@@ -382,63 +382,6 @@ class SignalCliBackend(SignalBackend):
             raise SignalSendFailed("Captcha required")
         raise SignalSendFailed(f"Signal {operation} failed")
 
-    def _run_signal_cli_binary(
-        self,
-        args: list[str],
-        timeout: int = DEFAULT_TIMEOUT,
-        check: bool = False,
-    ) -> bytes:
-        """Run signal-cli and return raw binary output (for images).
-
-        Args:
-            args: Command arguments
-            timeout: Timeout in seconds
-            check: If True, raise SignalSendFailed on non-zero exit code
-
-        Returns:
-            Raw stdout bytes
-
-        Raises:
-            SignalUnavailable: if binary not found
-            SignalTimeout: if command times out
-            SignalSendFailed: if check=True and exit code != 0
-        """
-        resolved = self._resolve_cli()
-
-        cmd = [
-            resolved,
-            "--config",
-            self._data_dir,
-            *args,
-        ]
-
-        # Ensure UTF-8 environment for proper emoji/unicode handling
-        env = os.environ.copy()
-        env["LC_ALL"] = "C.UTF-8"
-        env["LANG"] = "C.UTF-8"
-
-        try:
-            with _CLI_PROCESS_LOCK:
-                result = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    timeout=timeout,
-                    env=env,
-                    check=False,
-                )
-
-            if check and result.returncode != 0:
-                stderr = result.stderr.decode(errors="replace").strip() if result.stderr else "Unknown error"
-                _log.warning("signal-cli binary command failed (exit %d): %s", result.returncode, stderr[:100])
-                raise SignalSendFailed(f"signal-cli failed: {stderr[:100]}")
-
-            return result.stdout
-
-        except subprocess.TimeoutExpired as e:
-            raise SignalTimeout(f"signal-cli timed out after {timeout}s") from e
-        except (FileNotFoundError, OSError) as e:
-            raise SignalNotInstalled(f"Failed to run signal-cli: {e}") from e
-
     def invalidate_cache(self) -> None:
         """No-op for API compatibility. Status is always fetched fresh."""
 

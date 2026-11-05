@@ -111,7 +111,9 @@ async def get_uptime_widget(request: Request, conn=Depends(get_conn), _user=Depe
     since = until - timedelta(days=1)
     tsdb_dir = get_tsdb_dir(request)
     targets = [
-        target for target in sqlite_db.list_targets(conn) if target["is_enabled"] and select_uptime_metric(target)
+        target
+        for target in await run_in_threadpool(sqlite_db.list_targets, conn)
+        if target["is_enabled"] and select_uptime_metric(target)
     ]
     semaphore = asyncio.Semaphore(4)
 

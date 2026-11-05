@@ -14,6 +14,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from app.api import targets as targets_api
+from app.api.targets import _build_welcome_email_html
 from app.db import sqlite as sqlite_db
 from app.utils.constants import SettingKeys
 from app.utils.time import utcnow
@@ -84,3 +85,28 @@ def test_welcome_email_keeps_the_name_when_it_did_not_change(tmp_path: Path, spo
     _run(db_path, target_id, recipient_id, queued_name="Same")
     payload = spooler.enqueue.call_args.kwargs["payload"]
     assert "'Same'" in payload["text_body"]
+
+
+def test_welcome_email_links_http_system_url() -> None:
+    html_body = _build_welcome_email_html(
+        "Ann", "T", "msg", system_url="https://up.example/?a=1&amp;b=2", github_url="https://g.example"
+    )
+    assert 'href="https://up.example/?a=1&amp;b=2"' in html_body
+
+
+@pytest.mark.parametrize("url", ["#", "", "javascript:alert(1)"])
+def test_welcome_email_omits_link_for_non_http_system_url(url) -> None:
+    html_body = _build_welcome_email_html("Ann", "T", "msg", system_url=url, github_url="https://g.example")
+    assert "Open justUp!" not in html_body
+
+
+def test_welcome_text_body_links_http_and_https_system_urls(tmp_path: Path, spooler: MagicMock, monkeypatch) -> None:
+    for base in ("http://up.example", "https://up.example"):
+        spooler.enqueue.reset_mock()
+        monkeypatch.setattr(targets_api, "get_public_base_url", lambda _conn, base=base: base)
+        (tmp_path / base[:5]).mkdir()
+        db_path, target_id, recipient_id = _prepare(tmp_path / base[:5], stored_name="N")
+        _run(db_path, target_id, recipient_id, queued_name="N")
+        payload = spooler.enqueue.call_args.kwargs["payload"]
+        assert f"Open justUp!: {base}" in payload["text_body"]
+        assert f'href="{base}' in payload["html_body"]

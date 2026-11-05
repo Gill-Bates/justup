@@ -28,6 +28,19 @@ def _identity_of(service) -> str:
     return "identified" if service and service.method == "probed" and service.name else "unknown"
 
 
+def _service_columns(service) -> tuple:
+    """Return (name, product, version, method, confidence) truncated to the column limits; None without a service."""
+    if service is None:
+        return (None, None, None, None, None)
+    return (
+        service.name[:SERVICE_NAME_MAX] if service.name else None,
+        service.product[:SERVICE_TEXT_MAX] if service.product else None,
+        service.version[:SERVICE_TEXT_MAX] if service.version else None,
+        service.method,
+        service.confidence,
+    )
+
+
 def _port_dict(row: sqlite3.Row) -> dict:
     return {
         "protocol": row["protocol"],
@@ -72,8 +85,12 @@ def sync_network_ports(
     udp_ports: Iterable[int],
     scan_result: NmapScanResult | None = None,
     reset_protocols: Collection[str] = (),
+    scan_protocols: Collection[str] = ("tcp", "udp"),
 ) -> None:
-    """Reconcile configured pairs; drop observations of ``reset_protocols`` whose scan host changed."""
+    """Reconcile configured pairs; drop observations of ``reset_protocols`` whose scan host changed.
+
+    Only findings of ``scan_protocols`` are applied: a scan of one host says nothing about a protocol probed elsewhere.
+    """
     reset = sorted({p for p in reset_protocols if p in {"tcp", "udp"}})
     if reset:
         conn.execute(
@@ -90,7 +107,14 @@ def sync_network_ports(
     udp = parse_port_list(list(udp_ports))
     selected = {("tcp", port) for port in tcp} | {("udp", port) for port in udp}
     observed = (
-        {(port.protocol, port.port): port for host in scan_result.hosts for port in host.ports} if scan_result else {}
+        {
+            (port.protocol, port.port): port
+            for host in scan_result.hosts
+            for port in host.ports
+            if port.protocol in scan_protocols
+        }
+        if scan_result
+        else {}
     )
     existing = {
         (row["protocol"], row["port"])
@@ -118,11 +142,7 @@ def sync_network_ports(
                    identity_changed_at = NULL
                WHERE target_id = ? AND protocol = ? AND port = ?""",
             (
-                service.name[:SERVICE_NAME_MAX] if service and service.name else None,
-                service.product[:SERVICE_TEXT_MAX] if service and service.product else None,
-                service.version[:SERVICE_TEXT_MAX] if service and service.version else None,
-                service.method if service else None,
-                service.confidence if service else None,
+                *_service_columns(service),
                 scan_result.completed_at,
                 _identity_of(service),
                 target_id,
@@ -142,25 +162,18 @@ def update_network_port_status(
     *,
     raw_state: str | None = None,
     latency_ms: float | None = None,
-    service_identity: str | None = None,
 ) -> None:
     """Store the latest measurement; the port is addressed by protocol + number, never by number alone."""
     if protocol not in {"tcp", "udp"} or status not in {"up", "down", "unknown"}:
         raise ValueError("Invalid network port status")
     if raw_state is not None and raw_state not in RAW_STATES:
         raise ValueError("Invalid raw port state")
-    if service_identity is not None and service_identity not in SERVICE_IDENTITIES:
-        raise ValueError("Invalid service identity")
     now = utcnow()
     conn.execute(
         """UPDATE target_network_ports
            SET status = :status, checked_at = :now,
                last_up_at = CASE WHEN :status = 'up' THEN :now ELSE last_up_at END,
-               detail = :detail, raw_state = :raw_state, latency_ms = :latency_ms,
-               identity_changed_at = CASE
-                   WHEN :identity = 'changed' AND COALESCE(service_identity, '') != 'changed' THEN :now
-                   ELSE identity_changed_at END,
-               service_identity = COALESCE(:identity, service_identity)
+               detail = :detail, raw_state = :raw_state, latency_ms = :latency_ms
            WHERE target_id = :target_id AND protocol = :protocol AND port = :port""",
         {
             "status": status,
@@ -168,7 +181,6 @@ def update_network_port_status(
             "detail": detail[:200] if detail else None,
             "raw_state": raw_state,
             "latency_ms": latency_ms,
-            "identity": service_identity,
             "target_id": target_id,
             "protocol": protocol,
             "port": port,
@@ -203,11 +215,7 @@ def record_service_observation(
                    confidence = ?, discovered_at = ?, service_identity = ?, identity_changed_at = NULL
                WHERE target_id = ? AND protocol = ? AND port = ?""",
             (
-                service.name[:SERVICE_NAME_MAX] if service.name else None,
-                service.product[:SERVICE_TEXT_MAX] if service.product else None,
-                service.version[:SERVICE_TEXT_MAX] if service.version else None,
-                service.method,
-                service.confidence,
+                *_service_columns(service),
                 now,
                 identity,
                 target_id,

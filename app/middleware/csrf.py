@@ -17,6 +17,7 @@ from fastapi import Request, Response
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from ..utils.auth_helpers import session_cookie_name
 from ..utils.client_ip import request_is_https
 from ..utils.constants import SESSION_MAX_DAYS_MAX
 from .security_headers import CSP_REPORT_PATH
@@ -99,7 +100,7 @@ class CSRFMiddleware(BaseHTTPMiddleware):
 
         request.state.csrf_token = csrf_token
 
-        cookie_name = "__Host-token" if request_is_https(request) else "token"
+        cookie_name = session_cookie_name(request)
         # The CSP report sink ignores the session; browsers send reports with cookies but never with a CSRF header.
         cookie_auth = (
             bool(request.cookies.get(cookie_name))

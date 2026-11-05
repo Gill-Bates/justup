@@ -154,9 +154,13 @@ class _FileLock:
 
     def __enter__(self) -> Self:
         self._lock_path.parent.mkdir(parents=True, exist_ok=True)
-        self._fd = os.open(str(self._lock_path), os.O_CREAT | os.O_RDWR)
-        mode = fcntl.LOCK_EX if self._exclusive else fcntl.LOCK_SH
-        fcntl.flock(self._fd, mode)
+        fd = os.open(str(self._lock_path), os.O_CREAT | os.O_RDWR)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX if self._exclusive else fcntl.LOCK_SH)
+        except BaseException:
+            os.close(fd)  # __exit__ never runs when __enter__ raises
+            raise
+        self._fd = fd
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
@@ -860,6 +864,15 @@ def _compute_median(values: list[float]) -> float:
     return sorted_vals[mid]
 
 
+def _aggregate_bucket(base: str, values: list[float]) -> float:
+    """One bucket value: min for 0/1 availability (any outage survives), max for flags, else the median."""
+    if is_binary_metric(base):
+        return min(values)
+    if is_flag_metric(base):
+        return max(values)
+    return _compute_median(values)
+
+
 def _resample_points(
     points: list[MetricPoint],
     *,
@@ -917,14 +930,12 @@ def _resample_points(
         out.sort(key=lambda p: p.ts)
         return out[:max_points]
 
-    is_binary = is_binary_metric(base)
     resampled: list[MetricPoint] = []
     for bucket_start in sorted(buckets.keys()):
         vals = buckets[bucket_start]
         if not vals:
             continue
-        agg_value = min(vals) if is_binary else max(vals) if is_flag_metric(base) else _compute_median(vals)
-        resampled.append(MetricPoint(ts=bucket_start, value=agg_value))
+        resampled.append(MetricPoint(ts=bucket_start, value=_aggregate_bucket(base, vals)))
 
     # Ensure we keep the first/last timestamps for stable charts
     if resampled:
@@ -1042,8 +1053,7 @@ def downsample_series(
     if not buckets:
         return 0
 
-    is_binary = is_binary_metric(_base_metric(metric))
-    is_flag = is_flag_metric(_base_metric(metric))
+    base = _base_metric(metric)
     with _FileLock(target_path):
         target_path.parent.mkdir(parents=True, exist_ok=True)
         # Re-check under the exclusive lock: another run may have written meanwhile.
@@ -1053,8 +1063,7 @@ def downsample_series(
             for bucket_start, values in sorted(buckets.items()):
                 if newest is not None and bucket_start <= newest:
                     continue
-                # For up/down metrics: 0 if any check failed, 1 if all passed
-                agg_value = min(values) if is_binary else max(values) if is_flag else _compute_median(values)
+                agg_value = _aggregate_bucket(base, values)
                 f.write(json.dumps({"ts": bucket_start.isoformat(), "value": agg_value}, ensure_ascii=False) + "\n")
                 created += 1
             f.flush()
@@ -1771,12 +1780,8 @@ def query_display_series(
         end = min(until, start + timedelta(seconds=bucket_seconds))
         if metric == "http_status":
             value = max(values, key=lambda code: (6 if code == 0 else int(code) // 100, code))
-        elif is_binary_metric(metric):
-            value = min(values)
-        elif is_flag_metric(metric):
-            value = max(values)
         else:
-            value = _compute_median(values)
+            value = _aggregate_bucket(metric, values)
         code_counts = None
         if metric == "http_status":
             code_counts = {str(int(code)) if code else "Error": values.count(code) for code in set(values)}

@@ -18,7 +18,8 @@ from typing import Any
 
 from .sqlite import transaction
 
-# Vertical bound in rows; mirrors MAX_Y in static/js/dashboard-grid.js and the CHECK in init_schema.
+# Vertical bound in rows; mirrors MAX_Y in static/js/dashboard-grid.js and the dashboard_layouts CHECK
+# in sqlite/schema.py (baseline) and sqlite/migrations.py (migration 4).
 DASHBOARD_MAX_Y = 1000
 LAYOUT_VERSION = 2
 DASHBOARD_WIDGET_MIN_SIZES = {

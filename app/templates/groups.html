@@ -142,7 +142,7 @@
 				});
 
 				if (!res.ok) {
-					const err = await res.json();
+					const err = await res.json().catch(() => ({}));
 					window.justUpToast?.error?.(err.detail || 'Failed to save group');
 					return;
 				}
@@ -161,7 +161,7 @@
 					method: 'DELETE',
 				});
 				if (!res.ok) {
-					const err = await res.json();
+					const err = await res.json().catch(() => ({}));
 					window.justUpToast?.error?.(err.detail || 'Failed to delete group');
 					return;
 				}

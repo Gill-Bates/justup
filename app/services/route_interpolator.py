@@ -11,9 +11,6 @@ Principles:
 - No mixed semantics (status vs. flags)
 - O(n + r log r) processing: n hops, r responding hops that get sorted
 - Clear separation: detection → interpolation → formatting
-
-Note: Bisect lookups add O(b·log r) where b=blocks, r=responding hops;
-sorting the responding hops adds O(r log r).
 """
 
 from __future__ import annotations
@@ -22,15 +19,13 @@ import copy
 from typing import Any
 
 from app.services.route_timeline import NO_REPLY_LABEL, no_reply_run_label
+from app.services.traceroute_service import STATUS_OK, STATUS_PARTIAL, STATUS_TIMEOUT
 from app.utils.constants import HopStatus
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Constants / Types
 # ──────────────────────────────────────────────────────────────────────────────
 
-STATUS_OK = HopStatus.OK
-STATUS_PARTIAL = "partial"
-STATUS_TIMEOUT = HopStatus.TIMEOUT
 STATUS_INTERPOLATED = HopStatus.INTERPOLATED
 
 Hop = dict[str, Any]
@@ -134,7 +129,7 @@ def ensure_destination_hop(
 def _make_collapsed_summary(batch: list[Hop]) -> Hop:
     """Create a summary row for consecutive hops without reply (counted from the measured hop numbers)."""
     first = batch[0]
-    last = batch[len(batch) - 1]
+    last = batch[-1]
     count = len(batch)
 
     hop_display = str(first.get("hop")) if count == 1 else f"{first.get('hop')} - {last.get('hop')}"

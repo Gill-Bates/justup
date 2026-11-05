@@ -332,6 +332,35 @@ def test_binary_availability_keeps_an_outage_in_every_rollup_and_in_segments(tmp
     assert dict(_all(tmp_path, "tcp_up_443@5m_median")) == rolled
 
 
+@pytest.mark.parametrize(
+    ("metric", "expected"),
+    [("udp_up_53", 0.0), ("udp_unknown_53", 1.0), ("ping_ms", 1.0)],
+)
+def test_bucket_aggregation_is_min_for_binary_max_for_flags_and_median_otherwise(tmp_path, metric, expected):
+    # One rule for rollups, chart resampling and display buckets: they must never disagree.
+    values = (1, 0, 1, 1, 1)
+    start = (NOW - timedelta(days=40)).replace(minute=0, second=0, microsecond=0)
+    _write_legacy(
+        tmp_path, metric, start, start + timedelta(minutes=5), timedelta(minutes=1), value=lambda i, t: values[i]
+    )
+    tsdb.run_rollups(tmp_path, 1, 3650)
+    assert dict(_all(tmp_path, f"{metric}@5m_median")) == {start.isoformat(): expected}
+    points = [tsdb.MetricPoint(ts=start + timedelta(minutes=i), value=v) for i, v in enumerate(values)]
+    resampled = tsdb._resample_points(
+        points, metric=metric, since=start, until=start + timedelta(minutes=5), max_points=1
+    )
+    assert [p.value for p in resampled if p.ts == start] == [expected]
+    recent = NOW.replace(minute=0, second=0, microsecond=0) - timedelta(hours=1)
+    for i, v in enumerate(values):
+        tsdb.append_point(
+            tmp_path, target_id=2, metric=metric, value=v, retention_days=365, at=recent + timedelta(minutes=i)
+        )
+    shown = tsdb.query_display_series(
+        tmp_path, target_id=2, metric=metric, since=recent, until=recent + timedelta(minutes=5), bucket_seconds=300
+    )
+    assert [p["value"] for p in shown["points"]] == [expected]
+
+
 def test_http_status_is_never_rolled_up_and_its_distribution_survives_compression(tmp_path):
     start = NOW - timedelta(days=29, hours=12)
     codes = [200, 200, 503, 404, 200]

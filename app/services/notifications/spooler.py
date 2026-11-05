@@ -23,11 +23,11 @@ Message types:
 - 'test': Configuration test messages
 
 Usage:
-    from app.services.notifications.spooler import NotificationSpooler
+    from app.services.notifications.spooler import get_spooler
 
-    spooler = NotificationSpooler(db_conn_factory)
-    spooler.enqueue(...)  # Add failed notification to queue
-    await spooler.process_queue()  # Process pending (called by scheduler)
+    spooler = get_spooler(db_conn_factory)
+    spooler.enqueue(...)  # every notification is delivered through the queue
+    await asyncio.to_thread(spooler.process_queue_sync, send_signal, send_email)  # scheduler
 """
 
 from __future__ import annotations
@@ -42,7 +42,7 @@ import time
 from collections.abc import Callable
 from contextlib import AbstractContextManager, contextmanager, nullcontext, suppress
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from email.utils import getaddresses
 from enum import StrEnum
 from typing import Any
@@ -50,6 +50,7 @@ from typing import Any
 from ...db import notifications as inbox
 from ...db import sqlite as sqlite_db
 from ...utils import maintenance
+from ...utils.time import assume_utc
 from ...utils.time import utcnow as _utcnow
 from .delivery_policy import (
     CHANNEL_POLICIES,
@@ -238,8 +239,7 @@ def _accepts_kwarg(func: Callable[..., Any], name: str) -> bool:
 
 def _parse_ts(ts_str: str) -> datetime:
     """Parse a stored ISO timestamp; naive values count as UTC."""
-    dt = datetime.fromisoformat(ts_str)
-    return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
+    return assume_utc(datetime.fromisoformat(ts_str))
 
 
 def _calculate_next_retry(retry_count: int) -> datetime:
@@ -441,14 +441,13 @@ class NotificationSpooler:
         with self._db_conn(immediate=True) as conn:
             if notification_type == NotificationType.ALERT and isinstance(payload.get("alert_id"), str):
                 duplicate = conn.execute(
-                    """
+                    f"""
                     SELECT id FROM notification_queue
                     WHERE notification_type = ? AND channel_type = ? AND recipient_id = ?
-                      AND CASE WHEN json_valid(payload) THEN json_extract(payload, '$.alert_id') END = ?
-                      AND CASE WHEN json_valid(payload)
-                               THEN COALESCE(json_extract(payload, '$.alert_event'), 'open') END = ?
+                      AND {_ALERT_KEY_SQL.format(t="")} = ?
+                      AND {_ALERT_EVENT_SQL.format(t="")} = ?
                     ORDER BY id DESC LIMIT 1
-                    """,
+                    """,  # noqa: S608 - fixed SQL fragments, all values bound as params
                     (
                         NotificationType.ALERT.value,
                         channel_type.value,
