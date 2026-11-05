@@ -156,6 +156,17 @@
 		}
 	}
 
+	// 3c. Ghost scroll: a container the user can scroll vertically by a few pixels only (typically `overflow-x: auto`,
+	//     which turns `overflow-y` into `auto` too). Real scrollers (main, the document) are measured separately.
+	for (const el of all) {
+		if (el === main || el.matches("input, textarea, select")) continue;
+		const cs = getComputedStyle(el);
+		const excess = el.scrollHeight - el.clientHeight;
+		if ((cs.overflowY === "auto" || cs.overflowY === "scroll") && excess > 1 && excess <= 8) {
+			issue("ghost-scroll-y", el, { scrollHeight: el.scrollHeight, clientHeight: el.clientHeight, overflowY: cs.overflowY });
+		}
+	}
+
 	// 4. Elements wider than the layout box that owns them (content column, card, modal) and that
 	//    no scroll container accounts for. A clipping box hides such a node, so it is measured here.
 	const BOX = ".card, .modal-content, .ui-page, main";

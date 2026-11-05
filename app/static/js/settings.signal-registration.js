@@ -51,7 +51,7 @@ let _loadSignalStatus = loadSignalStatus;
 let _linkAbort = null;
 
 /**
- * Set the status loader function (called from signal-actions.js init)
+ * Set the status loader function (no production caller; tests inject a loader through it)
  * @param {Function} fn
  */
 export function setStatusLoader(fn) {

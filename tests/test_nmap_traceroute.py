@@ -439,6 +439,157 @@ class TestGlobalNmapCap:
         assert waited < 0.7 + 0.5 and self._peak(sock_dir) <= nmap_scanner.MAX_CONCURRENT_NMAP
 
 
+_MIXED_BODY = """
+addr = sys.argv[-1]
+if addr.endswith('.2'):
+    sys.stderr.write('boom')
+    sys.exit(2)
+if addr.endswith('.3'):
+    time.sleep(60)
+""" + _CONCURRENCY_BODY.replace("time.sleep(0.8)", "time.sleep(0.25)")
+
+
+class TestSustainedLoad:
+    """Scans and traces fired in waves: caps hold, both kinds progress, and every outcome frees its resources."""
+
+    @staticmethod
+    def _install(sock_dir, monkeypatch, body):
+        monkeypatch.setattr(nmap_scanner, "NMAP_BINARY", str(_fake_nmap(sock_dir, body.format(root=str(sock_dir)))))
+        TestGlobalNmapCap._fresh_limits(monkeypatch)
+        monkeypatch.setattr(nmap_scanner, "_target_locks", {})
+        monkeypatch.setattr(nmap_scanner, "_trace_locks", {})
+
+    @staticmethod
+    def _assert_all_released():
+        assert nmap_scanner._scan_slots._value == nmap_scanner.MAX_CONCURRENT_SCANS
+        assert nmap_scanner._trace_slots._value == nmap_scanner.MAX_CONCURRENT_TRACEROUTES
+        assert nmap_scanner._nmap_slots._value == nmap_scanner.MAX_CONCURRENT_NMAP
+        assert not nmap_scanner._target_locks and not nmap_scanner._trace_locks
+
+    def test_parallel_scans_and_traces_keep_the_cap_and_neither_kind_starves(self, sock_dir, monkeypatch):
+        self._install(sock_dir, monkeypatch, _CONCURRENCY_BODY.replace("time.sleep(0.8)", "time.sleep(0.2)"))
+        done = {"scan": 0, "trace": 0}
+        busy = 0
+
+        async def scan_loop(n, stop):
+            while time.monotonic() < stop:
+                await nmap_scanner.scan_selected_ports(f"10.0.1.{n}", [22], [], timeout=10)
+                done["scan"] += 1
+
+        async def trace_loop(n, stop):
+            nonlocal busy
+            while time.monotonic() < stop:
+                try:
+                    await nmap_scanner.trace_route(f"10.0.2.{n}", timeout=10)
+                    done["trace"] += 1
+                except NmapScannerError as exc:
+                    assert exc.error.code == "busy"
+                    busy += 1
+                    await asyncio.sleep(0.05)
+
+        async def scenario():
+            stop = time.monotonic() + 3
+            await asyncio.gather(
+                *(scan_loop(n, stop) for n in range(1, 5)), *(trace_loop(n, stop) for n in range(1, 4))
+            )
+
+        asyncio.run(scenario())
+        assert max(int(x) for x in (sock_dir / "peak").read_text().split()) <= nmap_scanner.MAX_CONCURRENT_NMAP
+        assert done["scan"] >= 6 and done["trace"] >= 3  # each kind keeps its guaranteed slot
+        assert busy > 0  # a third parallel trace is refused, never queued
+        self._assert_all_released()
+
+    def test_failed_hung_and_cancelled_runs_and_busy_refusals_release_every_resource(self, sock_dir, monkeypatch):
+        self._install(sock_dir, monkeypatch, _MIXED_BODY)
+
+        async def settle(kind, host, cancel_after=None):
+            call = (
+                nmap_scanner.scan_selected_ports(host, [22], [], timeout=2)
+                if kind == "scan"
+                else nmap_scanner.trace_route(host, timeout=5)
+            )
+            task = asyncio.create_task(call)
+            if cancel_after:
+                await asyncio.sleep(cancel_after)
+                task.cancel()
+            try:
+                await task
+                return f"{kind}:ok"
+            except asyncio.CancelledError:
+                return f"{kind}:cancelled"
+            except NmapScannerError as exc:
+                return f"{kind}:{exc.error.code}"
+
+        async def scenario():
+            jobs = []
+            for wave in range(3):
+                for last in (1, 2, 3):
+                    jobs.append(settle("scan", f"10.0.{wave}.{last}"))
+                    jobs.append(settle("trace", f"10.1.{wave}.{last}"))
+                jobs.append(settle("scan", f"10.2.{wave}.1", cancel_after=0.1))
+                jobs.append(settle("trace", f"10.3.{wave}.1", cancel_after=0.1))
+            return await asyncio.gather(*jobs)
+
+        outcomes = asyncio.run(scenario())
+        assert {"scan:ok", "scan:process_failed", "scan:timeout", "scan:cancelled", "trace:busy"} <= set(outcomes)
+        self._assert_all_released()
+
+    def test_refused_trace_requests_leave_no_target_lock_behind(self, sock_dir, monkeypatch):
+        self._install(sock_dir, monkeypatch, _CONCURRENCY_BODY)
+
+        async def scenario():
+            running = [asyncio.create_task(nmap_scanner.trace_route(f"10.1.0.{n}", timeout=10)) for n in (1, 2)]
+            await asyncio.sleep(0.2)
+            refused = await asyncio.gather(
+                *(nmap_scanner.trace_route(f"10.9.0.{n}", timeout=10) for n in range(1, 40)), return_exceptions=True
+            )
+            await asyncio.gather(*running)
+            return refused
+
+        refused = asyncio.run(scenario())
+        assert all(isinstance(item, NmapScannerError) and item.error.code == "busy" for item in refused)
+        assert not nmap_scanner._trace_locks
+
+
+_V6_NO_TRACE = (
+    'sys.stdout.write(\'<nmaprun><host><status state="down"/><address addr="fd00::5" addrtype="ipv6"/></host>'
+    '<runstats><finished exit="success"/></runstats></nmaprun>\')'
+)
+_V6_ONE_HOP = (
+    'sys.stdout.write(\'<nmaprun><host><status state="down"/><address addr="fd00::5" addrtype="ipv6"/>'
+    '<trace port="443" proto="tcp"><hop ttl="1" ipaddr="fd00::1" rtt="0.4"/></trace></host>'
+    '<runstats><finished exit="success"/></runstats></nmaprun>\')'
+)
+
+
+class TestIpv6AndDownTarget:
+    """Fixture output of Nmap, not a measurement: a silent IPv6 target and a switched-off target."""
+
+    def test_silent_ipv6_target_falls_back_once_and_shows_only_the_router_that_answered(self, sock_dir, monkeypatch):
+        log = _trace_for(sock_dir, monkeypatch, f"if '-sn' in sys.argv:\n    {_V6_NO_TRACE}\nelse:\n    {_V6_ONE_HOP}")
+        route = asyncio.run(nmap_scanner.trace_route("fd00::5", timeout=12))
+        calls = [call.split() for call in _calls(log)]
+        assert len(calls) == 2 and all("-6" in call for call in calls)
+        assert "-sn" in calls[0] and "-sS" in calls[1]
+        assert route.address_family == "ipv6" and not route.destination_reached
+        assert [(h.hop_number, h.ip) for h in route.hops] == [(1, "fd00::1")]
+
+    def test_switched_off_target_gets_no_phantom_destination_hop(self, sock_dir, monkeypatch):
+        from app.services import traceroute_service
+
+        _trace_for(sock_dir, monkeypatch, f"if '-sn' in sys.argv:\n    {_V6_NO_TRACE}\nelse:\n    {_V6_ONE_HOP}")
+        route = asyncio.run(nmap_scanner.trace_route("fd00::5", timeout=12))
+        hops = traceroute_service.route_to_hops(route)
+        analysis = traceroute_service.analyze_route(hops, "fd00::5")
+        assert all(hop["ip"] != "fd00::5" for hop in hops) and not analysis["destination_reached"]
+
+    def test_target_that_is_down_in_the_output_and_has_no_route_reports_no_trace(self, sock_dir, monkeypatch):
+        _trace_for(sock_dir, monkeypatch, _V6_NO_TRACE)
+        with pytest.raises(NmapScannerError) as exc:
+            asyncio.run(nmap_scanner.trace_route("fd00::5", timeout=12))
+        assert exc.value.error.code == "no_trace"
+
+
 class TestRequestType:
     def test_client_worker_and_scanner_offer_the_same_probe_protocols(self):
         import typing

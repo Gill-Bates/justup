@@ -68,7 +68,7 @@ put("udp_unknown_161", 50, 1)
 });
 for (const viewport of VIEWPORTS) {
 	for (const theme of ["light", "dark"]) {
-		test(`detail: endpoints and the three unmeasured/down presentations at ${viewport.name} ${theme} @endpoint-state`, async ({ browser, app, adminState }) => {
+		test(`detail: check badges and the three unmeasured/down presentations at ${viewport.name} ${theme} @endpoint-state`, async ({ browser, app, adminState }) => {
 			const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height }, storageState: adminState });
 			const page = await context.newPage();
 			const errors = [];
@@ -76,29 +76,31 @@ for (const viewport of VIEWPORTS) {
 			try {
 				await page.goto(`${app.base}/ui/targets/${targetId}`, { waitUntil: "load" });
 				await page.evaluate((mode) => document.documentElement.setAttribute("data-bs-theme", mode), theme);
-				await page.locator('tr[data-endpoint="udp:161"]').waitFor({ state: "attached" });
+				const hero = page.locator("#target-info-cards .target-kpi-badges");
+				await hero.locator(".badge", { hasText: "UDP:161" }).waitFor({ state: "attached" });
 				await page.locator("#downtime-history-body .downtime-item").first().waitFor({ state: "attached", timeout: 20000 });
-				const rows = await page.locator("tr[data-endpoint]").evaluateAll((nodes) => nodes.map((node) => node.dataset.endpoint));
-				assert.deepEqual(rows, ["icmp", "tcp:25", "tcp:587", "udp:53", "udp:161"]);
-				const row = (key) => page.locator(`tr[data-endpoint="${key}"]`);
-				assert.match(await row("icmp").innerText(), /ICMP/);
-				assert.match(await row("tcp:25").innerText(), /Up[\s\S]*smtp/);
-				assert.match(await row("tcp:587").innerText(), /Down/);
-				const unknown = row("udp:161");
-				const unknownText = await unknown.innerText();
-				assert.match(unknownText, /Unknown/);
-				assert.match(unknownText, /open\|filtered[\s\S]*uncertain/i);
-				assert.match(unknownText, /snmp[\s\S]*table hint/i);
-				assert.doesNotMatch(unknownText, /\bDown\b/);
-				assert.doesNotMatch(await row("tcp:587").innerText(), /Unknown/);
-				// UNKNOWN differs from DOWN by icon, colour and edge shape, not by colour alone.
-				const look = (key) => row(key).locator(".ju-state-badge").evaluate((badge) => ({
-					icon: badge.querySelector(".material-icons").textContent,
-					background: getComputedStyle(badge).backgroundColor,
-					border: getComputedStyle(badge).borderTopStyle,
+				assert.equal(await page.locator("[data-endpoint], .target-endpoints-card").count(), 0, "no endpoint table");
+				const labels = await hero.locator(".badge").evaluateAll((nodes) => nodes.map((node) => {
+					const clone = node.cloneNode(true);
+					clone.querySelectorAll(".material-icons, .visually-hidden").forEach((part) => part.remove());
+					return clone.textContent.trim();
 				}));
-				const down = await look("tcp:587");
-				const unk = await look("udp:161");
+				assert.deepEqual(labels, ["PING", "TCP:25", "TCP:587", "UDP:53", "UDP:161"]);
+				const badge = (label) => hero.locator(".badge", { hasText: label });
+				assert.match(await badge("TCP:25").innerText(), /Up/);
+				assert.match(await badge("TCP:587").innerText(), /Down/);
+				const unknownText = await badge("UDP:161").innerText();
+				assert.match(unknownText, /Unknown/);
+				assert.doesNotMatch(unknownText, /\bDown\b/);
+				assert.doesNotMatch(await badge("TCP:587").innerText(), /Unknown/);
+				// UNKNOWN differs from DOWN by icon, colour and edge shape, not by colour alone.
+				const look = (label) => badge(label).evaluate((node) => ({
+					icon: node.querySelector(".material-icons").textContent,
+					background: getComputedStyle(node).backgroundColor,
+					border: getComputedStyle(node).borderTopStyle,
+				}));
+				const down = await look("TCP:587");
+				const unk = await look("UDP:161");
 				assert.notEqual(down.icon, unk.icon);
 				assert.notEqual(down.background, unk.background);
 				assert.equal(unk.border, "dashed");

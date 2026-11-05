@@ -4,7 +4,7 @@
 # Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 #
 
-"""Endpoint view model and its markup: ICMP apart, TCP/UDP unambiguous, UNKNOWN never rendered like DOWN."""
+"""Endpoint view model and the Checks badges: ICMP apart, TCP/UDP unambiguous, UNKNOWN never rendered like DOWN."""
 
 from __future__ import annotations
 
@@ -148,49 +148,119 @@ def test_status_helper_keeps_measured_up_checks_while_the_overall_status_is_unkn
     assert get_status_defaults()["ping_checked_at"] is None
 
 
-def endpoint_table(html: str) -> str:
-    match = re.search(
-        r'<table[^>]*aria-label="[^"]*">.*?</table>|<section[^>]*network-endpoints.*?</section>', html, re.DOTALL
-    )
-    assert match, "endpoint table missing"
-    return match.group(0)
+INFO_CARDS = "fragments/target_detail/info_cards.html"
 
 
-def test_detail_endpoint_table_lists_icmp_tcp_and_udp_with_distinct_unknown_and_down() -> None:
+def render_cards(t: dict) -> str:
+    t["endpoints"] = build_endpoint_views(t, t.get("network_ports", []))
+    return render(INFO_CARDS, target=t, user={"is_admin": True})
+
+
+def check_badges(html: str) -> dict[str, str]:
+    """Label -> markup of every badge in the Checks hero (CERT included), in document order."""
+    hero = re.search(r'<div class="ju-badges target-kpi-badges">(.*?)</div>\s*</div>\s*</div>', html, re.DOTALL).group(1)
+    badges = re.findall(r'<span class="badge.*?</span></span>', hero, re.DOTALL)
+    out: dict[str, str] = {}
+    for badge in badges:
+        text = re.sub(r"<[^>]+>", "", re.sub(r'<span class="material-icons"[^>]*>[^<]*</span>', "", badge))
+        out[text.split(":")[0].strip()] = badge
+    return out
+
+
+def assert_no_endpoint_table(html: str) -> None:
+    for fragment in ("target-endpoints-card", "Network endpoints", "data-endpoint", "<table", "Waiting for first measurement"):
+        assert fragment not in html, fragment
+
+
+def test_detail_checks_show_up_down_and_unknown_apart_without_an_endpoint_table() -> None:
     t = target()
     t["network_ports"] = [
-        stored("tcp", 25, "up", last_up_at="2026-11-04T10:00:00+00:00", service_name="smtp", method="probed"),
+        stored("tcp", 25, "up"),
         stored("tcp", 587, "down"),
         stored("udp", 53, "up", raw_state="open"),
         stored("udp", 161, "unknown", raw_state="open|filtered"),
     ]
-    t["endpoints"] = build_endpoint_views(t, t["network_ports"])
-    html = render("fragments/target_detail/info_cards.html", target=t, user={"is_admin": True})
-    table = endpoint_table(html)
-    rows = {m.group(1): m.group(0) for m in re.finditer(r'<tr[^>]*data-endpoint="([^"]+)".*?</tr>', table, re.DOTALL)}
-    assert list(rows) == ["icmp", "tcp:25", "tcp:587", "udp:53", "udp:161"]
-    down, unknown = rows["tcp:587"], rows["udp:161"]
-    assert "Down" in down and "Unknown" not in down
-    assert "Unknown" in unknown and "Down" not in unknown
-    assert "cancel" in down and "help" in unknown, "icon shape differs, not only the colour"
-    assert "ju-status-badge--danger" in down and "ju-status-badge--danger" not in unknown
-    assert "smtp" in rows["tcp:25"]
-    assert "uncertain" in unknown
-    assert re.search(r"<th[^>]*>Last successful check</th>", table)
-    assert "<th" in rows["icmp"] and "ICMP" in rows["icmp"]
-
-
-def test_every_enabled_endpoint_has_a_status_badge_with_text_for_unknown() -> None:
-    t = target()
-    t["network_ports"] = [stored("udp", 161, "unknown", raw_state="open|filtered")]
-    t["endpoints"] = build_endpoint_views(t, t["network_ports"])
-    html = render("fragments/target_detail/info_cards.html", target=t, user={})
-    badges = re.search(r'<div class="ju-badges target-kpi-badges">(.*?)</div>', html, re.DOTALL).group(1)
-    assert "UDP:161" in badges and "TCP:25" in badges
-    udp161 = re.search(
-        r"<span[^>]*>(?:(?!</span>\s*<span class=\"badge).)*?UDP:161.*?</span>\s*</span>", badges, re.DOTALL
+    html = render_cards(t)
+    assert_no_endpoint_table(html)
+    up, down, unknown = (
+        re.search(rf'<span class="badge[^>]*>(?:(?!<span class="badge).)*?{label}.*?</span></span>', html, re.DOTALL).group(0)
+        for label in ("TCP:25", "TCP:587", "UDP:161")
     )
-    assert udp161 and "Unknown" in udp161.group(0)
+    assert "ju-status-badge--success" in up and "check_circle" in up and ": Up<" in up
+    assert "ju-status-badge--danger" in down and "cancel" in down and ": Down<" in down
+    assert "ju-status-badge--neutral" in unknown and "help" in unknown and ": Unknown<" in unknown
+    assert "ju-state-badge--unknown" in unknown and "ju-state-badge--unknown" not in down
+    assert "ju-status-badge--danger" not in unknown and "Down" not in unknown
+    assert "uncertain" in unknown, "the Nmap note stays reachable as tooltip"
+
+
+def test_checks_hero_lists_exactly_the_configured_ports_and_not_the_ping_twice() -> None:
+    t = target(enable_udp_scan=False)
+    t["network_ports"] = [stored("tcp", 25, "up"), stored("tcp", 587, "down")]
+    html = render_cards(t)
+    labels = re.findall(r"(PING|TCP:\d+|UDP:\d+|HTTP|CERT)<span class=\"visually-hidden\">", html)
+    assert labels == ["PING", "TCP:25", "TCP:587"]
+    assert "ICMP" not in html
+
+
+def test_tcp_and_udp_with_the_same_port_number_are_two_badges() -> None:
+    t = target(enable_ping=False, tcp_ports="53", udp_ports="53")
+    t["network_ports"] = [stored("tcp", 53, "up"), stored("udp", 53, "down")]
+    html = render_cards(t)
+    assert html.count("TCP:53") == 1 and html.count("UDP:53") == 1
+
+
+def test_unmeasured_ports_are_unknown_badges_not_missing() -> None:
+    html = render_cards(target(enable_ping=False))
+    for label in ("TCP:25", "TCP:587", "UDP:53", "UDP:161"):
+        badge = re.search(
+            rf'<span class="badge[^>]*>(?:(?!<span class="badge).)*?{label}.*?</span></span>', html, re.DOTALL
+        ).group(0)
+        assert ": Unknown<" in badge and "ju-state-badge--unknown" in badge
+    assert "Waiting for first measurement" not in html
+
+
+def test_disabled_checks_and_removed_ports_have_no_badge() -> None:
+    t = target(enable_udp_scan=False, enable_ping=False, tcp_ports="25")
+    t["network_ports"] = [stored("tcp", 25, "up"), stored("tcp", 9999, "down"), stored("udp", 53, "up")]
+    html = render_cards(t)
+    assert "TCP:25" in html
+    for label in ("TCP:587", "TCP:9999", "UDP:53", "PING"):
+        assert label not in html
+
+
+def test_http_and_cert_badges_are_unchanged() -> None:
+    t = target(enable_ping=False, enable_tcp_connect=False, enable_udp_scan=False, enable_http_check=True,
+               http_status="down", enable_cert_expiration=True, cert_status="warning")
+    html = render_cards(t)
+    http = re.search(r'<span class="badge[^>]*>(?:(?!<span class="badge).)*?HTTP.*?</span></span>', html, re.DOTALL).group(0)
+    assert "ju-status-badge--danger" in http and ": Down<" in http
+    cert = re.search(r'<span class="badge\s+ju-status-badge--warning\s*">\s*CERT.*?</span>\s*</span>', html, re.DOTALL)
+    assert cert and "CERT<span class=\"visually-hidden\">: warning</span>" in cert.group(0)
+
+
+def test_target_without_any_check_says_so_and_has_no_table() -> None:
+    t = target(enable_ping=False, enable_tcp_connect=False, enable_udp_scan=False)
+    html = render_cards(t)
+    assert "No checks enabled" in html
+    assert_no_endpoint_table(html)
+
+
+def test_many_ports_are_all_badges_in_one_wrapping_group() -> None:
+    ports = ",".join(str(n) for n in range(1000, 1040))
+    t = target(enable_ping=False, enable_udp_scan=False, tcp_ports=ports)
+    html = render_cards(t)
+    assert len(re.findall(r"ju-state-badge--unknown", html)) == 40
+    assert 'class="ju-badges target-kpi-badges"' in html
+
+
+def test_state_badge_escapes_label_and_title() -> None:
+    macro = templates.env.from_string(
+        '{% from "fragments/_state_badge.html" import state_badge %}{{ state_badge(label, "up", title) }}'
+    )
+    html = macro.render(label="<img src=x onerror=alert(1)>", title='"><script>alert(1)</script>')
+    assert "<img src=x" not in html and "<script>" not in html
+    assert "&lt;img" in html and "&lt;script&gt;" in html
 
 
 def test_dashboard_table_shows_endpoint_status_with_text_not_only_colour() -> None:
@@ -219,96 +289,7 @@ def test_dashboard_table_shows_endpoint_status_with_text_not_only_colour() -> No
     assert "cancel" in down and "help" in unknown
 
 
-def test_endpoint_markup_never_inserts_scanner_text_as_html() -> None:
-    row = stored("tcp", 25, "up", service_name="<img src=x onerror=alert(1)>", method="probed")
-    t = target(enable_udp_scan=False, enable_ping=False, tcp_ports="25")
-    t["network_ports"] = [row]
-    t["endpoints"] = build_endpoint_views(t, t["network_ports"])
-    html = render("fragments/target_detail/info_cards.html", target=t, user={})
-    assert "<img src=x" not in html
-    assert "&lt;img" in html
-
-
-def _endpoint_card(t: dict) -> str:
-    t["endpoints"] = build_endpoint_views(t, t.get("network_ports", []))
-    return endpoint_table(render("fragments/target_detail/info_cards.html", target=t, user={}))
-
-
-def _tcp25(**overrides) -> dict:
-    return target(enable_ping=False, enable_udp_scan=False, tcp_ports="25", **overrides)
-
-
-def test_detail_view_lists_the_tcp_endpoint_of_a_target_without_port_rows(tmp_path) -> None:
-    # A target saved before the port table existed has no rows; the card still lists its endpoint.
-    from app.api import frontend
-    from app.db import sqlite as sqlite_db
-
-    conn = sqlite_db.connect(tmp_path / "db" / "justup.db")
-    sqlite_db.init_schema(conn)
-    try:
-        tid = sqlite_db.create_target(
-            conn,
-            {
-                "name": "mail",
-                "host": "mail.example.org",
-                "interval_seconds": 60,
-                "retention_days": 30,
-                "enable_tcp_connect": 1,
-                "tcp_ports": "25",
-            },
-        )
-        view = frontend._target_detail_view(conn, sqlite_db.get_target(conn, tid), tid)  # noqa: SLF001
-    finally:
-        sqlite_db.close_connection(conn)
-    html = render("fragments/target_detail/info_cards.html", target=view, user={})
-    assert "No port measurements yet" not in html
-    assert re.search(r'data-endpoint="tcp:25"', html)
-
-
-def test_unmeasured_endpoint_waits_for_its_first_measurement_instead_of_looking_empty() -> None:
-    t = _tcp25()
-    t["network_ports"] = [stored("tcp", 25, None, checked_at=None)]
-    card = _endpoint_card(t)
-    assert "TCP 25" in card and "Waiting for first measurement" in card
-    assert "No port measurements yet" not in card
-
-
-def test_measured_endpoint_shows_its_state_and_no_waiting_text() -> None:
-    t = _tcp25()
-    t["network_ports"] = [stored("tcp", 25, "up")]
-    card = _endpoint_card(t)
-    assert "Up" in card and "Waiting for first measurement" not in card
-
-
-def test_measured_udp_unknown_stays_unknown_and_is_not_waiting() -> None:
-    t = target(enable_ping=False, enable_tcp_connect=False, udp_ports="161")
-    t["network_ports"] = [stored("udp", 161, "unknown", raw_state="open|filtered")]
-    card = _endpoint_card(t)
-    assert "Unknown" in card and "Waiting for first measurement" not in card
-
-
-def test_legacy_target_without_port_rows_takes_its_state_from_the_tcp_status_cache() -> None:
-    t = _tcp25(tcp_port_status={"25": "up"})
-    card = _endpoint_card(t)
-    assert "Up" in card and "Waiting for first measurement" not in card
-
-
-def test_unmeasured_port_row_defers_to_the_tcp_status_cache() -> None:
-    # Migration 7 creates the row empty; the cache holds the pre-upgrade measurement the charts also show.
-    t = _tcp25(tcp_port_status={"25": "down"})
-    t["network_ports"] = [stored("tcp", 25, None, checked_at=None)]
-    [view] = build_endpoint_views(t, t["network_ports"])
-    assert (view["status"], view["measured"]) == ("down", True)
-
-
-def test_target_without_a_port_check_has_no_endpoint_card() -> None:
-    t = target(enable_ping=False, enable_tcp_connect=False, enable_udp_scan=False)
-    t["endpoints"] = build_endpoint_views(t, [])
-    assert "target-network-endpoints-title" not in render("fragments/target_detail/info_cards.html", target=t, user={})
-
-
-def test_detail_view_takes_an_unmeasured_tcp_port_state_from_the_series_the_charts_plot(tmp_path) -> None:
-    # The Response time chart plots tcp_up_25; the endpoint card must not say "waiting" next to it.
+def _detail_view(tmp_path, config: dict, *, series: bool = False) -> dict:
     from datetime import UTC, datetime
 
     from app.api import frontend
@@ -320,20 +301,45 @@ def test_detail_view_takes_an_unmeasured_tcp_port_state_from_the_series_the_char
     try:
         tid = sqlite_db.create_target(
             conn,
-            {
-                "name": "mail",
-                "host": "mail.example.org",
-                "interval_seconds": 60,
-                "retention_days": 30,
-                "enable_tcp_connect": 1,
-                "tcp_ports": "25,587",
-            },
+            {"name": "mail", "host": "mail.example.org", "interval_seconds": 60, "retention_days": 30} | config,
         )
-        append_point(
-            tmp_path / "tsdb", target_id=tid, metric="tcp_up_25", value=1, retention_days=30, at=datetime.now(UTC)
+        if series:
+            append_point(
+                tmp_path / "tsdb", target_id=tid, metric="tcp_up_25", value=1, retention_days=30, at=datetime.now(UTC)
+            )
+        return frontend._target_detail_view(  # noqa: SLF001
+            conn, sqlite_db.get_target(conn, tid), tid, tsdb_dir=tmp_path / "tsdb" if series else None
         )
-        view = frontend._target_detail_view(conn, sqlite_db.get_target(conn, tid), tid, tsdb_dir=tmp_path / "tsdb")  # noqa: SLF001
     finally:
         sqlite_db.close_connection(conn)
+
+
+def test_target_without_stored_port_rows_still_shows_its_tcp_badge(tmp_path) -> None:
+    # A target saved before the port table existed has no rows; the Checks hero still lists its port.
+    view = _detail_view(tmp_path, {"enable_tcp_connect": 1, "tcp_ports": "25"})
+    html = render(INFO_CARDS, target=view, user={})
+    assert "TCP:25" in html and ": Unknown<" in html
+    assert_no_endpoint_table(html)
+
+
+def test_legacy_target_without_port_rows_takes_its_state_from_the_tcp_status_cache() -> None:
+    t = target(enable_ping=False, enable_udp_scan=False, tcp_ports="25", tcp_port_status={"25": "up"})
+    badge = check_badges(render_cards(t))["TCP"]
+    assert "ju-status-badge--success" in badge and ": Up<" in badge
+
+
+def test_unmeasured_port_row_defers_to_the_tcp_status_cache() -> None:
+    # Migration 7 creates the row empty; the cache holds the pre-upgrade measurement the charts also show.
+    t = target(enable_ping=False, enable_udp_scan=False, tcp_ports="25", tcp_port_status={"25": "down"})
+    t["network_ports"] = [stored("tcp", 25, None, checked_at=None)]
+    [view] = build_endpoint_views(t, t["network_ports"])
+    assert (view["status"], view["measured"]) == ("down", True)
+    assert "ju-status-badge--danger" in check_badges(render_cards(t))["TCP"]
+
+
+def test_detail_view_takes_an_unmeasured_tcp_port_state_from_the_series_the_charts_plot(tmp_path) -> None:
+    view = _detail_view(tmp_path, {"enable_tcp_connect": 1, "tcp_ports": "25,587"}, series=True)
     states = {v["key"]: (v["status"], v["measured"]) for v in view["endpoints"]}
     assert states == {"tcp:25": ("up", True), "tcp:587": ("unknown", False)}
+    badges = render(INFO_CARDS, target=view, user={})
+    assert re.search(r"TCP:25.*?: Up<", badges, re.DOTALL) and re.search(r"TCP:587.*?: Unknown<", badges, re.DOTALL)

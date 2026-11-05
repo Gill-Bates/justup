@@ -518,7 +518,8 @@
 
 	poller = createPoller({
 		intervalMs: POLL_MS,
-		fetchSummary: function () { return root.apiFetch('/ui/notifications/summary', { cache: 'no-store' }); },
+		// The timeout settles a hung request so the in-flight guard cannot freeze the badge.
+		fetchSummary: function () { return root.apiFetch('/ui/notifications/summary', { cache: 'no-store', signal: AbortSignal.timeout(10000) }); },
 		onData: onData,
 		onAuthLost: function () { badge.hidden = true; },
 		isHidden: function () { return doc.hidden; },

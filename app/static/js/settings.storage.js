@@ -974,6 +974,7 @@ function initSettingsAutoSave() {
         if (target.closest('#signal-flow-link')) return;
         if (target.closest('#signal-flow-register')) return;
         if (target.name === 'auth_disabled') return;  // Handled by initAuthToggle with modal
+        if (target.name === 'signal_enabled') return;  // Handled by initEnableToggle's signalSaveQueue
 
         // Tag input: the component only fires 'change' for a valid, changed value
         if (target.type === 'hidden' && target.hasAttribute('data-tag-input-value')) {
@@ -1052,11 +1053,12 @@ function initSettingsAutoSave() {
         // SMTP password: allow setting when user provides a value
         if (target.type === 'password' || target.autocomplete?.includes('password')) {
             if (target.name === 'smtp_password') {
-                const next = (target.value || '').trim();
-                if (next) {
+                // Whitespace is part of the secret; only an all-blank value is skipped
+                const next = target.value || '';
+                if (next.trim()) {
                     const saved = await saveSetting('smtp_password', next);
                     // Clear only after a successful save and if the user did not type meanwhile
-                    if (saved && (target.value || '').trim() === next) {
+                    if (saved && (target.value || '') === next) {
                         setSecretState(target.closest('[data-secret-field]'), true);
                     }
                 }
@@ -1068,6 +1070,12 @@ function initSettingsAutoSave() {
         if (target.type === 'number') {
             const lastValue = lastValues.get(target) ?? target.defaultValue;
             if (target.value !== lastValue) {
+                // An empty or invalid entry must not be saved as the clamped minimum
+                if (target.value === '' || !target.checkValidity()) {
+                    revealSettingsSection(target);
+                    target.reportValidity();
+                    return;
+                }
                 // Clamp to valid range
                 const parsedMin = parseInt(target.min, 10);
                 const parsedMax = parseInt(target.max, 10);

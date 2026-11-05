@@ -519,8 +519,11 @@ async def trace_route(
         first = (probe_protocol, probe_port)
     else:
         fallback = ("tcp", DEFAULT_PROBE_PORT)
+    # Refuse before a lock entry exists, so refused requests cannot leave one behind per address.
+    if _trace_slots.locked() or _nmap_slots.locked():
+        raise NmapScannerError("busy", "A traceroute is already running for this target or the worker is busy")
     lock = _trace_locks.setdefault(address, asyncio.Lock())
-    if lock.locked() or _trace_slots.locked() or _nmap_slots.locked():
+    if lock.locked():
         raise NmapScannerError("busy", "A traceroute is already running for this target or the worker is busy")
     await lock.acquire()
     try:

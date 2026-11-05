@@ -2,35 +2,53 @@
 // tests/layout/target-endpoints.spec.mjs
 // Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 //
-
-// Target detail, "Network endpoints" card: it lists every configured endpoint (never the empty text while
-// a check is configured) and the cards of the Dashboard tab stack with one gutter between them. The
-// generic layout audit looks for overflow, clipping and overlap, so an oversized empty band between two
-// cards (a card pushed into a 1fr grid row) passes it; this spec measures the gaps themselves.
+// Target detail, Dashboard tab: every enabled check is a badge in the Checks hero and there is no "Network
+// endpoints" card. The cards of the tab stack with one gutter between them (no band left by the removed
+// card), many ports wrap inside the hero without horizontal overflow or clipped badges, and a live
+// (HTMX) refresh updates the badges without bringing a table back. The generic layout audit looks for
+// overflow, clipping and overlap, so an oversized empty band between two cards passes it; this spec
+// measures the gaps themselves.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "./fixtures.mjs";
-
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const VIEWPORTS = [
 	{ name: "1920x1080", width: 1920, height: 1080 },
-	{ name: "1280x720", width: 1280, height: 720 },
+	{ name: "1280x800", width: 1280, height: 800 },
+	{ name: "768x1024", width: 768, height: 1024 },
 	{ name: "390x844", width: 390, height: 844 },
 ];
+const MANY = Array.from({ length: 36 }, (_, index) => 2000 + index);
 const TARGETS = {
-	tcp25: { name: "Endpoint TCP25", host: "tcp25.example.net", enable_tcp_connect: true, tcp_host: "tcp25.example.net", tcp_ports: "25" },
-	multi: { name: "Endpoint Multi", host: "multi.example.net", enable_tcp_connect: true, tcp_host: "multi.example.net", tcp_ports: "22,25,443", enable_udp_scan: true, udp_ports: "53,161" },
+	tcp25: { name: "Endpoint TCP25", host: "tcp25.example.net", enable_tcp_connect: true, tcp_host: "tcp25.example.net", tcp_ports: "25,587" },
+	multi: { name: "Endpoint Multi", host: "multi.example.net", enable_ping: true, enable_tcp_connect: true, tcp_host: "multi.example.net", tcp_ports: "53,25", enable_udp_scan: true, udp_ports: "53,161" },
 	none: { name: "Endpoint None", host: "none.example.net", enable_http_check: true, http_url: "https://none.example.net/" },
+	many: { name: "Endpoint Many", host: "many.example.net", enable_tcp_connect: true, tcp_host: "many.example.net", tcp_ports: MANY.join(",") },
+	live: { name: "Endpoint Live", host: "live.example.net", is_enabled: false, enable_ping: false, enable_tcp_connect: true, tcp_host: "live.example.net", tcp_ports: "25,587" },
 };
-const EXPECTED_ROWS = { tcp25: ["tcp:25"], multi: ["tcp:22", "tcp:25", "tcp:443", "udp:53", "udp:161"], none: [] };
+const EXPECTED_BADGES = {
+	tcp25: ["TCP:25", "TCP:587"],
+	multi: ["PING", "TCP:25", "TCP:53", "UDP:53", "UDP:161"],
+	none: ["HTTP", "CERT"],
+	many: MANY.map((port) => `TCP:${port}`),
+	live: ["TCP:25", "TCP:587"],
+};
 const GUTTER = 24; // --target-detail-gap: 1.5rem
 const TOLERANCE = 2;
-
 test.describe.configure({ mode: "serial" });
 let ids;
-
+const python = (app, script) => {
+	const result = spawnSync(app.python, ["-c", script], { cwd: repo, env: { ...process.env, JUSTUP_DATA_DIR: app.data }, encoding: "utf8" });
+	assert.equal(result.status, 0, result.stderr);
+};
+const setPort = (app, id, port, status) => python(app, `from app.db import sqlite as sqlite_db
+from app.utils.config import load_config
+conn = sqlite_db.connect(load_config().db_path)
+sqlite_db.update_network_port_status(conn, ${id}, "tcp", ${port}, "${status}")
+conn.commit()
+`);
 test.beforeAll(async ({ browser, app, adminState }) => {
 	const context = await browser.newContext({ storageState: adminState });
 	const page = await context.newPage();
@@ -45,25 +63,17 @@ test.beforeAll(async ({ browser, app, adminState }) => {
 		return created;
 	}, TARGETS);
 	await context.close();
-	// A measured TCP:25 series, the one the charts plot.
-	const script = `from datetime import datetime, timedelta, timezone
-from app.db.tsdb import append_point
-from app.utils.config import load_config
-config = load_config()
-now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
-for index in range(60):
-	at = now - timedelta(minutes=59 - index)
-	append_point(config.tsdb_dir, target_id=${ids.tcp25}, metric="tcp_ms_25", value=19 + index % 5, retention_days=365, at=at)
-	append_point(config.tsdb_dir, target_id=${ids.tcp25}, metric="tcp_up_25", value=1, retention_days=365, at=at)
-`;
-	const result = spawnSync(app.python, ["-c", script], { cwd: repo, env: { ...process.env, JUSTUP_DATA_DIR: app.data }, encoding: "utf8" });
-	assert.equal(result.status, 0, result.stderr);
+	setPort(app, ids.live, 25, "up");
+	setPort(app, ids.live, 587, "down");
 });
-
+const badgeStates = (page) => page.evaluate(() => Object.fromEntries([...document.querySelectorAll("#target-info-cards .target-kpi-badges .badge")].map((badge) => [
+	[...badge.childNodes].filter((node) => node.nodeType === 3).map((node) => node.textContent).join("").trim(),
+	badge.querySelector(".visually-hidden").textContent.replace(/^:\s*/, ""),
+])));
 for (const viewport of VIEWPORTS) {
 	for (const theme of ["light", "dark"]) {
-		for (const key of Object.keys(TARGETS)) {
-			test(`endpoint card and card gaps for ${key} at ${viewport.name} ${theme} @target-endpoints`, async ({ browser, app, adminState }) => {
+		for (const key of ["tcp25", "multi", "none", "many"]) {
+			test(`checks hero and card gaps for ${key} at ${viewport.name} ${theme} @target-endpoints`, async ({ browser, app, adminState }) => {
 				const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height }, storageState: adminState });
 				const page = await context.newPage();
 				const errors = [];
@@ -78,36 +88,46 @@ for (const viewport of VIEWPORTS) {
 							const rect = element.getBoundingClientRect();
 							return { top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right, height: rect.height, width: rect.width };
 						};
-						const card = document.getElementById("target-network-endpoints-title")?.closest("section");
-						const toolbar = document.querySelector("#target-dashboard-pane > .target-toolbar");
-						const combined = document.getElementById("combined-card");
-						const kpi = document.querySelector("#target-dashboard-pane .target-kpi-row");
+						const labelOf = (badge) => {
+							const clone = badge.cloneNode(true);
+							clone.querySelectorAll(".material-icons, .visually-hidden").forEach((node) => node.remove());
+							return clone.textContent.trim();
+						};
+						const hero = document.querySelector("#target-info-cards .target-kpi-badges");
+						const heroBox = box(hero);
+						const badges = [...hero.querySelectorAll(".badge")].map((badge) => ({ label: labelOf(badge), box: box(badge) }));
 						return {
-							rows: card ? [...card.querySelectorAll("tr[data-endpoint]")].map((row) => row.dataset.endpoint) : null,
-							text: card ? card.innerText.replace(/\s+/g, " ") : "",
-							card: card && box(card), toolbar: box(toolbar), combined: box(combined), kpi: box(kpi),
+							table: Boolean(document.querySelector(".target-endpoints-card, #target-network-endpoints-title, [data-endpoint]")),
+							text: document.body.innerText,
+							badges,
+							hero: heroBox,
+							toolbar: box(document.querySelector("#target-dashboard-pane > .target-toolbar")),
+							combined: box(document.getElementById("combined-card")),
+							kpi: box(document.querySelector("#target-dashboard-pane .target-kpi-row")),
 							scrollX: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+							heroScrollX: hero.scrollWidth - hero.clientWidth,
 						};
 					});
 					assert.deepEqual(errors, []);
-					assert.equal(result.scrollX <= 0, true, `horizontal overflow ${result.scrollX}px`);
-					assert.doesNotMatch(result.text, /No port measurements yet/);
-					assert.equal(Boolean(result.card), EXPECTED_ROWS[key].length > 0, "card shown exactly when an endpoint is configured");
-					const chain = [result.kpi];
-					if (result.card) {
-						assert.deepEqual(result.rows, EXPECTED_ROWS[key]);
-						assert.match(result.text, /Waiting for first measurement|Up|Down|Unknown/);
-						// A configured endpoint with a status is never presented as waiting.
-						assert.equal(result.card.width >= result.toolbar.width - TOLERANCE, true, `card spans the content width: ${result.card.width} vs ${result.toolbar.width}`);
-						chain.push(result.card);
+					assert.equal(result.table, false, "no endpoint card or table");
+					assert.doesNotMatch(result.text, /Network endpoints|Waiting for first measurement|No port measurements yet/);
+					assert.deepEqual(result.badges.map((badge) => badge.label), EXPECTED_BADGES[key]);
+					assert.equal(result.scrollX <= 0, true, `horizontal page overflow ${result.scrollX}px`);
+					assert.equal(result.heroScrollX <= 0, true, `horizontal hero overflow ${result.heroScrollX}px`);
+					for (const badge of result.badges) {
+						assert.equal(badge.box.left >= result.hero.left - 1 && badge.box.right <= result.hero.right + 1, true, `badge ${badge.label} sits inside the hero`);
 					}
-					chain.push(result.toolbar, result.combined);
+					if (key === "many") {
+						const rows = new Set(result.badges.map((badge) => Math.round(badge.box.top)));
+						assert.equal(rows.size > 1, true, "36 ports wrap onto several rows");
+					}
+					const chain = [result.kpi, result.toolbar, result.combined];
 					for (let index = 1; index < chain.length; index += 1) {
 						const gap = chain[index].top - chain[index - 1].bottom;
 						assert.equal(gap >= -TOLERANCE && gap <= GUTTER + TOLERANCE, true, `gap ${index} between stacked cards is ${Math.round(gap)}px, expected at most one ${GUTTER}px gutter`);
 					}
 					if (viewport.width >= 1200 && viewport.height >= 800) {
-						assert.equal(result.combined.height >= 300, true, `chart row keeps its height next to the endpoint card: ${Math.round(result.combined.height)}px`);
+						assert.equal(result.combined.height >= 300, true, `chart row keeps its height: ${Math.round(result.combined.height)}px`);
 					}
 				} finally {
 					await context.close();
@@ -116,3 +136,20 @@ for (const viewport of VIEWPORTS) {
 		}
 	}
 }
+test("live refresh updates the badges and never brings an endpoint table back @target-endpoints", async ({ browser, app, adminState }) => {
+	const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, storageState: adminState });
+	const page = await context.newPage();
+	try {
+		await page.goto(`${app.base}/ui/targets/${ids.live}`, { waitUntil: "load" });
+		await page.locator("#target-info-cards .target-kpi-badges .badge").first().waitFor();
+		assert.deepEqual(await badgeStates(page), { "TCP:25": "Up", "TCP:587": "Down" });
+		setPort(app, ids.live, 587, "up");
+		setPort(app, ids.live, 25, "unknown");
+		await page.evaluate(() => window.htmx.trigger(document.body, "justup-live-sync"));
+		await page.waitForFunction(() => [...document.querySelectorAll("#target-info-cards .target-kpi-badges .badge")].some((badge) => badge.textContent.includes("TCP:25") && badge.textContent.includes("Unknown")), null, { timeout: 15000 });
+		assert.deepEqual(await badgeStates(page), { "TCP:25": "Unknown", "TCP:587": "Up" });
+		assert.equal(await page.locator(".target-endpoints-card, [data-endpoint]").count(), 0);
+	} finally {
+		await context.close();
+	}
+});

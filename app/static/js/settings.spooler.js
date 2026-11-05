@@ -141,7 +141,7 @@
 		const rows = entries.map(function (e) {
 			const channelIcon = _channelIcon(e.channel_type);
 
-			const statusBadge = _statusBadge(e.status, e.retry_count);
+			const statusBadge = _statusBadge(e.status, e.retry_count, e.channel_type);
 			const errorCell = e.last_error
 				? '<span class="text-danger" title="' + escapeHtml(e.last_error) + '">' + escapeHtml(e.last_error.substring(0, 160)) + (e.last_error.length > 160 ? '…' : '') + '</span>'
 				: '<span class="text-body-secondary">–</span>';
@@ -280,9 +280,10 @@
 	}
 
 	// "sent" only means the server accepted the message; the caveat is documented, not shown as tooltip.
-	function _statusBadge(status, retries) {
+	function _statusBadge(status, retries, channelType) {
+		const handoff = channelType === 'signal' ? 'Signal handoff' : 'SMTP handoff';
 		const map = {
-			pending: ['ju-status-badge--warning', 'schedule', 'Waiting for handoff', 'Waiting for SMTP handoff'],
+			pending: ['ju-status-badge--warning', 'schedule', 'Waiting for handoff', 'Waiting for ' + handoff],
 			processing: ['ju-status-badge--info', 'sync', 'Handing over', 'Being handed to the server'],
 			sent: ['ju-status-badge--success', 'check', 'Sent', ''],
 			failed: ['ju-status-badge--danger', 'error_outline', 'Handoff failed', 'Handoff to the server failed'],
@@ -291,7 +292,7 @@
 		if (!entry) return '<span class="badge ju-status-badge--neutral">' + escapeHtml(status) + '</span>';
 		const retrying = status === 'pending' && retries > 0;
 		const label = retrying ? 'Retrying handoff' : entry[2];
-		const title = retrying ? 'SMTP handoff is being retried' : entry[3];
+		const title = retrying ? handoff + ' is being retried' : entry[3];
 		const titleAttr = title ? ' title="' + title + '"' : '';
 		return '<span class="badge ' + entry[0] + '"' + titleAttr + '>'
 			+ '<span class="material-icons me-1" style="font-size:12px;vertical-align:middle;" aria-hidden="true">' + entry[1] + '</span>'

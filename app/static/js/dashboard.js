@@ -54,6 +54,7 @@
 	}
 
 
+	const REQUEST_TIMEOUT_MS = 10000;
 	let downtimeLoading = false;
 	let downtimeRefreshPending = false;
 
@@ -131,7 +132,10 @@
 
 		try {
 			// The server aggregates the incidents, so the result does not depend on the raw point count.
-			const resp = await window.apiFetch('/dashboard/downtime?since=' + encodeURIComponent(since));
+			const resp = await window.apiFetch('/dashboard/downtime?since=' + encodeURIComponent(since), {
+				// A hung request would block every later refresh behind downtimeLoading.
+				signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+			});
 			if (!resp.ok) throw new Error('HTTP ' + resp.status);
 			const data = await resp.json();
 			const targets = data.targets || [];

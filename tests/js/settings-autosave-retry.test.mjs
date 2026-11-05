@@ -50,6 +50,8 @@ const fail = { ok: false, status: 500, json: async () => ({}) };
 const input = (type, name, value, defaultValue) => ({
   type, name, value, defaultValue, min: "1", max: "60", tagName: "INPUT",
   autocomplete: "", closest: () => null, hasAttribute: () => false,
+  checkValidity() { return this.value !== "" && Number(this.value) >= 1 && Number(this.value) <= 60; },
+  reportValidity() { this.reported = true; },
 });
 
 test("a failed text save is retried on the next blur of the unchanged value", async () => {
@@ -84,4 +86,31 @@ test("a delayed number save does not mark a newer input value as saved", async (
   await firstSave;
   await form.fire("blur", { target: field });
   assert.deepEqual(sent, [{ retention_days: 30 }, { retention_days: 31 }]);
+});
+
+test("a cleared number field is reported, not saved as its minimum", async () => {
+  sent.length = 0;
+  responses = [ok];
+  const field = input("number", "smtp_port", "", "587");
+  await form.fire("blur", { target: field });
+  assert.equal(sent.length, 0);
+  assert.equal(field.reported, true);
+  assert.equal(field.value, "");
+});
+
+test("the SMTP password is saved with its surrounding whitespace", async () => {
+  sent.length = 0;
+  responses = [ok];
+  const field = input("password", "smtp_password", " secret ", "");
+  field.closest = (selector) => selector !== "[data-secret-field]" ? null : ({ querySelector: () => null, dataset: {}, classList: { toggle() {}, add() {}, remove() {} } });
+  await form.fire("blur", { target: field });
+  assert.deepEqual(sent, [{ smtp_password: " secret " }]);
+});
+
+test("the Signal enable switch is not saved by the generic autosave", async () => {
+  sent.length = 0;
+  responses = [ok];
+  const field = { ...input("checkbox", "signal_enabled", "on", ""), checked: true };
+  await form.fire("change", { target: field });
+  assert.equal(sent.length, 0);
 });

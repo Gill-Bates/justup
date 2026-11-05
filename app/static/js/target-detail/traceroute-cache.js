@@ -311,7 +311,8 @@
         headers: { "HX-Request": "true" },
       });
       const redirect = response.headers.get("HX-Redirect");
-      if (redirect && redirect.startsWith("/") && !redirect.startsWith("//")) {
+      // Only a same-origin path: "//host" and "/\host" are both off-origin in browsers.
+      if (redirect && /^\/(?![/\\])/.test(redirect)) {
         onRedirect(redirect);
         return { redirected: true };
       }

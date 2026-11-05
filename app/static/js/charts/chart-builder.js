@@ -23,7 +23,9 @@ var _MOBILE_BREAKPOINT = 768;
  */
 function _legendPosition(chartOrCanvas) {
   const canvas = chartOrCanvas?.canvas || chartOrCanvas;
-  const width = chartOrCanvas?.width || canvas?.parentElement?.clientWidth || canvas?.clientWidth || window.innerWidth;
+  // A canvas element's .width is its backing-store size (300 initially, CSS width x DPR later).
+  const chartWidth = chartOrCanvas?.canvas ? chartOrCanvas.width : 0;
+  const width = chartWidth || canvas?.parentElement?.clientWidth || canvas?.clientWidth || window.innerWidth;
   const fitDashboard =
     window.matchMedia &&
     window.matchMedia("(min-width: 1200px) and (min-height: 800px)").matches;

@@ -36,7 +36,7 @@ const registration = await import("../../app/static/js/settings.signal-registrat
 const actions = await import("../../app/static/js/settings.signal-actions.js");
 const BUTTON_IDS = [
   "signal-link-confirm-btn", "signal-register-btn", "signal-verify-btn",
-  "confirm-unlink-device-btn", "confirm-unregister-phone-btn", "send-test-btn",
+  "confirm-unlink-device-btn", "confirm-unregister-phone-btn", "send-signal-test-btn",
 ];
 const buttons = () => BUTTON_IDS.map(id => document.getElementById(id));
 const json = (status, body) => ({ ok: status < 400, status, json: async () => body, text: async () => JSON.stringify(body) });

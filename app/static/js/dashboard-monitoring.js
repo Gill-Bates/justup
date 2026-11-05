@@ -66,7 +66,9 @@
 		row(body, label, '–', 'help_outline');
 	}
 	async function json(url, signal) {
-		const response = await window.apiFetch(url, { signal, headers: { Accept: 'application/json' } });
+		// The timeout settles a hung request so the per-tile pending guard cannot freeze the widget.
+		const bounded = signal ? AbortSignal.any([signal, AbortSignal.timeout(10000)]) : AbortSignal.timeout(10000);
+		const response = await window.apiFetch(url, { signal: bounded, headers: { Accept: 'application/json' } });
 		if (!response.ok) throw new Error('Request failed');
 		return response.json();
 	}
@@ -75,6 +77,10 @@
 	function setStatus(tile, label, tone) {
 		const badge = tile.querySelector('.dashboard-monitor-status');
 		if (!badge) throw new Error('Widget status badge is missing');
+		// The badge sits in a live region: rewriting an unchanged state would re-announce it every refresh.
+		if (badge.dataset.label === label && badge.dataset.tone === tone) return;
+		badge.dataset.label = label;
+		badge.dataset.tone = tone;
 		const iconName = STATUS_ICONS[tone] || 'warning';
 		const icon = node('span', iconName, 'material-icons');
 		icon.setAttribute('aria-hidden', 'true');

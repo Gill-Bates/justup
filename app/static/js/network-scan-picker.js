@@ -325,9 +325,10 @@
     }
     async function poll(id, sequence) {
       if (sequence !== generation) return;
-      controller = new AbortController();
+      const local = new AbortController();
+      controller = local;
       try {
-        const response = await window.apiFetch(`/network-scans/${encodeURIComponent(id)}`, { signal: controller.signal });
+        const response = await window.apiFetch(`/network-scans/${encodeURIComponent(id)}`, { signal: local.signal });
         const data = await responseJson(response);
         // A newer scan, a cancel or a changed host makes this answer stale.
         if (sequence !== generation || scanHost(host) !== checkedHost) return;
@@ -343,7 +344,7 @@
         if (sequence !== generation || error.name === 'AbortError') return;
         finish(core.describeRequestError(error));
       } finally {
-        controller = null;
+        if (controller === local) controller = null;
       }
     }
     el_.start.addEventListener('click', async () => {
@@ -363,24 +364,24 @@
       el_.cancel.hidden = false;
       setStatus('Starting scan…', true);
       const sequence = generation;
-      controller = new AbortController();
+      // The POST is not aborted: a scan cancelled before its ID is known is deleted once the ID arrives.
       try {
         const response = await window.apiFetch('/network-scans', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ host: target, protocols, profile: el_.profile.value }),
-          signal: controller.signal
+          body: JSON.stringify({ host: target, protocols, profile: el_.profile.value })
         });
         const data = await responseJson(response);
-        if (sequence !== generation || scanHost(host) !== checkedHost) return;
+        if (sequence !== generation || scanHost(host) !== checkedHost) {
+          if (typeof data?.id === 'string') window.apiFetch(`/network-scans/${encodeURIComponent(data.id)}`, { method: 'DELETE' }).catch(() => {});
+          return;
+        }
         if (typeof data?.id !== 'string') throw new Error('The scan response is missing a job ID.');
         job = data;
         await poll(data.id, sequence);
       } catch (error) {
         if (sequence !== generation || error.name === 'AbortError') return;
         finish(core.describeRequestError(error));
-      } finally {
-        controller = null;
       }
     });
     el_.cancel.addEventListener('click', async () => {

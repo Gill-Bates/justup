@@ -24,6 +24,7 @@ import {
     setError,
     setWarning,
     clearStatus,
+    showError,
     showModal,
     hideModal
 } from './settings.core.js';
@@ -215,11 +216,11 @@ export async function unregisterPhone() {
     const errorEl = DOM.unregisterPhoneError();
     const btn = DOM.confirmUnregisterPhoneBtn();
     if (!password) {
-        setError(errorEl, 'Password is required');
+        showError(errorEl, 'Password is required');
         return;
     }
 
-    clearStatus(errorEl);
+    showError(errorEl, null);
     setSignalBusy(true);
 
     try {
@@ -250,13 +251,13 @@ export async function unregisterPhone() {
 
                     refreshStatus();
                 } else {
-                    setError(errorEl, error);
+                    showError(errorEl, error);
                 }
             }
         }, 'Unregistering...');
     } catch (e) {
         console.warn('Unregister phone error:', e);
-        setError(errorEl, 'Network error: ' + e.message);
+        showError(errorEl, 'Network error: ' + e.message);
     } finally {
         setSignalBusy(false);
     }

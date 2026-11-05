@@ -71,7 +71,7 @@ function harness(responses) {
     setInterval: () => 1,
   };
   vm.runInNewContext(src, {
-    window, document, console: { error() {}, warn() {} }, setInterval: window.setInterval,
+    window, document, console: { error() {}, warn() {} }, setInterval: window.setInterval, AbortSignal,
   });
   const load = async () => { ready(); await new Promise(resolve => setImmediate(resolve)); };
   const visible = id => !nodes[id].classList.contains("d-none");

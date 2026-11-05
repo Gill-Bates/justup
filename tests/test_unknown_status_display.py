@@ -108,16 +108,20 @@ def test_status_icon_of_unknown_differs_in_shape_and_name_from_down(seeded) -> N
     assert "target-status-pill--down" in down_pill and ">Offline<" in down_pill
 
 
-def test_unknown_overall_status_keeps_the_measured_ping_and_lists_the_udp_endpoint(seeded) -> None:
+def test_unknown_overall_status_keeps_the_measured_ping_and_shows_the_udp_port_as_unknown_badge(seeded) -> None:
     client, ids = seeded
     html = client.get(f"/ui/fragments/target-info-cards/{ids['unknown']}").text
     ping = re.search(
         r'<span class="badge[^>]*>(?:(?!<span class="badge).)*?PING.*?</span></span>', html, re.DOTALL
     ).group(0)
     assert "ju-status-badge--success" in ping and "Up" in ping and "Unknown" not in ping
-    udp = re.search(r'<tr[^>]*data-endpoint="udp:161".*?</tr>', html, re.DOTALL).group(0)
-    assert "Unknown" in udp and "open|filtered" in udp and "Down" not in udp
+    udp = re.search(
+        r'<span class="badge[^>]*>(?:(?!<span class="badge).)*?UDP:161.*?</span></span>', html, re.DOTALL
+    ).group(0)
+    assert "ju-state-badge--unknown" in udp and ": Unknown<" in udp and "help" in udp
+    assert "open|filtered" in udp and "Down" not in udp
     assert "ju-status-badge--danger" not in udp
+    assert "<table" not in html and "data-endpoint" not in html and "Network endpoints" not in html
 
 
 def test_targets_table_marks_the_unknown_endpoint_apart_from_down(seeded) -> None:

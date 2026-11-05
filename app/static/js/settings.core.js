@@ -105,7 +105,7 @@ export const DOM = {
     signalSetNameBtn: () => _cache.signalSetNameBtn ??= document.getElementById('signal-set-name-btn'),
     signalProfileStatus: () => _cache.signalProfileStatus ??= document.getElementById('signal-profile-status'),
     signalUnregisterBtn: () => _cache.signalUnregisterBtn ??= document.getElementById('signal-unregister-btn'),
-    sendTestBtn: () => _cache.sendTestBtn ??= document.getElementById('send-test-btn'),
+    sendTestBtn: () => _cache.sendTestBtn ??= document.getElementById('send-signal-test-btn'),
     testStatus: () => _cache.testStatus ??= document.getElementById('test-status'),
     
     // Signal steps

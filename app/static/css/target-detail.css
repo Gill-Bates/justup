@@ -1345,25 +1345,8 @@ details[open]>summary .target-details-chevron {
 	}
 
 	#target-dashboard-pane.active #target-info-cards>.target-kpi-row,
-	#target-dashboard-pane.active #target-info-cards>.target-endpoints-card,
 	#target-dashboard-pane.active>.target-toolbar {
 		grid-column: 1 / -1;
-	}
-
-	/* The endpoint card is a row of its own: without it the toolbar would land in the 1fr row and
-	   stretch into an empty band. A long port list scrolls inside the card instead of growing it. */
-	#target-dashboard-pane.active:has(.target-endpoints-card) {
-		grid-template-rows: auto auto auto minmax(24rem, 1fr);
-	}
-
-	#target-dashboard-pane.active .target-endpoints-card .table-responsive {
-		max-height: 9rem;
-		overflow-y: auto;
-	}
-
-	/* Floor grows by the card at its capped height so the footer is still never overlapped. */
-	.target-detail-page:has(#target-dashboard-pane.active .target-endpoints-card) {
-		min-height: calc(50rem + 14rem);
 	}
 
 	#target-dashboard-pane.active .target-kpi-card .card-body {

@@ -38,7 +38,7 @@ export function setUnlinkHandler(fn) {
 }
 
 /**
- * Set the mode selection handler (called from signal-registration.js init)
+ * Set the mode selection handler (called from initSignal in signal-actions.js)
  * @param {Function} fn
  */
 export function setSelectModeHandler(fn) {

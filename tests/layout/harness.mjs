@@ -1533,6 +1533,7 @@ async function auditSelfTest(browser) {
 			<div class="card" id="availability-card"><div class="card-body"><div class="target-availability-plot"><canvas id="chart-uptime"></canvas></div></div></div>
 			<div id="downtime-history-card"><div class="card-body"><div class="target-empty-state"></div></div></div>
 			<div data-widget-id="delivery-queue"><div class="dashboard-monitor-body" style="height:10px;overflow-y:auto"><div style="height:40px"></div></div></div>
+			<div id="ghost-bar" style="width:100px;height:40px;overflow-x:auto"><div style="width:200px;height:44px"></div></div>
 			<div class="ju-notif-swipe-item is-dismiss-revealed"><div class="ju-notif-swipe-content"></div><div class="ju-notif-dismiss-action"></div></div>
 		</main>`);
 		await page.evaluate(() => {
@@ -1543,7 +1544,7 @@ async function auditSelfTest(browser) {
 		});
 		const result = await runAudit(page, "top");
 		const types = new Set(result.issues.map((finding) => finding.type));
-		for (const type of ["text-overlap", "dashboard-content-outside-card", "chart-plot-too-small", "chart-plot-outside-card", "chart-legend-outside-canvas", "chart-legend-overlaps-plot", "chart-area-too-small", "chart-legend-position", "dashboard-kpi-row-does-not-fill-grid", "downtime-empty-ghost-scroll", "notification-delete-overlaps-content", "delivery-queue-ghost-scroll"]) {
+		for (const type of ["text-overlap", "dashboard-content-outside-card", "chart-plot-too-small", "chart-plot-outside-card", "chart-legend-outside-canvas", "chart-legend-overlaps-plot", "chart-area-too-small", "chart-legend-position", "dashboard-kpi-row-does-not-fill-grid", "downtime-empty-ghost-scroll", "notification-delete-overlaps-content", "delivery-queue-ghost-scroll", "ghost-scroll-y"]) {
 			assert.ok(types.has(type), `layout audit self-test did not detect ${type}`);
 		}
 		await auditShellSelfTest(context);
@@ -1884,10 +1885,35 @@ async function auditPage(browser, app, state, browserName, vp, pg) {
 	}
 }
 
+// Scrollbar emulation. Playwright's Chromium hides scrollbars in headless mode. "classic" keeps the engine's
+// default bars (layout width > 0), "thin" applies `scrollbar-width: thin` to every element and "hidden" is the
+// headless default (no layout width: layout-equivalent to overlay scrollbars, which also take no layout space).
+// Chromium on Linux ignores the OverlayScrollbar switches (verified: width stays 15px), so real overlay painting is
+// not emulated. WebKit offers no switch: it runs once, with whatever the build paints.
+const SCROLLBAR_MODES = { chromium: ["classic", "thin", "hidden"], webkit: ["native"], firefox: ["native"] };
+async function launchWithScrollbars(browserType, mode) {
+	if (browserType.name() !== "chromium") throw new Error(`No scrollbar emulation for ${browserType.name()}`);
+	const options = { args: ["--disable-threaded-animation"] };
+	if (mode !== "hidden") options.ignoreDefaultArgs = ["--hide-scrollbars"];
+	return browserType.launch(options);
+}
+// Layout width of a classic scrollbar in this browser; 0 for overlay or hidden bars.
+const probeScrollbar = (page) => page.evaluate(() => {
+	const probe = document.createElement("div");
+	probe.style.cssText = "position:absolute;visibility:hidden;width:100px;height:100px;overflow:scroll";
+	document.body.append(probe);
+	const width = probe.offsetWidth - probe.clientWidth;
+	probe.remove();
+	return width;
+});
+
 export {
 	auditDashboardGrid,
 	auditPage,
 	auditSelfTest,
+	launchWithScrollbars,
+	probeScrollbar,
+	SCROLLBAR_MODES,
 	PAGES,
 	seed,
 	startApp,
