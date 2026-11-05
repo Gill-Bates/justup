@@ -79,8 +79,9 @@ The interactive map is described in [Traceroute & maps](traceroute.md).
   exact outage time.
 - The SLA table shows only configured targets. Charts without a latency SLA draw a
   default reference line (500 ms response, 100 ms ping), labelled as not an SLA.
-- The traceroute queries at most 20 hops. If the destination was not reached, the
-  report says so; a destination that did not answer is marked **NO REPLY**.
+- The traceroute (Nmap, the same measurement as the web view) queries at most 30 hops and
+  shows one round-trip time per hop, without loss or average columns. If the destination was
+  not reached, the report says so; a destination that did not answer is marked **NO REPLY**.
 - TLS checks show text labels (PASS / FAIL), **NOT TESTED**, or **INCOMPLETE**, not
   only colors.
 - The HTTP status chart counts stored samples; older data may be aggregated.

@@ -62,6 +62,41 @@ the page works as before and keeps the result in memory only.
   It needs an `nmap` binary and raw-socket rights (root or `cap_net_raw`); otherwise
   traceroute is unavailable.
 
+## Measured behaviour
+Measured in a three-router lab (network namespaces, IPv4 and IPv6) with Nmap 7.993 from the
+runtime image under the Compose capability profile, against `mtr --json -n -c 3 -m 20` 0.95
+(the removed tool). 10 runs per cell (5 for the last two rows), one trace at a time, p50 in
+seconds. The lab is a clean, low-latency path; absolute times on the internet differ.
+
+| Scenario | MTR p50 | Nmap p50 | Route found |
+| --- | --- | --- | --- |
+| Clean path, 3 hops | 7.8 | 0.2 (IPv6), 0.6 (IPv4)¹ | both: all 3 hops |
+| Router without *time exceeded*, target drops ping | 8.6 | 2.1 | Nmap: 2 hops, destination reached. MTR: 1 hop, destination not reached |
+| Target also drops all TCP and UDP | 8.6 | 2.1 (IPv4), 3.1 (IPv6, no trace) | IPv4: Nmap reached the destination; IPv6: the first attempt found no trace, the fallback (through the worker) found 1 hop after 11.2 s |
+| Target down | 9.0 | 3.1 (no trace), 11.2 with the fallback | MTR shows the routers up to the failing one; plain Nmap often shows nothing |
+
+¹ Back-to-back IPv4 runs hit the kernel's ICMP rate limit (one *time exceeded* per second), so
+some Nmap runs missed a hop and were retried; the IPv6 runs did not.
+
+- **Faster** on a healthy path (about 0.2–0.6 s against 7.8 s), because Nmap sends its probes
+  once instead of three rounds per hop. **Slower** when the target stays silent: after the
+  first attempt returns nothing, the fallback needs up to about 11 s; MTR always needs 8–9 s.
+- **More robust** when a router or the target blocks ping: the discovery probes still found
+  the destination where MTR's ICMP probes did not.
+- **Probe volume.** Per trace Nmap sent 15–27 packets and MTR 18–59 (counter delta on the
+  client interface, includes unrelated background traffic of the container).
+- **Concurrency.** Two traces run in parallel; the third is refused as *busy* by design (5 of
+  15 requests in a three-parallel run). Nmap is one short process per trace (about 27 MB peak
+  RSS).
+- **Lost compared with MTR:** per-hop loss and average, best and worst round-trip time. A
+  hop's single RTT is one sample and says nothing about loss or stability.
+- **Worker overhead:** about 0–0.5 s over a plain Nmap call (socket, validation, XML parsing).
+- **Not measured:** public IPv6 (the Docker bridge has no IPv6 route to the internet), arm64,
+  and IPv6 with three parallel traces.
+
+If the silent-target case matters, a tuning option would be a shorter budget for the first
+attempt (it currently takes 40 % of the request time); this was not implemented.
+
 ## Route timeline
 
 First hop, intermediate hops, and destination appear once each, in hop order. The
