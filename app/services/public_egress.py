@@ -63,7 +63,6 @@ HTTPS_PORT = 443
 
 _FAMILIES: dict[Family, socket.AddressFamily] = {"ipv4": socket.AF_INET, "ipv6": socket.AF_INET6}
 _FAMILY_VERSION: dict[Family, int] = {"ipv4": 4, "ipv6": 6}
-_PROXY_ENV = ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY")
 # NAT64: an address from this range is a translated IPv4 address, not a native IPv6 egress address.
 _NAT64 = (ipaddress.ip_network("64:ff9b::/96"), ipaddress.ip_network("64:ff9b:1::/48"))
 
@@ -293,7 +292,14 @@ def _iso(moment: datetime) -> str:
 
 def proxy_env_configured() -> bool:
     """True if a proxy environment variable is set (HTTP monitors may then leave via another address)."""
-    return any(os.environ.get(name) or os.environ.get(name.lower()) for name in _PROXY_ENV)
+    return bool(
+        os.environ.get("HTTPS_PROXY")
+        or os.environ.get("https_proxy")
+        or os.environ.get("HTTP_PROXY")
+        or os.environ.get("http_proxy")
+        or os.environ.get("ALL_PROXY")
+        or os.environ.get("all_proxy")  # noqa: SIM112 - lower-case form is the common proxy convention
+    )
 
 
 def _combine(

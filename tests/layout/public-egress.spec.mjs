@@ -61,6 +61,7 @@ for (const viewport of VIEWPORTS) {
 				window.__v6 = v6;
 				window.apiFetch = async (url) => {
 					window.__calls.push(url);
+					if (window.__fail) return { ok: false, status: 500, json: async () => ({}) };
 					return { ok: true, status: 200, json: async () => window.__next };
 				};
 				const module = await import("/static/js/settings.public-egress.js");
@@ -103,7 +104,7 @@ for (const viewport of VIEWPORTS) {
 			assert.equal(await page.locator('[data-egress-family="ipv4"] [data-egress-copy]').isDisabled(), true);
 			assert.match(await text(page, '[data-egress-family="ipv4"] [data-egress-detail]'), /Last confirmed/);
 			assert.equal(await page.locator("[data-egress-cached]").isVisible(), true);
-			await page.evaluate(() => { window.apiFetch = async () => ({ ok: false, status: 500, json: async () => ({}) }); });
+			await page.evaluate(() => { window.__fail = true; });
 			await page.click("[data-egress-refresh]");
 			await page.waitForFunction(() => document.querySelector("[data-egress-live]").textContent === "Public address lookup failed.");
 			assert.equal(await text(page, '[data-egress-family="ipv6"] [data-egress-address]'), LONG_V6);

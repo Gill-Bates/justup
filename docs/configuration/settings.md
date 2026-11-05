@@ -57,6 +57,9 @@ values are [environment variables](environment.md).
   set the switch again after a reset. If the setting cannot be read, no online
   request is made. Provider Lookup (ASN/ISP) is independent. See
   [Traceroute & maps](../features/traceroute.md#online-fallback).
+- **Public outbound IPs** (read-only card, no setting): shows the IPv4 and IPv6 address that
+  external services see for this server. See
+  [Public outbound IPs](../features/network-monitoring.md#public-outbound-ips).
 - **GeoLite DB auto-update** (`geoip_auto_update`): checks for a newer MaxMind
   GeoLite2 database at start.
 - **Disable Authentication** (Users tab): every page and API call then runs as

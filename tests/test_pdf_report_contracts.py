@@ -1573,7 +1573,6 @@ def test_pdf_builds_offline_with_text_only_when_flags_are_unavailable(monkeypatc
         raise OSError("offline")
 
     monkeypatch.setattr(flag_images.httpx, "Client", no_network)
-    flag_images.clear_cache()
     b = _route_flag_builder(monkeypatch, flags=False)
     b.prefetch_external_data()
     assert b._flags == {}

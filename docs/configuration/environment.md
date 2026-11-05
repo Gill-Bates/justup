@@ -51,6 +51,14 @@ signed with it is needed. See [Backup & restore](../features/backup.md).
 | `TRUSTED_PROXIES` | empty | Proxy addresses trusted for `X-Forwarded-For`, `X-Real-IP`, and `X-Forwarded-Proto` |
 | `LOG_LEVEL` | `INFO` | Log level (`CRITICAL`, `ERROR`, `WARNING`, `INFO`, `DEBUG`); access lines appear only at `DEBUG`. An invalid value falls back to `INFO` with a warning |
 
+`JUSTUP_HOST=::` makes the listener IPv6-only. Measured with the bundled uvicorn (0.54.0) on
+Linux with `net.ipv6.bindv6only=0`: `ss -ltn` showed `[::]:PORT`, `http://[::1]:PORT/healthz`
+answered `200`, and `127.0.0.1:PORT` refused the connection, because asyncio sets
+`IPV6_V6ONLY` on a socket it binds for a host string. `0.0.0.0` and `127.0.0.1` are
+IPv4-only (`::1` refused). The default `0.0.0.0` therefore does not serve IPv6, and `::` does not
+serve IPv4. Published ports and Docker's IPv6 handling were not tested; see
+[Docker](../getting-started/docker.md#ipv4-and-ipv6).
+
 justUp! supports exactly one app process per data directory. There is no
 `WORKERS` variable.
 

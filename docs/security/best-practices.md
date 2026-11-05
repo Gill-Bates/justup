@@ -34,14 +34,15 @@ justUp! contacts these services:
 | --- | --- | --- |
 | ipwho.is, ip-api Pro (with key) | Hop geolocation fallback when GeoLite2 is not precise enough (public IPs only, HTTPS) | Yes (`online_geo_fallback_enabled`) |
 | Provider lookup | ASN and ISP of target IPs | Yes (Settings > Network) |
+| icanhazip.com, ipify.org | Public outbound IPs card (Settings > Network): the services see the server's public address; run on tab open and Refresh, not stored | No (no request while the Network tab is closed) |
 | MaxMind | GeoLite2 update | Yes (`geoip_auto_update`) |
 | api.github.com | Daily release check | No |
 | jsDelivr | Country flag images in the web UI | No (falls back to country codes) |
 | flagcdn.com | Country flag images in PDF reports (optional, PNG over HTTPS) | No (falls back to the country code) |
 
 PDF reports request only `https://flagcdn.com/48x36/<code>.png` for the countries shown. flagcdn.com sees the
-server's public IP and which countries are requested, never target or hop addresses. Flags are cached
-locally; if the service is unreachable the report shows the country code only.
+server's public IP and which countries are requested, never target or hop addresses. Flags are not cached
+and are fetched again for every report; if the service is unreachable the report shows the country code only.
 
 Block outbound access at the network level if a service is not acceptable.
 GeoLite2 needs a MaxMind account and license key.

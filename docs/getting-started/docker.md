@@ -99,3 +99,24 @@ docker logs -f justup
 
 Uvicorn access lines appear only at `LOG_LEVEL=DEBUG`. The initial admin password
 is printed to the container output, so restrict access to the Docker logs.
+
+## IPv4 and IPv6
+
+- **Incoming**: the container listens on one address family, set by `JUSTUP_HOST`
+  (`0.0.0.0` = IPv4, the default; `::` = IPv6 only). See
+  [Environment variables](../configuration/environment.md#server-and-network). The supplied
+  Compose file publishes no port and enables no IPv6 on the Docker network; both are your
+  choice, and neither was changed or tested here.
+- **Outgoing**: monitors use the address families the container can route. Docker's default
+  bridge network has no IPv6 route unless you enable IPv6 on the network. Without a global
+  IPv6 route, IPv6 targets fail with `network unreachable` (TCP, certificate), `unreachable`
+  (ping) or `All connection attempts failed` (HTTP), as observed without a global IPv6 route
+  on the test host.
+- **Which address a monitor uses** for a host name with both A and AAAA records: the public-DNS
+  lookup (1.1.1.1, 9.9.9.9) asks A before AAAA, then the system resolver's addresses follow.
+  Ping, TCP and TLS checks use the first pinned address; HTTP tries the candidates in order.
+  An IPv6 literal target is used as given.
+- **Seen by others**: the container's address on the Docker bridge (for example 172.x) is not
+  what remote services see. Settings > Network > *Public outbound IPs* shows the address
+  that external services observe; see
+  [Public outbound IPs](../features/network-monitoring.md#public-outbound-ips).

@@ -30,6 +30,7 @@ Details: [Authentication](authentication.md), [Rate limiting](rate-limiting.md),
 - Public IPs of traceroute hops may be sent over HTTPS to ipwho.is (and ip-api Pro with
   a key), only when GeoLite2 is not precise enough and the online fallback is on; the daily release check contacts api.github.com; flag images load from
   jsDelivr in the web UI and from flagcdn.com in PDF reports (country codes only; optional). See [Best practices](best-practices.md#external-services).
+- Settings > Network > Public outbound IPs connects directly (no proxy) to icanhazip.com and ipify.org over HTTPS, which sees the server's public address; nothing is stored. See [Network monitoring](../features/network-monitoring.md#public-outbound-ips).
 - justUp! sets no `Content-Security-Policy` header; see [Best practices](best-practices.md#content-security-policy).
 
 ## Container

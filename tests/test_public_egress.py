@@ -61,10 +61,10 @@ class Net:
         self.answers: dict[tuple[str, str], bytes | BaseException] = {}
         self.dns: dict[tuple[str, str], list[str] | BaseException] = {}
         self.connects: list[tuple[str, str, str]] = []
-        monkeypatch.setattr(pe.socket, "getaddrinfo", self._getaddrinfo)
+        monkeypatch.setattr(pe.socket, "getaddrinfo", self.resolve_scripted)
         monkeypatch.setattr(pe, "_open_tls", self.open_tls)
 
-    def _getaddrinfo(self, host, _port, family=0, *_args, **_kwargs):
+    def resolve_scripted(self, host, _port, family=0, *_args, **_kwargs):
         key = ("ipv6" if family == socket.AF_INET6 else "ipv4", host)
         answer = self.dns.get(key)
         if answer is None:
@@ -238,7 +238,7 @@ def _threads(prefix: str) -> int:
 def test_hanging_dns_cannot_pile_up_threads_or_block_the_service(net, monkeypatch):
     release = threading.Event()
     started = []
-    real = net._getaddrinfo
+    real = net.resolve_scripted
 
     def hanging(host, port, family=0, *args, **kwargs):
         started.append(host)

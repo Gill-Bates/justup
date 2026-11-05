@@ -42,6 +42,13 @@ ALLOWED_ENV_NAMES = {
     "JUSTUP_HOST",
     "JUSTUP_PORT",
     "JUSTUP_BACKUP_HMAC_SECRET",
+    # Read only to report that HTTP monitors may leave through a proxy (Settings > Network, public egress).
+    "HTTPS_PROXY",
+    "https_proxy",
+    "HTTP_PROXY",
+    "http_proxy",
+    "ALL_PROXY",
+    "all_proxy",
     "SIGNAL_CLI_PATH",
     "SIGNAL_DATA_DIR",
     "TESTING",

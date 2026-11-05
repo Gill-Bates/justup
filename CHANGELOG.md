@@ -8,6 +8,7 @@
 - `New` Settings > General has a **Public hostname** field. Alert mails and Signal messages link to the target, and the "Open in justUp!" button now appears in mails.
 - `New` Settings > Recipients has a search field and a **Re-check Signal** button per recipient (limited to 5 checks per minute).
 - `New` The About page shows the Nmap version.
+- `New` Settings > Network shows the public outbound IPv4 and IPv6 address of the server as seen by icanhazip.com and ipify.org (admins only, not stored, with a Refresh button). Stale addresses cannot be copied.
 - `Fix` Downtime no longer counts stretches without measurements. Gaps show as "No measurements", unknown results as "Unknown"; the dashboard, history and PDF report use the same durations.
 - `Fix` UDP scans use the target host and no longer write an "up" point for mixed open and uncertain ports.
 - `Fix` The PDF report no longer runs a TLS scan for `http://` targets, and its timeline lines up with the other charts.

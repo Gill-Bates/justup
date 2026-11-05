@@ -70,6 +70,78 @@ In the wizard and the editor, one input takes single ports and lists in the rang
 separated by commas or spaces. A port is TCP unless you write `udp:53` or `53/udp`. The
 ports appear as removable chips (`TCP 22`, `UDP 53`) below the input. A manually entered port has no service name and is monitored like any other.
 
+## Public outbound IPs
+
+Settings > Network > **Public outbound IPs** shows the IPv4 and IPv6 address that external
+services observe when justUp! connects out. It answers "which address do my monitors and
+the services I probe see?", for example to allow-list the server elsewhere.
+
+This is not the address you use to reach justUp!. The incoming server address depends on
+`JUSTUP_HOST`, published ports and your reverse proxy. The outgoing address is chosen by the
+routing of the container and its host.
+
+### How it is determined
+
+justUp! opens one HTTPS connection per address family and provider and reads the plain-text
+answer. Nothing is taken from local interfaces, from the incoming request or from proxy headers.
+
+| Family | Providers | Operator |
+| --- | --- | --- |
+| IPv4 | `ipv4.icanhazip.com`, `api4.ipify.org` | Cloudflare, ipify |
+| IPv6 | `ipv6.icanhazip.com`, `api6.ipify.org` | Cloudflare, ipify |
+
+Why these services: HTTPS with certificate and host-name verification, separate host names
+that resolve only to A or only to AAAA records (so a family cannot silently fall back to the
+other), a bare-text answer that is parsed only as an IP address, and two unrelated operators
+that can be compared. The list is fixed; no URL is configurable.
+
+Rules the lookup follows:
+
+- The family is forced per lookup. A failed IPv6 lookup never shows an IPv4 address.
+- The host name is resolved once, every answer must be a public address, and the connection
+  goes to that validated address. Redirects are not followed.
+- An answer must be a public address of the requested family. Private (RFC 1918), CGNAT, ULA,
+  link-local, loopback, documentation, IPv4-mapped and NAT64 addresses are discarded, so a
+  Docker bridge address is never shown as a public address.
+- The answer is limited to 256 bytes and the whole lookup to about 8 seconds. Resolver and
+  connection work runs in small bounded pools; while earlier resolver calls are still hanging
+  new lookups fail fast with "Earlier lookups are still running" instead of queueing.
+- The lookup is direct. `HTTPS_PROXY`, `HTTP_PROXY` and `ALL_PROXY` are not used; if one is set,
+  the card says so, because HTTP monitors that use it may leave via another address.
+- Results are held in memory for 300 seconds, never stored. Concurrent requests share one
+  lookup. **Refresh** asks for a new measurement, but within 10 seconds of the last one the
+  cached result is returned and labelled "Cached result, not re-measured".
+
+### States
+
+| State | Meaning | Address shown | Copy |
+| --- | --- | --- | --- |
+| Available | One or both providers agree | yes | yes |
+| Stale | Not confirmed now; the last confirmed address (up to 24 hours old) with the time it was confirmed | yes | no |
+| Inconsistent | Providers report different addresses (for example multi-WAN or policy routing) | all observed values as text | no |
+| Unavailable | No route or no DNS record for this family (for example no IPv6) | no | no |
+| Lookup failed | Timeout, TLS or answer error, resolver busy | no | no |
+| Checking | A lookup is running; a previous address stays visible | previous, if any | no |
+
+IPv4 and IPv6 are independent: an IPv6 failure does not hide the IPv4 address. If the
+request to justUp! itself fails (HTTP error, timeout), the last address shown is kept as
+*Stale* with its time and an error text.
+
+### Privacy
+
+To find the addresses, icanhazip.com and ipify.org see the public egress address of the
+server and nothing else. justUp! sends no host name, user data or target. The check runs when
+the Network tab opens and on **Refresh**; there is no polling and nothing is stored. The
+endpoint `GET /settings/network/public-egress` is admin-only, limited to 12 requests per
+minute and sent with `Cache-Control: private, no-store`.
+
+### Limits of the result
+
+The card shows what these providers observe now. NAT, Docker bridge networking, IPv6
+routing, policy routing, multiple WAN links, VPNs and proxies can give other destinations a
+different address. IPv6 may be missing on a Docker network by default (see
+[Docker](../getting-started/docker.md#ipv4-and-ipv6)).
+
 ## Status values
 
 Each endpoint has a **transport status**:
@@ -203,6 +275,23 @@ An open port proves **transport reachability** and nothing more.
   the HTTP check or a dedicated probe next to this feature.
 - A middlebox, proxy or load balancer can accept connections on behalf of a dead service.
 - UDP results are inherently weaker than TCP results (see above).
+
+## IPv4 and IPv6 in checks
+
+Established by reading the code and by running checks on a host without a global IPv6
+route (only `fe80::/64`):
+
+- IPv6 literals work: TCP and certificate checks report `network unreachable`, ping `unreachable`
+  and HTTP `All connection attempts failed`; the `Host` header brackets the literal and drops a
+  zone id. Nmap and traceroute add `-6` for an IPv6 target.
+- IPv4-mapped IPv6 addresses (`::ffff:a.b.c.d`) are judged by their IPv4 part in the SSRF
+  guard, so `::ffff:10.0.0.1` is treated like `10.0.0.1`.
+- For a host name, the public-DNS lookup prefers A before AAAA (queried over the IPv4
+  resolvers 1.1.1.1 and 9.9.9.9), followed by the system resolver's addresses. Ping, TCP and
+  TLS use the first pinned address; HTTP tries the candidates in order.
+- Observation, not changed: only `ENETUNREACH` (101) is labelled `network unreachable` and
+  retried as transient. `EHOSTUNREACH` (113) appears as `[Errno 113] No route to host` and is not
+  treated as retryable. No failing behaviour was reproduced for it.
 
 ## Docker image and Nmap version
 

@@ -47,6 +47,7 @@ headers from other peers create no new buckets.
 | `/settings/signal/status` | GET | `30/minute` | IP |
 | `/settings/signal/unregister` | POST | `3/minute` | IP |
 | `/settings/signal/unlink` | POST | `5/minute` | IP |
+| `/settings/network/public-egress` | GET | `12/minute` (also with `refresh=true`) | IP |
 | `/settings/backup` | POST | `10/minute` | IP |
 | `/settings/restore` | POST | `10/minute` | IP |
 | `/settings/smtp/test-mail` | POST | `5/minute` | IP |

@@ -637,6 +637,7 @@ RATE_LIMITED_ROUTES = {
     ("POST", "/settings/auth/toggle"): ["5/minute"],
     ("POST", "/settings/signal/test"): ["5/minute"],
     ("GET", "/settings/signal/status"): ["30/minute"],
+    ("GET", "/settings/network/public-egress"): ["12/minute"],
     ("POST", "/settings/signal/unregister"): ["3/minute"],
     ("POST", "/settings/signal/unlink"): ["5/minute"],
     ("POST", "/settings/backup"): ["10/minute"],
@@ -683,7 +684,7 @@ def _route_specs(router_or_app) -> dict[tuple[str, str], list[str]]:
     return found
 
 
-def test_all_45_rate_limited_routes_keep_their_limit_exactly_once():
+def test_all_46_rate_limited_routes_keep_their_limit_exactly_once():
     found: dict[tuple[str, str], list[str]] = {}
     for router in (
         users.router,
@@ -700,7 +701,7 @@ def test_all_45_rate_limited_routes_keep_their_limit_exactly_once():
         network_scans.router,
     ):
         found |= _route_specs(router)
-    assert len(RATE_LIMITED_ROUTES) == 45
+    assert len(RATE_LIMITED_ROUTES) == 46
     assert found == {k: sorted(v) for k, v in RATE_LIMITED_ROUTES.items()}
 
 
