@@ -19,6 +19,10 @@
  * server-issued keys), shape-checked, size-capped and pruned. No auth data is ever stored.
  * Without usable storage the module falls back to an in-memory store.
  *
+ * Geo key: the optional scope `geo` names the IXP data the locations were derived from. An entry
+ * stored under another key is dropped, so the next view asks the server, which renders its stored
+ * route again with the current data instead of measuring.
+ *
  * Clock: `measuredAt` is server time compared with the client clock. A response stamp up to
  * CLOCK_SKEW_MS in the future is clamped to the client clock; a larger one is replaced by the
  * client clock. A stored entry stamped further ahead than the tolerance is discarded.
@@ -44,11 +48,14 @@
   const ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
   const isId = (value) => typeof value === "string" && ID_PATTERN.test(value);
+  // `geo` identifies the IXP data a result was located with; scopes without it keep the older contract.
+  const isGeo = (value) => value === undefined || isId(value);
   const isScope = (scope) =>
     Boolean(scope) &&
     isId(scope.user) &&
     isId(scope.target) &&
-    isId(scope.build);
+    isId(scope.build) &&
+    isGeo(scope.geo);
 
   function createMemoryStorage() {
     const map = new Map();
@@ -112,10 +119,12 @@
         isId(entry.user) &&
         isId(entry.target) &&
         isId(entry.build) &&
+        isGeo(entry.geo) &&
         (!scope ||
           (entry.user === scope.user &&
             entry.target === scope.target &&
-            entry.build === scope.build)) &&
+            entry.build === scope.build &&
+            entry.geo === scope.geo)) &&
         Number.isFinite(entry.measuredAt) &&
         entry.measuredAt <= t + CLOCK_SKEW_MS &&
         t - entry.measuredAt <= RETENTION_MS &&
@@ -171,6 +180,7 @@
         user: scope.user,
         target: scope.target,
         build: scope.build,
+        geo: scope.geo, // omitted by JSON.stringify when the page has no geo key
         measuredAt,
         html,
       });

@@ -69,7 +69,10 @@ def test_provider_table_uses_ip_key(monkeypatch, info):
     b = _builder({"http_url": "https://example.com:8443/x"})
     b._add_provider_info()
     assert len(b.elements) == 1
+    texts = _texts(b)  # collected before rendering, which consumes the flowables
     assert _render(b).startswith(b"%PDF")
+    assert (info["ip"] if info["ip"] != "-" else "—") in texts
+    assert info["provider"] in texts or info["provider"] == "-"
 
 
 def test_provider_table_markup_in_external_fields_is_escaped(monkeypatch):
@@ -83,7 +86,13 @@ def test_provider_table_markup_in_external_fields_is_escaped(monkeypatch):
     monkeypatch.setattr(pdf_report, "lookup_provider_info", lambda host: evil)
     b = _builder({"ping_host": "example.com"})
     b._add_provider_info()
+    texts = _texts(b)  # collected before rendering, which consumes the flowables
     assert _render(b).startswith(b"%PDF")
+    assert '<font color="red">' not in texts
+    assert "&lt;font" in texts
+    assert "AS&lt;b&gt;1&amp;2" in texts
+    assert "\x00" not in texts
+    assert "\x07" not in texts
 
 
 def test_provider_section_skipped_without_host(monkeypatch):
@@ -390,8 +399,10 @@ def test_ssl_section_survives_hostile_text(monkeypatch):
     cert = dataclasses.replace(
         base.certificate, subject='CN=<font color="red">a&b', issuer="O=<i>Issuer", san=("<b>x</b>.example",)
     )
-    _, pdf = _ssl_section(monkeypatch, dataclasses.replace(base, certificate=cert))
+    text, pdf = _ssl_section(monkeypatch, dataclasses.replace(base, certificate=cert))
     assert pdf.startswith(b"%PDF")
+    assert '<font color="red">' not in text and "<i>Issuer" not in text and "<b>x</b>" not in text
+    assert "CN=&lt;font" in text and "O=&lt;i&gt;Issuer" in text
 
 
 def test_ssl_section_lists_every_certificate_deployment(monkeypatch):
@@ -423,7 +434,9 @@ def test_stack_section_survives_hostile_text(monkeypatch):
     monkeypatch.setattr(b, "_get_whatweb_data", lambda: stack)
     b._add_detected_stack()
     assert b.elements
+    text = _texts(b)  # collected before rendering, which consumes the flowables
     assert _render(b).startswith(b"%PDF")
+    assert '<font color="red">' not in text and "nginx &lt;1.0&gt; &amp; co" in text
 
 
 def test_get_ssl_data_turns_scanner_crash_into_failed_result(monkeypatch):
@@ -640,8 +653,6 @@ def test_cover_is_page_one_and_each_chapter_starts_on_a_new_page(monkeypatch):
 
 @pytest.mark.parametrize("size", ["a4", "letter"])
 def test_a4_and_letter_keep_the_chapter_layout(monkeypatch, size):
-    import re
-
     b = _full_builder(
         monkeypatch,
         size=size,
@@ -1358,8 +1369,7 @@ def test_provider_location_is_marked_approximate_with_radius(monkeypatch):
     monkeypatch.setattr(
         pdf_report, "lookup_provider_info", lambda host: _info(location="Ratingen", location_accuracy="100 km radius")
     )
-    b._provider_cache = None
-    del b._provider_cache
+    b.__dict__.pop("_provider_cache", None)  # drop the lookup cached by the builder fixture
     assert b._destination_place() == "Ratingen, DE · approximate GeoIP location · 100 km radius"
     assert b._destination_place(with_accuracy=False) == "Ratingen, DE · approximate GeoIP location"
 
@@ -1367,9 +1377,7 @@ def test_provider_location_is_marked_approximate_with_radius(monkeypatch):
 def test_merged_downtime_summary_without_incidents_and_own_page_with_incidents(monkeypatch):
     quiet = _full_builder(monkeypatch, hops=[_hop(1)], ssl=None, target_extra=FULL_COVERAGE)
     quiet.build()
-    assert quiet.chapter_pages["Downtime Log"] == quiet.chapter_pages["Availability & Performance"] or (
-        quiet.chapter_pages["Downtime Log"] == quiet.page_count
-    )
+    assert quiet.chapter_pages["Downtime Log"] == quiet.chapter_pages["Availability & Performance"]
     assert "No downtime recorded" in _all_text(quiet)
     thin = _full_builder(monkeypatch, hops=[_hop(1)], ssl=None)
     assert "No downtime detected in observed checks" in _all_text(thin)
@@ -1698,13 +1706,13 @@ def test_response_time_legend_is_below_plot(monkeypatch):
         (6, [0, 2, 4, 6]),
         (140, [0, 50, 100, 150]),
         (1250, [0, 250, 500, 750, 1000, 1250]),
-        (0.8, [0, 0.2, 0.4, 0.6, 0.8]),
+        (0.8, [0, 0.2, 0.4, 0.6, 0.8, 1.0]),
     ],
 )
 def test_nice_ticks_are_round_ascending_numbers(top, expected):
     ticks = pdf_report._nice_ticks(top, 4 if top == 140 else 5)
     assert ticks[0] == 0 and ticks[-1] >= top and ticks == sorted(set(ticks))
-    assert ticks == pytest.approx(expected) or len(ticks) <= 8
+    assert ticks == pytest.approx(expected)
 
 
 @pytest.mark.parametrize(

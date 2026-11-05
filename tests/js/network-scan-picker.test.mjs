@@ -18,7 +18,7 @@ function el(extra = {}) {
     classList: { toggle() {}, add() {}, remove() {} },
     addEventListener(name, fn) { (listeners[name] ||= []).push(fn); },
     fire: (name) => Promise.all((listeners[name] || []).map((fn) => fn())),
-    setAttribute() {}, removeAttribute() {}, replaceChildren() {}, dispatchEvent() {},
+    setAttribute() {}, removeAttribute() {}, replaceChildren() {}, dispatchEvent() {}, querySelectorAll: () => [],
     ...extra,
   };
 }
@@ -118,4 +118,42 @@ test('cancel before the job ID is known deletes the scan once the ID arrives', a
   await new Promise((resolve) => setImmediate(resolve));
   assert.ok(calls.includes('DELETE /network-scans/job-1'), calls.join(', '));
   assert.ok(!calls.includes('GET /network-scans/job-1'), 'a cancelled scan is not polled');
+});
+test('starting a scan and cancelling remove the rows of the earlier scan from the DOM', async () => {
+  const cleared = [];
+  let releasePost;
+  const parts = {};
+  const part = (sel) => (parts[sel] ||= el({ focus() {}, replaceChildren: (...nodes) => { if (!nodes.length) cleared.push(sel); } }));
+  const root = el({
+    dataset: { hostId: 'h', tcpId: 't', udpId: 'u', tcpToggleId: 'tt', udpToggleId: 'ut' },
+    closest: () => ({ querySelector: () => el() }),
+    querySelector: (sel) => (sel === '[data-scan-profile]' ? el({ value: 'quick' }) : part(sel)),
+  });
+  const ids = { h: el({ value: '192.0.2.10' }), t: el(), u: el(), tt: el(), ut: el() };
+  const sandbox = {
+    window: {
+      apiFetch: async (url, options = {}) => {
+        if (options.method === 'POST') {
+          await new Promise((resolve) => { releasePost = resolve; });
+          return { ok: false, status: 500, json: async () => ({ detail: 'stop' }) };
+        }
+        return { ok: true, status: 200, json: async () => ({ available: true }) };
+      },
+      setTimeout, addEventListener() {},
+    },
+    document: { getElementById: (id) => ids[id], querySelectorAll: () => [root], addEventListener() {}, visibilityState: 'visible' },
+    AbortController, Set, Number, JSON, Array, URL, Date, Error, Promise, clearTimeout, Event: class {},
+  };
+  vm.runInNewContext(coreSource, sandbox);
+  vm.runInNewContext(source, sandbox);
+  await new Promise((resolve) => setImmediate(resolve));
+  const lists = ['[data-scan-confirmed]', '[data-scan-other-list]'];
+  const started = parts['[data-scan-action="start"]'].fire('click');
+  await new Promise((resolve) => setImmediate(resolve));
+  for (const list of lists) assert.ok(cleared.includes(list), `${list} is emptied when a new scan starts`);
+  cleared.length = 0;
+  await parts['[data-scan-action="cancel"]'].fire('click');
+  for (const list of lists) assert.ok(cleared.includes(list), `${list} is emptied on cancel`);
+  releasePost();
+  await started;
 });

@@ -49,6 +49,16 @@ class RefreshSource(StrEnum):
     ALL = "all"
 
 
+class IxpSnapshotStatus(BaseModel):
+    """Metadata of the active IXP prefix snapshot (no prefixes, no credentials)."""
+
+    import_run_id: str
+    completed_at: str
+    exchange_count: int
+    prefix_count: int
+    source: str
+
+
 class PopStatusResponse(BaseModel):
     """Response model for POP status endpoint."""
 
@@ -58,6 +68,7 @@ class PopStatusResponse(BaseModel):
     sources: dict[str, int] = Field(description="Breakdown by source (active only)")
     last_peeringdb_run: dict | None = Field(description="Last PeeringDB import run")
     last_unlocode_run: dict | None = Field(description="Last UN/LOCODE import run")
+    ixp_snapshot: IxpSnapshotStatus | None = Field(description="Active IXP prefix snapshot; null before the first import")
     recent_runs: list[dict] = Field(description="Recent import runs")
     auto_refresh: dict = Field(description="Self-managing refresh state: last success/attempt, next attempt")
     locks: dict[str, dict] = Field(description="Lock status per source (process-local)")

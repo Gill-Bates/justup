@@ -1020,6 +1020,13 @@ def _backoff_seconds(consecutive_failures: int) -> float:
     return min(POP_BACKOFF_BASE_SECONDS * (2.0**exponent), POP_BACKOFF_MAX_SECONDS)
 
 
+def _startup_offset(rng: random.Random, include_jitter: bool) -> float:
+    """Short randomised offset before a first import, so many installations do not call the API together."""
+    if not include_jitter:
+        return POP_STARTUP_JITTER_MIN_SECONDS
+    return rng.uniform(POP_STARTUP_JITTER_MIN_SECONDS, POP_STARTUP_JITTER_MAX_SECONDS)
+
+
 def compute_next_action(
     *,
     now: datetime,
@@ -1028,6 +1035,7 @@ def compute_next_action(
     consecutive_failures: int,
     rng: random.Random | None = None,
     include_jitter: bool = True,
+    ixp_snapshot_missing: bool = False,
 ) -> RefreshPlan:
     """Decide whether a PeeringDB refresh is due and, if not, how long to wait.
 
@@ -1037,6 +1045,9 @@ def compute_next_action(
       install downloads promptly without a rigid wait, but still spreads load).
     - A prior failure streak: wait the exponential backoff measured from the last attempt, so
       repeated restarts during an outage resume the backoff instead of retrying immediately.
+    - No IXP snapshot yet (an upgrade added the IXP tables): the facility import's freshness does not
+      count; the first IXP import follows after the startup offset, never faster than the base backoff
+      after the previous attempt, so an import that cannot produce a snapshot cannot loop.
     - Fresh data: wait until the freshness window expires, plus light jitter.
     - Overdue data: refresh now.
     """
@@ -1050,12 +1061,13 @@ def compute_next_action(
         return RefreshPlan(0.0, f"retry after backoff ({consecutive_failures} failure(s))")
 
     if last_success_at is None:
-        jitter = (
-            rng.uniform(POP_STARTUP_JITTER_MIN_SECONDS, POP_STARTUP_JITTER_MAX_SECONDS)
-            if include_jitter
-            else POP_STARTUP_JITTER_MIN_SECONDS
-        )
-        return RefreshPlan(jitter, "first install: no successful external import yet")
+        return RefreshPlan(_startup_offset(rng, include_jitter), "first install: no successful external import yet")
+
+    if ixp_snapshot_missing:
+        wait = _startup_offset(rng, include_jitter)
+        if last_attempt_at is not None:
+            wait = max(wait, POP_BACKOFF_BASE_SECONDS - (now - last_attempt_at).total_seconds())
+        return RefreshPlan(wait, "IXP snapshot missing: first IXP import due")
 
     age = (now - last_success_at).total_seconds()
     remaining = POP_FRESHNESS_SECONDS - age
@@ -1092,6 +1104,15 @@ def get_scheduler_state(conn: sqlite3.Connection) -> dict[str, Any]:
     }
 
 
+def _ixp_snapshot_missing(conn: sqlite3.Connection) -> bool:
+    """True while no usable IXP snapshot exists; an unreadable table is not treated as missing."""
+    try:
+        snapshot = ixp_prefixes.snapshot_status(conn)
+    except sqlite3.Error:
+        return False
+    return snapshot is None or not snapshot["completed_at"] or not snapshot["prefix_count"]
+
+
 def plan_next_refresh(
     conn: sqlite3.Connection, *, rng: random.Random | None = None, include_jitter: bool = True
 ) -> RefreshPlan:
@@ -1106,6 +1127,7 @@ def plan_next_refresh(
         consecutive_failures=consecutive_failures,
         rng=rng,
         include_jitter=include_jitter,
+        ixp_snapshot_missing=_ixp_snapshot_missing(conn),
     )
 
 
@@ -1177,7 +1199,7 @@ def get_refresh_status(get_conn) -> dict:
         next_attempt_at = (utcnow() + timedelta(seconds=plan.delay_seconds)).isoformat()
         jitter_seconds = 0
         if not scheduler_state["consecutive_failures"]:
-            if not scheduler_state["last_success_at"]:
+            if not scheduler_state["last_success_at"] or _ixp_snapshot_missing(conn):
                 jitter_seconds = POP_STARTUP_JITTER_MAX_SECONDS - POP_STARTUP_JITTER_MIN_SECONDS
             elif plan.delay_seconds > 0:
                 jitter_seconds = POP_SCHEDULE_JITTER_SECONDS

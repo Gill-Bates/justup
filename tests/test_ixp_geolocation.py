@@ -16,6 +16,7 @@ import ipaddress
 import sqlite3
 import threading
 from contextlib import contextmanager
+from datetime import timedelta
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -26,6 +27,7 @@ from app.services import geo_resolver as gr
 from app.services import ixp_import, ixp_index, pop_codes, pop_refresh, provider_lookup, traceroute_geo
 from app.services.pdf_route_map import is_approximate
 from app.utils import maintenance
+from app.utils.time import utcnow
 from tests import _support  # noqa: F401 - imported for its sys.path side effect
 
 METRO_IP = "80.81.192.10"  # inside the metro exchange prefix
@@ -453,3 +455,147 @@ def test_failed_commit_leaves_database_and_index_untouched(refresh_db, monkeypat
     assert not c.in_transaction
     assert (ixp_prefixes.snapshot_status(c), _stored_prefixes(c)) == before
     assert ixp_index._index is active  # the runtime index never saw the rolled-back data
+
+
+# Upgrade of an existing installation: the first IXP import is not held back by a fresh facility import
+
+
+V4_DECIX = "80.81.192.39"
+V6_DECIX = "2001:7f8::10"
+
+
+def _decix_tables() -> dict[str, list[dict]]:
+    tables = _tables()
+    tables["ix"][0] = {"id": 1, "status": "ok", "name": "DE-CIX Frankfurt", "city": "Frankfurt", "country": "DE"}
+    tables["ixpfx"][0] = {"id": 100, "status": "ok", "ixlan_id": 10, "protocol": "IPv4", "prefix": "80.81.192.0/21"}
+    return tables
+
+
+def _old_facility_import(c: sqlite3.Connection, *, days: int = 1) -> None:
+    """The state of an installation before the IXP tables existed: a successful PeeringDB run, no snapshot."""
+    stamp = (utcnow() - timedelta(days=days)).isoformat()
+    c.execute(
+        "INSERT INTO pop_import_runs (run_id, source, started_at, finished_at, status) VALUES (?, 'peeringdb', ?, ?, 'completed')",
+        ("old-facility-run", stamp, stamp),
+    )
+    c.commit()
+
+
+def test_upgrade_installation_imports_the_ixp_snapshot_on_its_own(refresh_db, monkeypatch) -> None:
+    _path, c = refresh_db
+    _old_facility_import(c)
+    assert ixp_prefixes.snapshot_status(c) is None
+    assert ixp_index.lookup(V4_DECIX) is None  # no snapshot: no IXP match, the GeoIP answer would stand
+
+    plan = pop_refresh.plan_next_refresh(c, include_jitter=False)
+    assert plan.delay_seconds <= pop_refresh.POP_STARTUP_JITTER_MAX_SECONDS and "IXP" in plan.reason
+
+    _serve(monkeypatch, _decix_tables())
+    results = pop_refresh.refresh_external_sources(lambda: c)  # exactly what the scheduler loop calls
+    assert [r.error for r in results] == [None]
+
+    assert ixp_prefixes.snapshot_status(c)["prefix_count"] == 3
+    for ip in (V4_DECIX, V6_DECIX):
+        evidence = ixp_index.lookup(ip)
+        assert evidence is not None
+        assert (evidence.name, evidence.location_class, evidence.city, evidence.country) == (
+            "DE-CIX Frankfurt",
+            ixp_prefixes.LOC_METRO,
+            "Frankfurt",
+            "DE",
+        )
+
+    later = pop_refresh.plan_next_refresh(c, include_jitter=False)
+    assert later.delay_seconds > 20 * 24 * 3600 and "IXP" not in later.reason  # no refresh loop afterwards
+
+
+def test_ixp_failure_after_the_upgrade_backs_off_and_keeps_the_facility_import(refresh_db, monkeypatch) -> None:
+    _path, c = refresh_db
+    _old_facility_import(c)
+
+    def rate_limited(table, skip):
+        if table == "ixpfx":
+            raise RuntimeError("[ratelimit] Rate limited after 3 retries")
+
+    _serve(monkeypatch, _decix_tables(), fail=rate_limited)
+    result = pop_refresh.refresh_external_sources(lambda: c)[0]
+    assert result.error and "phase=fetch_ixp" in result.error
+    assert ixp_prefixes.snapshot_status(c) is None
+    assert c.execute("SELECT COUNT(*) FROM pop_city_evidence").fetchone()[0] == 1  # facility import still applied
+
+    plan = pop_refresh.plan_next_refresh(c, include_jitter=False)
+    assert "backoff" in plan.reason
+    assert plan.delay_seconds > pop_refresh.POP_BACKOFF_BASE_SECONDS - 120  # no busy loop against PeeringDB
+
+
+def test_ixp_failure_keeps_the_previous_snapshot_and_retries_with_growing_backoff(refresh_db, monkeypatch) -> None:
+    _path, c = refresh_db
+    _serve(monkeypatch, _decix_tables())
+    assert pop_refresh.refresh_external_sources(lambda: c)[0].error is None
+    before = (ixp_prefixes.snapshot_status(c), _stored_prefixes(c), ixp_index._index)
+
+    def down(table, skip):
+        if table == "ix":
+            raise RuntimeError("connection reset")
+
+    _serve(monkeypatch, _decix_tables(), fail=down)
+    delays = []
+    for _ in range(2):
+        assert pop_refresh.refresh_external_sources(lambda: c)[0].error
+        assert (ixp_prefixes.snapshot_status(c), _stored_prefixes(c), ixp_index._index) == before
+        delays.append(pop_refresh.plan_next_refresh(c, include_jitter=False).delay_seconds)
+    assert 0 < delays[0] <= pop_refresh.POP_BACKOFF_BASE_SECONDS
+    assert delays[1] > delays[0]
+    assert ixp_index.lookup(V4_DECIX).name == "DE-CIX Frankfurt"
+
+
+def test_fresh_ixp_snapshot_triggers_no_new_import_before_the_interval(refresh_db, monkeypatch) -> None:
+    _path, c = refresh_db
+    seen = _serve(monkeypatch, _decix_tables())
+    assert pop_refresh.refresh_external_sources(lambda: c)[0].error is None
+    requests = len(seen)
+    assert requests > 0
+    assert pop_refresh.plan_next_refresh(c, include_jitter=False).delay_seconds > 20 * 24 * 3600
+    assert len(seen) == requests  # planning alone never talks to PeeringDB
+
+
+# Geo version: the identity browser and server caches use to notice changed IXP data
+
+
+def test_geo_version_follows_the_active_ixp_data_not_the_reload_count() -> None:
+    assert ixp_index.geo_version() == ixp_index.geo_version() == "none"
+    ixp_index.install(_index())
+    first = ixp_index.geo_version()
+    assert first != "none"
+    ixp_index.install(_index())  # identical data published again (a periodic re-import)
+    assert ixp_index.geo_version() == first
+    changed = _decix_tables()
+    ixp_index.install(_index(_build(changed)))
+    assert ixp_index.geo_version() not in {first, "none"}
+    ixp_index.install(None)
+    assert ixp_index.geo_version() == "none"
+
+
+# A hop whose GeoIP answer says IL is replaced by the IXP region once the snapshot exists
+
+
+def _israeli_geoip(ip: str):
+    return {
+        "lat": 32.08,
+        "lon": 34.78,
+        "city": "Tel Aviv",
+        "country": "IL",
+        "accuracy_radius_km": 50.0,
+        "city_is_region": False,
+    }
+
+
+@pytest.mark.parametrize("ip", [V4_DECIX, V6_DECIX])
+def test_conflicting_geoip_country_is_replaced_by_the_ixp_region(monkeypatch, ip) -> None:
+    monkeypatch.setattr(traceroute_geo, "geolocate_ip", _israeli_geoip)
+    monkeypatch.setattr(traceroute_geo, "_online_fallback_enabled", lambda: False)
+    before = traceroute_geo.location_view(traceroute_geo.geolocate_with_hostname_hint(ip))
+    assert before["country"] == "IL"  # no snapshot: only GeoIP speaks
+    ixp_index.install(_index(_build(_decix_tables())))
+    after = traceroute_geo.location_view(traceroute_geo.geolocate_with_hostname_hint(ip))
+    assert (after["city"], after["country"], after["ixp"]) == ("Frankfurt", "DE", "DE-CIX Frankfurt")

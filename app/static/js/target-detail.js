@@ -189,7 +189,7 @@ function _setupNetworkDiagnostics() {
 	store.prune();
 	const loader = cacheApi.createLoader({
 		url: container.dataset.url,
-		scope: { user: container.dataset.cacheUser, target: container.dataset.cacheTarget, build: container.dataset.cacheBuild },
+		scope: { user: container.dataset.cacheUser, target: container.dataset.cacheTarget, build: container.dataset.cacheBuild, geo: container.dataset.cacheGeo },
 		store,
 		fetchFn: (url, init) => fetch(url, init),
 		locks: navigator.locks || null,

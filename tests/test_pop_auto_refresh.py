@@ -515,3 +515,79 @@ def test_unlocode_placeholder_not_counted_as_external_success(conn, monkeypatch)
     assert state["last_success_at"] is None
     plan = pop_refresh.plan_next_refresh(conn, rng=_seeded_rng())
     assert "first install" in plan.reason
+
+
+# --------------------------------------------------------------------------- #
+# IXP snapshot after an upgrade: a fresh facility import must not defer the first IXP import
+# --------------------------------------------------------------------------- #
+
+
+def _insert_ixp_snapshot(conn: sqlite3.Connection, *, prefixes: int = 3, completed_at=None) -> None:
+    conn.execute(
+        "INSERT OR REPLACE INTO ixp_snapshot (id, import_run_id, completed_at, exchange_count, prefix_count, source)"
+        " VALUES (1, 'run', ?, 2, ?, 'peeringdb_ixp')",
+        ((completed_at or utcnow()).isoformat(), prefixes),
+    )
+    conn.commit()
+
+
+def test_upgrade_without_ixp_snapshot_schedules_the_first_ixp_import_soon(conn):
+    """A facility import from yesterday is fresh, but the new IXP tables are still empty."""
+    now = utcnow()
+    _insert_run(conn, status="completed", started=now - timedelta(days=1), finished=now - timedelta(days=1))
+    plan = pop_refresh.plan_next_refresh(conn, rng=_seeded_rng())
+    assert plan.delay_seconds <= pop_refresh.POP_STARTUP_JITTER_MAX_SECONDS
+    assert "IXP" in plan.reason
+
+
+@pytest.mark.parametrize("prefix_count", [0, None])
+def test_empty_or_absent_ixp_snapshot_counts_as_missing(conn, prefix_count):
+    now = utcnow()
+    _insert_run(conn, status="completed", started=now - timedelta(days=1), finished=now - timedelta(days=1))
+    if prefix_count is not None:
+        _insert_ixp_snapshot(conn, prefixes=prefix_count)
+    plan = pop_refresh.plan_next_refresh(conn, rng=_seeded_rng())
+    assert plan.delay_seconds <= pop_refresh.POP_STARTUP_JITTER_MAX_SECONDS
+    assert "IXP" in plan.reason
+
+
+def test_present_ixp_snapshot_keeps_the_normal_freshness_window(conn):
+    """No repeated refresh while both data sets are inside their interval."""
+    now = utcnow()
+    _insert_run(conn, status="completed", started=now - timedelta(days=1), finished=now - timedelta(days=1))
+    _insert_ixp_snapshot(conn)
+    plan = pop_refresh.plan_next_refresh(conn, rng=_seeded_rng())
+    assert plan.delay_seconds > 20 * 24 * 3600
+    assert "IXP" not in plan.reason
+
+
+def test_missing_ixp_snapshot_does_not_bypass_the_failure_backoff(conn):
+    now = utcnow()
+    _insert_run(conn, status="completed", started=now - timedelta(days=1), finished=now - timedelta(days=1))
+    _insert_run(
+        conn, status="failed", started=now - timedelta(minutes=1), finished=now - timedelta(minutes=1), error="x"
+    )
+    plan = pop_refresh.plan_next_refresh(conn, rng=_seeded_rng())
+    assert "backoff" in plan.reason
+    assert plan.delay_seconds > pop_refresh.POP_BACKOFF_BASE_SECONDS - 120
+
+
+def test_missing_ixp_snapshot_never_retries_faster_than_the_base_backoff(conn):
+    """A run that ends without an error but without a snapshot must not become a download loop."""
+    now = utcnow()
+    _insert_run(conn, status="completed", started=now - timedelta(minutes=2), finished=now - timedelta(minutes=2))
+    plan = pop_refresh.plan_next_refresh(conn, rng=_seeded_rng())
+    assert plan.delay_seconds >= pop_refresh.POP_BACKOFF_BASE_SECONDS - 3 * 60
+    assert "IXP" in plan.reason
+
+
+def test_status_reports_the_ixp_snapshot_and_the_ixp_reason(conn):
+    now = utcnow()
+    _insert_run(conn, status="completed", started=now - timedelta(days=1), finished=now - timedelta(days=1))
+    status = pop_refresh.get_refresh_status(lambda: conn)
+    assert status["ixp_snapshot"] is None
+    assert "IXP" in status["auto_refresh"]["next_attempt_reason"]
+    _insert_ixp_snapshot(conn)
+    status = pop_refresh.get_refresh_status(lambda: conn)
+    assert status["ixp_snapshot"]["prefix_count"] == 3
+    assert "IXP" not in status["auto_refresh"]["next_attempt_reason"]

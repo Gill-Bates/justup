@@ -31,6 +31,7 @@ HTTP Status Codes:
 from __future__ import annotations
 
 import asyncio
+import copy
 import functools
 import hashlib
 import html
@@ -42,6 +43,7 @@ import time
 from collections import OrderedDict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import TYPE_CHECKING
 from urllib.parse import urlencode
 
 import markdown
@@ -57,6 +59,7 @@ from ..models.settings import SettingsUpdate
 from ..models.targets import target_row_to_dict
 from ..models.users import PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH
 from ..monitor.quality_probe import DEFAULT_QUALITY_TARGETS
+from ..services import ixp_index
 from ..services.route_timeline import (
     STATE_LABELS,
     expand_sequence_hops,
@@ -115,6 +118,9 @@ from ..utils.uptime_metric import enabled_availability_metrics, uptime_level
 from ..utils.version import BUILD_INFO, VERSION
 from . import notifications as notifications_api
 
+if TYPE_CHECKING:
+    from ..services.traceroute_service import TracerouteOutcome
+
 router = APIRouter(tags=["frontend"])
 
 _templates_dir = Path(__file__).resolve().parent.parent / "templates"
@@ -131,6 +137,10 @@ _traceroute_fragment_cache_lock = threading.Lock()
 _TRACEROUTE_CACHE_VERSION = "nmap1"
 # Last successfully rendered fragment per key (no expiry); shown again when a new measurement fails.
 _traceroute_last_good: OrderedDict[tuple[str, int, str], tuple[bytes, int]] = OrderedDict()
+# Measured route per key, kept as long as the browser keeps its result, with the IXP data version it was
+# last rendered with. A changed version re-renders this route; the stored hops are never measured again.
+_TRACEROUTE_ROUTE_TTL_SECONDS = 24 * 3600
+_traceroute_routes: OrderedDict[tuple[str, int, str], tuple[float, TracerouteOutcome, str]] = OrderedDict()
 _TRACEROUTE_REFRESH_FAILED_HEADER = "X-Traceroute-Refresh-Failed"
 
 
@@ -167,6 +177,33 @@ def _cache_traceroute_fragment(
         _traceroute_last_good.move_to_end(key)
         while len(_traceroute_last_good) > _TRACEROUTE_CACHE_MAX_ENTRIES:
             _traceroute_last_good.popitem(last=False)
+
+
+def _remember_traceroute_route(
+    cache_namespace: str, target_id: int, host: str, outcome: TracerouteOutcome, geo_version: str
+) -> None:
+    key = (cache_namespace, target_id, host)
+    with _traceroute_fragment_cache_lock:
+        _traceroute_routes[key] = (time.monotonic() + _TRACEROUTE_ROUTE_TTL_SECONDS, outcome, geo_version)
+        _traceroute_routes.move_to_end(key)
+        while len(_traceroute_routes) > _TRACEROUTE_CACHE_MAX_ENTRIES:
+            _traceroute_routes.popitem(last=False)
+
+
+def _route_with_outdated_geo(
+    cache_namespace: str, target_id: int, host: str, current_geo_version: str
+) -> TracerouteOutcome | None:
+    """The stored route when it was rendered with other IXP data than the current one, else None."""
+    key = (cache_namespace, target_id, host)
+    with _traceroute_fragment_cache_lock:
+        entry = _traceroute_routes.get(key)
+        if entry is None:
+            return None
+        expires_at, outcome, rendered_with = entry
+        if time.monotonic() >= expires_at:
+            _traceroute_routes.pop(key, None)
+            return None
+        return outcome if rendered_with != current_geo_version else None
 
 
 def _get_last_good_traceroute_fragment(cache_namespace: str, target_id: int, host: str) -> tuple[bytes, int] | None:
@@ -371,20 +408,23 @@ templates.env.filters["user_scope"] = _user_scope_key
 
 # Bump when the rendered traceroute fragment or its geo decision changes; the browser cache drops
 # entries of another revision, version or build. The server cache is in memory and dies with the process.
-TRACEROUTE_FRAGMENT_REVISION = 2
+TRACEROUTE_FRAGMENT_REVISION = 3
 
 
 def _traceroute_cache_scope(user: dict, row) -> dict[str, str]:
     """Non-secret scope keys the browser's traceroute cache is separated by.
 
     Hashes keep the keys opaque and stable. The target key changes with the traceroute destination
-    and with a re-created target, so a re-used id or an edited host never shows a stale route.
+    and with a re-created target, so a re-used id or an edited host never shows a stale route. The geo key
+    follows the IXP data: when it changes, the browser asks the server for a re-rendered result instead of
+    replaying the old locations.
     """
 
     return {
         "user": _user_scope_key(user),
         "target": _scope_digest("target", _row_get(row, "id"), _row_get(row, "created_at"), _resolve_target_host(row)),
         "build": _scope_digest("build", VERSION, BUILD_INFO, TRACEROUTE_FRAGMENT_REVISION),
+        "geo": _scope_digest("geo", ixp_index.geo_version()),
     }
 
 
@@ -1770,6 +1810,11 @@ async def fragment_traceroute(
     cache_namespace = f"{_TRACEROUTE_CACHE_VERSION}:{request.app.state.db_path}"
     force_refresh = refresh and request.headers.get("HX-Request") == "true"
     if not force_refresh:
+        # Changed IXP data: render the stored route again with the current geo decisions, no new scan.
+        geo_version = await run_in_threadpool(ixp_index.geo_version)
+        stored_route = _route_with_outdated_geo(cache_namespace, target_id, lookup_host, geo_version)
+        if stored_route is not None:
+            return await _single_flight_traceroute(request, target_id, lookup_host, cache_namespace, stored_route)
         cached_fragment = _get_cached_traceroute_fragment(cache_namespace, target_id, lookup_host)
         if cached_fragment is not None:
             body, measured_at_ms = cached_fragment
@@ -1800,13 +1845,24 @@ async def fragment_traceroute(
 _traceroute_inflight: dict[tuple[str, int, str], asyncio.Task] = {}
 
 
-async def _single_flight_traceroute(request: Request, target_id: int, lookup_host: str, cache_namespace: str):
-    """Run at most one traceroute per key; concurrent cache misses wait for it and get its body."""
+async def _single_flight_traceroute(
+    request: Request,
+    target_id: int,
+    lookup_host: str,
+    cache_namespace: str,
+    stored_route: TracerouteOutcome | None = None,
+):
+    """Run at most one traceroute per key; concurrent cache misses wait for it and get its body.
+
+    ``stored_route`` renders an already measured route again instead of measuring.
+    """
     key = (cache_namespace, target_id, lookup_host)
     task = _traceroute_inflight.get(key)
     leader = task is None
     if leader:
-        task = asyncio.ensure_future(_run_traceroute_fragment(request, target_id, lookup_host, cache_namespace))
+        task = asyncio.ensure_future(
+            _run_traceroute_fragment(request, target_id, lookup_host, cache_namespace, stored_route)
+        )
         _traceroute_inflight[key] = task
         # Release in a callback so a failure or cancelled caller cannot leave the key reserved.
         task.add_done_callback(
@@ -1820,8 +1876,14 @@ async def _single_flight_traceroute(request: Request, target_id: int, lookup_hos
     return HTMLResponse(response.body, status_code=response.status_code, headers=headers)
 
 
-async def _run_traceroute_fragment(request: Request, target_id: int, lookup_host: str, cache_namespace: str):
-    """Trace ``lookup_host``, render the fragment and store it in the cache."""
+async def _run_traceroute_fragment(
+    request: Request,
+    target_id: int,
+    lookup_host: str,
+    cache_namespace: str,
+    stored_route: TracerouteOutcome | None = None,
+):
+    """Trace ``lookup_host`` (or reuse ``stored_route``), render the fragment and store it in the cache."""
     # Traceroute utilities (imports at function level for lazy loading)
     from ..services import route_map_rules
     from ..services.route_interpolator import (
@@ -1839,8 +1901,10 @@ async def _run_traceroute_fragment(request: Request, target_id: int, lookup_host
     )
     from ..services.traceroute_service import TRACE_HOP_LIMIT, analyze_route, trace
 
+    # Read before the first geo decision: data published meanwhile only makes the next request render again.
+    geo_version = await run_in_threadpool(ixp_index.geo_version)
     # The service resolves ONE address and traces exactly that address; scan and evaluation share it.
-    outcome = await trace(lookup_host)
+    outcome = stored_route if stored_route is not None else await trace(lookup_host)
     target_ip = outcome.target_ip
     if not outcome.ok:
         previous = _get_last_good_traceroute_fragment(cache_namespace, target_id, lookup_host)
@@ -1867,7 +1931,7 @@ async def _run_traceroute_fragment(request: Request, target_id: int, lookup_host
                 "error_code": outcome.error_code,
             },
         )
-    hops = outcome.hops
+    hops = copy.deepcopy(outcome.hops)  # rendering must not alter the stored route
     route = outcome.route
     measured_at_ms = int(route.completed_at.timestamp() * 1000)
 
@@ -2024,6 +2088,7 @@ async def _run_traceroute_fragment(request: Request, target_id: int, lookup_host
         },
     )
     _cache_traceroute_fragment(cache_namespace, target_id, lookup_host, response.body, measured_at_ms)
+    _remember_traceroute_route(cache_namespace, target_id, lookup_host, outcome, geo_version)
     response.headers["Cache-Control"] = "private, no-store"
     response.headers[_TRACEROUTE_MEASURED_AT_HEADER] = str(measured_at_ms)
     return response

@@ -1529,9 +1529,21 @@ details[open]>summary .target-details-chevron {
 		min-height: 0;
 	}
 
-	#target-network-diagnostics-pane.active:has(.traceroute-diagnostics) :is(.target-network-card, #traceroute-container) {
+	/* The card stacks any compact leading block above the traceroute, which takes the remaining height. */
+	#target-network-diagnostics-pane.active:has(.traceroute-diagnostics) .target-network-card {
+		display: flex;
+		flex-direction: column;
+		min-height: 0;
+	}
+
+	#target-network-diagnostics-pane.active:has(.traceroute-diagnostics) .target-network-card > :not(#traceroute-container) {
+		flex: 0 0 auto;
+	}
+
+	#target-network-diagnostics-pane.active:has(.traceroute-diagnostics) #traceroute-container {
 		display: grid;
 		grid-template-rows: minmax(0, 1fr);
+		flex: 1 1 auto;
 		min-height: 0;
 	}
 

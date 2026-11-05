@@ -15,6 +15,7 @@ current, so an older loader can never overwrite a newer index.
 
 from __future__ import annotations
 
+import hashlib
 import ipaddress
 import logging
 import threading
@@ -31,10 +32,19 @@ _log = logging.getLogger(__name__)
 LOAD_RETRY_SECONDS = 30.0  # a failing load is not retried per hop
 
 
+def _content_version(by_len: dict[tuple[int, int], dict[int, gr.IxpEvidence]]) -> str:
+    """Digest of everything a lookup can return, so identical data keeps the same version."""
+    digest = hashlib.sha256()
+    for key in sorted(by_len):
+        for address, evidence in sorted(by_len[key].items()):
+            digest.update(repr((key, address, evidence)).encode())
+    return digest.hexdigest()[:16]
+
+
 class IxpIndex:
     """Immutable prefix index; build once, read from any thread."""
 
-    __slots__ = ("_by_len", "_lengths", "exchange_count", "prefix_count")
+    __slots__ = ("_by_len", "_lengths", "exchange_count", "prefix_count", "version")
 
     def __init__(self, exchanges: Iterable[IxpExchange], prefixes: Iterable[IxpPrefix]) -> None:
         by_ix = {e.ix_id: e for e in exchanges}
@@ -68,6 +78,7 @@ class IxpIndex:
         self._lengths = {v: sorted((plen for (ver, plen) in by_len if ver == v), reverse=True) for v in (4, 6)}
         self.exchange_count = len(by_ix)
         self.prefix_count = count
+        self.version = _content_version(by_len)
 
     def lookup(self, address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> gr.IxpEvidence | None:
         bits = 32 if address.version == 4 else 128
@@ -92,6 +103,18 @@ _last_failure = float("-inf")
 def current_generation() -> int:
     """Changes whenever the active index is replaced; caches of rendered geo decisions key on it."""
     return _generation
+
+
+def geo_version() -> str:
+    """Identity of the IXP data behind rendered geo results ("none" without data).
+
+    Unlike ``current_generation`` it depends on the content, not on how often the index was replaced,
+    so it survives restarts and an unchanged re-import does not invalidate browser caches.
+    """
+    if _dirty:
+        _lazy_load()
+    index = _index
+    return index.version if index is not None else "none"
 
 
 def _swap(index: IxpIndex | None) -> None:

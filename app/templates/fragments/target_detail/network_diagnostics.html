@@ -1,24 +1,6 @@
 <div class="target-network-card" id="network-diagnostics" aria-labelledby="target-network-diagnostics-tab" role="region">
-	{% if user and user.is_admin %}
-	<section id="service-detection" class="mb-3" data-target-id="{{ target.id }}" aria-label="Service detection">
-		<div class="d-flex flex-wrap align-items-center gap-2">
-			<button type="button" class="btn btn-outline-secondary" data-service-action="preview">Detect services</button>
-			<button type="button" class="btn btn-primary" data-service-action="confirm" hidden>Apply changes</button>
-			<span class="small text-body-secondary" data-service-status role="status"></span>
-		</div>
-		<p class="small text-danger mt-2 mb-0" data-service-error role="alert" hidden></p>
-		<div class="mt-2" data-service-group="service" role="group" aria-labelledby="service-group-service" hidden>
-			<p class="fw-semibold small mb-1" id="service-group-service">Service changed</p>
-			<ul class="list-unstyled small mb-2" data-service-list="service"></ul>
-		</div>
-		<div class="mt-2" data-service-group="version" role="group" aria-labelledby="service-group-version" hidden>
-			<p class="fw-semibold small mb-1" id="service-group-version">Version only</p>
-			<ul class="list-unstyled small mb-2" data-service-list="version"></ul>
-		</div>
-	</section>
-	{% endif %}
 	<div id="traceroute-container" data-url="/ui/fragments/traceroute/{{ target.id }}"
-		data-cache-user="{{ traceroute_cache_scope.user }}" data-cache-target="{{ traceroute_cache_scope.target }}" data-cache-build="{{ traceroute_cache_scope.build }}">
+		data-cache-user="{{ traceroute_cache_scope.user }}" data-cache-target="{{ traceroute_cache_scope.target }}" data-cache-build="{{ traceroute_cache_scope.build }}" data-cache-geo="{{ traceroute_cache_scope.geo }}">
 		<div class="text-center py-4">
 			<span class="small text-body-secondary">Select this tab to load network diagnostics.</span>
 		</div>

@@ -693,6 +693,26 @@
 				<div class="card mt-3"><div class="card-body">
 				{% include 'fragments/network_scan_picker.html' %}
 				</div></div>
+				<div class="card mt-3"><div class="card-body">
+				<section id="service-detection" data-target-id="{{ target.id }}" aria-labelledby="service-detection-title">
+					<h3 class="h6" id="service-detection-title">Detect services</h3>
+					<p class="small text-body-secondary mb-2">Re-detects the services of the stored ports. Nothing is stored until you apply the changes.</p>
+					<div class="d-flex flex-wrap align-items-center gap-2">
+						<button type="button" class="btn btn-outline-secondary" data-service-action="preview">Detect services</button>
+						<button type="button" class="btn btn-primary" data-service-action="confirm" hidden>Apply changes</button>
+						<span class="small text-body-secondary" data-service-status role="status"></span>
+					</div>
+					<p class="small text-danger mt-2 mb-0" data-service-error role="alert" hidden></p>
+					<div class="mt-2" data-service-group="service" role="group" aria-labelledby="service-group-service" hidden>
+						<p class="fw-semibold small mb-1" id="service-group-service">Service changed</p>
+						<ul class="list-unstyled small mb-2" data-service-list="service"></ul>
+					</div>
+					<div class="mt-2" data-service-group="version" role="group" aria-labelledby="service-group-version" hidden>
+						<p class="fw-semibold small mb-1" id="service-group-version">Version only</p>
+						<ul class="list-unstyled small mb-2" data-service-list="version"></ul>
+					</div>
+				</section>
+				</div></div>
 
 					</div>
 					<div class="tab-pane fade" id="target-alerts-pane" role="tabpanel"
@@ -1379,4 +1399,5 @@
 </script>
 <script src="/static/js/utils/port-scan-core.js" defer></script>
 <script src="/static/js/network-scan-picker.js" defer></script>
+<script src="/static/js/target-detail/service-detection.js" defer></script>
 {% endblock %}

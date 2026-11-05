@@ -13,6 +13,7 @@ import re
 import time
 from pathlib import Path
 
+import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
@@ -165,8 +166,10 @@ def _timeout_hop(hop: int) -> dict:
     return {"hop": hop, "ip": "*", "hostname": "-", "latency_ms": None, "loss_pct": 100.0, "status": "timeout"}
 
 
-def _diagnostics_client(tmp_path: Path, monkeypatch, hops: list[dict], *, target_ip: str, geo_points: list[dict]):
-    """Authenticated client whose trace/geo layer is stubbed; real interpolation and collapsing run."""
+def _diagnostics_client(
+    tmp_path: Path, monkeypatch, hops: list[dict], *, target_ip: str, geo_points: list[dict], stub_geo: bool = True
+):
+    """Authenticated client whose trace layer is stubbed (and the geo layer unless ``stub_geo`` is off)."""
     monkeypatch.setenv("SECRET_KEY", Fernet.generate_key().decode("ascii"))
     monkeypatch.setenv("JUSTUP_DATA_DIR", str(tmp_path))
     monkeypatch.setattr(crypto, "_primary_key", None)
@@ -188,18 +191,20 @@ def _diagnostics_client(tmp_path: Path, monkeypatch, hops: list[dict], *, target
     sqlite_db.close_connection(conn)
     with frontend_api._traceroute_fragment_cache_lock:
         frontend_api._traceroute_fragment_cache.clear()
+        frontend_api._traceroute_routes.clear()
     with frontend_api._traceroute_refresh_lock:
         frontend_api._traceroute_refresh_inflight.clear()
         frontend_api._traceroute_refresh_finished.clear()
 
     calls: list[tuple] = []
     patch_trace(monkeypatch, hops, resolved=target_ip, calls=calls)
-    monkeypatch.setattr(
-        traceroute_geo,
-        "geolocate_with_hostname_hint",
-        lambda ip, _hint=None: next((p for p in geo_points if p["ip"] == ip), None),
-    )
-    monkeypatch.setattr(traceroute_geo, "route_hops_to_geo_points", lambda *_args, **_kwargs: geo_points)
+    if stub_geo:
+        monkeypatch.setattr(
+            traceroute_geo,
+            "geolocate_with_hostname_hint",
+            lambda ip, _hint=None: next((p for p in geo_points if p["ip"] == ip), None),
+        )
+        monkeypatch.setattr(traceroute_geo, "route_hops_to_geo_points", lambda *_args, **_kwargs: geo_points)
 
     client = TestClient(app)
     client.get("/ui/login")
@@ -638,3 +643,146 @@ def test_timeline_groups_no_reply_runs_and_keeps_single_timeouts_separate() -> N
     assert (group["title"], group["subtitle"], group["measurement"]) == ("3 hops without reply", "No reply", "timeout")
     assert nodes[3]["state_label"] == "No reply" and "estimated" not in nodes[3]["detail"].lower()
     assert [item["label"] for item in timeline["legend"]] == ["Measured", "No reply"]
+
+
+# ── Changed IXP data: rendered geo results are replaced from the stored route, never by a new scan ──
+
+
+def _ixp_route_hops() -> list[dict]:
+    return [
+        _ok_hop(1, "192.168.0.1", 1.0),
+        _ok_hop(2, "80.81.192.39", 5.0, hostname="-"),
+        _ok_hop(3, "203.0.113.9", 9.0, hostname="diag.example.com"),
+    ]
+
+
+def _decix_index():
+    from app.services import ixp_import, ixp_index
+
+    ix = [{"id": 1, "status": "ok", "name": "DE-CIX Frankfurt", "city": "Frankfurt", "country": "DE"}]
+    ixlan = [{"id": 10, "status": "ok", "ix_id": 1}]
+    ixpfx = [{"id": 100, "status": "ok", "ixlan_id": 10, "protocol": "IPv4", "prefix": "80.81.192.0/21"}]
+    ixfac = [{"id": 1, "status": "ok", "ix_id": 1, "fac_id": 1000}]
+    fac = [{"id": 1000, "status": "ok", "city": "Frankfurt", "country": "DE", "latitude": 50.11, "longitude": 8.68}]
+    snapshot = ixp_import.build_snapshot(ix, ixlan, ixpfx, ixfac, fac).snapshot
+    return ixp_index.IxpIndex(snapshot.exchanges, snapshot.prefixes)
+
+
+@pytest.fixture
+def israeli_geoip(monkeypatch):
+    """GeoIP says Tel Aviv for the exchange address; counts lookups so a re-render can be told from a cache hit."""
+    from app.services import ixp_index
+
+    ixp_index.reset_for_tests()
+    lookups: list[str] = []
+
+    def geoip(ip: str):
+        lookups.append(ip)
+        if ip != "80.81.192.39":
+            return None
+        return {
+            "lat": 32.08,
+            "lon": 34.78,
+            "city": "Tel Aviv",
+            "country": "IL",
+            "accuracy_radius_km": 50.0,
+            "city_is_region": False,
+        }
+
+    monkeypatch.setattr(traceroute_geo, "geolocate_ip", geoip)
+    monkeypatch.setattr(traceroute_geo, "_online_fallback_enabled", lambda: False)
+    yield lookups
+    ixp_index.reset_for_tests()
+
+
+def test_ixp_update_replaces_a_cached_il_hop_without_a_new_scan(tmp_path: Path, monkeypatch, israeli_geoip) -> None:
+    from app.services import ixp_index
+
+    client, url, calls, _app, _tid = _diagnostics_client(
+        tmp_path, monkeypatch, _ixp_route_hops(), target_ip="203.0.113.9", geo_points=[], stub_geo=False
+    )
+    first = client.get(url, headers=_HX)
+    assert "Tel Aviv" in first.text and "Frankfurt" not in first.text
+    measured_at = first.headers["x-measured-at"]
+
+    lookups_before = len(israeli_geoip)
+    same = client.get(url, headers=_HX)  # same IXP data: the cached fragment is served untouched
+    assert same.content == first.content and len(israeli_geoip) == lookups_before
+
+    generation = ixp_index.current_generation()
+    ixp_index.install(_decix_index())  # a successful IXP import publishes new data
+    assert ixp_index.current_generation() != generation
+
+    updated = client.get(url, headers=_HX)
+    assert updated.status_code == 200
+    assert "Frankfurt" in updated.text and "DE-CIX Frankfurt" in updated.text
+    assert "Tel Aviv" not in updated.text
+    assert len(calls) == 1  # the stored route was re-rendered; Nmap was not asked again
+    assert updated.headers["x-measured-at"] == measured_at  # still the original measurement time
+
+    lookups_after = len(israeli_geoip)
+    again = client.get(url, headers=_HX)  # and the new rendering is cached again
+    assert again.content == updated.content and len(israeli_geoip) == lookups_after and len(calls) == 1
+
+    forced = client.get(f"{url}?refresh=1", headers=_HX)  # an explicit new scan is still a scan
+    assert forced.status_code == 200 and len(calls) == 2
+    client.close()
+
+
+def test_rerender_after_an_ixp_update_works_when_the_fragment_cache_entry_expired(
+    tmp_path: Path, monkeypatch, israeli_geoip
+) -> None:
+    from app.services import ixp_index
+
+    client, url, calls, app, target_id = _diagnostics_client(
+        tmp_path, monkeypatch, _ixp_route_hops(), target_ip="203.0.113.9", geo_points=[], stub_geo=False
+    )
+    client.get(url, headers=_HX)
+    key = (f"{frontend_api._TRACEROUTE_CACHE_VERSION}:{app.state.db_path}", target_id, "diag.example.com")
+    with frontend_api._traceroute_fragment_cache_lock:
+        _expires, body, measured = frontend_api._traceroute_fragment_cache[key]
+        frontend_api._traceroute_fragment_cache[key] = (time.monotonic() - 1, body, measured)
+    ixp_index.install(_decix_index())
+    updated = client.get(url, headers=_HX)
+    assert "Frankfurt" in updated.text and "Tel Aviv" not in updated.text
+    assert len(calls) == 1
+    client.close()
+
+
+def test_expired_fragment_without_new_ixp_data_still_measures_again(tmp_path: Path, monkeypatch, israeli_geoip) -> None:
+    client, url, calls, app, target_id = _diagnostics_client(
+        tmp_path, monkeypatch, _ixp_route_hops(), target_ip="203.0.113.9", geo_points=[], stub_geo=False
+    )
+    client.get(url, headers=_HX)
+    key = (f"{frontend_api._TRACEROUTE_CACHE_VERSION}:{app.state.db_path}", target_id, "diag.example.com")
+    with frontend_api._traceroute_fragment_cache_lock:
+        _expires, body, measured = frontend_api._traceroute_fragment_cache[key]
+        frontend_api._traceroute_fragment_cache[key] = (time.monotonic() - 1, body, measured)
+    client.get(url, headers=_HX)
+    assert len(calls) == 2  # the five-minute contract is unchanged when the geo data did not change
+    client.close()
+
+
+def test_cache_scope_carries_the_geo_version_of_the_ixp_data(israeli_geoip) -> None:
+    from app.services import ixp_index
+
+    user = {"id": 1, "created_at": "2026-01-01 10:00:00"}
+    row = {"id": 7, "created_at": "2026-02-01 10:00:00", "host": "a.example.com"}
+    without = frontend_api._traceroute_cache_scope(user, row)
+    assert without == frontend_api._traceroute_cache_scope(user, row)
+    assert len(without["geo"]) == 16 and without["geo"].isalnum()
+    ixp_index.install(_decix_index())
+    with_ixp = frontend_api._traceroute_cache_scope(user, row)
+    assert with_ixp["geo"] != without["geo"]
+    assert {k: v for k, v in with_ixp.items() if k != "geo"} == {k: v for k, v in without.items() if k != "geo"}
+    ixp_index.install(_decix_index())  # same content published again: the browser keeps its entry
+    assert frontend_api._traceroute_cache_scope(user, row)["geo"] == with_ixp["geo"]
+
+
+def test_target_page_renders_the_geo_scope_key(tmp_path: Path, monkeypatch, israeli_geoip) -> None:
+    client, _url, _calls, _app, target_id = _diagnostics_client(
+        tmp_path, monkeypatch, [], target_ip="203.0.113.9", geo_points=[]
+    )
+    page = client.get(f"/ui/targets/{target_id}")
+    assert re.search(r'data-cache-build="[0-9a-f]{16}"\s+data-cache-geo="[0-9a-f]{16}"', page.text)
+    client.close()

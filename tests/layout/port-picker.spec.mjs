@@ -397,7 +397,8 @@ async function assertNoStaleResults(picker, phase) {
 	assert.equal(await picker.locator("[data-scan-action=apply]").isVisible(), false, `${phase}: no adoption action`);
 }
 // Scan, then walk through new scan, cancel and host change; hostInput is the host field of the surrounding form.
-async function checkResultsLifecycle(page, picker, hostInput, gate) {
+// revealHost brings that field into view when it sits on another tab than the picker.
+async function checkResultsLifecycle(page, picker, hostInput, gate, revealHost = async () => {}) {
 	await assertNoStaleResults(picker, "before the first scan");
 	await runScan(picker);
 	assert.equal(await picker.locator("[data-scan-results]").isVisible(), true);
@@ -410,6 +411,7 @@ async function checkResultsLifecycle(page, picker, hostInput, gate) {
 	gate.open();
 	await page.waitForFunction(() => !document.querySelector("[data-scan-action=start]").disabled);
 	await runScan(picker);
+	await revealHost();
 	await hostInput.fill("other.example.org");
 	await picker.locator("[data-scan-results]").waitFor({ state: "hidden" });
 	await assertNoStaleResults(picker, "after a host change");
@@ -595,7 +597,7 @@ test.describe("target form", () => {
 		await stubScan(page, { poll: async () => { await gate.wait(); return { status: 200, json: completed() }; } });
 		const picker = await openEdit(page, app);
 		const hostId = await picker.evaluate((root) => root.dataset.hostId);
-		await checkResultsLifecycle(page, picker, page.locator(`#${hostId}`), gate);
+		await checkResultsLifecycle(page, picker, page.locator(`#${hostId}`), gate, () => page.locator("#target-general-tab").click());
 	});
 	test("edit: the editor uses the same picker component as the wizard @portpicker", async ({ app, page }) => {
 		await stubScan(page);
@@ -616,7 +618,7 @@ test.describe("target form", () => {
 		assert.equal(before.tcp_ports, "22");
 		assert.equal(before.udp_ports, "161");
 		await page.locator('#target-form button[type="submit"]').click();
-		await page.waitForURL(new RegExp(`/ui/targets/${editId}$`), { timeout: 30000 });
+		await page.waitForURL(`${app.base}/ui/targets`, { timeout: 30000 });
 		const after = await page.evaluate(async (id) => (await (await window.apiFetch(`/targets/${id}`)).json()), editId);
 		assert.equal(after.tcp_ports, "22,443");
 		assert.equal(after.udp_ports, "53");

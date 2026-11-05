@@ -117,6 +117,54 @@ def test_pop_status_sources_sum_to_active(conn, tmp_path) -> None:
     assert sum(body["sources"].values()) == body["active_locations"]
 
 
+def _pop_status_app(conn):
+    from fastapi import FastAPI
+
+    from app.api import pop as pop_api
+    from app.utils.deps import get_conn
+
+    app = FastAPI()
+    app.state.db_path = Path(conn.execute("PRAGMA database_list").fetchone()[2])
+    app.include_router(pop_api.router)
+    app.dependency_overrides[get_conn] = lambda: conn
+    return app, pop_api
+
+
+def test_pop_status_exposes_the_ixp_snapshot(conn) -> None:
+    from fastapi.testclient import TestClient
+
+    app, pop_api = _pop_status_app(conn)
+    app.dependency_overrides[pop_api.require_admin] = lambda: {"is_admin": True}
+    client = TestClient(app)
+    body = client.get("/api/admin/pop/status").json()
+    assert "ixp_snapshot" in body and body["ixp_snapshot"] is None  # visible even before the first import
+    conn.execute(
+        "INSERT INTO ixp_snapshot (id, import_run_id, completed_at, exchange_count, prefix_count, source)"
+        " VALUES (1, 'run-1', '2026-05-01T10:00:00+00:00', 4, 9, 'peeringdb_ixp')"
+    )
+    conn.commit()
+    assert client.get("/api/admin/pop/status").json()["ixp_snapshot"] == {
+        "import_run_id": "run-1",
+        "completed_at": "2026-05-01T10:00:00+00:00",
+        "exchange_count": 4,
+        "prefix_count": 9,
+        "source": "peeringdb_ixp",
+    }
+
+
+def test_pop_status_stays_admin_only(conn) -> None:
+    from fastapi.testclient import TestClient
+
+    from app.api.auth import get_current_user
+
+    app, _pop_api = _pop_status_app(conn)
+    app.dependency_overrides[get_current_user] = lambda: {"id": 2, "is_admin": False, "is_active": True}
+    client = TestClient(app)
+    assert client.get("/api/admin/pop/status").status_code == 403
+    assert client.get("/api/admin/pop/runs").status_code == 403
+    assert client.post("/api/admin/pop/refresh", params={"source": "peeringdb"}).status_code == 403
+
+
 def test_restart_marks_orphaned_pdf_jobs_failed(conn) -> None:
     tid = sqlite_db.create_target(
         conn, {"name": "T", "host": "t.example.com", "interval_seconds": 60, "retention_days": 30}

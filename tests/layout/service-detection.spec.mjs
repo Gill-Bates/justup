@@ -3,7 +3,7 @@
 // Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 //
 
-// "Detect services" on the network tab of a target: the preview groups service changes and
+// "Detect services" on the Network tab of Edit Target: the preview groups service changes and
 // version-only changes and stores nothing; "Apply changes" asks in the shared dialog (never a native
 // popup); Cancel and Escape send nothing; Apply sends exactly one confirmation; a failed preview shows
 // the error and offers no Apply. Chromium and WebKit, light and dark, desktop and phone.
@@ -29,9 +29,9 @@ async function open(browser, app, adminState, viewport, theme, previewReply) {
 		state.confirms.push(route.request().postDataJSON());
 		await route.fulfill({ status: 200, json: CHANGES });
 	});
-	await page.goto(`${app.base}/ui/targets/1`, { waitUntil: "load" });
+	await page.goto(`${app.base}/ui/targets/1/edit`, { waitUntil: "load" });
 	await page.evaluate((mode) => document.documentElement.setAttribute("data-bs-theme", mode), theme);
-	await page.click("#target-network-diagnostics-tab");
+	await page.click("#target-network-tab");
 	await page.waitForSelector("#service-detection [data-service-action=preview]", { state: "visible" });
 	return { context, page, state };
 }
