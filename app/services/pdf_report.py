@@ -90,8 +90,10 @@ from app.services.traceroute_service import (
 )
 from app.utils.availability_rules import MIN_DOWNTIME_SECONDS, measured_outages
 from app.utils.cert_target import resolve_cert_target
+from app.utils.downtime_view import display_seconds
 from app.utils.ssrf import redact_url
 from app.utils.status_palette import STATUS_PALETTE
+from app.utils.time import utcnow
 from app.utils.tls_model import Check, ScanStatus, TlsScanResult, Verdict
 from app.utils.tls_scanner import scan_tls
 from app.utils.uptime_metric import uptime_level
@@ -1568,7 +1570,7 @@ def _extract_downtime_events(
         DowntimeEvent(
             start=o.start,
             end=o.end,
-            duration_minutes=None if o.end is None else int((o.seconds() or 0) / 60),
+            duration_minutes=None if o.end is None else display_seconds(o.start, o.end) // 60,
         )
         for o in measured_outages(points, interval_seconds=interval_seconds, now=now)
         if o.end is None or (o.seconds() or 0) >= MIN_DOWNTIME_SECONDS
@@ -1584,11 +1586,12 @@ def _report_downtime_events(report_data: ReportData) -> list[DowntimeEvent]:
             DowntimeEvent(
                 start=period.start,
                 end=period.end,
-                duration_minutes=None if period.duration_seconds is None else period.duration_seconds // 60,
+                duration_minutes=None if period.end is None else display_seconds(period.start, period.end) // 60,
             )
             for period in reversed(report_data.downtime_periods)
         ]
-    return _extract_downtime_events(report_data.uptime_data, report_data.target.get("interval_seconds") or 60)
+    # Live time as reference: a trailing DOWN point of a closed range is not an ongoing outage.
+    return _extract_downtime_events(report_data.uptime_data, report_data.target.get("interval_seconds") or 60, utcnow())
 
 
 # ---------------------------------------------------------------------------

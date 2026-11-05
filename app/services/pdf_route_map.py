@@ -31,6 +31,7 @@ from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.pdfgen.canvas import FILL_EVEN_ODD
 from reportlab.platypus import Flowable
 
+from app.services.geo_resolver import ACCURACY_APPROXIMATE
 from app.services.route_map_rules import (
     BASEMAP_FILE,
     DASH_ARRAY,
@@ -41,19 +42,21 @@ from app.services.route_map_rules import (
     MAX_CITY_LABELS,
     MIN_ARROW_SEGMENT_PX,
     PALETTE,
+    polygon_parts,
     select_labels,
-)
-from app.services.route_map_rules import (
-    GEO_DIR as GEO_DIR,  # re-export: the dataset provenance test reads it from this module
 )
 from app.services.route_timeline import logical_hop_count, mapped_hop_numbers, route_start_is_mapped
 from app.services.traceroute_geo import (
+    LOC_APPROXIMATE,
+    LOC_COUNTRY,
     MAP_ROLE_ESTIMATE,
     META_MAP_RADIUS_KM,
     META_MAP_ROLE,
     SEGMENT_DASHED,
     route_map_features,
 )
+
+GEO_DIR = BASEMAP_FILE.parent  # the dataset paths are owned by route_map_rules
 
 MIN_EXTENT_DEG = 3.0  # smallest visible span, so a single region stays recognisable
 KM_PER_DEG_LAT = 111.19

@@ -2010,3 +2010,26 @@ def test_template_reset_is_all_or_nothing_when_a_write_fails(conn, kind, monkeyp
         client.post(url + "/reset")
     monkeypatch.setattr(sqlite_db, "set_setting", real)
     assert _template_state(conn, kind) == before
+@pytest.mark.asyncio
+async def test_settings_spooler_init_runs_off_the_event_loop(monkeypatch):
+    import threading
+    from types import SimpleNamespace
+
+    from app.api import settings as settings_api
+    from app.services.notifications import spooler as spooler_module
+
+    init_threads: list[int] = []
+
+    class _FakeSpooler:
+        def flush_queue(self):
+            return 0
+
+    def _fake_get_spooler(_factory):
+        init_threads.append(threading.get_ident())
+        return _FakeSpooler()
+
+    monkeypatch.setattr(spooler_module, "get_spooler", _fake_get_spooler)
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(db_path="unused.db")))
+    await settings_api.flush_notification_queue(request, _admin=None)
+    assert init_threads
+    assert init_threads[0] != threading.get_ident()

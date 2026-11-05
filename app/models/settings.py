@@ -27,7 +27,6 @@ from ..utils.constants import (
     SESSION_MAX_DAYS_MIN,
 )
 
-
 # Shared by the read model and the patch model so both accept the same values.
 _THEME_PATTERN = "^(system|light|dark)$"
 _PDF_PAGE_SIZE_PATTERN = "^(a4|letter)$"

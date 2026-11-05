@@ -193,3 +193,39 @@ async def test_queue_row_is_not_sent_when_starttls_is_missing(scheduler, db_path
 
     assert all(not inst.sent for inst in fakes[0].instances)
     assert spooler.get_queue_stats_detailed()["by_status"].get("sent", 0) == 0
+@pytest.mark.asyncio
+async def test_first_spooler_init_under_write_lock_does_not_block_event_loop(scheduler, db_path, monkeypatch):
+    import asyncio
+
+    from app.services.notifications import spooler as spooler_module
+
+    monkeypatch.setattr(spooler_module, "_spooler", None)
+    monkeypatch.setattr(spooler_module, "_spooler_last_failure", None)
+    holder = sqlite_db.connect(db_path)
+    holder.execute("BEGIN IMMEDIATE")
+    ticks = 0
+    ticks_at_release = -1
+
+    async def ticker() -> None:
+        nonlocal ticks
+        while True:
+            await asyncio.sleep(0.02)
+            ticks += 1
+
+    async def release() -> None:
+        nonlocal ticks_at_release
+        await asyncio.sleep(0.5)
+        ticks_at_release = ticks
+        holder.rollback()
+
+    tick_task = asyncio.create_task(ticker())
+    release_task = asyncio.create_task(release())
+    await asyncio.sleep(0)  # let both tasks start their timers before the call under test
+    try:
+        await scheduler._process_notification_spooler(datetime.now(UTC))
+        await release_task
+    finally:
+        tick_task.cancel()
+        sqlite_db.close_connection(holder)
+    # With a blocked loop, release() cannot run until the busy timeout expired and no ticks happen.
+    assert ticks_at_release >= 10

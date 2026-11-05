@@ -867,7 +867,8 @@ class MonitorScheduler:
                 return
 
         try:
-            spooler = get_spooler(self._get_conn)
+            # First call runs a BEGIN IMMEDIATE that may wait for the SQLite busy timeout.
+            spooler = await asyncio.to_thread(get_spooler, self._get_conn)
 
             def send_signal(phone: str, message: str, sender: str) -> bool:
                 """Send Signal message, returns True on success."""

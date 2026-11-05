@@ -283,3 +283,34 @@ def test_fetch_gives_up_after_retries_on_transient_status(fetch_env, status) -> 
     with pytest.raises(RuntimeError):
         pop_refresh._fetch_with_retry("https://example.test/x", max_retries=2)
     assert state["calls"] == 3
+@pytest.mark.parametrize(
+    ("header", "expected"),
+    [("0", 0), ("5", 5), ("9999", 60), ("-5", None), ("abc", None), ("1_0", None), ("", None), ("٣", None)],
+)
+def test_parse_retry_after_delta_seconds(header, expected) -> None:
+    assert pop_refresh._parse_retry_after(header) == expected
+def test_parse_retry_after_http_date() -> None:
+    from datetime import UTC, datetime, timedelta
+    from email.utils import format_datetime
+    now = datetime.now(UTC)
+    assert 0 < pop_refresh._parse_retry_after(format_datetime(now + timedelta(seconds=20), usegmt=True)) <= 21
+    assert pop_refresh._parse_retry_after(format_datetime(now - timedelta(seconds=20), usegmt=True)) is None
+@pytest.mark.parametrize("header", ["-1", "-9999", "garbage"])
+def test_fetch_invalid_retry_after_falls_back_to_backoff(fetch_env, monkeypatch, header) -> None:
+    install, state = fetch_env
+    sleeps: list[float] = []
+    monkeypatch.setattr(pop_refresh.time, "sleep", sleeps.append)
+    install(lambda req, st: httpx.Response(429, headers={"retry-after": header}))
+    with pytest.raises(RuntimeError, match="Rate limited"):
+        pop_refresh._fetch_with_retry("https://example.test/x", max_retries=2)
+    assert state["calls"] == 3
+    assert len(sleeps) == 2
+    assert all(s >= 1.0 for s in sleeps), "invalid Retry-After must not cause immediate retries"
+def test_fetch_explicit_zero_retry_after_is_honoured(fetch_env, monkeypatch) -> None:
+    install, state = fetch_env
+    sleeps: list[float] = []
+    monkeypatch.setattr(pop_refresh.time, "sleep", sleeps.append)
+    install(lambda req, st: httpx.Response(429, headers={"retry-after": "0"}))
+    with pytest.raises(RuntimeError, match="Rate limited"):
+        pop_refresh._fetch_with_retry("https://example.test/x", max_retries=1)
+    assert sleeps == [0]

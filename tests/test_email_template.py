@@ -359,6 +359,16 @@ def test_test_sample_duration_tracks_current_time():
     assert "ongoing" in ctx["alert"]["duration"].lower()
 
 
+@pytest.mark.parametrize("resolved_offset", [None, timedelta(minutes=15)])
+def test_naive_timestamps_count_as_utc_for_the_duration(resolved_offset):
+    # Naive values are UTC by convention; mixing them with an aware clock must not degrade the duration.
+    started = datetime.now(UTC).replace(tzinfo=None) - timedelta(minutes=15)
+    resolved = (started + resolved_offset).replace(tzinfo=UTC).isoformat() if resolved_offset else None
+    alert, target = build_test_alert_sample()
+    ctx = build_alert_context({**alert, "started_at": started.isoformat(), "resolved_at": resolved}, target)
+    assert ctx["alert"]["duration"].startswith("15m")
+
+
 def test_test_sample_is_marked_as_a_test_notification():
     alert, _ = build_test_alert_sample()
     assert "test notification" in alert["reason"].lower()

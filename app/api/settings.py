@@ -323,7 +323,7 @@ async def send_signal_test(request: Request, conn=Depends(get_conn), _admin=Depe
     test_message = "🔔 justUp Signal Test\n\nIf you receive this message, your Signal integration is working correctly!"
 
     # Enqueue to spooler (all notifications go through spooler)
-    spooler = _request_spooler(request)
+    spooler = await run_in_threadpool(_request_spooler, request)
 
     try:
         queue_id = await run_in_threadpool(
@@ -1123,7 +1123,7 @@ async def send_test_email(
     text_body = html_to_text(html_body)
 
     # Enqueue to spooler (all notifications go through spooler)
-    spooler = _request_spooler(request)
+    spooler = await run_in_threadpool(_request_spooler, request)
 
     queue_id = await run_in_threadpool(
         spooler.enqueue,
@@ -1162,7 +1162,7 @@ async def get_notification_queue_stats(
     Shows the current state of the notification spooler (retry queue).
     Includes time dimension for debugging: oldest entry, max retry count, etc.
     """
-    spooler = _request_spooler(request)
+    spooler = await run_in_threadpool(_request_spooler, request)
     detailed = await run_in_threadpool(spooler.get_queue_stats_detailed)
 
     return {
@@ -1197,7 +1197,7 @@ async def get_notification_queue_log(
 
     Supports pagination and optional filtering by status/channel.
     """
-    spooler = _request_spooler(request)
+    spooler = await run_in_threadpool(_request_spooler, request)
     return await run_in_threadpool(
         spooler.get_log,
         limit=limit,
@@ -1218,7 +1218,7 @@ async def flush_notification_queue(
     This is useful when Signal is rate-limited or broken and you want
     to clear the backlog instead of waiting for retries.
     """
-    spooler = _request_spooler(request)
+    spooler = await run_in_threadpool(_request_spooler, request)
     deleted = await run_in_threadpool(spooler.flush_queue)
     _log.info("Flushed %d notifications from queue", deleted)
     return {"deleted": deleted, "message": f"Flushed {deleted} notifications"}
@@ -1233,7 +1233,7 @@ async def clear_notification_log(
 
     Keeps pending, processing and failed entries intact.
     """
-    spooler = _request_spooler(request)
+    spooler = await run_in_threadpool(_request_spooler, request)
     deleted = await run_in_threadpool(spooler.clear_log)
     _log.info("Cleared %d sent notifications from log", deleted)
     return {"deleted": deleted, "message": f"Cleared {deleted} log entries"}

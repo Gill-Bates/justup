@@ -16,6 +16,7 @@ from app.api import metrics
 from app.db import tsdb
 from app.services import pdf_report
 from app.utils.availability_rules import MIN_DOWNTIME_SECONDS, downtime_series, is_gap, measured_outages
+from app.utils.downtime_view import build_history, display_seconds
 from tests import _support  # noqa: F401
 
 # Relative to now: the availability graph picks its TSDB tier (raw vs rollup) by the age of the data.
@@ -373,3 +374,62 @@ def test_unmeasured_periods_ignore_disabled_series_and_continuous_data(tmp_path)
 def test_silence_after_the_last_measurement_is_not_listed(tmp_path):
     put(tmp_path, "http_up", [(1, 1), (2, 1)])
     assert unmeasured(tmp_path) == []
+
+
+def _report(uptime: list[dict], periods_=None) -> pdf_report.ReportData:
+    return pdf_report.ReportData(
+        target={"interval_seconds": 60},
+        from_date=at(0),
+        to_date=at(600),
+        http_data=[],
+        uptime_data=uptime,
+        ping_data=[],
+        tcp_data=[],
+        cert_data=[],
+        status_code_data=[],
+        downtime_periods=periods_,
+    )
+
+
+def test_pdf_kpi_table_and_history_use_the_same_displayed_durations(tmp_path):
+    # Jittered check instants: the history shows whole seconds, KPI and table must show the same minutes.
+    jitter = timedelta(seconds=0.9)
+    for minute, value in [(4, 1), (5, 0), (6, 0), (7, 1), (30, 1), (31, 0), (33, 1)]:
+        tsdb.append_point(
+            tmp_path,
+            target_id=1,
+            metric="http_up",
+            value=value,
+            retention_days=365,
+            at=at(minute) + (jitter if minute == 5 else timedelta(0)),
+        )
+    found = periods(tmp_path)
+    history = build_history(
+        [{"kind": "down", "start": p.start, "end": p.end, "services": p.failed_services} for p in found], now=at(600)
+    ).events
+    shown = sum(display_seconds(p.start, p.end) for p in found)
+    report_data = _report([], found)
+    table = pdf_report._report_downtime_events(report_data)
+    assert len(history) == len(table) == len(found) == 2
+    assert pdf_report._compute_kpis(report_data).downtime_minutes == sum(e.duration_minutes for e in table)
+    assert sum(e.duration_minutes for e in table) == shown // 60 == 4
+
+
+def test_sparse_failures_and_long_gaps_are_never_counted_as_downtime():
+    # Thinned report series (84 min spacing) with isolated failures and a 6 h hole: only the proven
+    # check intervals count, in the KPI and in the table alike.
+    step = 84
+    stamps = [m for m in range(0, 24 * 60, step) if not 400 < m < 760]
+    failing = {stamps[3], stamps[8], stamps[10]}
+    uptime = [{"ts": at(m).isoformat(), "value": 0 if m in failing else 1} for m in stamps]
+    report_data = _report(uptime)
+    table = pdf_report._report_downtime_events(report_data)
+    assert [e.duration_minutes for e in table] == [1, 1, 1]
+    assert pdf_report._compute_kpis(report_data).downtime_minutes == 3
+
+
+def test_trailing_down_of_a_closed_report_range_is_not_ongoing():
+    data = [{"ts": at(m).isoformat(), "value": v} for m, v in [(0, 1), (1, 1), (2, 0), (3, 0)]]
+    events = pdf_report._report_downtime_events(_report(data))
+    assert all(e.end is not None for e in events)
+    assert pdf_report._compute_kpis(_report(data)).downtime_minutes == 1

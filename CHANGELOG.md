@@ -8,6 +8,7 @@
 - `Change` A host change resets the observed port service data (per protocol) and the target status.
 - `New` The sidebar has an About entry, and the About page shows the Nmap version.
 - `Change` The PDF downtime log and downtime KPI use the recorded downtime periods; gaps without measurements no longer count as downtime.
+- `Fix` PDF downtime minutes in the KPI and the downtime log now use the same whole-second durations as the dashboard and the downtime history, and a failed check at the end of a past report range is no longer shown as an ongoing outage.
 - `Fix` UDP scans no longer fall back to the TCP host; they use the target host.
 - `Fix` The PDF report no longer fails when the downtime query errors; it falls back to the sampled data.
 - `Fix` The Nmap scan worker returns proper errors for an empty (EOF) or invalid result instead of a 500 or leaked validation text.
@@ -27,6 +28,8 @@
 - `New` Traceroute now uses Nmap through the worker instead of `mtr` (up to 30 hops, one round-trip time per hop). The Loss, Avg, Best and Worst columns are gone, silent hops show "No reply", and the Docker image no longer contains `mtr`. A host name that cannot be resolved is not traced.
 - `Change` The downtime card of the target details is compact: one figure row `Downtimes` / `Data gaps`, events in at most three lines with short dates (`4 Nov · 18:57–21:50`), exact times on hover, and compact empty states. The explanatory paragraph and info icon are gone from the card (the terms are explained in the documentation); a data gap is never shown as uptime.
 - `Fix` The duration in the downtime list could be one minute short of the shown times (2 h 52 m for 18:57:06 to 21:50:06); it now follows the displayed seconds.
+- `Fix` The notification queue no longer freezes the web UI and monitoring while the database is busy at the first start of the spooler; its initialisation runs off the event loop.
+- `Fix` The PoP data refresh no longer retries immediately when a server answers HTTP 429 with a negative or invalid `Retry-After`; it waits with the normal backoff, and the header may also be an HTTP date.
 - `Fix` In the PDF report the Availability Timeline (and the Data Coverage bar) now start where the plot area of the Response Time, Ping and TCP charts starts, so bars and curves sit on the same time axis instead of the bars running left over the Y-axis labels.
 - `Fix` Zooming into the availability chart no longer draws green or red lines over the axis labels or past the plot area; lines are cut at the edge of the plot.
 - `Fix` Zooming into the response-time chart no longer paints downtime bands and the status strip over the axes and past the plot area; they are cut at the edge of the plot like the lines.

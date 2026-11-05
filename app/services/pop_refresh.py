@@ -42,7 +42,8 @@ import threading
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 from ..db import pop_locations
@@ -248,6 +249,25 @@ def _read_bounded(response: Any, limit: int) -> bytes:
     return bytes(data[:limit])
 
 
+def _parse_retry_after(value: str) -> int | None:
+    """Seconds from an untrusted Retry-After header (delta-seconds or HTTP date), capped; None if invalid."""
+    cap = int(HTTP_BACKOFF_MAX * 2)
+    value = value.strip()
+    if value.isascii() and value.isdigit():
+        return min(int(value), cap) if len(value) <= 9 else cap
+    try:
+        delta = (parsedate_to_datetime(value) - datetime.now(UTC)).total_seconds()
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return min(math.ceil(delta), cap) if delta >= 0 else None
+
+
+def _backoff_delay(attempt: int) -> float:
+    """Exponential backoff with jitter for the given zero-based attempt."""
+    jitter = random.uniform(0, HTTP_JITTER_MAX)  # noqa: S311 - backoff jitter, not security-sensitive
+    return min(HTTP_BACKOFF_BASE**attempt, HTTP_BACKOFF_MAX) + jitter
+
+
 def _fetch_with_retry(
     url: str,
     max_retries: int = HTTP_MAX_RETRIES,
@@ -283,12 +303,13 @@ def _fetch_with_retry(
                 if response.status_code == 429:
                     error_category = ErrorCategory.RATELIMIT
                     retry_after = response.headers.get("retry-after", "60")
-                    try:
-                        # A negative Retry-After would make time.sleep() raise ValueError.
-                        wait_seconds = max(0, min(int(retry_after), int(HTTP_BACKOFF_MAX * 2)))
-                    except ValueError:
-                        wait_seconds = int(HTTP_BACKOFF_MAX)
-                    _log.warning("Rate limited (429), waiting %ds (Retry-After: %s)", wait_seconds, retry_after)
+                    wait_seconds = _parse_retry_after(retry_after)
+                    if wait_seconds is None:
+                        # Invalid (negative, malformed, past date): use the normal backoff instead.
+                        _log.warning("Rate limited (429), ignoring invalid Retry-After %.40r", retry_after)
+                        wait_seconds = _backoff_delay(attempt)
+                    else:
+                        _log.warning("Rate limited (429), waiting %ds (Retry-After: %s)", wait_seconds, retry_after)
                     if attempt < max_retries:
                         time.sleep(wait_seconds)
                         continue
@@ -332,9 +353,7 @@ def _fetch_with_retry(
 
         if attempt < max_retries:
             # Exponential backoff with jitter
-            backoff = min(HTTP_BACKOFF_BASE**attempt, HTTP_BACKOFF_MAX)
-            jitter = random.uniform(0, HTTP_JITTER_MAX)  # noqa: S311 - backoff jitter, not security-sensitive
-            sleep_time = backoff + jitter
+            sleep_time = _backoff_delay(attempt)
             _log.debug("Retry %d/%d in %.1fs: %s", attempt + 1, max_retries, sleep_time, last_error)
             time.sleep(sleep_time)
 
