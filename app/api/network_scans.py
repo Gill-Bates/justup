@@ -8,7 +8,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response, status
 from pydantic import BaseModel, Field
 
 from app.services.nmap_client import availability
@@ -61,7 +61,9 @@ async def worker_availability(_admin=Depends(require_admin)) -> dict:
     response_model=ServiceDetectionPreview,
     dependencies=[Depends(rate_limit("5/minute")), Depends(rate_limit_user("2/minute", require_admin))],
 )
-async def preview_service_detection(target_id: int, request: Request, admin=Depends(require_admin)) -> dict:
+async def preview_service_detection(
+    request: Request, target_id: int = Path(gt=0), admin=Depends(require_admin)
+) -> dict:
     scheduler = getattr(request.app.state, "scheduler", None)
     if scheduler is None:
         raise HTTPException(status_code=503, detail="Monitoring is unavailable")
@@ -82,7 +84,10 @@ async def preview_service_detection(target_id: int, request: Request, admin=Depe
     dependencies=[Depends(rate_limit("10/minute")), Depends(rate_limit_user("5/minute", require_admin))],
 )
 def confirm_service_detection(
-    target_id: int, payload: ServiceDetectionConfirmation, request: Request, admin=Depends(require_admin)
+    payload: ServiceDetectionConfirmation,
+    request: Request,
+    target_id: int = Path(gt=0),
+    admin=Depends(require_admin),
 ) -> list[dict]:
     scheduler = getattr(request.app.state, "scheduler", None)
     if scheduler is None:

@@ -30,7 +30,7 @@ DASHBOARD_WIDGET_MIN_SIZES = {
     "quality": (2, 3),
     "downtime": (3, 3),
     "alerts-open": (3, 3),
-    "delivery-queue": (3, 3),
+    "delivery-queue": (4, 3),
     "uptime-day": (3, 2),
     "cert-expiry": (3, 3),
     "slowest-monitors": (4, 3),

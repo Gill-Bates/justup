@@ -174,7 +174,7 @@ def test_layouts_are_isolated_per_user(env):
 
 def test_admin_widget_is_rejected_and_filtered_after_role_change(env):
     alice = env["alice"]
-    queue = {**_STATUS, "id": "delivery-queue", "h": 3}
+    queue = {**_STATUS, "id": "delivery-queue", "w": 4, "h": 3}
     assert alice.call("PUT", {"version": 2, "widgets": [queue]}).status_code == 403
     connection = sqlite_db.connect(env["app"].state.db_path)
     try:

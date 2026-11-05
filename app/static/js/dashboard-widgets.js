@@ -23,7 +23,7 @@
 			def('quality', 'Monitor quality', 0, 2, 6, 3, 2, 3),
 			def('downtime', 'Downtime overview (24h)', 0, 5, 12, 4, 3, 3),
 			def('alerts-open', 'Alerts', 6, 2, 6, 3, 3, 3),
-			def('delivery-queue', 'Delivery queue', 4, 2, 4, 3, 3, 3, true, true),
+			def('delivery-queue', 'Delivery queue', 4, 2, 4, 3, 4, 3, true, true),
 			def('uptime-day', 'Uptime (24h)', 0, 10, 3, 2, 3, 2, false),
 			def('cert-expiry', 'Certificate expiry', 3, 10, 3, 4, 3, 3, false),
 			def('slowest-monitors', 'Slowest monitors (latest)', 0, 14, 6, 4, 4, 3, false),

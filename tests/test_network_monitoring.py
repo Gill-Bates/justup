@@ -961,3 +961,121 @@ def test_redetection_result_is_discarded_when_the_target_changed_meanwhile(db_pa
         asyncio.run(sched.preview_service_detection(tid, owner_id=1))
     if change == "edited":
         assert _ports(db_path, tid)[("tcp", 25)]["service_identity"] == before
+
+
+# ── Service re-detection: trigger, guards and races ───────────────────────────
+
+
+def _tcp_and_udp_target(db_path):
+    tid = _target(db_path, enable_tcp_connect=True, tcp_ports="25", enable_udp_scan=True, udp_ports="53")
+    conn = sqlite_db.connect(db_path)
+    sqlite_db.sync_network_ports(
+        conn, tid, tcp_ports=[25], udp_ports=[53], scan_result=_scan_result({25: "open"}, _svc(), tcp=True)
+    )
+    conn.commit()
+    sqlite_db.close_connection(conn)
+    return tid
+
+
+def test_periodic_cycles_never_redetect_services_or_flag_a_change(db_path, tmp_path, monkeypatch):
+    tid = _tcp_and_udp_target(db_path)
+    before = _ports(db_path, tid)[("tcp", 25)]
+    sched = _sched(db_path, tmp_path)
+    sched._refresh_targets(utcnow())
+    changed = _svc(name="http", product="nginx", version="1")
+    calls = _fake_scan(monkeypatch, _scan_result({53: "open"}, changed))
+
+    async def forbidden(*args, **kwargs):
+        raise AssertionError("periodic monitoring must not start a service detection")
+
+    monkeypatch.setattr(sched, "preview_service_detection", forbidden)
+    monkeypatch.setattr(sched, "confirm_service_detection", forbidden)
+    with mock.patch.object(scheduler.checks, "tcp_connect", _tcp_connect({25: (True, 1.0, None)})):
+        _run_confirmed_scans(sched, tid, scans=3)
+    after = _ports(db_path, tid)[("tcp", 25)]
+    assert calls and all(call["detect_services"] is False for call in calls)
+    for column in ("service_name", "service_product", "service_version", "service_identity", "identity_changed_at"):
+        assert after[column] == before[column], column
+    assert sched._service_previews == {}
+
+
+def test_preview_of_an_unknown_target_is_a_lookup_error_and_scans_nothing(db_path, tmp_path, monkeypatch):
+    sched = _sched(db_path, tmp_path)
+    sched._refresh_targets(utcnow())
+    calls = _fake_scan(monkeypatch, _scan_result({25: "open"}, _svc(), tcp=True))
+    with pytest.raises(LookupError):
+        asyncio.run(sched.preview_service_detection(4242, owner_id=1))
+    assert calls == []
+
+
+def test_preview_without_scan_findings_issues_no_token_and_stores_nothing(db_path, tmp_path, monkeypatch):
+    tid, sched, _preview, _calls = _redetect(db_path, tmp_path, monkeypatch, _svc())
+    before = _ports(db_path, tid)[("tcp", 25)]
+    _fake_scan(monkeypatch, NmapScanResult(hosts=[], started_at=utcnow(), completed_at=utcnow(), complete=True))
+    result = asyncio.run(sched.preview_service_detection(tid, owner_id=1))
+    assert result == {"token": None, "changes": []}
+    assert sched._service_previews == {}
+    assert _ports(db_path, tid)[("tcp", 25)] == before
+    with pytest.raises(LookupError):
+        sched.confirm_service_detection(tid, 1, "0" * 32)
+
+
+def test_confirmation_for_another_target_is_refused_and_keeps_the_preview(db_path, tmp_path, monkeypatch):
+    tid, sched, preview, _calls = _redetect(db_path, tmp_path, monkeypatch, _svc(name="http", product="nginx"))
+    with pytest.raises(LookupError):
+        sched.confirm_service_detection(tid + 1, 1, preview["token"])
+    assert _ports(db_path, tid)[("tcp", 25)]["service_name"] == "smtp"
+
+
+def test_concurrent_confirmations_apply_exactly_once(db_path, tmp_path, monkeypatch):
+    import threading
+
+    tid, sched, preview, _calls = _redetect(db_path, tmp_path, monkeypatch, _svc(name="http", product="nginx"))
+    outcomes: list[str] = []
+    barrier = threading.Barrier(6)
+
+    def confirm():
+        barrier.wait()
+        try:
+            sched.confirm_service_detection(tid, 1, preview["token"])
+            outcomes.append("applied")
+        except LookupError:
+            outcomes.append("refused")
+
+    threads = [threading.Thread(target=confirm) for _ in range(6)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert sorted(outcomes) == ["applied"] + ["refused"] * 5
+    assert _ports(db_path, tid)[("tcp", 25)]["service_name"] == "http"
+
+
+def test_a_second_preview_of_the_same_target_is_refused_while_one_runs(db_path, tmp_path, monkeypatch):
+    tid, sched, _preview, _calls = _redetect(db_path, tmp_path, monkeypatch, _svc(name="http", product="nginx"))
+
+    async def scenario():
+        gate = asyncio.Event()
+        started = asyncio.Event()
+
+        async def slow():
+            started.set()
+            await gate.wait()
+            return _scan_result({25: "open"}, _svc(name="http", product="nginx"), tcp=True)
+
+        calls = _fake_scan(monkeypatch, slow)
+        first = asyncio.create_task(sched.preview_service_detection(tid, owner_id=1))
+        await started.wait()
+        with pytest.raises(ValueError, match="already running"):
+            await asyncio.wait_for(sched.preview_service_detection(tid, owner_id=2), timeout=2)
+        assert len(calls) == 1
+        gate.set()
+        assert (await first)["token"]
+        # The guard is released afterwards, also after a failed scan.
+        _fake_scan(monkeypatch, NmapScannerError("unavailable", "down"))
+        with pytest.raises(NmapScannerError):
+            await sched.preview_service_detection(tid, owner_id=1)
+        _fake_scan(monkeypatch, _scan_result({25: "open"}, _svc(name="http", product="nginx"), tcp=True))
+        assert (await sched.preview_service_detection(tid, owner_id=1))["token"]
+
+    asyncio.run(scenario())

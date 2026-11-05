@@ -5,6 +5,7 @@
 
 ## [Unreleased]
 - `New` Admins can re-detect the services of a target (**Detect services**): a preview shows the changes and nothing is stored until the admin confirms.
+- `Change` **Detect services** lists service changes and version-only changes in separate groups, and **Apply changes** asks in the shared confirmation dialog before anything is stored. A second detection for the same target is refused (409) while one is running.
 - `Change` A host change resets the observed port service data (per protocol) and the target status.
 - `New` The sidebar has an About entry, and the About page shows the Nmap version.
 - `Change` The PDF downtime log and downtime KPI use the recorded downtime periods; gaps without measurements no longer count as downtime.
@@ -17,6 +18,7 @@
 - `Fix` Hover and background tints written with invalid `rgb()` syntax now apply.
 - `Fix` The slider thumb reduced-motion and forced-colors rules now apply.
 - `Fix` The first dashboard paint for admins no longer overlaps the tiles.
+- `Fix` The Delivery queue tile can no longer be resized below 4 of 12 columns; at 3 columns its metrics were clipped.
 - `Change` The factory dashboard layout is now: the four status tiles on top, Monitor quality, Delivery queue (admins) and Alerts as one row of equal cards, and the Downtime overview across the full width below. Without the queue card, Quality and Alerts share the row. Your saved layout is not changed; Reset layout applies the new default.
 - `Security` The bundled Nmap now uses the Debian PCRE2 and zlib packages, so the image scan covers them, and it no longer contains libssh2 (only used by the NSE scripts, which are not built). The remaining bundled libraries (libpcap, libdnet, liblinear) are listed with their versions in the image provenance and the release notes; the image scan cannot see them.
 - `Security` The release image build now fails when its Nmap is not linked against the Debian zlib and PCRE2 (the earlier negative banner check never failed the build), when the Adoptium signing key is anything but the one expected key (exact fingerprint instead of a text search), or when the Nmap libraries of the builder and the runtime stage differ.

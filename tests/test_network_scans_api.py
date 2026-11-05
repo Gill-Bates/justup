@@ -177,6 +177,160 @@ OTHER_ADMIN = {"X-Test-User": "admin:2"}
 PLAIN_USER = {"X-Test-User": "user:3"}
 
 
+@pytest.mark.parametrize("action", ["preview", "confirm"])
+@pytest.mark.parametrize("target_id", ["0", "-1", "abc"])
+def test_service_detection_rejects_an_invalid_target_id(client, action, target_id):
+    client.app.state.scheduler = object()
+    response = client.post(f"/api/network-scans/services/{target_id}/{action}", headers=ADMIN, json={"token": "a" * 32})
+    assert response.status_code == 422
+
+
+def test_service_detection_preview_is_rate_limited_per_admin(client):
+    class DetectionScheduler:
+        previews = 0
+
+        async def preview_service_detection(self, target_id, owner_id):
+            self.previews += 1
+            return {"token": None, "changes": []}
+
+    scheduler = DetectionScheduler()
+    client.app.state.scheduler = scheduler
+    path = "/api/network-scans/services/7/preview"
+    assert [client.post(path, headers=ADMIN).status_code for _ in range(3)] == [200, 200, 429]
+    assert scheduler.previews == 2
+    assert client.post(path, headers=OTHER_ADMIN).status_code == 200  # the budget is per admin
+
+
+def test_service_detection_confirm_is_rate_limited_per_admin(client):
+    class DetectionScheduler:
+        confirmations = 0
+
+        def confirm_service_detection(self, target_id, owner_id, token):
+            self.confirmations += 1
+            raise LookupError("Service detection preview not found")
+
+    scheduler = DetectionScheduler()
+    client.app.state.scheduler = scheduler
+    path = "/api/network-scans/services/7/confirm"
+    codes = [client.post(path, headers=ADMIN, json={"token": "a" * 32}).status_code for _ in range(6)]
+    assert codes == [404] * 5 + [429]
+    assert scheduler.confirmations == 5
+
+
+class TestServiceDetectionWithRealScheduler:
+    """The route and the real scheduler together: nothing is stored before a confirmation."""
+
+    @pytest.fixture
+    def detection(self, client, tmp_path, monkeypatch):
+        from app.db import sqlite as sqlite_db
+        from app.monitor.scheduler import MonitorScheduler
+        from app.services import nmap_client
+
+        db_path = tmp_path / "db" / "justup.db"
+        conn = sqlite_db.connect(db_path)
+        sqlite_db.init_schema(conn)
+        state = type("State", (), {})()
+        state.tid = sqlite_db.create_target(
+            conn,
+            {
+                "name": "t",
+                "interval_seconds": 60,
+                "retention_days": 30,
+                "host": "t.example",
+                "enable_http_check": False,
+                "enable_ping": False,
+                "enable_tcp_connect": True,
+                "enable_cert_expiration": False,
+                "http_url": "https://t.example/",
+                "ping_host": "t.example",
+                "tcp_host": "t.example",
+                "tcp_ports": "22",
+            },
+        )
+        stored = NmapServiceInfo(name="ssh", product="OpenSSH", version="8.0", method="probed", confidence=10)
+        found = NmapPortResult(protocol="tcp", port=22, state="open", service=stored)
+        now = utcnow()
+        sqlite_db.sync_network_ports(
+            conn,
+            state.tid,
+            tcp_ports=[22],
+            udp_ports=[],
+            scan_result=NmapScanResult(
+                hosts=[NmapHostResult(address="192.0.2.1", ports=[found])],
+                started_at=now,
+                completed_at=now,
+                complete=True,
+            ),
+        )
+        conn.commit()
+        sqlite_db.close_connection(conn)
+        state.db_path = db_path
+        state.service = stored
+        state.next_service = NmapServiceInfo(name="http", product="nginx", version="1", method="probed", confidence=10)
+
+        async def request_scan(host, **kwargs):
+            port = NmapPortResult(protocol="tcp", port=22, state="open", service=state.next_service)
+            hosts = [] if state.next_service is None else [NmapHostResult(address="192.0.2.1", ports=[port])]
+            stamp = utcnow()
+            return NmapScanResult(hosts=hosts, started_at=stamp, completed_at=stamp, complete=True)
+
+        monkeypatch.setattr(nmap_client, "request_scan", request_scan)
+        scheduler = MonitorScheduler(get_conn=lambda: sqlite_db.connect(db_path), tsdb_dir=tmp_path / "tsdb")
+        scheduler._refresh_targets(utcnow())
+        client.app.state.scheduler = scheduler
+        state.stored_name = lambda: next(
+            row["service_name"] for row in _rows(db_path, state.tid) if (row["protocol"], row["port"]) == ("tcp", 22)
+        )
+        return state
+
+    def test_unknown_target_is_404(self, client, detection):
+        assert client.post("/api/network-scans/services/9999/preview", headers=ADMIN).status_code == 404
+
+    def test_no_scan_findings_means_no_token(self, client, detection):
+        detection.next_service = None
+        body = client.post(f"/api/network-scans/services/{detection.tid}/preview", headers=ADMIN).json()
+        assert body == {"token": None, "changes": []}
+
+    def test_nothing_is_stored_until_the_confirmation_and_it_works_once(self, client, detection):
+        path = f"/api/network-scans/services/{detection.tid}"
+        preview = client.post(f"{path}/preview", headers=ADMIN).json()
+        assert [c["kind"] for c in preview["changes"]] == ["service_changed"]
+        assert detection.stored_name() == "ssh"
+        foreign = client.post(f"{path}/confirm", headers=OTHER_ADMIN, json={"token": preview["token"]})
+        assert foreign.status_code == 404 and detection.stored_name() == "ssh"
+        first = client.post(f"{path}/confirm", headers=ADMIN, json={"token": preview["token"]})
+        assert first.status_code == 200 and detection.stored_name() == "http"
+        again = client.post(f"{path}/confirm", headers=ADMIN, json={"token": preview["token"]})
+        assert again.status_code == 404
+
+    def test_a_double_submitted_confirmation_applies_once(self, client, detection):
+        path = f"/api/network-scans/services/{detection.tid}"
+        token = client.post(f"{path}/preview", headers=ADMIN).json()["token"]
+        codes: list[int] = []
+        barrier = threading.Barrier(2)
+
+        def confirm():
+            barrier.wait()
+            codes.append(client.post(f"{path}/confirm", headers=ADMIN, json={"token": token}).status_code)
+
+        threads = [threading.Thread(target=confirm) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        assert sorted(codes) == [200, 404]
+
+
+def _rows(db_path, tid):
+    from app.db import sqlite as sqlite_db
+
+    conn = sqlite_db.connect(db_path)
+    try:
+        return [dict(row) for row in sqlite_db.list_network_ports(conn, tid)]
+    finally:
+        sqlite_db.close_connection(conn)
+
+
 def _start(client, headers=ADMIN, **body):
     payload = {"host": "10.0.0.5", "protocols": ["tcp"], **body}
     return client.post("/api/network-scans", json=payload, headers=headers)

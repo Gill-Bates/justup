@@ -692,7 +692,13 @@ async function auditDashboardGrid(browser, app, adminState, browserName, phase) 
 			const overlaps = (left, right) => left.left < right.right && left.right > right.left && left.top < right.bottom && left.bottom > right.top;
 			const bounds = rect(metrics);
 			const metricBoxes = [...metrics.querySelectorAll('dt, dd')].map(rect);
-			return { rows: tile.gridstackNode.h, minRows: tile.gridstackNode.minH, naturalHeight, frame, band, cellHeight,
+			const bodyStyle = getComputedStyle(body);
+			const containerPx = body.clientWidth - parseFloat(bodyStyle.paddingLeft) - parseFloat(bodyStyle.paddingRight);
+			return { cols: tile.gridstackNode.w, minCols: tile.gridstackNode.minW,
+				containerRem: containerPx / parseFloat(getComputedStyle(document.documentElement).fontSize),
+				stacked: getComputedStyle(metrics).gridTemplateColumns.split(' ').length === 1,
+				bodyScroll: [body.scrollHeight, body.clientHeight],
+				rows: tile.gridstackNode.h, minRows: tile.gridstackNode.minH, naturalHeight, frame, band, cellHeight,
 				requiredRows: Math.ceil((naturalHeight + frame + band) / cellHeight),
 				headerOverflow: header.scrollWidth - header.clientWidth,
 				bodyOverflow: body.scrollHeight - body.clientHeight, metricsOverflow: metrics.scrollWidth - metrics.clientWidth,
@@ -706,6 +712,7 @@ async function auditDashboardGrid(browser, app, adminState, browserName, phase) 
 		assert.ok(geometry.bodyOverflow <= 1, `${label}: Queue body scrolls or clips content ${JSON.stringify(geometry)}`);
 		assert.ok(geometry.metricsOverflow <= 1 && !geometry.metricOutside, `${label}: Queue metrics overflow their container ${JSON.stringify(geometry)}`);
 		assert.equal(geometry.titleStatusOverlap, false, `${label}: Queue title overlaps its status badge ${JSON.stringify(geometry)}`);
+		return geometry;
 	};
 	if (phase !== "legacy") {
 		const setup = await browser.newContext({ storageState: adminState });
@@ -1376,6 +1383,24 @@ db.commit()
 				assert.equal((await request(page, "/me/dashboard-layout", "PUT", layout)).status, 200);
 				await page.reload();
 				await ready(page);
+				if (sizing === "minimum") {
+					// The Queue tile at its registry minimum width (3 columns, minW 3) keeps its three-row minimum without
+					// clipping or scrolling; the stacked-metrics container query must not add rows. 1280x720 at 200 % zoom is 640x360.
+					for (const viewport of [{ width: 992, height: 768 }, { width: 1024, height: 768 }, { width: 640, height: 360 }]) {
+						await page.setViewportSize(viewport);
+						await ready(page);
+						for (const theme of ["light", "dark"]) {
+							await page.evaluate((value) => document.documentElement.setAttribute("data-bs-theme", value), theme);
+							await waitForVisualStability(page);
+							const label = `${browserName} Queue at minimum width ${viewport.width}x${viewport.height} ${theme}`;
+							const measured = await expectQueueContent(page, label);
+							if (viewport.width >= 992) assert.equal(measured.cols, 4, `${label}: Queue is not at its 4-column minimum ${JSON.stringify(measured)}`);
+							console.log(`MEASURED ${label}: ${JSON.stringify(measured)}`);
+						}
+					}
+					await page.setViewportSize({ width: 1440, height: 1000 });
+					await ready(page);
+				}
 				for (const editing of [false, true]) {
 					if (editing) await page.getByRole("button", { name: "Edit dashboard", exact: true }).click();
 					for (const theme of ["light", "dark"]) {

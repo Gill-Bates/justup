@@ -240,6 +240,8 @@ The move handle occupies a reserved header region while edit mode is active. It 
 
 The previous four-number rendering came from a visible `pending + processing` value inserted before the three metrics; its description existed only in `aria-label` and `title`. The card's three-row default and minimum then prevented automatic sizing from reclaiming space when that redundant row was removed. The queue's initial HTML is a loading shell; its counts and status are rendered by the served dashboard JavaScript, so the browser path must be checked as well as the template.
 
+The Queue tile has a minimum width of 4 of 12 columns (`minW 4`; 3 columns gave a 7rem container that needed six stacked rows). At 4 columns the metrics container is 10.9 rem (992 px) to 11.5 rem (1024 px), so the stacking container query starts below 10 rem and the three metrics stay in one row; `tests/layout/harness.mjs` (`sizes` phase) asserts this at the minimum width in Chromium and WebKit, light and dark. Keep registry, `DASHBOARD_WIDGET_MIN_SIZES` and this value synchronized.
+
 Browser measurement at 1280 x 720 with the compact metric labels gives a 125 px natural card, 20 px GridStack frame, and 24 px reserved edit-handle band: 169 px total. Two rows provide 144 px at the current 72 px cell height, so the minimum remains three rows. Keep this calculation covered in Chromium and WebKit at desktop, 200% effective zoom, and narrow widths, in both view and edit modes.
 
 #### Recommendations

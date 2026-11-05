@@ -477,6 +477,7 @@ class MonitorScheduler:
         self._stale_logged_epoch = -1
         self._service_previews: dict[str, PendingServiceDetection] = {}
         self._service_previews_lock = threading.Lock()
+        self._service_detections_running: set[int] = set()
 
     @contextmanager
     def _db_conn(self):
@@ -1931,7 +1932,21 @@ class MonitorScheduler:
             _log.warning("Target %s: could not store UDP port status: %s", target_id, exc)
 
     async def preview_service_detection(self, target_id: int, owner_id: int) -> dict[str, Any]:
-        """Scan configured ports and return proposed changes without storing observations."""
+        """Scan configured ports and return proposed changes without storing observations.
+
+        Only one detection per target runs at a time, so a double click cannot start a second scan.
+        """
+        with self._service_previews_lock:
+            if target_id in self._service_detections_running:
+                raise ValueError("Service detection already running")
+            self._service_detections_running.add(target_id)
+        try:
+            return await self._preview_service_detection(target_id, owner_id)
+        finally:
+            with self._service_previews_lock:
+                self._service_detections_running.discard(target_id)
+
+    async def _preview_service_detection(self, target_id: int, owner_id: int) -> dict[str, Any]:
         cfg = self._targets.get(target_id)
         if not cfg:
             raise LookupError("Target not found in the monitoring snapshot")

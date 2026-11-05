@@ -458,8 +458,8 @@
 }
 
 
-/* Too narrow for three columns of whole words: one metric per row, number still above its label. */
-@container dashboard-body (width < 13rem) {
+/* Too narrow for three columns of whole words (the Queue minimum, 4 of 12 columns, is ~10.9rem): one metric per row. */
+@container dashboard-body (width < 10rem) {
 	.dashboard-monitor-metrics {
 		grid-template-columns: minmax(0, 1fr);
 		gap: 0.125rem;

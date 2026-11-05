@@ -26,6 +26,8 @@ test('factory layouts retain six originals and expose only allowed defaults', ()
   assert.equal(normal.find(entry => entry.id === 'quality').defaultSize.h, 3);
   assert.equal(admin.find(entry => entry.id === 'delivery-queue').defaultSize.h, 3);
   assert.equal(admin.find(entry => entry.id === 'delivery-queue').minH, 3);
+  // Three metric columns of whole words need about 10rem; with fewer than 4 of 12 columns the tile is narrower.
+  assert.equal(admin.find(entry => entry.id === 'delivery-queue').minW, 4);
   const alerts = admin.find(entry => entry.id === 'alerts-open');
   assert.equal(alerts.label, 'Alerts');
   const queue = admin.find(entry => entry.id === 'delivery-queue');
