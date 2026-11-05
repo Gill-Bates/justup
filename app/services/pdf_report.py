@@ -2568,15 +2568,19 @@ class PDFReportBuilder:
         """Small result badge. Unknown (not tested) is deliberately neutral, never green."""
         labels = {"pass": "PASS", "fail": "FAIL", "warn": "WARNING", "unknown": "NOT TESTED", "info": "INFO"}
         bg, fg = _pdf_status_badge_colors(kind)
+        return self._small_badge(text or labels.get(kind, "UNKNOWN"), bg, fg)
+
+    def _small_badge(self, text: str, bg_color, text_color=None) -> Badge:
+        """The one compact badge style of the report tables."""
         return Badge(
-            text=text or labels.get(kind, "UNKNOWN"),
+            text=text,
             font=self.font,
             font_size=8,
             padding_x=2.2 * mm,
             padding_y=0.9 * mm,
             corner_radius=1.6 * mm,
-            bg_color=bg,
-            text_color=fg,
+            bg_color=bg_color,
+            text_color=text_color,
             shadow=False,
         )
 
@@ -3512,18 +3516,7 @@ class PDFReportBuilder:
         self.elements.extend([diagram, Spacer(1, 3 * mm)])
 
     def _status_badge(self, text: str, kind: str) -> Badge:
-        bg, fg = _pdf_status_badge_colors(kind)
-        return Badge(
-            text=text,
-            font=self.font,
-            font_size=8,
-            padding_x=2.2 * mm,
-            padding_y=0.9 * mm,
-            corner_radius=1.6 * mm,
-            bg_color=bg,
-            text_color=fg,
-            shadow=False,
-        )
+        return self._state_badge(kind, text)
 
     def _add_traceroute(
         self,
@@ -3574,8 +3567,8 @@ class PDFReportBuilder:
             if hostname:
                 # A short address and name share one line, which keeps a 13-hop table on one page.
                 sep = " · " if len(ip) + len(hostname) <= _HOP_ONE_LINE_MAX else "<br/>"
-                muted = COLORS["muted"].hexval()
-                path_html = f'{path_html}{sep}<font size="8" color="{muted}">{_esc(hostname)}</font>'
+                host_color = COLORS["muted"].hexval()
+                path_html = f'{path_html}{sep}<font size="8" color="{host_color}">{_esc(hostname)}</font>'
             path = Paragraph(path_html, st["hop_ip_muted"] if muted else st["hop_ip"])
 
             city, country = hop.get("city") or "", hop.get("country") or ""
@@ -4060,29 +4053,11 @@ class PDFReportBuilder:
                 end_text = "—"
                 minutes = int((last_sample - _to_tz(event.start, self.tz)).total_seconds() / 60)
                 duration = f"≥ {_fmt_duration(max(minutes, 0))}"
-                badge = Badge(
-                    text="ONGOING",
-                    font=self.font,
-                    font_size=8,
-                    padding_x=2.2 * mm,
-                    padding_y=0.9 * mm,
-                    corner_radius=1.6 * mm,
-                    bg_color=COLORS["danger"],
-                    shadow=False,
-                )
+                badge = self._small_badge("ONGOING", COLORS["danger"])
             else:
                 end_text = _fmt_dt(event.end, self.tz)
                 duration = _fmt_duration(event.duration_minutes)
-                badge = Badge(
-                    text="RESOLVED",
-                    font=self.font,
-                    font_size=8,
-                    padding_x=2.2 * mm,
-                    padding_y=0.9 * mm,
-                    corner_radius=1.6 * mm,
-                    bg_color=COLORS["success"],
-                    shadow=False,
-                )
+                badge = self._small_badge("RESOLVED", COLORS["success"])
             rows.append(
                 [
                     Paragraph(str(i), st["td_muted"]),

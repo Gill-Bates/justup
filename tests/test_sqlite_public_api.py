@@ -13,6 +13,7 @@ and ``monkeypatch.setattr(sqlite_db, ...)``, so all three must keep working.
 
 from __future__ import annotations
 
+import contextlib
 import inspect
 import sqlite3
 
@@ -265,7 +266,8 @@ def test_logger_name_is_unchanged() -> None:
 def test_patching_a_package_name_reaches_internal_callers(monkeypatch: pytest.MonkeyPatch) -> None:
     """auth_tokens.get_session_max_days calls get_setting, which lives in another submodule."""
     monkeypatch.setattr(sqlite_db, "get_setting", lambda _conn, _key, _default=None: 7)
-    assert sqlite_db.get_session_max_days(sqlite3.connect(":memory:")) == 7
+    with contextlib.closing(sqlite3.connect(":memory:")) as conn:
+        assert sqlite_db.get_session_max_days(conn) == 7
 
 
 def test_connection_counters_are_read_and_written_through_the_package(monkeypatch: pytest.MonkeyPatch) -> None:

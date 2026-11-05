@@ -292,8 +292,6 @@ def test_nmap_signature_rejects_untrusted_bad_or_ambiguous_results(monkeypatch, 
 
 
 def stub_downloads(monkeypatch, content: bytes = b"archive"):
-    import hashlib
-
     def fake_download(_url, path, **_kwargs):
         path.write_bytes(content)
         return hashlib.sha256(content).hexdigest()

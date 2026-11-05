@@ -67,10 +67,6 @@ class PingInvocationTests(unittest.TestCase):
         self.assertEqual(result.detail, "timeout")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 # --- http_head: connections are bound to the addresses that passed the SSRF check -------------------------
 
 
@@ -334,7 +330,7 @@ def test_tcp_ports_resolve_once_and_connect_to_the_pinned_ip(monkeypatch):
 
     def fake_connect(address, **_kwargs):
         seen.append(address)
-        time.sleep(0.02 * (address[1] % 10))  # distinct per-port latency
+        time.sleep(0.05 * (address[1] % 10))  # distinct per-port latency, wide steps against scheduler jitter
         return contextlib.nullcontext()
 
     monkeypatch.setattr(checks.socket, "create_connection", fake_connect)

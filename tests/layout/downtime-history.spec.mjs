@@ -151,14 +151,12 @@ test("downtime card: gaps only claim no success, no data is neutral, range swap 
 	} finally {
 		await gaps.context.close();
 	}
-	const none = await open(browser, app, adminState, VIEWPORTS[0], "light", "nodata").catch(() => null);
-	if (none) {
-		try {
-			const text = await none.page.locator("#downtime-history-body").innerText();
-			assert.match(text, /No measurement data[\s\S]*No checks recorded in this range/);
-			assert.doesNotMatch(text, /0\s+Downtimes/);
-		} finally {
-			await none.context.close();
-		}
+	const none = await open(browser, app, adminState, VIEWPORTS[0], "light", "nodata");
+	try {
+		const text = await none.page.locator("#downtime-history-body").innerText();
+		assert.match(text, /No measurement data[\s\S]*No checks recorded in this range/);
+		assert.doesNotMatch(text, /0\s+Downtimes/);
+	} finally {
+		await none.context.close();
 	}
 });

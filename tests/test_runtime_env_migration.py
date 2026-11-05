@@ -367,7 +367,7 @@ def test_a_settings_write_drops_the_last_known_value(conn, monkeypatch: pytest.M
     sqlite_db.set_setting(conn, key, True)
     runtime_settings.clear_runtime_cache()
     assert runtime_settings.get_runtime_bool_fail_closed(key, False) is True
-    runtime_settings.clear_runtime_cache()  # e.g. the admin just switched the setting
+    sqlite_db.set_setting(conn, key, False)  # a real write must drop the cache and the last known value
     _unreadable(monkeypatch)
     assert runtime_settings.get_runtime_bool_fail_closed(key, True) is False  # stale True must not be used
 

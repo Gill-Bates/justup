@@ -116,9 +116,8 @@ def test_uncertain_udp_state_is_labelled_and_service_hint_is_marked() -> None:
 
 
 def test_status_helper_keeps_measured_up_checks_while_the_overall_status_is_unknown() -> None:
-    class Row(dict):
-        def keys(self):  # sqlite3.Row API
-            return super().keys()
+    class Row(dict):  # stands in for sqlite3.Row (keys() and item access)
+        pass
 
     row = Row(
         is_enabled=1,

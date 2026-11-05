@@ -209,13 +209,18 @@ class TestWorkerRoundTrip:
         calls = (sock_dir / "argv").read_text().splitlines()
         assert len(calls) == 1 and "-sn" in calls[0] and "--traceroute" in calls[0] and "-sT" not in calls[0]
 
-    def test_bounded_second_attempt_uses_the_requested_probe_port_only_without_a_first_trace(
-        self, sock_dir, monkeypatch
-    ):
-        body = f"if '-sn' in sys.argv:\n    {XML_NO_TRACE}\nelse:\n    {XML_TRACE}"
+    def test_requested_probe_crosses_the_socket_and_runs_alone_without_discovery(self, sock_dir, monkeypatch):
+        log = sock_dir / "argv"
+        body = (
+            f"open({str(log)!r}, 'a').write(' '.join(sys.argv[1:]) + '\\n')\n"
+            f"if '-sn' in sys.argv:\n    {XML_NO_TRACE}\nelse:\n    {XML_TRACE}"
+        )
         self._setup(sock_dir, monkeypatch, body)
         route = asyncio.run(_roundtrip(sock_dir, probe_protocol="udp", probe_port=53, timeout=10))
         assert route.destination_reached
+        calls = [line.split() for line in log.read_text().splitlines()]
+        assert len(calls) == 1 and "-sn" not in calls[0]
+        assert "-sU" in calls[0] and calls[0][calls[0].index("-p") + 1] == "53"
 
     def test_two_attempts_without_trace_report_no_trace(self, sock_dir, monkeypatch):
         self._setup(sock_dir, monkeypatch, XML_NO_TRACE)

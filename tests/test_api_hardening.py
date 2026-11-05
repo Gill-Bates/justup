@@ -285,6 +285,9 @@ class TestUserAdmin:
             "PUT", f"/users/{env['user_id']}", {"username": "viewer", "is_admin": False, "can_close_alerts": False}
         )
         assert other.status_code == 200
+        with closing(_db(env)) as conn:
+            assert not sqlite_db.get_user_by_username(conn, "viewer")["is_admin"]
+            assert sqlite_db.get_user_by_username(conn, "root")["is_admin"]
 
     def test_non_admin_gets_403(self, env):
         resp = env["user"].call(
@@ -674,6 +677,12 @@ class TestTargetWizardContracts:
             csrf = cookie_session.client.cookies.get("csrf_token")
             no_origin = cookie_session.client.post("/targets", json=values, headers={"X-CSRF-Token": csrf})
             assert no_origin.status_code == 403
+            no_csrf = cookie_session.client.post("/targets", json=values, headers={"Origin": "http://testserver"})
+            assert no_csrf.status_code == 403
+            bad_csrf = cookie_session.client.post(
+                "/targets", json=values, headers={"Origin": "http://testserver", "X-CSRF-Token": csrf + "x"}
+            )
+            assert bad_csrf.status_code == 403
             hostile_origin = cookie_session.client.post(
                 "/targets",
                 json=values,

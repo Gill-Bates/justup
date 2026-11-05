@@ -70,8 +70,10 @@ for (const [name, handler] of [
   test(`registration (${name}) leaves the action buttons usable`, async () => {
     reset();
     document.getElementById("signal-register-number").value = "+491701234567";
-    respond = handler;
+    let requests = 0;
+    respond = () => { requests += 1; return handler(); };
     await registration.signalRegister();
+    assert.equal(requests, 1, "the request must actually be sent");
     assert.ok(buttons().every(b => !b.disabled));
   });
 }
@@ -80,8 +82,10 @@ test("verify leaves the action buttons usable after success and failure", async 
   document.getElementById("signal-register-number").value = "+491701234567";
   document.getElementById("signal-verify-code").value = "123456";
   for (const r of [json(400, { detail: "bad code" }), json(200, {})]) {
-    respond = () => r;
+    let requests = 0;
+    respond = () => { requests += 1; return r; };
     await registration.signalVerify();
+    assert.ok(requests >= 1, "the request must actually be sent");
     assert.ok(buttons().every(b => !b.disabled));
   }
 });
@@ -98,8 +102,10 @@ test("unregister leaves the action buttons usable after success and failure", as
   reset();
   document.getElementById("unregister-phone-password").value = "pw";
   for (const r of [json(401, { detail: "Invalid password" }), json(200, {})]) {
-    respond = () => r;
+    let requests = 0;
+    respond = () => { requests += 1; return r; };
     await actions.unregisterPhone();
+    assert.equal(requests, 1, "the request must actually be sent");
     assert.ok(buttons().every(b => !b.disabled));
   }
 });

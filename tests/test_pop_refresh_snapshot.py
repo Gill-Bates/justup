@@ -141,7 +141,7 @@ def test_run_full_refresh_returns_result_per_source_on_success(conn, monkeypatch
     # path, so run_full_refresh() raised AttributeError reading .processed on that source.
     monkeypatch.setattr(pop_refresh, "_fetch_with_retry", lambda url: _facs())
     maintenance.end_maintenance()
-    monkeypatch.setattr(maintenance, "_GENERATION", 0, raising=False)
+    monkeypatch.setattr(maintenance, "_GENERATION", 0)
 
     results = pop_refresh.run_full_refresh(lambda: conn)
 

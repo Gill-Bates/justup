@@ -415,7 +415,6 @@ class TestTraceProcessLifecycle:
         for pid in map(int, pids.read_text().split()):
             _assert_gone(pid)
 
-
     @pytest.mark.parametrize(
         ("stderr", "code"),
         [
@@ -462,9 +461,7 @@ class TestTimeoutAndCancel:
         for pid in map(int, pids.read_text().split()):
             _assert_gone(pid)
 
-    def test_already_dead_group_does_not_raise_while_stopping(self, use, tmp_path):
-        use("os.setsid() if False else None\nsys.stdout.write('')")
-
+    def test_already_dead_group_does_not_raise_while_stopping(self):
         async def scenario():
             proc = await asyncio.create_subprocess_exec(sys.executable, "-c", "pass", start_new_session=True)
             await proc.wait()

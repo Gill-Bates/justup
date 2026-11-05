@@ -419,7 +419,8 @@ test("target edit: scan button is disabled while the worker is down, manual port
 		body = route.request().postDataJSON();
 		return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ detail: "stop" }) });
 	});
-	const saved = page.waitForRequest(request => request.url().endsWith("/targets/1") && request.method() !== "GET");
+	// The response exists only after the route handler stored the request body.
+	const saved = page.waitForResponse(response => response.url().endsWith("/targets/1") && response.request().method() !== "GET");
 	await page.locator('#target-form button[type="submit"]').click();
 	await saved;
 	assert.match(body.tcp_ports, /(?:^|,)22(?:,|$)/);

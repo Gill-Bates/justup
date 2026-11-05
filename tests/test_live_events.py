@@ -62,16 +62,16 @@ def test_user_and_admin_events_reach_only_authorised_clients() -> None:
         bus = EventBus()
         bus.start()
         alice, bob, boss = bus.subscribe(1, False), bus.subscribe(2, False), bus.subscribe(3, True)
-        bus.publish(LiveEvent("notification.changed", {}, user_ids=frozenset({1})))
-        bus.publish(LiveEvent("notification.changed", {}, admin_only=True))
-        bus.publish(LiveEvent("notification.changed", {}, user_ids=frozenset({2}), admins_too=True))
+        bus.publish(LiveEvent("notification.changed", {"n": "user1"}, user_ids=frozenset({1})))
+        bus.publish(LiveEvent("notification.changed", {"n": "admin"}, admin_only=True))
+        bus.publish(LiveEvent("notification.changed", {"n": "user2+admins"}, user_ids=frozenset({2}), admins_too=True))
         await asyncio.sleep(0.05)
-        return [await _drain(s, 3, 0.05) for s in (alice, bob, boss)]
+        return [[e.data["n"] for e in await _drain(s, 3, 0.05)] for s in (alice, bob, boss)]
 
     alice, bob, boss = _run(scenario())
-    assert len(alice) == 1
-    assert len(bob) == 1
-    assert len(boss) == 2  # admin-only plus the admins_too event, never the user-1 event
+    assert alice == ["user1"]
+    assert bob == ["user2+admins"]
+    assert boss == ["admin", "user2+admins"]  # never the user-1 event
 
 
 def test_full_buffer_collapses_into_one_resync_and_never_blocks_the_publisher() -> None:
@@ -280,6 +280,15 @@ def test_disabled_user_and_role_change_end_the_stream(client: TestClient) -> Non
 def test_lifespan_exit_clears_the_bus(client: TestClient) -> None:
     assert client.app.state.event_bus.subscriber_count == 0  # type: ignore[attr-defined]
     assert event_bus._current is client.app.state.event_bus  # type: ignore[attr-defined]  # noqa: SLF001
+    # A second lifespan cycle on the same app proves the exit path, not only the startup path.
+    with TestClient(client.app) as inner:
+        bus = inner.app.state.event_bus  # type: ignore[attr-defined]
+        assert event_bus._current is bus  # noqa: SLF001
+        sub = bus.subscribe(1, False)
+        assert sub is not None
+    assert event_bus._current is None  # noqa: SLF001
+    assert sub.closed
+    assert bus.subscribe(1, False) is None
 
 
 @pytest.fixture

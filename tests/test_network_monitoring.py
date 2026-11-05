@@ -12,7 +12,6 @@ from __future__ import annotations
 import asyncio
 from datetime import timedelta
 from pathlib import Path
-from types import SimpleNamespace
 from unittest import mock
 
 import pytest
@@ -359,7 +358,7 @@ def test_udp_with_only_unclear_states_is_unknown_without_downtime_or_alert(db_pa
     _run_cycles(sched, tid, 3)
     assert _status(db_path, tid) == TargetStatus.UNKNOWN
     assert _values(tmp_path, tid, "udp_up") == [] and _values(tmp_path, tid, "udp_up_500") == []
-    sched._rt[tid].down_since_by_service["udp"] = None
+    assert sched._rt[tid].down_since_by_service["udp"] is None
     assert _alert_ids(db_path) == []
 
 
@@ -932,7 +931,6 @@ def test_port_status_constants_match_the_contract():
         "unknown",
         "changed",
     )
-    assert SimpleNamespace  # keep the import used for readability of ad-hoc fakes
 
 
 @pytest.mark.parametrize("change", ["host", "disable_udp"])

@@ -109,6 +109,10 @@ def test_disabled_pagination_links_have_no_href() -> None:
     for rel in ("notifications.html", "notifications/_alerts_panel.html"):
         text = (TEMPLATES / rel).read_text(encoding="utf-8")
         assert not re.search(r"page-item \{% if[^%]*%\}disabled", text), rel
+        disabled = re.findall(r'<li class="page-item[^"]*\bdisabled\b[^"]*">(.*?)</li>', text, re.DOTALL)
+        assert disabled, f"{rel}: no disabled pagination item found"
+        for item in disabled:
+            assert "<a" not in item and "href=" not in item, f"{rel}: disabled item is a link: {item}"
 
 
 def _css_rule(css: str, selector: str) -> str:

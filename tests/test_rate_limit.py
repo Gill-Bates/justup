@@ -334,9 +334,9 @@ def _limited_app(clock: FakeClock) -> FastAPI:
 def test_first_n_allowed_then_429_with_contract_headers():
     clock = FakeClock()
     client = TestClient(_limited_app(clock))
-    client.get("/a")
+    assert client.get("/a").status_code == 200
     clock.now += 20
-    client.get("/a")
+    assert client.get("/a").status_code == 200
     clock.now += 10
     response = client.get("/a")
     assert response.status_code == 429
@@ -350,8 +350,7 @@ def test_first_n_allowed_then_429_with_contract_headers():
 def test_retry_after_is_at_least_one_second():
     clock = FakeClock()
     client = TestClient(_limited_app(clock))
-    client.get("/a")
-    client.get("/a")
+    assert [client.get("/a").status_code for _ in range(2)] == [200, 200]
     clock.now += 59.9999
     assert client.get("/a").headers["Retry-After"] == "1"
 

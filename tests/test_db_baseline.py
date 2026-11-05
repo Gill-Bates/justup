@@ -26,9 +26,13 @@ EXPECTED_TABLES = {
     "auth_tokens",
     "dashboard_layouts",
     "groups",
+    "ixp_exchanges",
+    "ixp_prefixes",
+    "ixp_snapshot",
     "login_attempts",
     "monitor_quality",
     "monitor_quality_latest",
+    "notification_channel_state",
     "notification_dismissals",
     "notification_queue",
     "notification_reads",
@@ -45,6 +49,7 @@ EXPECTED_TABLES = {
     "settings",
     "target_alert_users",
     "target_locks",
+    "target_network_ports",
     "target_recipients",
     "target_status",
     "targets",
@@ -112,7 +117,8 @@ def test_new_file_is_initialised_as_baseline(db_path: Path):
         assert sqlite_db.SCHEMA_VERSION == 1
         assert sqlite_db.get_schema_version(conn) == sqlite_db.SCHEMA_VERSION
         tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        assert tables >= EXPECTED_TABLES
+        tables.discard("sqlite_sequence")
+        assert tables == EXPECTED_TABLES
         indexes = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='index'")}
         assert indexes >= EXPECTED_INDEXES
         assert "group_name" not in {r[1] for r in conn.execute("PRAGMA table_info(targets)")}

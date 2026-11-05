@@ -131,7 +131,7 @@ for (const viewport of VIEWPORTS) {
 				assert.equal(await clear.isVisible(), true, `${theme}: clear button appears with a query`);
 				assert.equal(await storedGroupState(page), stored, `${theme}: opening a group for the search does not overwrite the stored state`);
 				assert.equal(await empty.isHidden(), true);
-				if (SHOTS && theme) {
+				if (SHOTS) {
 					fs.mkdirSync(SHOTS, { recursive: true });
 					await page.screenshot({ path: path.join(SHOTS, `targets-search-hits-${theme}-${viewport.name.replace(/[@%]/g, "_")}.png`) });
 				}

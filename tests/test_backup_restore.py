@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import sqlite3
 import tarfile
 import threading
@@ -169,7 +170,7 @@ class TestFilenameAndHmac:
     def test_rotated_key_still_verifies_old_backup(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         archive = _good(tmp_path / "a.tar.bz2")
         digest = backup_mod.compute_backup_hmac(archive)
-        old = __import__("os").environ["SECRET_KEY"]
+        old = os.environ["SECRET_KEY"]
         monkeypatch.delenv("SECRET_KEY")
         monkeypatch.setenv("SECRET_KEYS", f"{Fernet.generate_key().decode('ascii')},{old}")
         assert verify_backup_hmac(archive, digest)
@@ -462,7 +463,7 @@ class TestBoundedMemberHandling:
         monkeypatch.setattr(tarfile.TarFile, "next", counting_next)
         with pytest.raises(BackupError, match="Too many"):
             backup_mod.inspect_backup_archive(archive, max_members=50)
-        assert parsed <= 60  # aborted right after the limit instead of reading all 5001 headers
+        assert 50 <= parsed <= 60  # aborted right after the limit instead of reading all 5001 headers
 
     def test_many_small_entries_stay_within_a_modest_memory_budget(self, tmp_path: Path):
         import tracemalloc
@@ -630,9 +631,6 @@ class TestRestoreEndpoint:
 
     def test_roundtrip_keeps_plain_and_compressed_series_identical(self, env):
         """A backup holds the legacy JSONL and the gzip segments; restore brings both back unchanged."""
-        import io
-        from datetime import timedelta
-
         from app.db import tsdb
 
         client, token, data_dir = env
@@ -825,7 +823,7 @@ class TestRestoreEndpoint:
 class TestHmacKeys:
     def test_all_keys_are_evaluated_in_one_read(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         archive = _good(tmp_path / "a.tar.bz2")
-        old = __import__("os").environ["SECRET_KEY"]
+        old = os.environ["SECRET_KEY"]
         monkeypatch.delenv("SECRET_KEY")
         monkeypatch.setenv("SECRET_KEYS", f"{Fernet.generate_key().decode('ascii')},{old}")
         monkeypatch.setattr(crypto, "_primary_key", None)
@@ -865,7 +863,7 @@ class TestHmacKeys:
         assert not verify_backup_hmac(archive, digest)  # changing the external secret does not rotate
 
     def test_primary_key_change_invalidates_issued_tokens(self, monkeypatch: pytest.MonkeyPatch):
-        old = __import__("os").environ["SECRET_KEY"]
+        old = os.environ["SECRET_KEY"]
         token = "session-token"  # noqa: S105 - throwaway test value
         before = hash_token(token)
         monkeypatch.delenv("SECRET_KEY")
@@ -878,9 +876,6 @@ class TestHmacKeys:
 
 class TestSnapshotAndIntegrity:
     def test_snapshot_is_consistent_during_active_writes(self, tmp_path: Path):
-        import sqlite3
-        import threading
-
         src = tmp_path / "sqlite"
         src.mkdir()
         db = src / "justup.db"
@@ -888,7 +883,7 @@ class TestSnapshotAndIntegrity:
         conn.execute("CREATE TABLE ledger(id INTEGER PRIMARY KEY, a INTEGER NOT NULL, b INTEGER NOT NULL)")
         conn.commit()
         conn.close()
-        stop = threading.Event()
+        stop, wrote = threading.Event(), threading.Event()
         errors: list[Exception] = []
 
         def writer():
@@ -898,6 +893,7 @@ class TestSnapshotAndIntegrity:
                     with sqlite_db.transaction(wconn):  # a and b always change together
                         wconn.execute("INSERT INTO ledger(a, b) VALUES (1, 1)")
                         wconn.execute("UPDATE ledger SET a = a + 1, b = b + 1")
+                    wrote.set()
             except Exception as exc:  # noqa: BLE001 - surfaced by the assertion below
                 errors.append(exc)
             finally:
@@ -906,6 +902,7 @@ class TestSnapshotAndIntegrity:
         thread = threading.Thread(target=writer)
         thread.start()
         try:
+            assert wrote.wait(5)  # snapshots must overlap real writes
             for index in range(5):
                 backup_mod.snapshot_sqlite_dir(src, tmp_path / f"snap{index}")
         finally:
@@ -916,6 +913,7 @@ class TestSnapshotAndIntegrity:
             backup_mod.check_sqlite_integrity(tmp_path / f"snap{index}" / "justup.db", full=True)
             snap = sqlite3.connect(tmp_path / f"snap{index}" / "justup.db")
             assert snap.execute("SELECT COUNT(*) FROM ledger WHERE a != b").fetchone()[0] == 0
+            assert snap.execute("SELECT COUNT(*) FROM ledger").fetchone()[0] > 0
             snap.close()
         assert not list((tmp_path / "snap0").glob("*-wal"))
 
@@ -959,8 +957,6 @@ class TestSnapshotAndIntegrity:
         assert marker.read_text() == "original"
 
     def test_garbage_in_database_pages_fails_quick_check(self, tmp_path: Path):
-        import sqlite3
-
         db = tmp_path / "broken.db"
         conn = sqlite3.connect(db)
         conn.execute("CREATE TABLE t(a TEXT)")
@@ -1255,10 +1251,6 @@ class TestCoordinatedMaintenance:
         return {"Authorization": f"Bearer {token}", "X-CSRF-Token": client.cookies.get("csrf_token")}
 
     def test_backup_archives_complete_tsdb_series_while_writers_append(self, env):
-        import json
-        import threading
-
-        from app.db import sqlite as _s  # noqa: F401
         from app.db import tsdb
 
         client, _token, data_dir = env
@@ -1347,8 +1339,6 @@ class TestCoordinatedMaintenance:
             maintenance.end_maintenance()
 
     def test_restore_waits_for_a_running_tsdb_writer_then_applies(self, env, tmp_path: Path, monkeypatch):
-        import threading
-
         monkeypatch.setattr(settings_api, "RESTORE_QUIESCE_TIMEOUT_SECONDS", 5.0)
         name, payload = _named(_good(tmp_path / "a.tar.bz2"))
         entered, release = threading.Event(), threading.Event()
@@ -1389,8 +1379,6 @@ class TestCoordinatedMaintenance:
         assert (env[2] / "sqlite" / "justup.db").read_bytes() == DB_BYTES
 
     def test_restore_503_changes_nothing_and_resets_the_state(self, env, tmp_path: Path, monkeypatch):
-        import threading
-
         monkeypatch.setattr(settings_api, "RESTORE_QUIESCE_TIMEOUT_SECONDS", 0.3)
         db_file = env[2] / "sqlite" / "justup.db"
         before = db_file.read_bytes()
@@ -1404,7 +1392,7 @@ class TestCoordinatedMaintenance:
 
         t = threading.Thread(target=stuck_writer)
         t.start()
-        entered.wait(5)
+        assert entered.wait(5)
         try:
             resp = _post(env, name, payload)
         finally:
@@ -1413,7 +1401,7 @@ class TestCoordinatedMaintenance:
         assert resp.status_code == 503
         assert resp.headers["retry-after"] == "30"
         assert db_file.read_bytes() == before
-        assert not (env[2] / "sqlite" / "x.db").exists()
+        assert not list(env[2].glob(".restore_staging_*"))  # staging directory cleaned up
         assert not maintenance.is_active()  # refusal lifted
         with maintenance.work_section():
             pass
@@ -1511,8 +1499,6 @@ class TestCoordinatedMaintenance:
         assert maintenance.current_generation() == generation_before + 1
 
     def test_two_simultaneous_restores_reject_second_before_extraction(self, env, tmp_path: Path, monkeypatch):
-        import threading
-
         name, payload = _named(_good(tmp_path / "a.tar.bz2"))
 
         real_extract = settings_api.extract_backup
