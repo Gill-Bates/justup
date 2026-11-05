@@ -291,7 +291,7 @@
     doc.querySelectorAll('*').forEach(function (el) {
       Array.from(el.attributes).forEach(function (attr) {
         if (attr.name.startsWith('on') ||
-            (/^(href|src|xlink:href|action|formaction)$/.test(attr.name) && window.JuLinkUrl.isScriptUrl(attr.value))) {
+            (/^(href|src|xlink:href|action|formaction)$/.test(attr.name) && window.JuLinkUrl.isBlockedUrlAttribute(el.tagName, attr.name, attr.value))) {
           el.removeAttribute(attr.name);
         }
       });

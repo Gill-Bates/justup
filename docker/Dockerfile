@@ -78,6 +78,8 @@ RUN find app/ -type d -name "__pycache__" -prune -exec rm -rf {} + || true
 # builds. The args are mandatory and carry no default: they are part of every BuildKit cache key
 # here, so a new release or a changed upstream archive can never hit a cached old binary, and the
 # builder aborts if the archive it downloads does not match NMAP_SOURCE_SHA256.
+# The verified archive itself is never copied into the runtime image; the release workflow attaches
+# the same archive (hash-checked against NMAP_SOURCE_SHA256) to the GitHub release instead.
 # Local build:
 #   v="$(python3 tools/nmap-release.py latest)"
 #   python3 tools/nmap-release.py fetch "$v" /tmp/nmap-verify   # prints nothing, writes provenance.txt
@@ -181,6 +183,8 @@ nmap-protocols, nmap-rpc) under the Nmap Public Source License (NPSL), https://n
 The licence text is in LICENSE next to this file. Nmap is a registered trademark of Nmap Software LLC.
 Source of this release: https://nmap.org/dist/nmap-${version}.tar.bz2 (signature verified,
 SHA-256 ${source_sha256})
+The same archive, its signature and a manifest are attached to the matching release at
+https://github.com/Gill-Bates/justup/releases
 Build: unmodified upstream source, built natively for ${TARGETARCH}; provenance: PROVENANCE.txt
 NOTICE
 EOF

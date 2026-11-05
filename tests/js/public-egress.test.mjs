@@ -2,6 +2,7 @@
 // tests/js/public-egress.test.mjs
 // Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 //
+
 // Display rules of the "Public outbound IPs" card: errors are never shown as addresses.
 import assert from "node:assert/strict";
 import test from "node:test";

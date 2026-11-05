@@ -3,6 +3,7 @@
 # tests/test_public_egress.py
 # Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 #
+
 """Public egress lookup (Settings > Network): all network access is mocked, nothing leaves the machine."""
 
 from __future__ import annotations

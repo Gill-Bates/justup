@@ -180,6 +180,18 @@ jobs:
           echo "  python base      : ${python_base}"
           echo "  signal-cli       : ${signal_cli_version}"
           echo "  nmap             : ${nmap_version}, source sha256 ${nmap_source_sha256}"
+          # The exact verified files the images are built from; they become release assets
+          # (create-release re-verifies them) and never enter the runtime image.
+          mkdir -p "${RUNNER_TEMP}/nmap-source"
+          cp "${verify_dir}/nmap-${nmap_version}.tar.bz2" "${verify_dir}/nmap-${nmap_version}.tar.bz2.asc" \
+            "${verify_dir}/nmap_gpgkeys.txt" "${RUNNER_TEMP}/nmap-source/"
+      - name: Upload verified Nmap source archive
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: nmap-source
+          path: ${{ runner.temp }}/nmap-source/
+          if-no-files-found: error
+          retention-days: 7
 
       # The only place architectures are declared: build, create-manifest,
       # release-newest.py and the release notes all derive from it. Native
@@ -655,6 +667,8 @@ jobs:
     if: needs.build.result == 'success'
     runs-on: ubuntu-26.04
     timeout-minutes: 15
+    outputs:
+      index_digest: ${{ steps.index.outputs.index_digest }}
     env:
       VERSION: ${{ needs.meta.outputs.version }}
       CANDIDATE_TAG: ${{ needs.meta.outputs.candidate_tag }}
@@ -851,6 +865,13 @@ jobs:
 
           docker buildx imagetools inspect --raw "${IMAGE_NAME}:latest" > manifest-latest.json
           python3 tools/verify-manifest.py verify manifest-latest.json digests
+      # The verified index digest, for the release record of the Nmap source archive.
+      - name: Export index digest
+        id: index
+        run: |
+          set -euo pipefail
+          [[ "$INDEX_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "ERROR: no index digest" >&2; exit 1; }
+          echo "index_digest=${INDEX_DIGEST}" >> "$GITHUB_OUTPUT"
 
   # always(): a failed or cancelled build or manifest leaves temporary tags on Docker
   # Hub that nothing else would remove. The tags are derived from the version, the
@@ -987,6 +1008,8 @@ jobs:
       MOVES_LATEST: ${{ needs.meta.outputs.moves_latest }}
       ARCHS: ${{ needs.meta.outputs.archs }}
       NMAP_VERSION: ${{ needs.meta.outputs.nmap_version }}
+      NMAP_SOURCE_SHA256: ${{ needs.meta.outputs.nmap_source_sha256 }}
+      INDEX_DIGEST: ${{ needs.create-manifest.outputs.index_digest }}
     permissions:
       contents: write
       actions: read
@@ -1019,6 +1042,18 @@ jobs:
           path: nmap-provenance/
           merge-multiple: true
 
+      - name: Download verified Nmap source archive
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: nmap-source
+          path: nmap-source/
+      # Same archive as in the image build: its hash must equal the one the images were built with
+      # and the one in every architecture's PROVENANCE.txt; the signature is checked again.
+      - name: Verify and prepare the Nmap source release assets
+        run: |
+          set -euo pipefail
+          python3 tools/nmap-release.py release-assets "$NMAP_VERSION" nmap-source nmap-release-assets \
+            "$NMAP_SOURCE_SHA256" "${IMAGE_NAME}@${INDEX_DIGEST}" nmap-provenance/*.txt
       # The release body links to the reports: each must exist and be a valid report
       # of a recognized image (tools/trivy-report.py) before a public release is created.
       - name: Validate Trivy findings
@@ -1131,6 +1166,9 @@ jobs:
               '',
               'Nmap is built from the signature-verified source, so Trivy sees only the Debian packages below. ' +
                 'The bundled libraries are compiled into the binary and are not covered by the scan; review their CVEs against these versions.',
+             
+              'The exact Nmap source archive (' + `nmap-${nmapVersion}.tar.bz2` + ', licence: NPSL, https://nmap.org/npsl/), its signature and ' +
+                '`nmap-source-manifest.txt` (URL, SHA-256, image digest) are attached to this release; the image does not contain the archive.',
               '',
               '| Architecture | Bundled libraries (not scanned) | Debian packages (scanned) |',
               '|---|---|---|',
@@ -1177,11 +1215,16 @@ jobs:
 
             // Attach the scan reports and the installed-dependency manifests (the release body links to
             // the reports; run artifacts expire). Any failure here fails the job.
-            const assets = archs.flatMap(arch => [
+            const nmapSource = `nmap-${nmapVersion}.tar.bz2`;
+            const assets = [
+              [nmapSource, path.join('nmap-release-assets', nmapSource), 'application/x-bzip2'],
+              [`${nmapSource}.asc`, path.join('nmap-release-assets', `${nmapSource}.asc`), 'application/pgp-signature'],
+              ['nmap-source-manifest.txt', path.join('nmap-release-assets', 'nmap-source-manifest.txt'), 'text/plain'],
+            ].concat(archs.flatMap(arch => [
               [`trivy-${arch}.json`, path.join('trivy-reports', `trivy-findings-${arch}`, `trivy-${arch}.json`), 'application/json'],
               [`toolchain-${arch}.txt`, path.join('toolchain', `${arch}.txt`), 'text/plain'],
               [`nmap-provenance-${arch}.txt`, path.join('nmap-provenance', `nmap-provenance-${arch}.txt`), 'text/plain'],
-            ]);
+            ]));
             for (const [assetName, file, contentType] of assets) {
               const data = fs.readFileSync(file);
               const existing = (release.assets || []).find(a => a.name === assetName);

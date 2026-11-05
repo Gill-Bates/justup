@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import re
@@ -339,6 +340,132 @@ def test_nmap_fetch_rejects_malformed_inputs_before_any_download(tmp_path, versi
     with pytest.raises(ValueError):
         nmap_release.fetch(version, tmp_path / "out", digest)
     assert not (tmp_path / "out").exists()
+
+
+# --- nmap-release.py release-assets: source archive as a release asset ------------------
+IMAGE_REF = "justup/justup@sha256:" + "b" * 64
+
+
+def release_inputs(tmp_path, *, version="7.993", archs=("amd64", "arm64"), content=b"nmap source"):
+    """Create the `meta` artifact directory and one image provenance file per architecture."""
+    source = tmp_path / "src"
+    source.mkdir()
+    (source / f"nmap-{version}.tar.bz2").write_bytes(content)
+    (source / f"nmap-{version}.tar.bz2.asc").write_bytes(b"signature")
+    (source / "nmap_gpgkeys.txt").write_bytes(b"keys")
+    digest = hashlib.sha256(content).hexdigest()
+    files = []
+    for arch in archs:
+        path = tmp_path / f"prov-{arch}.txt"
+        path.write_text(
+            "\n".join(
+                [
+                    f"nmap_version={version}",
+                    f"source_url={DIST}/nmap-{version}.tar.bz2",
+                    f"source_sha256={digest}",
+                    f"signing_key_fingerprint={nmap_release.PROJECT_KEY}",
+                    f"architecture={arch}",
+                ]
+            )
+            + "\n"
+        )
+        files.append(path)
+    return source, digest, files
+
+
+def run_release_assets(monkeypatch, tmp_path, *, version="7.993", expected=None, **kwargs):
+    monkeypatch.setattr(nmap_release, "verify_signature", lambda *_a: None)
+    source, digest, files = release_inputs(tmp_path, **kwargs)
+    out = tmp_path / "out"
+    nmap_release.release_assets(version, source, out, expected or digest, IMAGE_REF, files)
+    return out, digest
+
+
+def test_nmap_release_assets_write_archive_signature_and_manifest(monkeypatch, tmp_path):
+    out, digest = run_release_assets(monkeypatch, tmp_path)
+    assert (out / "nmap-7.993.tar.bz2").read_bytes() == b"nmap source"
+    assert (out / "nmap-7.993.tar.bz2.asc").read_bytes() == b"signature"
+    fields = nmap_release.read_fields(out / "nmap-source-manifest.txt")
+    assert fields["nmap_version"] == "7.993"
+    assert fields["source_url"] == f"{DIST}/nmap-7.993.tar.bz2"
+    assert fields["source_sha256"] == digest
+    assert fields["source_size_bytes"] == str(len(b"nmap source"))
+    assert fields["signing_key_fingerprint"] == nmap_release.PROJECT_KEY
+    assert fields["license"].endswith("(NPSL)")
+    assert fields["image"] == IMAGE_REF
+    assert fields["image_architectures"] == "amd64,arm64"
+
+
+def test_nmap_release_assets_reject_a_hash_that_differs_from_the_build(monkeypatch, tmp_path):
+    with pytest.raises(ValueError, match="differs from the hash the images were built with"):
+        run_release_assets(monkeypatch, tmp_path, expected="0" * 64)
+    assert not (tmp_path / "out").exists()
+
+
+def test_nmap_release_assets_reject_a_provenance_hash_that_differs(monkeypatch, tmp_path):
+    source, digest, files = release_inputs(tmp_path)
+    files[1].write_text(files[1].read_text().replace(digest, "0" * 64))
+    monkeypatch.setattr(nmap_release, "verify_signature", lambda *_a: None)
+    with pytest.raises(ValueError, match="source_sha256"):
+        nmap_release.release_assets("7.993", source, tmp_path / "out", digest, IMAGE_REF, files)
+    assert not (tmp_path / "out").exists()
+
+
+def test_nmap_release_assets_reject_a_provenance_of_another_version(monkeypatch, tmp_path):
+    source, digest, files = release_inputs(tmp_path)
+    files[0].write_text(files[0].read_text().replace("nmap_version=7.993", "nmap_version=7.992"))
+    monkeypatch.setattr(nmap_release, "verify_signature", lambda *_a: None)
+    with pytest.raises(ValueError, match="nmap_version"):
+        nmap_release.release_assets("7.993", source, tmp_path / "out", digest, IMAGE_REF, files)
+
+
+@pytest.mark.parametrize("missing", ["nmap-7.993.tar.bz2", "nmap-7.993.tar.bz2.asc", "nmap_gpgkeys.txt"])
+def test_nmap_release_assets_reject_a_missing_source_file(monkeypatch, tmp_path, missing):
+    source, digest, files = release_inputs(tmp_path)
+    (source / missing).unlink()
+    monkeypatch.setattr(nmap_release, "verify_signature", lambda *_a: None)
+    with pytest.raises(ValueError, match="missing file"):
+        nmap_release.release_assets("7.993", source, tmp_path / "out", digest, IMAGE_REF, files)
+
+
+def test_nmap_release_assets_reject_a_missing_provenance_file(monkeypatch, tmp_path):
+    source, digest, files = release_inputs(tmp_path)
+    monkeypatch.setattr(nmap_release, "verify_signature", lambda *_a: None)
+    with pytest.raises(ValueError, match="missing file"):
+        nmap_release.release_assets(
+            "7.993", source, tmp_path / "out", digest, IMAGE_REF, [*files, tmp_path / "gone.txt"]
+        )
+
+
+def test_nmap_release_assets_reject_a_wrong_version_for_the_archive(monkeypatch, tmp_path):
+    source, digest, files = release_inputs(tmp_path)
+    monkeypatch.setattr(nmap_release, "verify_signature", lambda *_a: None)
+    with pytest.raises(ValueError, match="missing file"):
+        nmap_release.release_assets("7.994", source, tmp_path / "out", digest, IMAGE_REF, files)
+
+
+def test_nmap_release_assets_reject_a_repeated_architecture(monkeypatch, tmp_path):
+    with pytest.raises(ValueError, match="architecture"):
+        run_release_assets(monkeypatch, tmp_path, archs=("amd64", "amd64"))
+
+
+def test_nmap_release_assets_abort_on_a_failed_signature(monkeypatch, tmp_path):
+    source, digest, files = release_inputs(tmp_path)
+
+    def reject(*_args):
+        raise ValueError("Nmap signature is invalid or was made by an untrusted key: x")
+
+    monkeypatch.setattr(nmap_release, "verify_signature", reject)
+    with pytest.raises(ValueError, match="untrusted key"):
+        nmap_release.release_assets("7.993", source, tmp_path / "out", digest, IMAGE_REF, files)
+    assert not (tmp_path / "out").exists()
+
+
+@pytest.mark.parametrize("image_ref", ["justup/justup:latest", "justup@sha256:abc", ""])
+def test_nmap_release_assets_require_an_image_digest_reference(tmp_path, image_ref):
+    source, digest, files = release_inputs(tmp_path)
+    with pytest.raises(ValueError, match="image reference"):
+        nmap_release.release_assets("7.993", source, tmp_path / "out", digest, image_ref, files)
 
 
 def test_nmap_download_refuses_non_https_urls(tmp_path):

@@ -2,6 +2,7 @@
 // tests/layout/public-egress.spec.mjs
 // Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 //
+
 // Settings > Network "Public outbound IPs": grid position, independent family states, refresh and copy
 // from the keyboard, long IPv6 values, no horizontal overflow, light and dark.
 import assert from "node:assert/strict";

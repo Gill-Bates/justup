@@ -20,6 +20,17 @@
 		var normalized = String(raw == null ? '' : raw).replace(HIDDEN, '').toLowerCase();
 		return SCRIPT_SCHEMES.some(function (scheme) { return normalized.indexOf(scheme) === 0; });
 	}
+	// Raster inline images only: SVG can carry script, so image/svg+xml never matches.
+	var RASTER_DATA_URL = /^data:image\/(?:png|jpe?g|gif|webp|bmp|avif);base64,[a-z0-9+\/]*={0,2}$/;
+	/** True for a base64 raster data:image/* address, ignoring case and hidden characters. */
+	function isRasterImageDataUrl(raw) {
+		return RASTER_DATA_URL.test(String(raw == null ? '' : raw).replace(HIDDEN, '').toLowerCase());
+	}
+	/** True when attribute `name` of element `tag` must be dropped; an img src may keep raster data:image/*. */
+	function isBlockedUrlAttribute(tag, name, value) {
+		if (String(tag).toLowerCase() === 'img' && name === 'src' && isRasterImageDataUrl(value)) return false;
+		return isScriptUrl(value);
+	}
 	/** @returns {{ok: true, url: string}|{ok: false, error: string}} */
 	function validateLinkUrl(raw) {
 		var url = raw == null ? '' : String(raw).trim();
@@ -30,5 +41,6 @@
 		return { ok: true, url: url };
 	}
 
-	root.JuLinkUrl = { validateLinkUrl: validateLinkUrl, isScriptUrl: isScriptUrl };
+	root.JuLinkUrl = { validateLinkUrl: validateLinkUrl, isScriptUrl: isScriptUrl,
+		isRasterImageDataUrl: isRasterImageDataUrl, isBlockedUrlAttribute: isBlockedUrlAttribute };
 })(typeof window !== 'undefined' ? window : globalThis);

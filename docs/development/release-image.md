@@ -18,6 +18,18 @@ Release images are not bit-for-bit reproducible.
 
 Nmap is not pinned. The release workflow resolves the latest stable release once, verifies its PGP signature and source hash and builds both architectures from that same source (details: [Network monitoring with Nmap](../features/network-monitoring.md#docker-image-and-nmap-version)). A new Nmap release ships with the next justUp image build.
 
+### Nmap source archive as a release asset
+
+The runtime image contains no Nmap source archive (`tools/verify-runtime-image.py` rejects one). Instead, the `meta` job uploads the archive it verified, its signature and the Nmap signing keys as a run artifact. Before the GitHub release is written, `tools/nmap-release.py release-assets` in `create-release` checks the signature again, compares the archive hash with the hash the images were built with (`NMAP_SOURCE_SHA256`) and with `source_sha256`, version, URL and key fingerprint in every architecture's `PROVENANCE.txt`, and fails the release on any difference or missing file. The release then carries:
+
+| Asset | Content |
+|---|---|
+| `nmap-<version>.tar.bz2` | The exact source archive the images were built from |
+| `nmap-<version>.tar.bz2.asc` | Its upstream PGP signature |
+| `nmap-source-manifest.txt` | Version, source URL, SHA-256, size, signing key fingerprint, licence name and URL (NPSL), verified image index digest |
+
+This provides the archive and the hash evidence; it is not a legal assessment of redistributing Nmap under the NPSL. That review is a separate open task. Whether the assets upload correctly can only be seen in the first real release run.
+
 ### What the vulnerability scan sees of Nmap
 
 Trivy (`scanners: vuln`) reports only packages from a package database (dpkg) or a language lockfile. The Nmap binary is compiled from source and copied into the image, so it has no dpkg entry and **Trivy cannot report CVEs in Nmap itself**. Its libraries are handled in two groups:

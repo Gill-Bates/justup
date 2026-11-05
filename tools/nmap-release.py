@@ -10,6 +10,11 @@ latest                           print the version of the latest stable release 
 fetch VERSION DIR [SHA256]       download the source archive and its signature into DIR, verify the
                                  signature against the pinned Nmap signing key, optionally require
                                  the archive hash, write DIR/provenance.txt; any failure exits 1
+release-assets VERSION SRC_DIR OUT_DIR SHA256 IMAGE_REF PROVENANCE...
+                                 release job: re-verify the archive fetched in `meta` (signature, hash
+                                 against the value the images were built with, every architecture's
+                                 PROVENANCE.txt from the image), then write the archive, its signature
+                                 and nmap-source-manifest.txt (URL, SHA-256, NPSL, image digest) to OUT_DIR
 """
 
 from __future__ import annotations
@@ -160,6 +165,95 @@ def fetch(version: str, output: Path, expected_sha256: str | None = None) -> Non
     (output / "provenance.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+NPSL_URL = "https://nmap.org/npsl/"
+IMAGE_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*@sha256:[0-9a-f]{64}$")
+
+
+def read_fields(path: Path) -> dict[str, str]:
+    """Parse a key=value provenance file; a missing file or a duplicate key is an error."""
+    if not path.is_file():
+        raise ValueError(f"missing file: {path}")
+    fields: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        key, separator, value = line.partition("=")
+        if not separator:
+            continue
+        if key in fields:
+            raise ValueError(f"duplicate field {key} in {path.name}")
+        fields[key] = value
+    return fields
+
+
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def release_assets(
+    version: str, source: Path, output: Path, expected_sha256: str, image_ref: str, provenance_files: list[Path]
+) -> None:
+    """Verify the archive from `meta` against the images, then write the release assets."""
+    if not VERSION_RE.fullmatch(version):
+        raise ValueError("invalid Nmap version")
+    if not SHA256_RE.fullmatch(expected_sha256):
+        raise ValueError("invalid expected SHA-256")
+    if not IMAGE_REF_RE.fullmatch(image_ref):
+        raise ValueError("image reference must be <repository>@sha256:<digest>")
+    if not provenance_files:
+        raise ValueError("at least one image provenance file is required")
+    name = f"nmap-{version}.tar.bz2"
+    archive, signature, keyfile = source / name, source / f"{name}.asc", source / "nmap_gpgkeys.txt"
+    for required in (archive, signature, keyfile):
+        if not required.is_file():
+            raise ValueError(f"missing file: {required}")
+    actual = file_sha256(archive)
+    if actual != expected_sha256:
+        raise ValueError(
+            f"source archive hash {actual} differs from the hash the images were built with {expected_sha256}"
+        )
+    verify_signature(archive, signature, keyfile, output.parent / f".{output.name}-gnupg")
+    source_url = f"{DIST}/{name}"
+    architectures: list[str] = []
+    for path in provenance_files:
+        fields = read_fields(path)
+        expected = {
+            "nmap_version": version,
+            "source_url": source_url,
+            "source_sha256": expected_sha256,
+            "signing_key_fingerprint": PROJECT_KEY,
+        }
+        for key, value in expected.items():
+            if fields.get(key) != value:
+                raise ValueError(f"{path.name}: {key} is {fields.get(key)!r}, expected {value!r}")
+        arch = fields.get("architecture", "")
+        if not re.fullmatch(r"[a-z0-9_]+", arch) or arch in architectures:
+            raise ValueError(f"{path.name}: architecture {arch!r} is missing, invalid or repeated")
+        architectures.append(arch)
+    output.mkdir(parents=True, exist_ok=True)
+    for source_file in (archive, signature):
+        (output / source_file.name).write_bytes(source_file.read_bytes())
+    lines = [
+        f"nmap_version={version}",
+        f"source_file={name}",
+        f"source_url={source_url}",
+        f"source_sha256={actual}",
+        f"source_size_bytes={archive.stat().st_size}",
+        f"signature_file={signature.name}",
+        f"signature_sha256={file_sha256(signature)}",
+        f"signing_key_fingerprint={PROJECT_KEY}",
+        "signature_verified=true",
+        "license=Nmap Public Source License (NPSL)",
+        f"license_url={NPSL_URL}",
+        f"image={image_ref}",
+        f"image_architectures={','.join(sorted(architectures))}",
+        "image_source_sha256_matches=true",
+    ]
+    (output / "nmap-source-manifest.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def main(argv: list[str]) -> int:
     try:
         if argv == ["latest"]:
@@ -172,10 +266,15 @@ def main(argv: list[str]) -> int:
         if len(argv) in (3, 4) and argv[0] == "fetch":
             fetch(argv[1], Path(argv[2]), argv[3] if len(argv) == 4 else None)
             return 0
+        if len(argv) >= 7 and argv[0] == "release-assets":
+            release_assets(argv[1], Path(argv[2]), Path(argv[3]), argv[4], argv[5], [Path(a) for a in argv[6:]])
+            return 0
     except (OSError, UnicodeError, ValueError, urllib.error.URLError, subprocess.TimeoutExpired) as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 1
-    print("Usage: nmap-release.py latest | fetch VERSION OUTPUT_DIR [SOURCE_SHA256]", file=sys.stderr)
+    print(
+        "Usage: nmap-release.py latest | fetch VERSION OUTPUT_DIR [SOURCE_SHA256] | release-assets ...", file=sys.stderr
+    )
     return 2
 
 

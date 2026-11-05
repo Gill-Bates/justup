@@ -45,3 +45,18 @@ test("the template sanitiser's scheme check refuses the same schemes as the link
     assert.equal(isScriptUrl(ok), false, String(ok));
   }
 });
+test("the template sanitiser keeps inline raster images and still blocks active content", () => {
+  const { isBlockedUrlAttribute } = sandbox.JuLinkUrl;
+  const png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==";
+  for (const ok of [png, png.toUpperCase().replace("DATA:IMAGE/PNG", "data:image/png"), "data:image/jpeg;base64,/9j/4AAQ", "data:image/gif;base64,R0lGOD"]) {
+    assert.equal(isBlockedUrlAttribute("IMG", "src", ok), false, ok);
+  }
+  const bad = ["javascript:alert(1)", "vbscript:x", "data:text/html;base64,PGI+", "data:image/svg+xml;base64,PHN2Zz4=",
+    "data:image/svg+xml,<svg onload=alert(1)>", "data:image/png,notbase64", "data:image/png;base64,AA\"onerror=x", "data:application/javascript,1"];
+  for (const value of bad) assert.equal(isBlockedUrlAttribute("img", "src", value), true, value);
+  // Raster data URLs stay blocked wherever they are not an image source.
+  assert.equal(isBlockedUrlAttribute("a", "href", png), true);
+  assert.equal(isBlockedUrlAttribute("img", "href", png), true);
+  assert.equal(isBlockedUrlAttribute("iframe", "src", png), true);
+  assert.equal(isBlockedUrlAttribute("img", "src", "https://example.org/a.png"), false);
+});
