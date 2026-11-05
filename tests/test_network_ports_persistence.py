@@ -4,12 +4,10 @@
 # Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 #
 
-"""Multi-protocol target persistence: schema 6 -> 8 migration, port identity and server-derived service metadata."""
+"""Multi-protocol target persistence: port identity and server-derived service metadata."""
 
-# ruff: noqa: SLF001  # white-box access to the migration table
 from __future__ import annotations
 
-import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -21,7 +19,6 @@ from app.api import targets
 from app.api.auth import get_current_user
 from app.db import sqlite as sqlite_db
 from app.db import tsdb
-from app.db.sqlite import migrations
 from app.services import target_identity
 from app.services.nmap_scanner import (
     NmapHostResult,
@@ -32,8 +29,6 @@ from app.services.nmap_scanner import (
 from app.utils.deps import get_conn
 from app.utils.time import utcnow
 from tests import _support  # noqa: F401 - imported for its sys.path side effect
-
-NEW_PORT_COLUMNS = ("raw_state", "service_identity", "identity_changed_at", "latency_ms")
 
 
 @pytest.fixture
@@ -66,15 +61,6 @@ def _values(name: str = "t", **extra) -> dict:
     }
 
 
-def _downgrade_to_v6(conn: sqlite3.Connection) -> None:
-    """Shape a current database like the released v1.0.2 schema (user_version 6)."""
-    conn.execute("DROP TABLE target_network_ports")
-    conn.execute("ALTER TABLE targets DROP COLUMN enable_udp_scan")
-    conn.execute("ALTER TABLE targets DROP COLUMN udp_ports")
-    conn.execute("PRAGMA user_version = 6")
-    conn.commit()
-
-
 def _scan(*ports: NmapPortResult, address: str = "198.51.100.7") -> NmapScanResult:
     now = utcnow()
     return NmapScanResult(
@@ -95,82 +81,6 @@ def _app_client(conn, tmp_path: Path) -> TestClient:
     app.dependency_overrides[get_conn] = lambda: conn
     app.dependency_overrides[get_current_user] = lambda: {"id": 1, "username": "root", "is_admin": 1}
     return TestClient(app)
-
-
-# ─── migration from the previous schema version ───────────────────────────────
-
-
-def test_migration_from_v6_keeps_tcp_and_ping_and_defaults_udp_off(db_path: Path):
-    conn = sqlite_db.connect(db_path)
-    tid = sqlite_db.create_target(conn, _values("legacy"))
-    quiet = sqlite_db.create_target(conn, _values("quiet", enable_tcp_connect=False, tcp_ports="80"))
-    _downgrade_to_v6(conn)
-    sqlite_db.close_connection(conn)
-
-    conn = sqlite_db.connect(db_path)
-    try:
-        sqlite_db.init_schema(conn)
-        assert sqlite_db.get_schema_version(conn) == sqlite_db.SCHEMA_VERSION
-        row = sqlite_db.get_target(conn, tid)
-        assert (row["enable_ping"], row["enable_tcp_connect"], row["tcp_ports"]) == (1, 1, "22,53")
-        assert (row["enable_udp_scan"], row["udp_ports"]) == (0, "")
-        assert sqlite_db.get_target(conn, quiet)["enable_udp_scan"] == 0
-        ports = sqlite_db.list_network_ports(conn, tid)
-        assert [(p["protocol"], p["port"], p["source"]) for p in ports] == [
-            ("tcp", 22, "manual"),
-            ("tcp", 53, "manual"),
-        ]
-        assert {p["service_identity"] for p in ports} == {"unknown"}
-        assert sqlite_db.list_network_ports(conn, quiet) == []
-        assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
-        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
-    finally:
-        sqlite_db.close_connection(conn)
-
-
-def test_migration_is_idempotent_and_rerun_safe(db_path: Path):
-    conn = sqlite_db.connect(db_path)
-    tid = sqlite_db.create_target(conn, _values("legacy"))
-    _downgrade_to_v6(conn)
-    sqlite_db.close_connection(conn)
-    conn = sqlite_db.connect(db_path)
-    try:
-        sqlite_db.init_schema(conn)
-        before = sqlite_db.list_network_ports(conn, tid)
-        # Re-running both steps directly (e.g. after an interrupted deploy) must change nothing.
-        migrations._migrate_7_network_ports(conn)
-        migrations._migrate_8_network_port_state(conn)
-        conn.commit()
-        sqlite_db.init_schema(conn)
-        assert sqlite_db.list_network_ports(conn, tid) == before
-        columns = [r[1] for r in conn.execute("PRAGMA table_info(target_network_ports)")]
-        assert len(columns) == len(set(columns))
-    finally:
-        sqlite_db.close_connection(conn)
-
-
-def test_database_already_at_v7_gains_the_state_columns(db_path: Path):
-    conn = sqlite_db.connect(db_path)
-    tid = sqlite_db.create_target(conn, _values("dev"))
-    sqlite_db.sync_network_ports(
-        conn, tid, tcp_ports=[22], udp_ports=[], scan_result=_scan(_port("tcp", 22, name="ssh", method="probed"))
-    )
-    conn.commit()
-    for column in NEW_PORT_COLUMNS:
-        conn.execute(f"ALTER TABLE target_network_ports DROP COLUMN {column}")
-    conn.execute("PRAGMA user_version = 7")
-    conn.commit()
-    sqlite_db.close_connection(conn)
-
-    conn = sqlite_db.connect(db_path)
-    try:
-        sqlite_db.init_schema(conn)
-        columns = {r[1] for r in conn.execute("PRAGMA table_info(target_network_ports)")}
-        assert set(NEW_PORT_COLUMNS) <= columns
-        (port,) = sqlite_db.list_network_ports(conn, tid)
-        assert (port["service_name"], port["source"], port["service_identity"]) == ("ssh", "discovered", "identified")
-    finally:
-        sqlite_db.close_connection(conn)
 
 
 # ─── multi-protocol round trip and port identity ──────────────────────────────

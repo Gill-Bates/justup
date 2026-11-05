@@ -43,9 +43,9 @@ Application and schema versions are compared independently:
 | Application version | Database schema | Result |
 | --- | --- | --- |
 | Same or older | Same | Restore without migration |
-| Same or older | Older, with a complete migration path | Migrate the staged database, then restore |
+| Same or older | Exact former current version 10 | Restamp the staged database to version 1, then restore |
 | Newer | Any | Reject before extraction |
-| Any | Newer than supported, or without a complete migration path | Reject before extraction |
+| Any | Versions 2–9 or above 10 | Reject: no supported layout or version path |
 
 Versions must be numeric and comparable. Development builds are accepted only
 when both sides report `dev` and their non-empty build IDs match exactly.
@@ -75,9 +75,9 @@ first key. Changing the first `SECRET_KEY` signs all users out.
 3. It extracts into a staging directory and checks the archived databases: the schema must match
    the manifest, the application database must contain no triggers or views, and every database
    must pass the integrity check.
-4. A backup with an older database schema is migrated in the staging directory, never in the live
-   database. The result must pass `integrity_check` and `foreign_key_check`, match the current
-   schema, and leave no `-wal`/`-shm` file behind.
+4. An exact former-current version-10 backup is restamped to version 1 in the staging directory.
+   The result must pass `integrity_check` and `foreign_key_check`, match the current schema,
+   and leave no `-wal`/`-shm` file behind.
 5. It enters maintenance mode: new checks, jobs, and backups stop, and running work
    gets up to 30 s to finish. New database connections get HTTP 503.
 6. It swaps in the restored data.
@@ -85,7 +85,7 @@ first key. Changing the first `SECRET_KEY` signs all users out.
 A backup that fails step 2 to 4 is rejected with HTTP 400 and nothing is changed: the live data
 stays in place, no restart is triggered, and the message names the cause. If the swap fails, it is
 rolled back and operation resumes. After a successful restore, the instance stays in maintenance
-mode until you restart the container. A migrated backup is already at the current schema, so the
+mode until you restart the container. A restamped backup is already at the current schema, so the
 restart runs no migration.
 
 Set the proxy timeout so that the upload and the restore fit.
@@ -97,9 +97,9 @@ Release number and database schema are compared separately.
 | Backup release | Backup schema | Result |
 |---|---|---|
 | same or older | same | Restored, no migration |
-| same or older | older | Migrated, if a complete migration path exists; otherwise rejected |
+| same or older | exact former current version 10 | Restamped to version 1 if its full layout matches; otherwise rejected |
 | newer | any | Rejected: upgrade justUp! first |
-| any | newer | Rejected: upgrade justUp! first |
+| any | versions 2–9 or above 10 | Rejected: no supported schema path |
 
 There is no downgrade. Releases are ordered numerically (`1.0.10` is newer than `1.0.9`); a
 pre-release (`rc1`, `beta2`, ...) is older than its final release. Versions that cannot be ordered
@@ -108,7 +108,7 @@ development build (`dev`) only restores backups with an identical build ID.
 
 ### Failed migration
 
-The migration runs in one transaction on the staged copy. If it fails, the staged copy is
+The version-10 restamp runs in one transaction on the staged copy. If it fails, the staged copy is
 discarded and the response says that the migration failed. Details are in the server log. The
 uploaded backup file is not modified.
 

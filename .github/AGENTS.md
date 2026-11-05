@@ -1,5 +1,4 @@
-<!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-09-21 | Updated: 2026-11-03 -->
+<!-- Generated: 2026-09-21 | Updated: 2026-11-05 -->
 # .github
 
 ## Purpose
@@ -12,27 +11,29 @@ GitHub repository automation and assets: CI/CD workflows (PR gate with Python, c
 | `renovate.json` | Renovate config: `config:best-practices`, weekly schedule (before 6am Monday, Europe/Berlin), max 3 open PRs; auto-merges minor/patch GitHub Actions with digest pinning and 3-day release age, pins Docker digests, groups Python deps from `pyproject.toml` via the `pep621` manager (not auto-merged, labelled `python`), keeps trivy-action always current, majors labelled `breaking-change`, vulnerability alerts labelled `security` |
 | `../tools/verify-libsignal-native.py` | Read-only verifier run inside each release image; checks the libsignal JNI library packaged in the jar (name, ELF header) and dlopen()s it, not a JVM load or Signal delivery |
 | `../tools/verify-runtime-image.py` | Runtime image purity check (no build tools, caches, source trees or object files; filesystem and layers), run before the push |
-| `../tools/verify-manifest.py`, `../tools/toolchain-parity.py`, `../tools/trivy-report.py` | Tested release helpers: index and digest check, architecture parity with required fields, Trivy report validation and summary |
+| `../tools/verify-nmap-worker.py`, `../tools/nmap-release.py` | Nmap release gate: `nmap-release.py` resolves and PGP-verifies the stable source release in `meta`; `verify-nmap-worker.py` runs inside each image (binary, capabilities, scan and trace through the worker socket) |
+| `../tools/verify-manifest.py`, `../tools/toolchain-parity.py`, `../tools/trivy-report.py`, `../tools/release-newest.py`, `../tools/dockerhub.py` | Tested release helpers: index and digest check, architecture parity with required fields, Trivy report validation and summary, newest-release decision, Docker Hub access (details in `workflows/AGENTS.md`) |
 
 ## Subdirectories
 | Directory | Purpose |
 |-----------|---------|
-| `img/` | Empty placeholder directory; the README and docs use external shields.io badges, no tracked images live here |
 | `skills/` | Prompt files for the code-review suite: `01_CodeReview.md`, `02_CheckComments.md`, `03_CheckIgnoreFiles.md`, `04_DRY.md` (no AGENTS.md) |
 | `workflows/` | GitHub Actions pipelines: `ci.yml` (PR gate), `docker-build.yml` (tagged release), `security.yml` (weekly read-only rescan of the published image), `docs-build.yml` (Pages). See `workflows/AGENTS.md` |
 
 ## For AI Agents
 
 ### Working In This Directory
-- Workflow actions are pinned (some by commit SHA for supply-chain safety); keep pins when editing.
+- Every third-party workflow action is pinned to a full commit SHA with a version comment; keep pins when editing.
 - Do not commit secrets; workflows read Docker Hub credentials from repository secrets.
 - Renovate config is strict JSON (4-space indent).
-- `ci.yml` runs on pushes to all branches and gates PRs targeting `main`. The release workflow calls it again for the tagged commit. `docker-build.yml` only starts from version tags or a manual tag dispatch — keep that division when adding checks: deterministic checks, focused Chromium UI regressions and the Chromium + WebKit shell viewport matrix belong in `ci.yml`; the full UX/UI browser matrix remains local.
+- Agents neither push nor publish (the user pushes); no weakening of gates and no skipped tests to get a workflow green.
+- `ci.yml` runs on pushes to all branches and gates PRs targeting `main`. The release workflow calls it again for the tagged commit. `docker-build.yml` only starts from version tags or a manual tag dispatch — keep that division when adding checks: deterministic checks, focused Chromium/WebKit UI regressions and the Chromium + WebKit shell viewport matrix belong in `ci.yml`; the full profile and Firefox remain local.
 
 ### Testing Requirements
 - No local test runner for the workflows themselves; validate YAML syntax and rely on the PR run. Validate `renovate.json` with `npx renovate-config-validator` if available.
-- The steps inside them are reproducible locally — see `workflows/AGENTS.md`. The `python` job runs Ruff and parallel pytest, the `frontend` job runs ESLint/Stylelint (`npm run lint`) and `node --test` (`npm test`), and the `browser` job runs Playwright Test layout cases in Chromium and WebKit, GridStack interactions in Chromium, plus modal, notification-row, wizard, SMTP, sidebar transition, notification dropdown and authentication checks in Chromium. The full browser matrix remains local.
-- The release workflow checks each built image's libsignal native library (packaging plus dlopen) and runtime-image purity, publishes only a verified candidate index, and compares installed toolchain versions across architectures; it does not prove that Signal starts or sends a message. `security.yml` rescans the published image weekly (untested until its first Actions run).
+- The steps inside them are reproducible locally; job contents and commands are listed once in `workflows/AGENTS.md`. Run `actionlint .github/workflows/*.yml` after workflow edits.
+- Never run the arm64 image build locally (no emulation); `linux/arm64` is built and verified only on the native runner in Actions.
+- The release workflow checks each built image's Nmap worker (privilege separation, scan, traceroute, no `mtr`), libsignal native library (packaging plus dlopen) and runtime-image purity, publishes only a verified candidate index, and compares installed toolchain versions across architectures; it does not prove that Signal starts or sends a message. `security.yml` rescans the published image weekly (untested until its first Actions run).
 
 ### Common Patterns
 - Least-privilege `permissions:` blocks per workflow/job, `concurrency` groups, explicit `timeout-minutes`, named runner images rather than `ubuntu-latest`.
@@ -40,7 +41,7 @@ GitHub repository automation and assets: CI/CD workflows (PR gate with Python, c
 ## Dependencies
 
 ### Internal
-- `docker/Dockerfile`, `docker/entrypoint.sh`, `docker/requirements.lock`, `docker/vendor/`, `docs/mkdocs.yml`, `pyproject.toml`, `package.json`, `CHANGELOG.md`, `LICENSE`, `.trivyignore`, `.trivyignore.yaml`, `app/static/` (lint targets), `tests/`, `tools/`.
+- `docker/Dockerfile`, `docker/entrypoint.sh`, `docker/nmap-worker.sh`, `docker/requirements.lock`, `docker/vendor/`, `docs/mkdocs.yml`, `pyproject.toml`, `package.json`, `CHANGELOG.md`, `LICENSE`, `.trivyignore`, `.trivyignore.yaml`, `app/static/` (lint targets), `tests/`, `tools/`.
 
 ### External
 - GitHub Actions, Docker Hub, GitHub Pages, Renovate, Trivy, Node.js/npm (ESLint, Stylelint).

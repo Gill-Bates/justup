@@ -253,13 +253,21 @@ def validate_backup_compatibility(manifest: dict[str, object]) -> None:
         if ordering > 0:
             raise BackupError("Backup incompatible! It was created by a newer application version.")
     schema_version = database["schema_version"]
-    if schema_version > sqlite_db.SCHEMA_VERSION:
+    if schema_version > sqlite_db.SCHEMA_VERSION and schema_version != sqlite_db.LEGACY_SCHEMA_VERSION:
+        if schema_version < sqlite_db.LEGACY_SCHEMA_VERSION:
+            raise BackupError(
+                f"Backup incompatible! No migration path exists from schema version {schema_version}. "
+                "Existing data was not changed."
+            )
         raise BackupError(
             f"Backup incompatible! Its database schema version {schema_version} is newer than the supported "
             f"version {sqlite_db.SCHEMA_VERSION}. Existing data was not changed."
         )
-    if schema_version < sqlite_db.SCHEMA_VERSION and sqlite_db._missing_migrations(schema_version):  # noqa: SLF001
-        raise BackupError(f"Backup incompatible! No migration path exists from schema version {schema_version}.")
+    if schema_version != sqlite_db.SCHEMA_VERSION and sqlite_db._missing_migrations(schema_version):  # noqa: SLF001
+        raise BackupError(
+            f"Backup incompatible! No migration path exists from schema version {schema_version}. "
+            "Existing data was not changed."
+        )
 
 
 class BackupError(Exception):
@@ -699,9 +707,9 @@ def migrate_staged_application_database(extracted_data: Path) -> tuple[int, int]
     try:
         conn = sqlite_db.connect(db_file)
         original_version = sqlite_db.get_schema_version(conn)
-        if original_version > sqlite_db.SCHEMA_VERSION:
+        if original_version > sqlite_db.SCHEMA_VERSION and original_version != sqlite_db.LEGACY_SCHEMA_VERSION:
             raise BackupError("Backup incompatible! Its database schema is newer than this release supports.")
-        if original_version < sqlite_db.SCHEMA_VERSION:
+        if original_version != sqlite_db.SCHEMA_VERSION:
             sqlite_db.init_schema(conn)
         else:
             sqlite_db.check_schema_compatibility(conn)

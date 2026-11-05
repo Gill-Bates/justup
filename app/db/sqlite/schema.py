@@ -544,25 +544,19 @@ def _ensure_unique_recipient_phone(conn: sqlite3.Connection) -> None:
     conn.execute(_RECIPIENT_PHONE_UNIQUE_DDL)
 
 
-# SCHEMA_VERSION 1 was the v1.0.0 baseline; _create_baseline_schema() now builds the current version. Pre-release
-# databases (user_version 0 with tables, or the former 2..7 lineage) are NOT migrated; they are
-# refused (IncompatibleSchemaError) and never touched or deleted.
-# A future release bumps SCHEMA_VERSION and appends one Migration (version = the new number) to
-# MIGRATIONS that upgrades a database from ``version - 1``. _create_baseline_schema() must then
-# create the new current schema for fresh databases, so migrations only transform older ones.
-# Migrations run inside init_schema's transaction (an error rolls schema and user_version back).
-SCHEMA_VERSION = 10
+# The current complete layout is the new version-1 baseline. Only an exact former-current version-10
+# layout is restamped; other historical layouts are refused without changes.
+SCHEMA_VERSION = 1
 
-# Dashboard summary (resolved / acknowledged in the last 24 h): range scans on their own timestamps instead of
-# reading every resolved alert. Shared by the baseline and migration 9, so both build the same layout.
+# Dashboard summary (resolved / acknowledged in the last 24 h): range scans on their own timestamps.
 ALERT_SUMMARY_INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_alerts_status_ended ON alerts(status, ended_at)",
     "CREATE INDEX IF NOT EXISTS idx_alerts_acknowledged_at ON alerts(acknowledged_at) WHERE is_acknowledged = 1",
 )
 
 
-# IXP peering-LAN prefixes imported from PeeringDB (ix, ixlan, ixpfx, ixfac, fac). Shared by the baseline and
-# migration 10. They are NOT pop_locations aliases: a prefix proves IXP membership, never a router position.
+# IXP peering-LAN prefixes imported from PeeringDB (ix, ixlan, ixpfx, ixfac, fac). A prefix proves
+# IXP membership, never a router position.
 # Only status "ok" records are stored; a missing record means withdrawn. ``ixp_snapshot`` is the single row
 # of the last complete, validated import.
 IXP_TABLE_DDL = (

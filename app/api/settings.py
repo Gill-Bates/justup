@@ -932,7 +932,13 @@ async def restore_backup(
     background_tasks.add_task(restart_app)
 
     message = "Backup compatible. Restore successful. Application is restarting..."
-    if original_schema_version < migrated_schema_version:
+    schema_changed = original_schema_version != migrated_schema_version
+    if original_schema_version > migrated_schema_version:
+        message = (
+            f"Backup compatible; database schema reset from {original_schema_version} to "
+            f"{migrated_schema_version}. Restore successful. Application is restarting..."
+        )
+    elif schema_changed:
         message = (
             f"Backup compatible; database schema migrated from {original_schema_version} to "
             f"{migrated_schema_version}. Restore successful. Application is restarting..."
@@ -940,7 +946,7 @@ async def restore_backup(
     return {
         "ok": True,
         "message": message,
-        "migrated": original_schema_version < migrated_schema_version,
+        "migrated": schema_changed,
         "backup_schema_version": original_schema_version,
         "current_schema_version": migrated_schema_version,
     }

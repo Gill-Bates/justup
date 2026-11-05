@@ -162,11 +162,9 @@ from .login_attempts import (
     record_failed_login,
 )
 from .migrations import (
+    LEGACY_SCHEMA_VERSION,
     MIGRATIONS,
     Migration,
-    _migrate_2_spooler_resilience,
-    _migrate_3_alert_dispatch_outbox,
-    _migrate_5_recipient_enable_for_all_targets,
     _missing_migrations,
     check_schema_compatibility,
     init_schema,

@@ -103,113 +103,58 @@ take and verify a backup, stop writers, and run `VACUUM` once.
 
 ### Schema baseline and versioning
 
-The schema of v1.0.0 is the baseline (`PRAGMA user_version` 1). The current schema version is
-**9**. The SQLite layer is the package `app/db/sqlite/` (`from app.db import sqlite` still exposes
-every function). `SCHEMA_VERSION` and `_create_baseline_schema()` live in `schema.py`
-(notification DDL in `schema_notifications.py`), the ordered `MIGRATIONS` registry,
-`check_schema_compatibility()` and `init_schema()` in `migrations.py`, and the layout comparison
-behind the compatibility check in `layout.py`:
-
-| Version | Step | Change |
-| --- | --- | --- |
-| 1 | baseline (v1.0.0) | all tables, foreign keys, CHECK constraints and indexes |
-| 2 | `1 -> 2` | `notification_queue.limited_attempts`, `notification_channel_state` |
-| 3 | `2 -> 3` | `alerts.active_incident`, `alert_dispatch_outbox` |
-| 4 | `3 -> 4` | `dashboard_layouts.height_mode` |
-| 5 | `4 -> 5` | `recipients.enable_for_all_targets` (existing recipients: off) |
-| 6 | `5 -> 6` | PoP candidate observations, city evidence, and explicit review metadata |
-| 7 | `6 -> 7` | `targets.enable_udp_scan`, `targets.udp_ports`, table `target_network_ports`; existing TCP ports are copied as manual rows |
-| 8 | `7 -> 8` | `target_network_ports.raw_state`, `service_identity`, `identity_changed_at`, `latency_ms` |
-| 9 | `8 -> 9` | range indexes for the alert summary and `ANALYZE alerts` (bounded sample) |
-
-A new database is created directly at the current version. A database at an older version is
-upgraded forward, step by step, on the next start. Migrations are forward-only: there is no
-downgrade, and a database written by a newer release is refused. Releases that change the
-schema bump `SCHEMA_VERSION` and append one `Migration` that upgrades from the previous version;
-`_create_baseline_schema()` must create the same end state for new databases.
+The complete current SQLite layout is the new version-1 baseline (`PRAGMA user_version` 1).
+`SCHEMA_VERSION` and `_create_baseline_schema()` live in `app/db/sqlite/schema.py`;
+`check_schema_compatibility()`, `init_schema()`, and the empty forward `MIGRATIONS` registry live in
+`migrations.py`. The layout comparison is in `layout.py`. A fresh database is created directly at
+version 1 with all current tables, constraints, and indexes, including the network-port and IXP
+prefix tables. The former version-2 through version-10 migration history has been consolidated.
+A later schema change must bump `SCHEMA_VERSION` and add a forward migration from version 1.
 
 #### Startup behaviour
 
-At start the application opens an existing database only if it is compatible:
-
 | State of the file | Result |
 | --- | --- |
-| No tables, `user_version` 0 (new or empty file) | created at the current version |
-| `user_version` 1–8 with a migration path | upgraded in one transaction, then opened |
-| Current `user_version` and matching layout | opened |
-| Tables but `user_version` 0 (unversioned pre-release database) | refused (`unversioned_database`) |
-| `user_version` above the supported version | refused (`future_schema`) |
-| `user_version` without a complete migration path | refused (`missing_migration_path`) |
-| Current `user_version` but a table, column, type, constraint or index differs | refused (`schema_drift`) |
-| Not a readable SQLite file | refused (`corrupt_database`) |
-| A migration or the check of its result fails | rolled back (`migration_failed` / `schema_drift`) |
+| No tables, `user_version` 0 | Create the complete baseline and stamp version 1 |
+| Version 1, matching layout | Open |
+| Former current version 10, matching the complete baseline layout | Restamp to version 1 in one transaction; preserve every table and row |
+| Versions 2–9 | Refuse without writes (`missing_migration_path`) |
+| Tables but `user_version` 0 | Refuse without writes (`unversioned_database`) |
+| Version above 10 | Refuse without writes (`future_schema`) |
+| Version 1 or 10 with a differing table, column, constraint, or index | Refuse without writes (`schema_drift`) |
+| Corrupt SQLite file | Refuse without writes (`corrupt_database`) |
 
-All migration steps and the validation of the resulting layout run in one `BEGIN IMMEDIATE`
-transaction. If any step fails, schema changes and `user_version` roll back together, and the
-file stays at the old version with all rows intact. Each applied migration is logged once
-(`Schema migration 2 -> 3 (...): ok`); a failure is logged with the same prefix. Repeating the
-start is idempotent. The compatibility check itself is read-only.
-
-A refused database is never modified or deleted; the application exits with a message naming
-the file, the stored and supported schema versions and the differing tables, columns or
-indexes (names and definitions only, never row contents).
+The compatibility check is read-only. Creating a new database or restamping an exact version-10
+layout uses one `BEGIN IMMEDIATE` transaction; any failure rolls back the schema and version
+counter together. The application does not delete or rebuild existing tables during the restamp.
+A version-9 database needs the last version-10 release to complete its 9 → 10 upgrade before this
+baseline reset can accept it. The migration history for versions 2–9 is no longer shipped.
 
 #### Compatibility validation
 
-The check compares, per table of the current schema: column names, declared types, `NOT NULL`,
-defaults and primary-key membership, foreign keys (target, columns, `ON DELETE`/`ON UPDATE`),
-`UNIQUE` constraints, normalised `CHECK` expressions, and the required indexes (table, columns,
-uniqueness, partial). It reads `PRAGMA table_info`, `foreign_key_list`, `index_list`,
-`index_xinfo` and the stored `CREATE TABLE` text. Tables and indexes unknown to the schema are ignored.
+The check compares the current tables' columns, declared types, `NOT NULL`, defaults, primary
+keys, foreign keys, unique constraints, normalized `CHECK` expressions, and required indexes.
+Column order is ignored because previously migrated version-10 databases may have columns added
+at the end. Unknown tables and indexes do not satisfy missing required objects.
 
-**Column order is not compared.** `ALTER TABLE ... ADD COLUMN` always appends the new column,
-so a correctly migrated database orders columns differently from a new one (for example
-`alerts.active_incident` sits last after the 2 -> 3 migration, but between `status` and
-`started_at` in a new database). Comparing positions would reject valid upgraded databases on
-their next restart. Nothing in the application depends on column positions.
-
-Two explicit, known variants are accepted although they differ from a new database:
-
-- `alerts.active_incident` may carry `DEFAULT 0` (upgraded) or `DEFAULT 1` (new). SQLite cannot
-  change a default without rebuilding the table, and no code path relies on it: every writer sets
-  the column explicitly (new alert `1`; resolved, acknowledged or deactivated alert `0`). Any
-  other default is reported as drift.
-- `idx_recipients_phone` may still be the old non-unique index while duplicate phone numbers exist
-  (see below); only its table and columns are compared.
+Two known layout variants remain accepted: an upgraded `alerts.active_incident` may have
+`DEFAULT 0` while a fresh table has `DEFAULT 1` (all application writers set the value), and
+`idx_recipients_phone` may still be non-unique while duplicate phone numbers are being resolved.
+Any other difference is reported as drift without exposing row values.
 
 #### Backup and recovery
 
-Take a backup before every upgrade: stop the app (or use Settings > Backup, which uses the
-SQLite Backup API for a consistent live snapshot) and keep `data/sqlite/` and `data/tsdb/` together.
-Never copy `justup.db` alone while the app runs: committed data may still sit in `justup.db-wal`. A backup is
-validated before a restore replaces anything: signature, archive paths, the backup manifest
-(`data/backup-manifest.json`: release, `PRAGMA user_version`, schema fingerprint), version compatibility,
-integrity check, and the same schema compatibility check as at start.
+Take a consistent SQLite backup before a version change using the Backup UI or the SQLite Backup
+API, and keep the matching `data/tsdb/` history. Copying only a live `.db` file can miss committed
+WAL transactions. The restore checks the signed manifest, schema fingerprint, version, integrity,
+and layout before replacing live data. An exact version-10 backup is restamped to version 1 in the
+staging directory, then checked again; backups from versions 2–9 have no migration path. The
+live database remains unchanged if validation or the staged restamp fails.
 
-A backup with an older schema is migrated during the restore, in the staging directory under
-`data/.restore_staging_*`, with the same `MIGRATIONS` and `init_schema()` as at start. The staged
-database must then pass `integrity_check`, `foreign_key_check`, and the layout check; its WAL is
-checkpointed and the connection closed, and no side file may remain, before `apply_restore()` swaps it
-in. The live database is never migrated in place. A newer release or schema, a missing migration path,
-a missing or contradicting manifest, triggers or views, or a failed migration reject the backup and
-leave existing data unchanged. See [Backup & Restore](../features/backup.md) for the compatibility
-table.
-
-A new `Migration` also defines which old backups stay restorable: keep the chain from the oldest
-supported schema version contiguous. The manifest fingerprint hashes the definitions of the archived
-file and is only compared with that same file, so a migrated database (whose `ALTER TABLE` text and
-column order differ from a new one) is never rejected because of it.
-
-If a start fails, nothing was changed. Read `PRAGMA user_version;` and `PRAGMA table_info(alerts);`
-of the file (read-only), compare with the message, and restore the pre-upgrade backup or start
-the release that matches the file. Do not edit `user_version` by hand and do not delete the
-database or TSDB files.
-
-The 3 → 4 layout rebuild has no down migration. To return to an older release after a successful
-upgrade, stop the app, recover the complete pre-upgrade SQLite and TSDB data offline, verify its
-integrity and schema version, then run the matching older release. Do not use the newer release's
-restore endpoint for a downgrade: it migrates older backups forward. A post-migration backup
-cannot recover the original version-3 layout semantics.
+The manifest fingerprint is checked against the archived file's own schema, so the version-10
+column order and accepted default/index variants do not prevent a valid restore. To return to an
+older release after this reset, restore a backup made for that release; the older executable may
+refuse a database stamped as version 1 with the new baseline layout.
 
 #### Unsupported pre-release databases
 

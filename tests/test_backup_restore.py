@@ -71,7 +71,7 @@ def _tar(path: Path, entries: list[tuple[str, bytes | None]], *, extra=None) -> 
 
 
 def _db_bytes(schema_version: int = sqlite_db.SCHEMA_VERSION, *, legacy_target: bool = False) -> bytes:
-    """A real application database image at the requested supported schema version."""
+    """A current-layout database with a chosen version stamp for compatibility checks."""
     with TemporaryDirectory() as tmp:
         db = Path(tmp) / "justup.db"
         conn = sqlite_db.connect(db)
@@ -90,19 +90,6 @@ def _db_bytes(schema_version: int = sqlite_db.SCHEMA_VERSION, *, legacy_target: 
                     "tcp_ports": "22,53",
                 },
             )
-        if schema_version <= 7:
-            for column in ("raw_state", "service_identity", "identity_changed_at", "latency_ms"):
-                conn.execute(f"ALTER TABLE target_network_ports DROP COLUMN {column}")
-        if schema_version <= 6:
-            conn.execute("DROP TABLE target_network_ports")
-            conn.execute("ALTER TABLE targets DROP COLUMN enable_udp_scan")
-            conn.execute("ALTER TABLE targets DROP COLUMN udp_ports")
-        if schema_version <= 2:
-            conn.execute("DROP TABLE alert_dispatch_outbox")
-            conn.execute("ALTER TABLE alerts DROP COLUMN active_incident")
-        if schema_version == 1:
-            conn.execute("DROP TABLE notification_channel_state")
-            conn.execute("ALTER TABLE notification_queue DROP COLUMN limited_attempts")
         conn.execute("INSERT INTO settings VALUES (?, ?, ?)", ("migration-marker", "preserved", "2026-01-01T00:00:00Z"))
         conn.execute(f"PRAGMA user_version = {schema_version}")
         conn.commit()
@@ -274,9 +261,8 @@ class TestArchiveValidation:
         with pytest.raises(BackupError, match="identical, verifiable build ID"):
             backup_mod.validate_backup_compatibility(manifest)
 
-    def test_missing_migration_path_is_rejected(self, monkeypatch: pytest.MonkeyPatch):
-        manifest = backup_mod.validate_backup_manifest(_manifest_bytes(_db_bytes(1)))
-        monkeypatch.setattr(sqlite_db, "_missing_migrations", lambda _version: True)
+    def test_missing_migration_path_is_rejected(self):
+        manifest = backup_mod.validate_backup_manifest(_manifest_bytes(_db_bytes(9)))
         with pytest.raises(BackupError, match="No migration path"):
             backup_mod.validate_backup_compatibility(manifest)
 
@@ -745,13 +731,13 @@ class TestRestoreEndpoint:
         assert resp.status_code == 400
         assert "newer application version" in resp.json()["detail"]
 
-    @pytest.mark.parametrize("schema_version", [1, 2, 6, 7])
-    def test_older_schema_is_migrated_before_restore(self, env, tmp_path: Path, schema_version: int):
-        name, payload = _named(_good(tmp_path / f"schema-{schema_version}.tar.bz2", db=_db_bytes(schema_version)))
+    def test_former_current_schema_is_restamped_before_restore(self, env, tmp_path: Path):
+        schema_version = sqlite_db.LEGACY_SCHEMA_VERSION
+        name, payload = _named(_good(tmp_path / "schema-10.tar.bz2", db=_db_bytes(schema_version)))
         resp = _post(env, name, payload)
         assert resp.status_code == 200, resp.text
         assert "Backup compatible" in resp.json()["message"]
-        assert f"migrated from {schema_version} to {sqlite_db.SCHEMA_VERSION}" in resp.json()["message"]
+        assert f"reset from {schema_version} to {sqlite_db.SCHEMA_VERSION}" in resp.json()["message"]
         live = env[2] / "sqlite" / "justup.db"
         conn = sqlite3.connect(f"{live.resolve().as_uri()}?mode=ro&immutable=1", uri=True)
         try:
@@ -759,22 +745,6 @@ class TestRestoreEndpoint:
             assert conn.execute("SELECT value FROM settings WHERE key='migration-marker'").fetchone()[0] == "preserved"
             assert conn.execute("PRAGMA foreign_key_check").fetchone() is None
             assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
-        finally:
-            conn.close()
-
-    def test_schema_6_backup_keeps_tcp_and_ping_and_leaves_udp_off(self, env, tmp_path: Path):
-        name, payload = _named(_good(tmp_path / "v6.tar.bz2", db=_db_bytes(6, legacy_target=True)))
-        resp = _post(env, name, payload)
-        assert resp.status_code == 200, resp.text
-        live = env[2] / "sqlite" / "justup.db"
-        conn = sqlite3.connect(f"{live.resolve().as_uri()}?mode=ro&immutable=1", uri=True)
-        try:
-            row = conn.execute(
-                "SELECT enable_ping, enable_tcp_connect, tcp_ports, enable_udp_scan, udp_ports FROM targets"
-            ).fetchone()
-            assert row == (1, 1, "22,53", 0, "")
-            ports = conn.execute("SELECT protocol, port, source FROM target_network_ports ORDER BY port").fetchall()
-            assert ports == [("tcp", 22, "manual"), ("tcp", 53, "manual")]
         finally:
             conn.close()
 
@@ -836,7 +806,7 @@ class TestRestoreEndpoint:
         def fail_migration(_conn):
             raise RuntimeError("injected staging migration failure")
 
-        backup_db = _db_bytes(2)
+        backup_db = _db_bytes(sqlite_db.LEGACY_SCHEMA_VERSION)
         monkeypatch.setattr(sqlite_db, "init_schema", fail_migration)
         name, payload = _named(_good(tmp_path / "migration-failure.tar.bz2", db=backup_db))
         resp = _post(env, name, payload)
@@ -1591,42 +1561,6 @@ class TestCoordinatedMaintenance:
 # Hardening of the manifest-based restore: versions, hostile databases, real v1 history
 # ---------------------------------------------------------------------------
 
-FIXTURES = Path(__file__).parent / "fixtures"
-
-_V1_ROWS = """
-INSERT INTO users(id, username, password_hash, is_admin, created_at) VALUES (3, 'alice', 'x', 1, '2026-01-01 00:00:00');
-INSERT INTO groups(id, name, created_at, updated_at) VALUES (5, 'Prod', '2026-01-01 00:00:00', '2026-01-01 00:00:00');
-INSERT INTO targets(id, name, group_id, interval_seconds, retention_days, enable_ping, enable_http_check,
-    enable_cert_expiration, created_at, updated_at)
-VALUES (7, 'web', 5, 60, 365, 1, 0, 0, '2026-01-01 00:00:00', '2026-01-01 00:00:00');
-INSERT INTO target_status(target_id, overall_status, updated_at) VALUES (7, 'down', '2026-01-02 00:00:00');
-INSERT INTO alerts(id, target_id, target_name, failed_service, status, started_at, created_at, updated_at)
-VALUES ('a-1', 7, 'web', 'PING', 'open', '2026-01-02 00:00:00', '2026-01-02 00:00:00', '2026-01-02 00:00:00');
-INSERT INTO recipients(id, name, email, created_at, updated_at)
-VALUES (9, 'ops', 'ops@example.com', '2026-01-01 00:00:00', '2026-01-01 00:00:00');
-INSERT INTO target_recipients(target_id, recipient_id) VALUES (7, 9);
-INSERT INTO notification_queue(notification_type, channel_type, recipient_id, recipient_name, recipient_address,
-    payload, retry_count, next_retry_at, created_at, updated_at, target_id)
-VALUES ('alert', 'email', 9, 'ops', 'ops@example.com', '{}', 3, '2026-01-02 00:00:00', '2026-01-02 00:00:00',
-    '2026-01-02 00:00:00', 7);
-INSERT INTO settings(key, value, updated_at) VALUES ('keep_me', '"yes"', '2026-01-01 00:00:00');
-"""
-
-
-def _v1_db_bytes() -> bytes:
-    """A schema-1 database built from the DDL of the v1.0.0 release (tests/fixtures/schema_v1.sql) plus history."""
-    with TemporaryDirectory() as tmp:
-        db = Path(tmp) / "justup.db"
-        raw = sqlite3.connect(db)
-        try:
-            raw.executescript((FIXTURES / "schema_v1.sql").read_text(encoding="utf-8"))
-            raw.executescript(_V1_ROWS)
-            raw.execute("PRAGMA user_version = 1")
-            raw.commit()
-        finally:
-            raw.close()
-        return db.read_bytes()
-
 
 def _app_db_with(*statements: str) -> bytes:
     """The current application database with extra statements applied (foreign keys off)."""
@@ -1747,7 +1681,11 @@ class TestHostileBackupContent:
             return closed
 
         monkeypatch.setattr(sqlite_db, "close_connection", close_and_leave_wal)
-        _assert_rejected(env, _archive(tmp_path / "a.tar.bz2", _db_bytes(2)), "existing data was not changed")
+        _assert_rejected(
+            env,
+            _archive(tmp_path / "a.tar.bz2", _db_bytes(sqlite_db.LEGACY_SCHEMA_VERSION)),
+            "existing data was not changed",
+        )
 
     def test_unexpected_exception_while_opening_the_staged_database_rejects_the_backup(
         self, env, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1772,65 +1710,48 @@ class TestRestoreAfterRestore:
         assert again.headers["retry-after"] == "30"
 
 
-class TestRealSchemaOneBackup:
-    """A schema-1 database built from the DDL of the v1.0.0 release, with history."""
+class TestFormerCurrentSchemaBackup:
+    """A version-10 backup keeps its data when restamped to the new version-1 baseline."""
 
     def _restore(self, env, tmp_path: Path):
-        name, payload = _named(
-            _archive(
-                tmp_path / "v1.tar.bz2",
-                _v1_db_bytes(),
-                app_version="1.0.0",
-                extra=(("data/tsdb/7/ping.jsonl", b'{"t": 1, "v": 12.5}\n'),),
-            )
+        archive = _archive(
+            tmp_path / "v10.tar.bz2",
+            _db_bytes(sqlite_db.LEGACY_SCHEMA_VERSION, legacy_target=True),
+            extra=(("data/tsdb/1/ping.jsonl", b'{"t": 1, "v": 12.5}\n'),),
         )
-        resp = _post(env, name, payload)
-        assert resp.status_code == 200, resp.text
+        name, payload = _named(archive)
+        response = _post(env, name, payload)
+        assert response.status_code == 200, response.text
         sqlite_db.end_quiesce()
-        return resp
+        return response
 
-    def test_history_survives_the_migration_that_runs_before_the_swap(self, env, tmp_path: Path):
-        resp = self._restore(env, tmp_path)
-        assert f"migrated from 1 to {sqlite_db.SCHEMA_VERSION}" in resp.json()["message"]
-        assert resp.json()["migrated"] is True
-        assert resp.json()["backup_schema_version"] == 1
-        assert (env[2] / "tsdb" / "7" / "ping.jsonl").read_bytes() == b'{"t": 1, "v": 12.5}\n'
-        conn = sqlite3.connect(env[2] / "sqlite" / "justup.db")  # no application start happened yet
+    def test_data_survives_restamp_before_swap(self, env, tmp_path: Path):
+        response = self._restore(env, tmp_path)
+        assert f"reset from {sqlite_db.LEGACY_SCHEMA_VERSION} to 1" in response.json()["message"]
+        assert response.json()["migrated"] is True
+        assert response.json()["backup_schema_version"] == sqlite_db.LEGACY_SCHEMA_VERSION
+        assert (env[2] / "tsdb" / "1" / "ping.jsonl").read_bytes() == b'{"t": 1, "v": 12.5}\n'
+        conn = sqlite3.connect(env[2] / "sqlite" / "justup.db")
         try:
-            assert conn.execute("PRAGMA user_version").fetchone()[0] == sqlite_db.SCHEMA_VERSION
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == 1
             assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
             assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
-            assert conn.execute("SELECT id, name, group_id FROM targets").fetchall() == [(7, "web", 5)]
-            assert conn.execute("SELECT id, username FROM users").fetchall() == [(3, "alice")]
-            assert conn.execute("SELECT target_id, recipient_id FROM target_recipients").fetchall() == [(7, 9)]
-            assert conn.execute("SELECT limited_attempts, retry_count FROM notification_queue").fetchall() == [(3, 3)]
-            assert conn.execute("SELECT id, active_incident FROM alerts").fetchall() == [("a-1", 1)]
-            assert conn.execute("SELECT alert_id FROM alert_dispatch_outbox").fetchall() == [("a-1",)]
+            assert conn.execute("SELECT id, name FROM targets").fetchall() == [(1, "legacy")]
+            assert conn.execute("SELECT value FROM settings WHERE key='migration-marker'").fetchone()[0] == "preserved"
         finally:
             conn.close()
-        assert not list((env[2] / "sqlite").glob("*-shm"))
 
-    def test_start_after_the_restore_needs_no_further_migration(self, env, tmp_path: Path, monkeypatch):
+    def test_second_start_does_not_change_restored_data(self, env, tmp_path: Path):
         self._restore(env, tmp_path)
-        applied: list[int] = []
-        monkeypatch.setattr(
-            sqlite_db,
-            "MIGRATIONS",
-            tuple(
-                sqlite_db.Migration(m.version, m.description, lambda _c, v=m.version: applied.append(v))
-                for m in sqlite_db.MIGRATIONS
-            ),
-        )
         conn = sqlite_db.connect(env[2] / "sqlite" / "justup.db")
         try:
             sqlite_db.init_schema(conn)
+            assert sqlite_db.get_schema_version(conn) == 1
+            assert conn.execute("SELECT name FROM targets").fetchone()[0] == "legacy"
         finally:
             sqlite_db.close_connection(conn)
-        assert applied == []
 
-    def test_failed_swap_after_a_migration_leaves_the_live_database_untouched(
-        self, env, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
+    def test_failed_swap_leaves_live_database_untouched(self, env, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         live = env[2] / "sqlite" / "justup.db"
         before = live.read_bytes()
 
@@ -1838,9 +1759,10 @@ class TestRealSchemaOneBackup:
             raise backup_mod.RestoreFailedError("restore failed", rolled_back=True)
 
         monkeypatch.setattr(settings_api, "apply_restore", failing_swap)
-        name, payload = _named(_archive(tmp_path / "v1.tar.bz2", _v1_db_bytes(), app_version="1.0.0"))
-        resp = _post(env, name, payload)
-        assert resp.status_code == 500
-        assert "rollback successful" in resp.json()["detail"]
+        archive = _archive(tmp_path / "v10.tar.bz2", _db_bytes(sqlite_db.LEGACY_SCHEMA_VERSION))
+        name, payload = _named(archive)
+        response = _post(env, name, payload)
+        assert response.status_code == 500
+        assert "rollback successful" in response.json()["detail"]
         assert live.read_bytes() == before
         assert not maintenance.is_active()
