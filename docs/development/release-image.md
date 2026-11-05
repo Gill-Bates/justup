@@ -47,7 +47,7 @@ Consequence: two builds with the same base digest, run at different times, can c
 
 The Trivy scan of the built images and the digest recorded per architecture show what a given release actually contains.
 
-Archived per release today: the digest of each architecture, `toolchain-<arch>.txt` (Python packages, signal-cli, libsignal, Java version, Nmap), `nmap-provenance-<arch>.txt` and the Trivy reports. Not archived: the complete Debian package inventory of the image, the exact Temurin package version, and the moving inputs (Debian and Adoptium repositories, `FLAG_ICONS_VERSION=main`). Archiving `dpkg-query -W` output per architecture would close the largest gap; it is not implemented.
+The release archives each architecture digest, `toolchain-<arch>.txt` (Python packages, signal-cli, libsignal, Java and Nmap versions, the Temurin package version, and the complete `dpkg-query -W` inventory), `nmap-provenance-<arch>.txt`, and the Trivy report. The Debian inventory and Temurin package version are recorded per architecture; unlike the shared toolchain inputs, their revisions need not match. The moving repository inputs (Debian and Adoptium repositories, `FLAG_ICONS_VERSION=main`) are not archived.
 
 The Trivy gate covers dpkg and language packages only. The libraries compiled into Nmap (libpcap, libdnet, liblinear) and Nmap itself are not part of that check; a CPE/NVD check for them is a separate open task.
 

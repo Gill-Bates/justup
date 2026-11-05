@@ -3,6 +3,7 @@
 # tests/test_template_static_urls.py
 # Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 #
+
 """Every literal /static/... URL in a template must point at a file under app/static.
 
 A template that references a script or stylesheet before the file exists (or after it was

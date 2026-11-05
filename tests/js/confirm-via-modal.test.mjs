@@ -2,6 +2,7 @@
 // tests/js/confirm-via-modal.test.mjs
 // Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 //
+
 // window.confirmViaModal: promise wrapper for the dedicated Settings confirmation modals.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";

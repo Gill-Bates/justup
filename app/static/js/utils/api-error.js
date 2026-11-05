@@ -2,6 +2,7 @@
 // app/static/js/utils/api-error.js
 // Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 //
+
 /**
  * Turns a FastAPI error `detail` into one readable message. Pure (no DOM), shared by classic scripts and
  * ES modules so a 422 list never reaches the UI as "[object Object]".

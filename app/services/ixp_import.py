@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 #
+# app/services/ixp_import.py
+# Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
+#
+
 # app/services/ixp_import.py  # noqa: ERA001 - canonical file header, not code
 # Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 #

@@ -2,6 +2,7 @@
 // tests/layout/service-detection.spec.mjs
 // Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 //
+
 // "Detect services" on the network tab of a target: the preview groups service changes and
 // version-only changes and stores nothing; "Apply changes" asks in the shared dialog (never a native
 // popup); Cancel and Escape send nothing; Apply sends exactly one confirmation; a failed preview shows

@@ -33,7 +33,12 @@ REQUIRED_FIELDS = (
     "nmap",
     "nmap_source_sha256",
     "nmap_bundled_libraries",
+    "temurin_package_version",
+    "debian_packages",
 )
+
+# These are archived per architecture; Debian revisions can legitimately differ across architectures.
+ARCH_SPECIFIC_FIELDS = {"temurin_package_version", "debian_packages"}
 
 
 def read(path: Path) -> dict[str, str]:
@@ -68,6 +73,8 @@ def problems(recorded: dict[str, dict[str, str]], required: list[str]) -> list[s
         )
     names = sorted({name for versions in recorded.values() for name in versions})
     for name in names:
+        if name in ARCH_SPECIFIC_FIELDS:
+            continue
         seen = {arch: versions.get(name, "<missing>") for arch, versions in recorded.items()}
         if len(set(seen.values())) > 1:
             detail = ", ".join(f"{arch}={value}" for arch, value in sorted(seen.items()))

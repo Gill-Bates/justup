@@ -23,6 +23,9 @@
 - `Security` The bundled Nmap is built from PGP-verified source and uses the Debian PCRE2 and zlib packages, so the image scan covers them; the release build fails otherwise.
 
 
+<details markdown="1">
+<summary>Previous versions...</summary>
+
 ## [1.0.2] - 2026-11-03
 
 - `New` The Targets page has a search field that filters by name, host, URL, TCP port or group while you type.
@@ -45,10 +48,6 @@
 - `Security` Backup restore re-validates the archive while extracting it.
 - `Security` The login redirect check rejects backslash and encoded bypasses.
 - `Security` Email template debug logs no longer contain placeholder values.
-
-
-<details markdown="1">
-<summary>Previous versions...</summary>
 
 ## [1.0.1] - 2026-11-02
 

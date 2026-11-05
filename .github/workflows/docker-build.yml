@@ -533,6 +533,18 @@ jobs:
           printf 'java_version=%s\nlibsignal_client=%s\n' \
             "$java_version" "$libsignal_client" >> "toolchain/${{ matrix.image_suffix }}.txt"
 
+          # The jlink runtime is copied from the builder, so its Debian package is absent here.
+          temurin_package_version="$(docker run --rm --platform "${{ matrix.platform }}" \
+            --entrypoint cat "${{ matrix.test_image }}" /opt/java/.temurin-package-version)"
+          test -n "$temurin_package_version"
+          printf 'temurin_package_version=%s\n' "$temurin_package_version" >> "toolchain/${{ matrix.image_suffix }}.txt"
+
+          # Preserve the full per-architecture dpkg inventory without requiring identical Debian revisions.
+          debian_packages="$(docker run --rm --platform "${{ matrix.platform }}" \
+            --entrypoint dpkg-query "${{ matrix.test_image }}" -W -f='${binary:Package}=${Version}\n' | sort | paste -sd, -)"
+          test -n "$debian_packages"
+          printf 'debian_packages=%s\n' "$debian_packages" >> "toolchain/${{ matrix.image_suffix }}.txt"
+
           echo "--- ${{ matrix.image_suffix }} ---"
           cat "toolchain/${{ matrix.image_suffix }}.txt"
 

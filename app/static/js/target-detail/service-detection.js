@@ -2,6 +2,7 @@
 // app/static/js/target-detail/service-detection.js
 // Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 //
+
 (() => {
 	'use strict';
 	const root = document.getElementById('service-detection');

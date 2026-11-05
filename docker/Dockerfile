@@ -444,7 +444,9 @@ RUN set -eu; \
     for m in $needed; do grep -qx "$m" /tmp/have || { echo "jlink runtime lacks required module $m" >&2; exit 1; }; done; \
     /opt/java/bin/java -version; \
     # Traceability + guard: the runtime must belong to the requested LTS line.
-    grep -E "^JAVA_VERSION=\"${JAVA_MAJOR}[.\"]" /opt/java/release
+    grep -E "^JAVA_VERSION=\"${JAVA_MAJOR}[.\"]" /opt/java/release; \
+    dpkg-query -W -f='${Version}\n' "temurin-${JAVA_MAJOR}-jdk" > /opt/java/.temurin-package-version; \
+    test -s /opt/java/.temurin-package-version
 
 # ──────────────────────────────────────────────────────────────
 # Stage 3: Runtime

@@ -2,6 +2,7 @@
 // tests/layout/target-endpoints.spec.mjs
 // Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 //
+
 // Target detail, Dashboard tab: every enabled check is a badge in the Checks hero and there is no "Network
 // endpoints" card. The cards of the tab stack with one gutter between them (no band left by the removed
 // card), many ports wrap inside the hero without horizontal overflow or clipped badges, and a live

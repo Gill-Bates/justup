@@ -102,6 +102,8 @@ FIELDS = {
     "nmap": "7.993",
     "nmap_source_sha256": "a" * 64,
     "nmap_bundled_libraries": "libdnet=1.18.2,liblinear=2.50,libpcap=1.10.7",
+    "temurin_package_version": "25.0.1+8",
+    "debian_packages": "zlib1g=1.3.1",
     "fastapi": "1",
 }
 
@@ -125,6 +127,8 @@ def test_parity_flags_difference_and_single_architecture():
         "nmap",
         "nmap_source_sha256",
         "nmap_bundled_libraries",
+        "temurin_package_version",
+        "debian_packages",
         "python",
     ],
 )
@@ -134,6 +138,11 @@ def test_parity_requires_fields_even_when_missing_everywhere(field):
     assert any(f"'{field}' is missing" in p for p in found)
     empty = {**FIELDS, field: ""}
     assert parity.problems({"amd64": empty, "arm64": dict(empty)}, [field])
+
+
+def test_parity_preserves_architecture_specific_package_inventory():
+    arm = {**FIELDS, "temurin_package_version": "25.0.1+9", "debian_packages": "zlib1g=1.3.2"}
+    assert parity.problems({"amd64": FIELDS, "arm64": arm}, list(parity.REQUIRED_FIELDS)) == []
 
 
 def test_parity_requires_every_direct_dependency(tmp_path, capsys):
