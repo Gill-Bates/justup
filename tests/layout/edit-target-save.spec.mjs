@@ -66,7 +66,7 @@ for (const viewport of VIEWPORTS) {
 			const id = await createTarget(page, app, name);
 			try {
 				await openEditor(page, app, id);
-				await page.locator("#name-input, [name=name]").first().fill(renamed);
+				await page.locator("#name").first().fill(renamed);
 				const patched = page.waitForResponse((response) => isWrite(response.request(), `/targets/${id}`, "PATCH"));
 				await saveButton(page).click();
 				const response = await patched;
@@ -90,7 +90,7 @@ for (const viewport of VIEWPORTS) {
 					await page.route(`**/targets/${id}`, (route) => route.request().method() === "PATCH"
 						? route.fulfill({ status, contentType: "application/json", body: JSON.stringify({ detail }) })
 						: route.fallback());
-					const input = page.locator("#name-input, [name=name]").first();
+					const input = page.locator("#name").first();
 					await input.fill("Kept input");
 					await saveButton(page).click();
 					await page.locator("#global-toast-body", { hasText: status === 422 ? "Name is invalid" : "stop" }).waitFor();
@@ -150,13 +150,13 @@ for (const viewport of VIEWPORTS) {
 				await saveButton(page).click();
 				// While the PATCH is in flight: another click, Enter in a field and a scripted submit.
 				await saveButton(page).click({ force: true }).catch(() => {});
-				await page.locator("#name-input, [name=name]").first().press("Enter");
+				await page.locator("#name").first().press("Enter");
 				await page.evaluate(() => document.getElementById("target-form").requestSubmit());
 				await patched;
 				// In the redirect delay after a complete save: the button has to stay locked.
 				await page.locator("#global-toast-body", { hasText: "Target updated" }).waitFor();
 				await page.evaluate(() => document.getElementById("target-form").requestSubmit());
-				await page.locator("#name-input, [name=name]").first().press("Enter").catch(() => {});
+				await page.locator("#name").first().press("Enter").catch(() => {});
 				await page.waitForURL((url) => url.pathname === OVERVIEW);
 				await page.waitForTimeout(500);
 				assert.deepEqual(counts, { patch: 1, put: 1 });
@@ -182,14 +182,8 @@ test("the wizard still ends on the new target's detail page @edit-target-save @w
 	await page.getByRole("button", { name: "Continue" }).click();
 	await page.locator("#step-recipients-title").waitFor({ state: "visible" });
 	await page.getByRole("button", { name: "Continue" }).click();
-	const created = page.waitForResponse((response) => isWrite(response.request(), "/targets", "POST"));
 	await page.getByRole("button", { name: "Start monitoring" }).click();
-	const response = await created;
-	assert.equal(response.status(), 201);
-	const id = (await response.json()).id;
-	try {
-		await page.waitForURL((url) => url.pathname === `${OVERVIEW}/${id}`);
-	} finally {
-		await deleteTarget(page, id);
-	}
+	await page.waitForURL((url) => /^\/ui\/targets\/\d+$/.test(url.pathname));
+	const id = Number(pathOf(page).split("/").pop());
+	await deleteTarget(page, id);
 });

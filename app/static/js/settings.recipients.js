@@ -508,11 +508,7 @@ async function addRecipient() {
 		
 		if (response.ok) {
 			const data = await response.json();
-			const modal = document.getElementById('addRecipientModal');
-			if (modal) {
-				const bsModal = bootstrap.Modal.getInstance(modal);
-				if (bsModal) bsModal.hide();
-			}
+			bootstrap.Modal.getInstance(document.getElementById('addRecipientModal'))?.hide();
 			form.reset();
 			// A new entry must not stay hidden behind an active filter.
 			clearRecipientSearch(false);

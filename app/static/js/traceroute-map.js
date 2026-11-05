@@ -280,6 +280,10 @@
 		var bounds = parseHopRange(point._hop_range);
 		return bounds !== null && hop >= bounds[0] && hop <= bounds[1];
 	}
+	/** Hop range carried by a table row or timeline button (data-hop-first / data-hop-last); NaN when absent. */
+	function elementHopRange(el) {
+		return { first: Number(el.dataset.hopFirst), last: Number(el.dataset.hopLast) };
+	}
 	/** Parse a "first-last" hop range string into [first, last]; null when malformed. */
 	function parseHopRange(text) {
 		var bounds = String(text).split('-').map(Number);
@@ -687,10 +691,9 @@
 		function setLinkedRows(spans, on) {
 			var root = mapContainer.closest('.traceroute-diagnostics') || document;
 			root.querySelectorAll('.tr-hop-row').forEach(function (row) {
-				var first = Number(row.dataset.hopFirst);
-				var last = Number(row.dataset.hopLast);
+				var range = elementHopRange(row);
 				if (!on) { row.classList.remove('is-linked'); return; }
-				if (isFinite(first) && isFinite(last) && overlaps(spans, first, last)) row.classList.add('is-linked');
+				if (isFinite(range.first) && isFinite(range.last) && overlaps(spans, range.first, range.last)) row.classList.add('is-linked');
 			});
 		}
 
@@ -943,7 +946,8 @@
 			var onRowOver = function (evt) {
 				var row = evt.target.closest ? evt.target.closest('.tr-hop-row') : null;
 				if (!row) return;
-				setLinkedMarkers(Number(row.dataset.hopFirst), Number(row.dataset.hopLast), true);
+				var range = elementHopRange(row);
+				setLinkedMarkers(range.first, range.last, true);
 			};
 			var onRowOut = function () { setLinkedMarkers(0, 0, false); };
 			// Clicking a hop row selects the segment leaving that hop (explicit, not
@@ -951,7 +955,7 @@
 			var onRowClick = function (evt) {
 				var row = evt.target.closest ? evt.target.closest('.tr-hop-row') : null;
 				if (!row) return;
-				var first = Number(row.dataset.hopFirst);
+				var first = elementHopRange(row).first;
 				var segmentIndex = segmentIndexForHop(first);
 				if (segmentIndex === null) return;
 				if (routeSelection === segmentIndex) { clearSelection(); } else { selectSegment(segmentIndex); }
@@ -1082,12 +1086,10 @@
 		try {
 			if (typeof Intl !== 'undefined' && Intl.DisplayNames) names = new Intl.DisplayNames(['en'], { type: 'region' });
 		} catch (e) { names = null; }
-		function rangeOf(btn) {
-			return { first: Number(btn.dataset.hopFirst), last: Number(btn.dataset.hopLast) };
-		}
 		function setRows(range) {
 			root.querySelectorAll('.tr-hop-row').forEach(function (row) {
-				var on = range !== null && rangesOverlap(range.first, range.last, Number(row.dataset.hopFirst), Number(row.dataset.hopLast));
+				var rowRange = elementHopRange(row);
+				var on = range !== null && rangesOverlap(range.first, range.last, rowRange.first, rowRange.last);
 				row.classList.toggle('is-linked', on);
 			});
 		}
@@ -1097,7 +1099,7 @@
 		}
 		function highlight(range) { setRows(range); emit(range); }
 		function showSelectionOrIdle() {
-			highlight(selected ? rangeOf(selected) : null);
+			highlight(selected ? elementHopRange(selected) : null);
 		}
 		function describe(btn) {
 			if (detail) detail.textContent = btn ? btn.dataset.detail || '' : idleText;
@@ -1118,7 +1120,7 @@
 			members.hidden = !open;
 			li.classList.toggle('is-open', open);
 			describe(open ? btn : null);
-			highlight(open ? rangeOf(btn) : null);
+			highlight(open ? elementHopRange(btn) : null);
 			if (open && selected) { selected.setAttribute('aria-pressed', 'false'); selected = null; }
 		}
 		function onClick(evt) {
@@ -1128,7 +1130,7 @@
 		}
 		function onPreview(evt) {
 			var btn = evt.target.closest ? evt.target.closest('[data-tr-hop], [data-tr-group]') : null;
-			if (btn && section.contains(btn)) highlight(rangeOf(btn));
+			if (btn && section.contains(btn)) highlight(elementHopRange(btn));
 		}
 		function onPreviewEnd() { showSelectionOrIdle(); }
 		function onFocusIn(evt) {
@@ -1136,7 +1138,7 @@
 			if (!btn) return;
 			// Keep the focused node inside the scrolling track without moving the page
 			if (track && btn.scrollIntoView) btn.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-			highlight(rangeOf(btn));
+			highlight(elementHopRange(btn));
 		}
 		function onKeydown(evt) {
 			// Arrow keys scroll the track while the track itself has focus

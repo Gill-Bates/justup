@@ -28,6 +28,8 @@ The runtime image contains no Nmap source archive (`tools/verify-runtime-image.p
 | `nmap-<version>.tar.bz2.asc` | Its upstream PGP signature |
 | `nmap-source-manifest.txt` | Version, source URL, SHA-256, size, signing key fingerprint, licence name and URL (NPSL), verified image index digest |
 
+All assets are published atomically. `create-release` creates the GitHub release as a **draft**, uploads every asset (source archive, signature, source manifest, and per architecture the Trivy report, toolchain manifest, Nmap provenance, SBOM and NVD report), reads the stored bytes back and compares size, API digest and SHA-256 with the local files (`tools/release-publish.py`), and only then publishes. A published tag is never changed: if the release for the tag exists and is complete, the job does nothing; if it is published with a missing, different or additional asset, the job fails and leaves it alone (a new version is needed). An unpublished draft from an earlier failed run is resumed, and only its assets are replaced. Before the registry push, the `build` job already checks that the prepared source archive matches the hash the image was built from.
+
 This provides the archive and the hash evidence; it is not a legal assessment of redistributing Nmap under the NPSL. That review is a separate open task. Whether the assets upload correctly can only be seen in the first real release run.
 
 ### What the vulnerability scan sees of Nmap
@@ -45,7 +47,7 @@ Trivy (`scanners: vuln`) reports only packages from a package database (dpkg) or
 | libssh2 | not built (`--without-libssh2`; only NSE uses it, and NSE is not built) | n/a | n/a |
 | Nmap itself | compiled from the verified source | `nmap_version`, `source_sha256` | **no** |
 
-`/usr/share/doc/nmap/PROVENANCE.txt` in the image, the `nmap-provenance-<arch>.txt` release asset and the "Nmap composition" section of the release notes list the bundled library versions and the Debian packages. The bundled versions come from the signed source tarball, so they are identical on both architectures (`nmap_bundled_libraries` in `toolchain-<arch>.txt`, compared by the parity gate). When a CVE is published for libpcap, libdnet, liblinear or Nmap, compare it with these versions by hand; a green Trivy result says nothing about them. Moving libpcap to Debian was not done: Debian's libpcap is older than the bundled one and would add `libdbus-1-3` to the runtime image. Matching Nmap's components against NVD by CPE is a possible follow-up, not part of the release gate.
+`/usr/share/doc/nmap/PROVENANCE.txt` in the image, the `nmap-provenance-<arch>.txt` release asset and the "Nmap composition" section of the release notes list the bundled library versions and the Debian packages. The bundled versions come from the signed source tarball, so they are identical on both architectures (`nmap_bundled_libraries` in `toolchain-<arch>.txt`, compared by the parity gate). When a CVE is published for libpcap, libdnet, liblinear or Nmap, compare it with these versions by hand; a green Trivy result says nothing about them. Moving libpcap to Debian was not done: Debian's libpcap is older than the bundled one and would add `libdbus-1-3` to the runtime image. Nmap and libpcap are additionally checked against NVD by CPE (see [NVD gate for the compiled components](#nvd-gate-for-the-compiled-components)); libdnet and liblinear remain unchecked.
 
 The build proves the Debian copies of zlib and PCRE2 in two ways. PCRE2 is a direct `NEEDED` entry of the binary. zlib is not: the linker leaves `libz.so.1` out of Nmap's own list and it resolves only through `libcrypto`, so the check reads the banner (`libz-<version>` for Debian, `nmap-libz-<version>` for the bundled copy) and the resolved `libz.so.1` in the `ldd` output. The runtime stage compares the library list recorded by the builder (`runtime_dependencies`) with its own `ldd` result and fails on any difference, then adds `system_libraries` for the packages that own those libraries.
 
@@ -59,9 +61,47 @@ Consequence: two builds with the same base digest, run at different times, can c
 
 The Trivy scan of the built images and the digest recorded per architecture show what a given release actually contains.
 
-The release archives each architecture digest, `toolchain-<arch>.txt` (Python packages, signal-cli, libsignal, Java and Nmap versions, the Temurin package version, and the complete `dpkg-query -W` inventory), `nmap-provenance-<arch>.txt`, and the Trivy report. The Debian inventory and Temurin package version are recorded per architecture; unlike the shared toolchain inputs, their revisions need not match. The moving repository inputs (Debian and Adoptium repositories, `FLAG_ICONS_VERSION=main`) are not archived.
+The release archives each architecture digest, `toolchain-<arch>.txt` (Python packages, signal-cli, libsignal, Java and Nmap versions, the Temurin package version, and the complete `dpkg-query -W` inventory), `nmap-provenance-<arch>.txt`, `nmap-sbom-<arch>.cdx.json`, `nmap-nvd-<arch>.json`, and the Trivy report. The Debian inventory and Temurin package version are recorded per architecture; unlike the shared toolchain inputs, their revisions need not match. The moving repository inputs (Debian and Adoptium repositories, `FLAG_ICONS_VERSION=main`) are not archived.
 
-The Trivy gate covers dpkg and language packages only. The libraries compiled into Nmap (libpcap, libdnet, liblinear) and Nmap itself are not part of that check; a CPE/NVD check for them is a separate open task.
+The Trivy gate covers dpkg and language packages only. The libraries compiled into Nmap and Nmap itself are covered by the NVD gate below, to the extent NVD publishes CPEs for them.
+
+## NVD gate for the compiled components
+
+`tools/nvd-gate.py` (tests: `tests/test_nvd_gate.py`) closes part of that gap in the `build` job, before anything is pushed:
+
+1. `sbom` writes a CycloneDX 1.5 SBOM from the image's `PROVENANCE.txt`: Nmap with its exact verified version and the bundled libraries with their versions, each with a `pkg:generic` purl and, where NVD has an entry, an explicit CPE (`cpe:2.3:a:nmap:nmap:<version>`, `cpe:2.3:a:tcpdump:libpcap:<version>`).
+2. `check` asks the NVD CVE API 2.0 (`virtualMatchString`, NVD evaluates the version ranges) for every component with a CPE. A CVE with a CVSS v4.0, v3.1 or v3.0 base score of 9.0 or higher blocks the release (exit 1). An unreachable or malformed NVD answer also fails the job (exit 3); it is never read as "no findings".
+3. SBOM and report are release assets (`nmap-sbom-<arch>.cdx.json`, `nmap-nvd-<arch>.json`).
+
+Limits, stated plainly:
+
+- Trivy is not used for this. It matches packages by purl against distribution and ecosystem advisories and does not match generic components against NVD CPEs; a `pkg:generic` entry would produce no result, which would look like a pass. (Source: Trivy's SBOM output carries purls only, [aquasecurity/trivy discussion 5209](https://github.com/aquasecurity/trivy/discussions/5209); not re-verified against the Trivy version the action installs.)
+- **libdnet and liblinear are not checked.** The NVD CPE dictionary has no entry for either (queried 2026-11-05); the report lists them as `NOT COVERED`. Review their CVEs by hand against `bundled_libraries`.
+- NVD data lags: a CVE without a CVSS v3/v4 score yet ("Awaiting Analysis") is listed as a warning and does not block. Only CRITICAL (>= 9.0) blocks; HIGH does not.
+- CPE assignment in NVD is hand-made. A CVE filed under a different vendor or product name is not found.
+- NVD is a live dependency. A rate limit (HTTP 403/429) or outage stops the release; rerun it. An optional repository secret `NVD_API_KEY` raises the rate limit.
+- A false positive is accepted only in `.nvdignore` (`CVE-YYYY-NNNN <reason>`; an entry without a reason is rejected). The file is empty.
+
+What is proven locally: the unit tests drive the gate with a CRITICAL fixture and expect a blocked release, and a manual run against the live NVD API reported CVE-2011-1935 (9.8) for libpcap 1.1.2 and no CRITICAL CVE for Nmap 7.98 and libpcap 1.10.5. What only the first release run shows: the step in Actions, the runner's NVD rate limit and the artifact upload.
+
+## Image size (diagnosis, not a release gate)
+
+Docker Hub shows the **compressed** size of a platform image: the sum of the layer sizes in that platform's manifest. `docker images` and `docker image inspect` show the **unpacked** size. The two are different quantities and are not comparable, and a gzip level or a different compressor changes the compressed one without changing the content. The reported compressed difference of 206 MB against 250 MB is not explained: the repository holds no measurement of either value (not even its source, which platform or which tag), and no image was built to measure it. The unpacked comparison values the project has are not stored in the repository either.
+
+Parts of the image that legitimately differ between `linux/amd64` and `linux/arm64` (unmeasured, to be checked against the numbers below): the libsignal JNI library and the Temurin `jlink` runtime (both architecture-specific binaries), the natively compiled Nmap binary and the Debian package set. The Dockerfile has no step that could make one architecture larger on purpose.
+
+To measure instead of guessing, take the three numbers for each platform of the same published tag and compare them layer by layer:
+
+```bash
+# Compressed size as Docker Hub reports it, per platform (child manifest digest from the index)
+docker buildx imagetools inspect --raw "$IMAGE@$CHILD_DIGEST" | jq '[.layers[].size] | add'
+docker buildx imagetools inspect --raw "$IMAGE@$CHILD_DIGEST" | jq -r '.layers[] | "\(.size)\t\(.digest)"'
+# Unpacked size and the per-layer origin of a locally built image (docker build --load, amd64 only)
+docker image inspect "$LOCAL_IMAGE" --format '{{.Size}}'
+docker history --no-trunc --format '{{.Size}}\t{{.CreatedBy}}' "$LOCAL_IMAGE"
+```
+
+A layer that is large in `docker history` but small in the manifest compresses well (text, JARs, Python bytecode); a large compressed layer points to incompressible content (the `jlink` runtime image modules, native libraries, wheels). Do not change the Dockerfile for size without such a per-layer measurement. Removing the bundled `liblinear` is deliberately deferred and is not part of this diagnosis. The `arm64` image is never built locally; its numbers come from the registry manifest.
 
 ## Updates
 

@@ -248,11 +248,7 @@
 			}
 			const data = await res.json();
 			window.justUpToast?.success?.('Cleared ' + (data.deleted || 0) + ' log entries');
-			const modalEl = document.getElementById('spoolerClearLogModal');
-			const modal = modalEl ? bootstrap.Modal.getInstance(modalEl) : null;
-			if (modal) {
-				modal.hide();
-			}
+			bootstrap.Modal.getInstance(document.getElementById('spoolerClearLogModal'))?.hide();
 			_currentPage = 0;
 			loadStats();
 			loadLog();

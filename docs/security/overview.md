@@ -38,6 +38,8 @@ Details: [Authentication](authentication.md), [Rate limiting](rate-limiting.md),
 The app runs as an unprivileged user; the entrypoint drops root with `gosu`. See
 [Docker](../getting-started/docker.md).
 
+Release images are scanned with Trivy. Nmap and the libraries compiled into it are invisible to Trivy, so the release also checks Nmap and libpcap against NVD and blocks on CRITICAL CVEs; libdnet and liblinear have no NVD entry and are not checked. Details and limits: [Release image](../development/release-image.md#nvd-gate-for-the-compiled-components).
+
 ## Accessibility
 
 justUp! targets WCAG 2.2 AA. Full conformance needs manual testing with assistive

@@ -12,6 +12,7 @@ GitHub repository automation and assets: CI/CD workflows (PR gate with Python, c
 | `../tools/verify-libsignal-native.py` | Read-only verifier run inside each release image; checks the libsignal JNI library packaged in the jar (name, ELF header) and dlopen()s it, not a JVM load or Signal delivery |
 | `../tools/verify-runtime-image.py` | Runtime image purity check (no build tools, caches, source trees or object files; filesystem and layers), run before the push |
 | `../tools/verify-nmap-worker.py`, `../tools/nmap-release.py` | Nmap release gate: `nmap-release.py` resolves and PGP-verifies the stable source release in `meta`; its `release-assets` command prepares the verified archive, signature and manifest as release assets; `verify-nmap-worker.py` runs inside each image (binary, capabilities, scan and trace through the worker socket) |
+| `../tools/nvd-gate.py`, `../tools/release-publish.py` | Release gates: `nvd-gate.py` builds the Nmap SBOM and blocks on CRITICAL NVD CVEs for Nmap and libpcap (exceptions in `.nvdignore`); `release-publish.py` plans and verifies the draft-first GitHub release (assets by size, digest and SHA-256) |
 | `../tools/verify-manifest.py`, `../tools/toolchain-parity.py`, `../tools/trivy-report.py`, `../tools/release-newest.py`, `../tools/dockerhub.py` | Tested release helpers: index and digest check, architecture parity with required fields, Trivy report validation and summary, newest-release decision, Docker Hub access (details in `workflows/AGENTS.md`) |
 
 ## Subdirectories

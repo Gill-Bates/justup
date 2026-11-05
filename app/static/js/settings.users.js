@@ -398,11 +398,7 @@ async function saveEditedUser() {
 		});
 
 		if (response.ok) {
-			const modalEl = document.getElementById('editUserModal');
-			if (modalEl) {
-				const modal = bootstrap.Modal.getInstance(modalEl);
-				if (modal) modal.hide();
-			}
+			bootstrap.Modal.getInstance(document.getElementById('editUserModal'))?.hide();
 			await loadUsers();
 			usersToast('User updated', 'success');
 		} else {
@@ -497,11 +493,7 @@ async function createUser() {
 		});
 
 		if (response.ok) {
-			const modal = document.getElementById('createUserModal');
-			if (modal) {
-				const bsModal = bootstrap.Modal.getInstance(modal);
-				if (bsModal) bsModal.hide();
-			}
+			bootstrap.Modal.getInstance(document.getElementById('createUserModal'))?.hide();
 			form.reset();
 			loadUsers();
 			usersToast('User created successfully', 'success');
