@@ -59,6 +59,7 @@ _ALLOWED_TABLES = frozenset(
         "monitor_quality",
         "alerts",
         "notification_queue",
+        "alert_dispatch_outbox",
         "notifications",
         "scheduler_runs",
         "target_locks",
@@ -152,6 +153,14 @@ def run_retention(
             deadline=deadline,
         ),
         "notification_queue": lambda: prune_notification_queue(conn, now=now, deadline=deadline),
+        # Completed events are history; orphans remain when alerts go away through a target cascade.
+        "alert_dispatch_outbox": lambda: delete_in_batches(
+            conn,
+            "alert_dispatch_outbox",
+            "(status = 'completed' AND updated_at < ?) OR alert_id NOT IN (SELECT id FROM alerts)",
+            (ts(timedelta(days=NOTIFICATION_RETENTION_DAYS)),),
+            deadline=deadline,
+        ),
         "notifications": lambda: delete_in_batches(
             conn,
             "notifications",

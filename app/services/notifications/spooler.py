@@ -1543,8 +1543,9 @@ class NotificationSpooler:
            - SignalRateLimited: Rate limited, will use retry_after_seconds for backoff
            - SignalRecipientInvalid / SignalNotRegistered: permanent failure (no retry)
            - Timeout/disconnect while sending: outcome unconfirmed, retried tagged UNCERTAIN_MARKER
-           - Any other Exception: Transient error, will retry with exponential backoff
-        3. Return False is treated as transient error (will retry)
+           - Other exceptions are classified by delivery_policy.classify_failure
+             (transient / rate_limited / limited / permanent)
+        3. Returning False spends the limited retry budget like a non-transient failure
 
         Returns:
             Tuple of (processed_count, success_count)

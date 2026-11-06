@@ -462,13 +462,12 @@ class SignalCliBackend(SignalBackend):
         Args:
             recipient: Phone number to send to (E.164 format)
             message: Message text
-            sender: Sender phone number (optional, uses first available account if not valid)
+            sender: Sender phone number (optional; the first local account is used when omitted)
 
         Rate-limited: Enforces minimum interval between sends to prevent
         overwhelming signal-cli with rapid-fire alerts.
 
-        Note: Sender is ALWAYS validated against signal-cli accounts.
-        If the provided sender doesn't exist, uses first available account.
+        Note: A configured sender must be registered in signal-cli (SignalNotRegistered otherwise).
         """
         # CRITICAL: Validate sender against signal-cli (THE authority)
         # Never trust a sender value from DB/payload without validation
@@ -622,12 +621,17 @@ class SignalCliBackend(SignalBackend):
 
             _log.debug("Starting signal-cli link: %s", " ".join(cmd[:4]) + " ...")
 
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
+            try:
+                proc = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+            except OSError as exc:
+                _log.warning("Failed to start signal-cli link: %s", exc)
+                self._link_session_id = None
+                return None, None
 
             self._link_process = proc
 
@@ -928,12 +932,9 @@ class SignalCliBackend(SignalBackend):
         Thread-safe: Uses lock to prevent concurrent state modifications.
         """
         with self._state_lock:
-            # Get the first registered account
-            accounts = self.list_accounts()
-            if not accounts:
-                raise SignalNotRegistered("No account registered to update profile")
+            # The configured sender is the account that sends alerts; raises when none is registered.
+            account = self.get_valid_sender(self._sender)
 
-            account = accounts[0]
             profile = {"account": account, "givenName": name}
 
             if avatar_path is None:

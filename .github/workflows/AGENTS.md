@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-09-21 | Updated: 2026-11-05 -->
+<!-- Generated: 2026-09-21 | Updated: 2026-11-06 -->
 # workflows
 
 ## Purpose
@@ -42,6 +42,7 @@ GitHub Actions for the justUp PR gate, multi-architecture Docker Hub release, Mk
 - The focused local checks are `bash -n docker/entrypoint.sh`, `shellcheck docker/entrypoint.sh`, `docker build --check -f docker/Dockerfile .`, and `mkdocs build -f docs/mkdocs.yml --strict` after copying the root docs files into a disposable docs tree.
 - The `python` job is reproducible locally with `pytest tests/test_dependency_lock.py -q` (supply-chain drift), `ruff check .` plus `ruff format --check .`, and `pytest -n auto`. The focused `@portpicker|@endpoint-state|@target-endpoints` set in `browser` is reproducible with the same Playwright command and `JUSTUP_LAYOUT_BROWSERS=chromium`.
 - The `frontend` job is reproducible locally with `npm ci --ignore-scripts`, `npm run lint`, and `npm test`. The tagged notification-row, wizard and SMTP browser set is reproducible with `JUSTUP_LAYOUT_BROWSERS=chromium npx playwright test --config tests/layout/playwright.config.mjs --list --grep '@notifications|@wizard|@smtp-ui'` (39 tests in three specs), followed by the same command without `--list`. The tab, load stability, card, chart clip, downtime and dashboard metric set runs with `JUSTUP_LAYOUT_BROWSERS=chromium,webkit npx playwright test --config tests/layout/playwright.config.mjs --grep '@settings-tab-press|@edit-target-tabs|@load-stability|@card-corners|@card-overlays|@combined-clip|@downtime-history|@dashboard-metrics'`; one matrix shard runs with `JUSTUP_LAYOUT_PROFILE=quick JUSTUP_LAYOUT_BROWSERS=chromium,webkit npx playwright test --config tests/layout/playwright.config.mjs --grep '@layout|@audit-self-test' --shard=1/2` (2/2 for the other).
+- Locally, run the `pytest`, `node` and `npx playwright test` commands above only through `tools/run-limited.sh` (root `AGENTS.md`). The unwrapped form shown here is what the workflows execute.
 - `verify-manifest.py` rejects more than one index entry per `os/architecture` (variants are not part of the platform contract). The release tools are tested by `pytest tests/test_dockerhub.py tests/test_release_tools.py tests/test_runtime_image_purity.py tests/test_workflow_contracts.py tests/test_libsignal_native_check.py -n 0`; structural GitHub workflow gates are also covered by `node --test tests/js/workflow-contracts.test.mjs`.
 - Image publishing, registry tag cleanup, GitHub releases, and Pages deployment run only in their protected GitHub Actions jobs.
 

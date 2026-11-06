@@ -675,13 +675,13 @@ def _plot_series(
         bv = [min(v, ymax) for v in bv]
     ax.fill_between(bt, bv, alpha=0.14, color=color, linewidth=0)
     (line,) = ax.plot(bt, bv, color=color, linewidth=1.1, label=label)
-    iso_t = [
-        bt[i]
+    iso = [
+        i
         for i in range(len(bt))
         if not math.isnan(bv[i]) and (i == 0 or math.isnan(bv[i - 1])) and (i == len(bt) - 1 or math.isnan(bv[i + 1]))
     ]
-    if iso_t:
-        ax.plot(iso_t, [bv[bt.index(t)] for t in iso_t], linestyle="none", marker="o", markersize=2.5, color=color)
+    if iso:
+        ax.plot([bt[i] for i in iso], [bv[i] for i in iso], linestyle="none", marker="o", markersize=2.5, color=color)
     return line
 
 
@@ -1348,7 +1348,8 @@ def _status_counts(data: list[dict]) -> dict[int, int]:
             continue
         code = int(number)
         if code == 0 or 100 <= code <= 599:
-            counts[code] = counts.get(code, 0) + int(p.get("count", 1))
+            n = _num(p.get("count"))
+            counts[code] = counts.get(code, 0) + (int(n) if n is not None else 1)
     return counts
 
 
@@ -1453,7 +1454,11 @@ def _valid_values(points: list[dict]) -> list[float]:
 
 
 def _availability_pct(up: int, total: int) -> float | None:
-    """Availability in percent; anything below a perfect run never rounds up to 100."""
+    """Availability in percent; anything below a perfect run never rounds up to 100.
+
+    The web UI (``format_percent``) deliberately rounds >= 99.95 to "100%" for compact tiles; a
+    printed report is a record, so it keeps 99.99 as the ceiling for imperfect runs.
+    """
     if not total:
         return None
     pct = round(up / total * 100, 2)
@@ -2878,7 +2883,7 @@ class PDFReportBuilder:
                 COLORS["muted"] if quiet_low_coverage or not has_checks else down_color,
                 "in observed checks"
                 if quiet_low_coverage
-                else f"{kpis.down_count:,} failed check{'s' if kpis.down_count != 1 else ''} × interval"
+                else "sum of measured outages"
                 if has_checks
                 else "no measurements",
             ),
@@ -3722,9 +3727,12 @@ class PDFReportBuilder:
             sla_ping_ms = target.get("sla_ping_latency_ms")
             # Unconfigured thresholds fall back to reference defaults that are not an agreed SLA
             if sla_response_ms is None:
-                sla_response_ms, response_label = _DEFAULT_RESPONSE_MS, "Default threshold (500 ms, no SLA set)"
+                sla_response_ms, response_label = (
+                    _DEFAULT_RESPONSE_MS,
+                    f"Default threshold ({_DEFAULT_RESPONSE_MS} ms, no SLA set)",
+                )
             if sla_ping_ms is None:
-                sla_ping_ms, ping_label = _DEFAULT_PING_MS, "Default threshold (100 ms, no SLA set)"
+                sla_ping_ms, ping_label = _DEFAULT_PING_MS, f"Default threshold ({_DEFAULT_PING_MS} ms, no SLA set)"
         else:
             sla_response_ms = sla_ping_ms = None
 

@@ -515,7 +515,7 @@ _RECIPIENT_PHONE_UNIQUE_DDL = (
 
 
 def _ensure_unique_recipient_phone(conn: sqlite3.Connection) -> None:
-    """Upgrade a non-unique ``idx_recipients_phone`` of an earlier v1 database to the unique one.
+    """Upgrade a non-unique ``idx_recipients_phone`` of a restamped former version-10 database to the unique one.
 
     Existing duplicates are only reported; nothing is deleted and the old index stays in place.
     Until they are merged, create_recipient()/update_recipient() still refuse any new duplicate

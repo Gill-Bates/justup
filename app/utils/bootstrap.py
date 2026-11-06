@@ -68,6 +68,9 @@ def get_geoip_build_info(data_dir: Path | None = None) -> tuple[str, int] | None
         return None
 
 
+GEOIP_MIN_BYTES = 10_000_000
+
+
 def _verify_mmdb(file_path: Path) -> bool:
     """
     Verify that a file is a valid MaxMind MMDB database.
@@ -81,12 +84,8 @@ def _verify_mmdb(file_path: Path) -> bool:
         return False
 
     file_size = file_path.stat().st_size
-    # City DB is typically >50MB; strict minimum for security
-    # Only allow override in test environments to prevent bypass
-    if os.getenv("TESTING") == "1" or os.getenv("PYTEST_CURRENT_TEST") is not None:
-        _min_size = 1_000_000  # 1MB for tests
-    else:
-        _min_size = 10_000_000  # 10MB minimum for production (City DB is ~60MB)
+    # City DB is ~60MB; the floor is a constant (tests patch it), never read from the environment.
+    _min_size = GEOIP_MIN_BYTES
 
     if file_size < _min_size:
         _log.warning("GeoIP database too small: %d bytes (minimum: %d)", file_size, _min_size)

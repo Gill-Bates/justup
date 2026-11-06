@@ -85,7 +85,7 @@ Rect = tuple[float, float, float, float]
 def draw_destination_diamond(
     c, cx: float, cy: float, half: float, fill, font_bold: str, font_size: float, glyph: str = "D"
 ) -> None:
-    """Destination marker: a filled diamond with a white glyph, identical on the map, its legend and the path."""
+    """Destination marker: a filled diamond with a white glyph, identical in the map legend and the path diagram; map markers use ``_draw_marker``."""
     c.saveState()
     c.setDash()
     c.setLineWidth(0.8)
@@ -148,6 +148,11 @@ def load_basemap() -> Basemap:
 # ─── Projection ──────────────────────────────────────────────────────────────────
 
 
+def _lon_scale(lat: float) -> float:
+    """Equirectangular longitude scale; fit and projection must use the same clamped latitude."""
+    return math.cos(math.radians(max(-80.0, min(80.0, lat))))
+
+
 @dataclass(frozen=True)
 class View:
     """Equirectangular view: points per degree of latitude, centred on (lat_c, lon_c)."""
@@ -160,7 +165,7 @@ class View:
 
     @property
     def k(self) -> float:
-        return math.cos(math.radians(max(-80.0, min(80.0, self.lat_c))))
+        return _lon_scale(self.lat_c)
 
     def project(self, lat: float, lon: float) -> tuple[float, float]:
         return (
@@ -183,7 +188,7 @@ def fit_view(
     lons = [c[1] for c in coords]
     lat_c = (min(lats) + max(lats)) / 2
     lon_c = (min(lons) + max(lons)) / 2
-    k = math.cos(math.radians(max(-80.0, min(80.0, lat_c))))
+    k = _lon_scale(lat_c)
     span_x = max((max(lons) - min(lons)) * k, MIN_EXTENT_DEG)
     span_y = max(max(lats) - min(lats), MIN_EXTENT_DEG)
     scale = min((width - 2 * margin_x) / span_x, (height - 2 * margin_y) / span_y)

@@ -134,6 +134,7 @@ def list_pending_alert_dispatches(conn: sqlite3.Connection, *, limit: int = 100)
             """
             SELECT * FROM alert_dispatch_outbox
             WHERE status = 'pending' AND next_attempt_at <= ?
+              AND alert_id IN (SELECT id FROM alerts)
             ORDER BY created_at, id
             LIMIT ?
             """,
@@ -396,6 +397,7 @@ def get_alerts_for_target_in_range(
 def delete_all_alerts(conn: sqlite3.Connection) -> int:
     """Delete all alerts from the database. Returns the number of deleted rows."""
     with transaction(conn):
+        conn.execute("DELETE FROM alert_dispatch_outbox")
         cur = conn.execute("DELETE FROM alerts")
         return cur.rowcount
 
@@ -403,5 +405,6 @@ def delete_all_alerts(conn: sqlite3.Connection) -> int:
 def delete_alerts_by_target(conn: sqlite3.Connection, target_id: int) -> int:
     """Delete all alerts (open and closed) for a specific target. Returns the number of deleted rows."""
     with transaction(conn):
+        conn.execute("DELETE FROM alert_dispatch_outbox WHERE target_id = ?", (target_id,))
         cur = conn.execute("DELETE FROM alerts WHERE target_id = ?", (target_id,))
         return cur.rowcount

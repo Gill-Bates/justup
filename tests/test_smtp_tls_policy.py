@@ -302,7 +302,11 @@ def _message():
 
 def test_every_smtp_connection_and_tls_decision_goes_through_the_shared_modules():
     """Alert mail and test mail share one spooler closure; no other module may open SMTP or re-decide TLS."""
-    opener = re.compile(r"^\s*(?:import smtplib|from smtplib import)", re.MULTILINE)
+    # Importing smtplib for its exception types is fine; constructing a client or importing names from it is not.
+    opener = re.compile(
+        r"^\s*from smtplib import|^\s*import smtplib\b(?=[\s\S]*\bSMTP(?:_SSL)?\s*\()",
+        re.MULTILINE,
+    )
     tls_key = re.compile(r"SettingKeys\.SMTP_USE_TLS")
     offenders = []
     for path in APP_ROOT.rglob("*.py"):

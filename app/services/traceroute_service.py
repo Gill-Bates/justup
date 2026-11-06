@@ -231,8 +231,11 @@ def trace_sync(host: str, *, timeout_s: float = DEFAULT_TIMEOUT_S) -> Traceroute
         except RuntimeError:
             return asyncio.run(trace(host, timeout_s=timeout_s))
         # Called on a thread that already runs a loop: use a private thread with its own loop.
-        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="traceroute-sync") as pool:
+        pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="traceroute-sync")
+        try:
             return pool.submit(lambda: asyncio.run(trace(host, timeout_s=timeout_s))).result(timeout_s + 10)
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)  # a timeout must not wait for the trace
     except Exception as exc:  # noqa: BLE001 - a failed trace must never break the PDF
         _log.warning("Traceroute for %s failed: %s", host, type(exc).__name__)
         return _failure(host, None, ERROR_FAILED)

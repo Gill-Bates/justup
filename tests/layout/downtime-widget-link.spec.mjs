@@ -9,6 +9,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { expect } from "@playwright/test";
 import { test } from "./fixtures.mjs";
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const DAY = 86_400_000;
@@ -42,9 +43,11 @@ async function open(browser, app, adminState) {
 	const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, storageState: adminState });
 	const page = await context.newPage();
 	const spans = [];
+	spans.urls = [];
 	page.on("request", (request) => {
 		const url = new URL(request.url());
 		if (!url.pathname.startsWith("/ui/fragments/availability-series/")) return;
+		spans.urls.push(url.pathname + url.search);
 		spans.push(Date.parse(url.searchParams.get("until")) - Date.parse(url.searchParams.get("since")));
 	});
 	return { context, page, spans };
@@ -62,6 +65,16 @@ async function openDashboardRow(page, app) {
 	await row.waitFor({ timeout: 30_000 });
 	return row;
 }
+/** Click the centre of a cell the way a user does; the row link's ::after overlays it, so Playwright's own hit-test would refuse. */
+async function clickCell(cell, options = {}) {
+	const hit = await cell.evaluate((el) => {
+		const box = el.getBoundingClientRect();
+		const top = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+		return top && top.closest("a") ? top.closest("a").getAttribute("href") : null;
+	});
+	assert.match(hit ?? "", /^\/ui\/targets\/\d+\?range=24h$/, "the cell centre hits the row link");
+	await cell.click({ force: true, ...options });
+}
 async function targetState(page) {
 	await page.waitForFunction(() => !document.querySelector('.target-detail-page [aria-busy="true"]') && document.querySelector("#quick-range"), null, { timeout: 30_000 });
 	return page.evaluate(() => ({
@@ -78,7 +91,7 @@ test("clicking any cell of a widget row opens the target with the 24 h range @do
 		const row = await openDashboardRow(page, app);
 		assert.equal(await row.locator("a[href]").count(), 1, "one link per row");
 		assert.match(await row.locator("a").getAttribute("href"), new RegExp(`^/ui/targets/${targetId}\\?range=24h$`));
-		await row.locator("td").last().click();
+		await clickCell(row.locator("td").last());
 		await page.waitForURL(new RegExp(`/ui/targets/${targetId}(\\?|$)`));
 		const state = await targetState(page);
 		assert.equal(state.preset, "24h");
@@ -93,12 +106,19 @@ test("keyboard: the row link is focusable, shows a visible focus ring and Enter 
 	try {
 		const row = await openDashboardRow(page, app);
 		const link = row.locator("a");
+		// Press Tab without reading focus in between (WebKit's scroll-region stops react to polling);
+		// the focus log must contain the row's single link as one of the stops.
+		await page.evaluate(() => {
+			window.__focusLog = [];
+			document.addEventListener("focusin", (event) => window.__focusLog.push({ href: event.target.getAttribute("href"), ring: getComputedStyle(event.target, "::after").outlineStyle }), true);
+		});
+		await page.locator("#dashboard-edit-toggle").focus();
+		for (let i = 0; i < 4; i++) await page.keyboard.press("Tab");
+		const log = await page.evaluate(() => window.__focusLog);
+		const stop = log.find((entry) => /^\/ui\/targets\/\d+\?range=24h$/.test(entry.href ?? ""));
+		assert.ok(stop, `the row link is a tab stop: ${JSON.stringify(log)}`);
+		assert.notEqual(stop.ring, "none", "the focus ring is drawn around the whole row");
 		await link.focus();
-		await page.keyboard.press("Tab");
-		await page.keyboard.press("Shift+Tab");
-		assert.equal(await link.evaluate((el) => document.activeElement === el), true);
-		const outline = await link.evaluate((el) => getComputedStyle(el, "::after").outlineStyle);
-		assert.notEqual(outline, "none", "the focus ring is drawn around the whole row");
 		await page.keyboard.press("Enter");
 		await page.waitForURL(new RegExp(`/ui/targets/${targetId}(\\?|$)`));
 		assert.equal((await targetState(page)).preset, "24h");
@@ -111,7 +131,7 @@ test("middle click opens the target in a new tab @downtime-widget-link", async (
 	try {
 		const row = await openDashboardRow(page, app);
 		const popup = context.waitForEvent("page");
-		await row.locator("td").nth(1).click({ button: "middle" });
+		await clickCell(row.locator("td").nth(1), { button: "middle" });
 		const tab = await popup;
 		await tab.waitForURL(new RegExp(`/ui/targets/${targetId}\\?range=24h`));
 		assert.match(page.url(), /\/$/, "the dashboard stays where it is");
@@ -135,11 +155,53 @@ test("a range in the URL is applied before the first chart load; invalid input a
 			const state = await targetState(page);
 			assert.equal(state.preset, item.preset, item.query);
 			assert.ok(spans.length > 0 && spans.every((span) => near(span, item.span)), `${item.query}: chart requests ${spans}`);
+			assert.equal(new Set(spans.urls).size, spans.urls.length, `${item.query}: no chart request is sent twice: ${spans.urls}`);
 			assert.doesNotMatch(state.url, /range=|from=|to=/, item.query);
 			if (item.keep) assert.ok(state.url.includes(item.keep), "other parameters survive");
 			assert.equal(await page.locator("#main-content, body").first().evaluate((el) => el.innerHTML.includes("<script>alert")), false);
 		} finally {
 			await context.close();
 		}
+	}
+});
+test("a range from the URL holds only for that visit: zoom reset and PDF export follow the shown range, a reload gives 24 h @downtime-widget-link", async ({ browser, app, adminState }) => {
+	const { context, page, spans } = await open(browser, app, adminState);
+	const pdfSpans = [];
+	// The request is recorded and refused, so no PDF job starts.
+	await page.route("**/reports/targets/*/pdf/request**", (route) => {
+		const url = new URL(route.request().url());
+		pdfSpans.push(Date.parse(url.searchParams.get("until")) - Date.parse(url.searchParams.get("since")));
+		return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ detail: "refused by test" }) });
+	});
+	try {
+		await page.goto(`${app.base}/ui/targets/${targetId}?range=7d`, { waitUntil: "load" });
+		const shown = await targetState(page);
+		assert.equal(shown.preset, "7d");
+		assert.doesNotMatch(shown.url, /range=/);
+		await page.waitForFunction(() => window.Chart.getChart(document.getElementById("chart-uptime"))?.scales?.x);
+		const xScale = () => page.evaluate(() => {
+			const { min, max } = window.Chart.getChart(document.getElementById("chart-uptime")).scales.x;
+			return [min, max];
+		});
+		const [loadMin, loadMax] = await xScale();
+		assert.ok(spans.length > 0 && spans.every((span) => near(span, 7 * DAY)), `chart requests: ${spans}`);
+		// Zoom into the middle half, then reset: the chart returns to its load view, not to a URL value.
+		await page.evaluate(([min, max]) => window.Chart.getChart(document.getElementById("chart-uptime")).zoomScale("x", { min: min + (max - min) / 4, max: max - (max - min) / 4 }, "none"), [loadMin, loadMax]);
+		await expect.poll(async () => { const [a, b] = await xScale(); return b - a; }).toBeLessThan((loadMax - loadMin) * 0.75);
+		await page.locator("#reset-zoom-btn").click();
+		await expect.poll(xScale).toEqual([loadMin, loadMax]);
+		const afterReset = await targetState(page);
+		assert.deepEqual([afterReset.preset, afterReset.from, afterReset.to, afterReset.url], [shown.preset, shown.from, shown.to, shown.url]);
+		await page.locator("#export-pdf-btn").click();
+		await expect.poll(() => pdfSpans.length).toBeGreaterThan(0);
+		assert.ok(pdfSpans.every((span) => near(span, 7 * DAY)), `PDF request spans: ${pdfSpans}`);
+		spans.length = 0;
+		await page.reload({ waitUntil: "load" });
+		const reloaded = await targetState(page);
+		assert.equal(reloaded.preset, "24h");
+		assert.doesNotMatch(reloaded.url, /range=/);
+		assert.ok(spans.length > 0 && spans.every((span) => near(span, DAY)), `reload chart requests: ${spans}`);
+	} finally {
+		await context.close();
 	}
 });

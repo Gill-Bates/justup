@@ -21,7 +21,7 @@ MAX_CANDIDATES = 5000
 MAX_OBSERVATIONS_PER_CANDIDATE = 20
 # Observed and proposed/reviewed positions farther apart than this conflict.
 LOCATION_CONFLICT_KM = 250
-_CODE = re.compile(r"^[a-z][a-z0-9]{1,4}$")
+CANDIDATE_CODE_RE = re.compile(r"^[a-z][a-z0-9]{1,4}$")
 _HOST = re.compile(r"^[a-z0-9.-]{1,253}$")
 
 
@@ -38,7 +38,11 @@ def observe(
     """Record one route observation; return whether it was new, never a lookup result."""
     code = code.strip().lower()
     hostname = hostname.strip().lower().rstrip(".")
-    if not _CODE.fullmatch(code) or not _HOST.fullmatch(hostname) or not re.fullmatch(r"[a-z0-9_-]{1,40}", provider):
+    if (
+        not CANDIDATE_CODE_RE.fullmatch(code)
+        or not _HOST.fullmatch(hostname)
+        or not re.fullmatch(r"[a-z0-9_-]{1,40}", provider)
+    ):
         return False
     try:
         address = ipaddress.ip_address(public_ip)
@@ -60,7 +64,7 @@ def observe(
         lat = lon = None
     source = "geolite2-coarse" if city and country and lat is not None else None
     canonical_guess = guess.get("canonical_guess") if source else None
-    if not isinstance(canonical_guess, str) or not _CODE.fullmatch(canonical_guess):
+    if not isinstance(canonical_guess, str) or not CANDIDATE_CODE_RE.fullmatch(canonical_guess):
         canonical_guess = None
     if canonical_guess:
         source = "geolite2-city+curated-code"
@@ -173,7 +177,7 @@ def review(
     code = code.strip().lower()
     actor, evidence = actor.strip(), evidence.strip()
     if (
-        not _CODE.fullmatch(code)
+        not CANDIDATE_CODE_RE.fullmatch(code)
         or not (1 <= len(actor) <= 80 and 1 <= len(evidence) <= 500)
         or not actor.isprintable()
         or not evidence.isprintable()
@@ -225,7 +229,7 @@ def review(
             if conn.execute("SELECT 1 FROM pop_locations WHERE alias_code = ? AND retired = 0", (code,)).fetchone():
                 raise ValueError("An active location already owns this alias")
             chosen_code = (canonical or code).strip().lower()
-            if not _CODE.fullmatch(chosen_code):
+            if not CANDIDATE_CODE_RE.fullmatch(chosen_code):
                 raise ValueError("Reviewed canonical code is invalid")
             if chosen_code != code:
                 if chosen_code != guess_code:

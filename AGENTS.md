@@ -44,3 +44,12 @@ Overrides, environment only and validated: `JUSTUP_TEST_SLOTS` (1 = one heavy ru
 - Nested calls of the wrapper skip locking, keep the inherited caps and start no extra workers.
 - A `flock` wrapper cannot control processes that bypass it. No absolute limit for all host processes is claimed.
 - GitHub Actions does not use the wrapper. `ci.yml` keeps `pytest -n auto` and 2 Playwright workers (`CI` set).
+
+## Browser tooling and test selection
+
+- Wrapper applies to every local command, including reproduction recipes copied from `docs/development/contributing.md` or `.github/workflows/AGENTS.md`: prefix `npx playwright test`, `node tests/layout/run.mjs` and `npm run test:layout` with `tools/run-limited.sh`. Only GitHub Actions runs them directly.
+- Playwright for the layout suite is the repository install (`package.json`, `package-lock.json`, currently 1.64.1; config `tests/layout/playwright.config.mjs`, always passed via `--config`). Do not run `npm install` or `playwright install` for it.
+- `/opt/ux-test-tools` is a separate, host-level install for interactive UX checks (`playwright`, `@axe-core/playwright`, Chromium, WebKit, Firefox), created by the "Full browsers" block in `setup.conf`. It is not locked and may lag the repository version (1.64.0 at the time of writing). Do not use it for the committed layout suite and do not install tools into the repository.
+- Check a selection before running it: `JUSTUP_LAYOUT_BROWSERS=chromium tools/run-limited.sh npx playwright test --config tests/layout/playwright.config.mjs --list --grep '@tag'`. Tags are listed in the `--grep` strings of `.github/workflows/ci.yml`; `node tests/layout/run.mjs --help` lists profiles (`quick`, `full`) and `--self-test`.
+- Do not add `waitForTimeout` or raise timeouts to turn a run green. Replace a fixed wait with `expect.poll` or `waitForFunction` on a state signal when you touch a spec; keep a deliberate measurement window only with a one-line reason.
+- Python: use `/opt/justup/.venv` (compiled `sslyze` included). Setup is documented in `setup.conf`.

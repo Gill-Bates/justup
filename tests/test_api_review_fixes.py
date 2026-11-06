@@ -539,6 +539,19 @@ def test_pop_refresh_entry_points_share_one_lock(conn, monkeypatch):
     reset_all()
 
 
+def test_unlocode_refresh_reports_not_implemented_instead_of_success(conn):
+    from app.api import pop
+
+    client = _client(conn, pop.router, user=_mk_user(conn, "root", admin=True))
+    client.app.state.db_path = Path(conn.execute("PRAGMA database_list").fetchone()[2])
+    reset_all()
+    resp = client.post("/api/admin/pop/refresh", params={"source": "unlocode"})
+    assert resp.status_code == 501
+    body = resp.json()
+    assert body["results"][0]["error"] == "not_implemented" and body["summary"]["has_errors"]
+    assert conn.execute("SELECT COUNT(*) FROM pop_import_runs").fetchone()[0] == 0
+
+
 # --- session lifetime (cookie vs. server-side expiry) -----------------------------------------
 
 

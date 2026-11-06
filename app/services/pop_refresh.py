@@ -321,8 +321,13 @@ def _fetch_with_retry(
 
                 # Response size protection: check the header first, then the running total while streaming
                 content_length = response.headers.get("content-length")
-                if content_length and int(content_length) > max_response_bytes:
-                    raise RuntimeError(f"Response too large: {int(content_length)} bytes (max {max_response_bytes})")
+                if (
+                    content_length
+                    and content_length.isascii()
+                    and content_length.isdigit()
+                    and int(content_length) > max_response_bytes
+                ):
+                    raise RuntimeError(f"Response too large: {content_length} bytes (max {max_response_bytes})")
 
                 body = bytearray()
                 for chunk in response.iter_bytes():
@@ -908,13 +913,14 @@ def _apply_peeringdb_snapshot(
 # UN/LOCODE refresh (placeholder)
 
 
+ERROR_NOT_IMPLEMENTED = "not_implemented"
+
+
 def refresh_from_unlocode(get_conn) -> PopRefreshResult:
     """
-    Refresh POP locations from UN/LOCODE data.
+    UN/LOCODE refresh: not implemented, always returns an ``ERROR_NOT_IMPLEMENTED`` result.
 
-    UN/LOCODE provides:
-    - Standard location codes (5 chars: 2 country + 3 location)
-    - City names and coordinates
+    No import run is recorded, so the status endpoint never shows a successful UN/LOCODE import.
 
     Args:
         get_conn: Connection factory callable
@@ -933,39 +939,9 @@ def refresh_from_unlocode(get_conn) -> PopRefreshResult:
         )
 
     try:
-        generation = maintenance.current_generation()
-        with maintenance.work_section(generation):
-            with _db_connection(get_conn) as conn:
-                run_id = pop_locations.start_import_run(conn, SOURCE_UNLOCODE)
-
-            # TODO: Implement actual UN/LOCODE data fetch
-            # UN/LOCODE data can be downloaded from:
-            # https://unece.org/trade/cefact/unlocode-code-list-country-and-territory
-            #
-            # The 3-letter location code within a country maps to our POP codes
-            _log.info("UN/LOCODE refresh: data integration not yet implemented")
-
-            with _db_connection(get_conn) as conn:
-                pop_locations.finish_import_run(
-                    conn,
-                    run_id=run_id,
-                    records_processed=0,
-                    records_inserted=0,
-                    records_updated=0,
-                    records_retired=0,
-                    error_message=None,
-                )
-
-        return PopRefreshResult(
-            run_id=run_id,
-            source=SOURCE_UNLOCODE,
-            processed=0,
-            inserted=0,
-            updated=0,
-            retired=0,
-        )
-    except maintenance.MaintenanceActiveError:
-        return PopRefreshResult(run_id="", source=SOURCE_UNLOCODE, error="maintenance_in_progress")
+        # No data fetch exists yet: report that instead of recording a successful empty import run.
+        _log.info("UN/LOCODE refresh requested but data integration is not implemented")
+        return PopRefreshResult(run_id="", source=SOURCE_UNLOCODE, error=ERROR_NOT_IMPLEMENTED)
     finally:
         lock.release()
 
@@ -1159,7 +1135,7 @@ def run_full_refresh(get_conn) -> list[PopRefreshResult]:
     total_updated = sum(r.updated for r in results)
     total_retired = sum(r.retired for r in results)
     total_errors = sum(r.validation_errors for r in results)
-    failures = [r for r in results if not r.success]
+    failures = [r for r in results if not r.success and r.error != ERROR_NOT_IMPLEMENTED]
 
     _log.info(
         "Full refresh complete: processed=%d, inserted=%d, updated=%d, "

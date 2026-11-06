@@ -178,6 +178,7 @@ def trigger_refresh(
         - 200: Success (full or partial)
         - 207: Multi-status (some sources failed)
         - 409: Conflict (already running)
+        - 501: Only sources that are not implemented (UN/LOCODE) were requested
         - 502: All sources failed
     """
     _log.info("Manual POP refresh triggered for source: %s", source.value)
@@ -195,7 +196,8 @@ def trigger_refresh(
 
     total_processed = sum(r["processed"] for r in results)
     total_inserted = sum(r["inserted"] for r in results)
-    failures = [r for r in results if not r["success"]]
+    # A source that is not implemented is reported but is neither a failure nor a partial success.
+    failures = [r for r in results if not r["success"] and r["error"] != pop_refresh.ERROR_NOT_IMPLEMENTED]
     already_running = [r for r in results if r["error"] == "already_running"]
 
     response_data = {
@@ -211,6 +213,8 @@ def trigger_refresh(
 
     if already_running and len(already_running) == len(results):
         return JSONResponse(status_code=409, content=response_data)
+    if results and all(r["error"] == pop_refresh.ERROR_NOT_IMPLEMENTED for r in results):
+        return JSONResponse(status_code=501, content=response_data)
     if len(failures) == len(results) and len(results) > 0:
         return JSONResponse(status_code=502, content=response_data)
     if len(failures) > 0:

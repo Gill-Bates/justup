@@ -17,6 +17,7 @@ import tarfile
 import tempfile
 import threading
 from pathlib import Path
+from typing import Literal
 
 from fastapi import (
     APIRouter,
@@ -623,7 +624,7 @@ async def get_public_egress(refresh: bool = False, _admin=Depends(require_admin)
     return JSONResponse(result, headers={"Cache-Control": "private, no-store"})
 
 
-@router.get("/db-health")
+@router.get("/db-health", dependencies=[Depends(rate_limit(RATE_LIMIT_HEAVY))])
 async def get_db_health(request: Request, quick_check: bool = False, _admin=Depends(require_admin)):
     """SQLite health: file/WAL size, free pages, queue backlog, connections.
 
@@ -1038,7 +1039,7 @@ class EmailTemplatePreviewRequest(BaseModel):
 
     subject: str | None = None
     html: str | None = None
-    variant: str = "down"  # "down" or "resolved"
+    variant: Literal["down", "resolved"] = "down"
 
 
 class EmailTemplatePreviewResponse(BaseModel):
@@ -1158,7 +1159,7 @@ async def send_test_email(
         immediate=True,
     )
 
-    _log.info("Test email queued for %s (queue_id=%d)", payload.recipient, queue_id)
+    _log.info("Test email queued (queue_id=%d)", queue_id)
     return {
         "ok": True,
         "message": f"Test email queued for {payload.recipient}; the SMTP handoff result appears in the delivery log",

@@ -240,3 +240,20 @@ def test_signal_text_contains_target_link_only_with_public_hostname(conn, client
     client.patch("/settings", json={"public_hostname": "justup.example.com"})
     with_url = dispatcher._render_signal_message(_alert(tid, status))  # noqa: SLF001
     assert f"https://justup.example.com/ui/targets/{tid}" in with_url
+
+
+@pytest.mark.parametrize("failed_service", ["", "TCP", "CERT WARNING (10d) - h"])
+def test_signal_and_mail_render_the_same_check_type_and_reason(conn, failed_service):
+    from app.services.notifications.email_template import EMAIL_TEMPLATE_SUBJECT_KEY
+
+    template = "{{target.check_type}}|{{alert.reason}}"
+    sqlite_db.set_setting(conn, SettingKeys.SIGNAL_MESSAGE_TEMPLATE_DOWN, template)
+    sqlite_db.set_setting(conn, EMAIL_TEMPLATE_SUBJECT_KEY, template)
+    tid = _target(conn)
+    alert = AlertPayload("a1", tid, "T1", failed_service, "open", utcnow())
+    dispatcher = NotificationDispatcher(conn)
+    subject, _ = dispatcher._render_email_content(alert)  # noqa: SLF001
+    assert dispatcher._render_signal_message(alert) == subject  # noqa: SLF001
+    # a missing target row degrades the same way on both channels
+    gone = AlertPayload("a2", 99999, "Gone", failed_service, "open", utcnow())
+    assert dispatcher._render_signal_message(gone) == dispatcher._render_email_content(gone)[0]  # noqa: SLF001

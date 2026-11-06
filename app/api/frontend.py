@@ -2100,7 +2100,7 @@ async def _run_traceroute_fragment(
 # ─── Signal Registration UI Fragments ───────────────────────────────────────────
 
 
-@router.get("/ui/fragments/signal-qr", response_class=HTMLResponse)
+@router.get("/ui/fragments/signal-qr", response_class=HTMLResponse, dependencies=[Depends(rate_limit("6/minute"))])
 def fragment_signal_qr(request: Request, conn=Depends(get_conn)):
     """Render Signal QR code for device linking.
 

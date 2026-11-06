@@ -1,4 +1,4 @@
-<!-- Generated: 2026-09-21 | Updated: 2026-11-05 -->
+<!-- Generated: 2026-09-21 | Updated: 2026-11-06 -->
 # .github
 
 ## Purpose
@@ -33,6 +33,7 @@ GitHub repository automation and assets: CI/CD workflows (PR gate with Python, c
 ### Testing Requirements
 - No local test runner for the workflows themselves; validate YAML syntax and rely on the PR run. Validate `renovate.json` with `npx renovate-config-validator` if available.
 - The steps inside them are reproducible locally; job contents and commands are listed once in `workflows/AGENTS.md`. Run `actionlint .github/workflows/*.yml` after workflow edits.
+- Local reproduction of the Playwright, pytest and Node steps goes through `tools/run-limited.sh` (see root `AGENTS.md`); the workflows themselves call the tools directly.
 - Never run the arm64 image build locally (no emulation); `linux/arm64` is built and verified only on the native runner in Actions.
 - The release workflow checks each built image's Nmap worker (privilege separation, scan, traceroute, no `mtr`), libsignal native library (packaging plus dlopen) and runtime-image purity, publishes only a verified candidate index, and compares installed toolchain versions across architectures; it does not prove that Signal starts or sends a message. `security.yml` rescans the published image weekly (untested until its first Actions run).
 

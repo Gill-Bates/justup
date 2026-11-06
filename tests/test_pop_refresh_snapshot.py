@@ -155,11 +155,10 @@ def test_run_full_refresh_returns_result_per_source_on_success(conn, monkeypatch
     assert peeringdb.error is None
     assert peeringdb.processed >= 1
 
-    # UN/LOCODE is a placeholder import: it must still return a valid result object,
-    # not None, with a reachable success return.
-    assert unlocode.error is None
+    # UN/LOCODE is not implemented: a valid result object that reports it, never a fake success.
+    assert unlocode.error == pop_refresh.ERROR_NOT_IMPLEMENTED
     assert unlocode.processed == 0
-    assert unlocode.run_id
+    assert not unlocode.run_id
 
 
 # validate_pop_record coordinate handling

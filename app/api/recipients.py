@@ -242,20 +242,6 @@ def list_recipients(conn=Depends(get_conn), _user=Depends(get_current_user)):
     return [_row_to_public(r, targets_by_recipient.get(r["id"])) for r in rows]
 
 
-def _is_phone_probably_registered(phone: str) -> bool | None:
-    """Check if a phone is likely registered with Signal.
-
-    Wrapper around _signal_registration_status() for tri-state API.
-
-    Args:
-            phone: E.164 formatted phone number
-
-    Returns:
-            True if registered, False if not registered, None if check unavailable
-    """
-    return _signal_registration_status(phone)
-
-
 @router.post("/verify-signal", dependencies=[Depends(rate_limit(RATE_LIMIT_HEAVY))])
 def verify_signal_numbers(
     phones: _PhoneList,
@@ -294,14 +280,9 @@ def verify_signal_numbers(
             phones_to_check.append(normalized)
 
     # Sequential on purpose: signal-cli serializes on a file lock, so threads would only queue.
-    # _is_phone_probably_registered answers cached numbers without a backend call.
+    # _signal_registration_status answers cached numbers without a backend call and maps failures to None.
     for normalized in phones_to_check:
-        try:
-            is_registered = _is_phone_probably_registered(normalized)
-            results[normalized] = is_registered
-        except Exception as e:  # noqa: BLE001 - Signal-check boundary: any failure degrades to unknown registration
-            _log.warning("Signal check failed for %s: %s", mask_phone(normalized), e)
-            results[normalized] = None
+        results[normalized] = _signal_registration_status(normalized)
 
     return {"results": results, "invalid": invalid_phones}
 

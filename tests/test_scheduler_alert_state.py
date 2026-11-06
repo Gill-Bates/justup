@@ -787,6 +787,56 @@ def test_status_refresh_preserves_both_saved_uptime_windows(db_path, tmp_path):
     assert status["uptime_percent_30d"] == 88.25
 
 
+def test_connectivity_issue_keeps_both_saved_uptime_windows(db_path, tmp_path):
+    target_id = _target(db_path, enable_http_check=True)
+    sched = _sched(db_path, tmp_path)
+    sched._refresh_targets(utcnow())
+    http_ok = scheduler.checks.CheckResult(ok=True, latency_ms=1.0, value={"status": 200})
+    with mock.patch.object(scheduler.checks, "http_head", mock.AsyncMock(return_value=http_ok)):
+        asyncio.run(sched._run_target(target_id, utcnow()))
+    conn = sqlite_db.connect(db_path)
+    try:
+        conn.execute(
+            "UPDATE target_status SET uptime_percent = 91.5, uptime_percent_30d = 88.25 WHERE target_id = ?",
+            (target_id,),
+        )
+        conn.commit()
+    finally:
+        sqlite_db.close_connection(conn)
+    asyncio.run(sched._handle_connectivity_issue(target_id, utcnow()))
+    conn = sqlite_db.connect(db_path)
+    try:
+        status = sqlite_db.get_target_status(conn, target_id)
+    finally:
+        sqlite_db.close_connection(conn)
+    assert status["overall_status"] == TargetStatus.UNKNOWN
+    assert (status["uptime_percent"], status["uptime_percent_30d"]) == (91.5, 88.25)
+
+
+def test_check_switched_off_while_failing_cannot_raise_a_down_alert(db_path, tmp_path):
+    target_id = _target(db_path, enable_http_check=True, enable_ping=True)
+    sched = _sched(db_path, tmp_path)
+    sched._refresh_targets(utcnow())
+    rt = sched._rt[target_id]
+    rt.down_since_by_service["ping"] = utcnow() - timedelta(hours=1)  # failing for longer than the timeout
+    conn = sqlite_db.connect(db_path)
+    try:
+        conn.execute("UPDATE targets SET enable_ping = 0 WHERE id = ?", (target_id,))
+        conn.commit()
+    finally:
+        sqlite_db.close_connection(conn)
+    sched._refresh_targets(utcnow())
+    http_ok = scheduler.checks.CheckResult(ok=True, latency_ms=1.0, value={"status": 200})
+    with (
+        mock.patch.object(scheduler.checks, "http_head", mock.AsyncMock(return_value=http_ok)),
+        mock.patch.object(sched, "_dispatch_alert", mock.AsyncMock()),
+    ):
+        asyncio.run(sched._run_target(target_id, utcnow()))
+
+    assert rt.down_since_by_service["ping"] is None
+    assert _alert_rows(db_path) == []
+
+
 def test_delayed_metric_storage_keeps_one_check_cycle_one_availability_sample(db_path, tmp_path):
     target_id = _target(db_path, enable_http_check=True, enable_ping=True)
     sched = _sched(db_path, tmp_path)

@@ -1633,8 +1633,8 @@ def test_report_text_is_english_only(monkeypatch, kw):
 
 def test_single_failed_check_uses_singular_wording(monkeypatch):
     text = _all_text(_full_builder(monkeypatch, hops=[_hop(1)], ssl=None, fail=(10,)))
-    assert "1 failed check ×" in text and "forms 1 downtime event" not in text
-    assert "1 failed checks" not in text
+    assert "sum of measured outages" in text and "forms 1 downtime event" not in text
+    assert "× interval" not in text
 
 
 def test_country_without_city_is_not_shown_as_a_place(monkeypatch):

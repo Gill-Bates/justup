@@ -509,8 +509,10 @@ def test_auto_scheduler_does_not_run_unlocode_placeholder(conn, monkeypatch):
 
 def test_unlocode_placeholder_not_counted_as_external_success(conn, monkeypatch):
     """Scenario 13: even a manual UN/LOCODE run does not become the scheduler's 'last success'."""
-    # A manual UN/LOCODE refresh records a completed placeholder run with zero records.
-    pop_refresh.refresh_from_unlocode(lambda: conn)
+    # A manual UN/LOCODE refresh is not implemented: it reports that and records no run at all.
+    result = pop_refresh.refresh_from_unlocode(lambda: conn)
+    assert result.error == pop_refresh.ERROR_NOT_IMPLEMENTED and not result.success
+    assert conn.execute("SELECT COUNT(*) FROM pop_import_runs").fetchone()[0] == 0
     # The scheduler keys off PeeringDB only, so its last-success state is still empty.
     state = pop_refresh.get_scheduler_state(conn)
     assert state["last_success_at"] is None

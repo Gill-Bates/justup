@@ -117,6 +117,7 @@ The downtime card of a target lists three kinds of period. A **downtime** is a c
 The dashboard shows online, offline, disabled, and total targets, the connection
 quality widget, and the **Downtime Overview (24h)**. It refreshes every 30 s and
 has a refresh button.
+Each row of the **Downtime Overview (24h)** is one link: a click, a tap, or Enter on the focused row opens the target with the same last 24 hours already selected. A middle click or Ctrl+click opens it in a new tab. The range applies only to that visit; the address bar does not keep it, so a reload shows the default 24 hours.
 
 On desktop, **Edit dashboard** moves, resizes, and hides widgets per user. **Done**
 saves the layout; **Reset layout** restores the default. Keyboard: arrow keys move a

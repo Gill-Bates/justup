@@ -286,8 +286,11 @@ _MAX_READER_ATTEMPTS = 3
 def _cache_put(ip: str, value: GeoLocation | None, generation: int) -> None:
     """Cache a result unless the database was swapped since it was read."""
     with _geo_cache_lock:
-        if generation == _reader_generation and len(_geo_cache) < _geo_cache_max_size:
-            _geo_cache[ip] = value
+        if generation != _reader_generation:
+            return
+        if ip not in _geo_cache and len(_geo_cache) >= _geo_cache_max_size:
+            _geo_cache.pop(next(iter(_geo_cache)))  # evict the oldest so a full cache keeps serving new hops
+        _geo_cache[ip] = value
 
 
 def _read_record(reader: Any, ip: str) -> tuple[int, dict[str, Any] | None]:

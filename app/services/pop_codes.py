@@ -29,7 +29,6 @@ Scope:
 from __future__ import annotations
 
 import logging
-import re
 import sqlite3
 import time
 from collections.abc import Callable
@@ -155,7 +154,7 @@ def observe_unknown_pop(
 
     parser = parse_provider_hostname(hostname)
     codes = [parser.pop_code] if parser else extract_pop_tokens(hostname)
-    code = next((c for c in codes if re.fullmatch(r"[a-z][a-z0-9]{1,4}", c)), None)
+    code = next((c for c in codes if pop_candidates.CANDIDATE_CODE_RE.fullmatch(c)), None)
     if not code:
         return
     conn = _get_pop_conn()
@@ -220,7 +219,11 @@ def lookup_pop_code(hostname: str, conn: sqlite3.Connection | None = None) -> Lo
         db = _get_pop_conn() if owns_db else conn
         try:
             if db:
-                loc = lookup_pop_by_tokens(db, [provider_result.pop_code])
+                try:
+                    loc = lookup_pop_by_tokens(db, [provider_result.pop_code])
+                except sqlite3.OperationalError as exc:  # busy DB degrades to the embedded fallback
+                    _log.debug("POP provider lookup DB error: %s", exc)
+                    loc = None
                 if loc:
                     return {
                         "city": loc["city"],

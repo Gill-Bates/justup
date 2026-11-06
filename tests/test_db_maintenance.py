@@ -230,6 +230,62 @@ def test_retention_keeps_open_and_recent_alerts_and_drops_old_resolved(conn):
     assert {r[0] for r in conn.execute("SELECT id FROM alerts")} == {"b", "c"}
 
 
+def _outbox(conn, alert_id, event_type, status, age_days=0):
+    ts = utcnow() - timedelta(days=age_days)
+    conn.execute(
+        "INSERT INTO alert_dispatch_outbox (alert_id, event_type, target_id, target_name, failed_service, started_at,"
+        " status, next_attempt_at, created_at, updated_at) VALUES (?, ?, 1, 't', 'http', ?, ?, ?, ?, ?)",
+        (alert_id, event_type, ts, status, ts, ts, ts),
+    )
+
+
+def _open_alert(conn, alert_id):
+    now = utcnow()
+    conn.execute(
+        "INSERT INTO alerts (id, target_id, target_name, failed_service, status, started_at, created_at, updated_at)"
+        " VALUES (?, 1, 't', 'http', 'open', ?, ?, ?)",
+        (alert_id, now, now, now),
+    )
+
+
+def test_retention_prunes_old_completed_outbox_rows_only(conn):
+    _insert_target(conn)
+    _open_alert(conn, "a")
+    _outbox(conn, "a", "open", "completed", age_days=retention.NOTIFICATION_RETENTION_DAYS + 1)
+    _outbox(conn, "a", "resolved", "pending", age_days=retention.NOTIFICATION_RETENTION_DAYS + 1)
+    conn.commit()
+    retention.run_retention(conn)
+    assert [r[0] for r in conn.execute("SELECT event_type FROM alert_dispatch_outbox")] == ["resolved"]
+
+
+def test_deleting_alerts_or_target_removes_their_pending_outbox_rows(conn):
+    _insert_target(conn)
+    _open_alert(conn, "a")
+    _open_alert(conn, "b")
+    _outbox(conn, "a", "open", "pending")
+    _outbox(conn, "b", "open", "pending")
+    conn.commit()
+    sqlite_db.delete_alerts_by_target(conn, 1)
+    assert conn.execute("SELECT COUNT(*) FROM alert_dispatch_outbox").fetchone()[0] == 0
+    _open_alert(conn, "c")
+    _outbox(conn, "c", "open", "pending")
+    conn.commit()
+    sqlite_db.delete_all_alerts(conn)
+    assert conn.execute("SELECT COUNT(*) FROM alert_dispatch_outbox").fetchone()[0] == 0
+
+
+def test_outbox_row_of_a_cascade_deleted_alert_is_neither_dispatched_nor_kept(conn):
+    _insert_target(conn)
+    _open_alert(conn, "a")
+    _outbox(conn, "a", "open", "pending")
+    conn.commit()
+    conn.execute("DELETE FROM targets WHERE id = 1")  # alerts go with the target, the outbox row does not
+    conn.commit()
+    assert sqlite_db.list_pending_alert_dispatches(conn) == []
+    retention.run_retention(conn)
+    assert conn.execute("SELECT COUNT(*) FROM alert_dispatch_outbox").fetchone()[0] == 0
+
+
 def test_failed_retention_task_is_reported_and_does_not_block_others(conn, monkeypatch):
     _queue(conn, "sent", 30)
     real = retention.delete_in_batches

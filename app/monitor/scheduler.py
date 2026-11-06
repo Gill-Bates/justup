@@ -1031,9 +1031,8 @@ class MonitorScheduler:
             def store_unknown_status() -> None:
                 with maintenance.work_section(generation), self._db_conn() as conn:
                     existing = sqlite_db.get_target_status(conn, target_id)
-                    uptime_percent = (
-                        existing["uptime_percent"] if (existing and "uptime_percent" in existing.keys()) else None  # noqa: SIM118
-                    )
+                    uptime_percent = existing["uptime_percent"] if existing else None
+                    uptime_percent_30d = existing["uptime_percent_30d"] if existing else None
 
                     sqlite_db.set_target_status_snapshot(
                         conn,
@@ -1047,6 +1046,7 @@ class MonitorScheduler:
                         tcp_latency_ms=None,
                         cert_days_left=None,
                         uptime_percent=uptime_percent,
+                        uptime_percent_30d=uptime_percent_30d,
                         overall_status=TargetStatus.UNKNOWN,  # Already str constant
                     )
                     conn.commit()
@@ -1762,6 +1762,17 @@ class MonitorScheduler:
                         rt.down_since_by_service["udp"] = None  # UNKNOWN restarts the confirmation
                 if still_enabled("enable_cert_expiration") and snapshot.get("cert_days_left") is not None:
                     _update_service("cert", 1)
+                # A switched-off check must not keep a "down since" time: it would raise a DOWN alert
+                # that no later result can resolve.
+                for service, flag in (
+                    ("http", "enable_http_check"),
+                    ("ping", "enable_ping"),
+                    ("tcp", "enable_tcp_connect"),
+                ):
+                    if not still_enabled(flag):
+                        rt.down_since_by_service[service] = None
+                if not (still_enabled("enable_udp_scan") and cfg.get("udp_ports")):
+                    rt.down_since_by_service["udp"] = None
                 if calculate_uptime and uptime_percent is not None:
                     rt.last_uptime_calc_at = now
                 event_bus.publish("target.status", {"target_id": target_id, "status": str(overall_status)})
@@ -1975,12 +1986,16 @@ class MonitorScheduler:
         rt.udp_result_at = utcnow()
         rt.udp_unconsumed = True
         try:
-            with maintenance.work_section(generation), self._db_conn() as conn:
-                for c in outcome.values():
-                    sqlite_db.update_network_port_status(
-                        conn, target_id, "udp", c.port, c.status, c.detail, raw_state=c.raw_state
-                    )
-                conn.commit()
+
+            def store_udp_ports() -> None:
+                with maintenance.work_section(generation), self._db_conn() as conn:
+                    for c in outcome.values():
+                        sqlite_db.update_network_port_status(
+                            conn, target_id, "udp", c.port, c.status, c.detail, raw_state=c.raw_state
+                        )
+                    conn.commit()
+
+            await asyncio.to_thread(self._thread_call(self._epoch_for_thread(), store_udp_ports))
         except maintenance.MaintenanceActiveError:
             return
         except Exception as exc:  # noqa: BLE001 - persistence failure is logged, the in-memory result stays

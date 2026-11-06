@@ -229,9 +229,12 @@ def test_general_settings_have_unique_form_ids_and_keep_all_fields():
             if tag == "form":
                 autosave = "data-settings-autosave" in attr or attr.get("id") == "general-settings-form"
                 self.form_stack.append(autosave)
-            elif tag in {"input", "select"} and attr.get("name") in expected_fields:
-                if not (self.form_stack and self.form_stack[-1]):
-                    self.orphans.append(attr["name"])
+            elif (
+                tag in {"input", "select"}
+                and attr.get("name") in expected_fields
+                and not (self.form_stack and self.form_stack[-1])
+            ):
+                self.orphans.append(attr["name"])
 
         def handle_endtag(self, tag):
             if tag == "form":

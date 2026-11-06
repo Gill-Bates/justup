@@ -23,7 +23,7 @@ def _flag(target: Mapping[str, Any] | Any, key: str) -> bool:
     """Read a flag from a dict or sqlite3.Row; a missing column counts as disabled."""
     try:
         return bool(target[key])
-    except (KeyError, IndexError):
+    except (KeyError, IndexError, TypeError):
         return False
 
 
