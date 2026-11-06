@@ -18,6 +18,7 @@ import {
     DOM, 
     withSpinner, 
     getErrorMessage, 
+    getErrorInfo,
     notify,
     setSuccess, 
     setError, 
@@ -589,29 +590,16 @@ export async function signalRegister() {
                 
                 signalAdvanceToStep('signal-reg-step-1', 'signal-reg-step-2');
             } else {
-                const error = await getErrorMessage(resp);
-                
-                const needsCaptcha = error && (
-                    error.toLowerCase().includes('captcha') ||
-                    error.toLowerCase().includes('challenge')
-                );
-                
-                if (needsCaptcha && captchaSection) {
+                const { message: error, code } = await getErrorInfo(resp);
+
+                if (code === 'captcha_required' && captchaSection) {
                     captchaSection.classList.remove('d-none');
                     setWarning(statusEl, 'Captcha required - solve it and paste the token below, then try again');
+                } else if (code === 'already_registered') {
+                    notify('info', 'This number is already registered');
+                    refreshStatus();
                 } else {
-                    const alreadyRegistered = error && (
-                        error.toLowerCase().includes('already registered') ||
-                        error.toLowerCase().includes('existing account') ||
-                        error.toLowerCase().includes('already linked')
-                    );
-                    
-                    if (alreadyRegistered) {
-                        notify('info', 'This number is already registered');
-                        refreshStatus();
-                    } else {
-                        setError(statusEl, error);
-                    }
+                    setError(statusEl, error);
                 }
             }
         });

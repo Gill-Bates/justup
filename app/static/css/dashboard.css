@@ -252,6 +252,20 @@
 	overflow: auto;
 }
 
+/* One link per row: its stretched ::after makes the whole row the click and tap target. */
+.dashboard-downtime-table tbody tr {
+	position: relative;
+}
+
+.dashboard-downtime-table a.stretched-link:focus-visible {
+	outline: none;
+}
+
+.dashboard-downtime-table a.stretched-link:focus-visible::after {
+	outline: var(--ju-focus-outline-width) solid var(--ju-focus-ring);
+	outline-offset: calc(-1 * var(--ju-focus-outline-width));
+}
+
 .dashboard-grid:not(.dashboard-grid--editing) .ui-resizable-handle {
 	display: none !important;
 }

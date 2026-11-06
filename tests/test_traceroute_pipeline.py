@@ -18,7 +18,7 @@ import pytest
 
 from app.api import frontend
 from app.services import geo_resolver as gr
-from app.services import pdf_report, traceroute_geo, traceroute_service
+from app.services import pdf_report, route_map_rules, traceroute_geo, traceroute_service
 from app.services.route_timeline import mapped_hop_numbers
 from tests import _support  # noqa: F401 - imported for its sys.path side effect
 from tests.traceroute_helpers import patch_trace
@@ -73,6 +73,15 @@ def _web_context(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     return captured
 
 
+def _points_by_hop(points: list[dict]) -> dict[int, dict]:
+    """Map every hop number a point stands for (including `_hop_range`) to that point."""
+    by_hop: dict[int, dict] = {}
+    for point in points:
+        for number in mapped_hop_numbers([point]):
+            by_hop[number] = point
+    return by_hop
+
+
 def _view(hops: list[dict]) -> list[tuple]:
     return [(h.get("hop_display", h.get("hop")), h.get("ip"), h.get("status"), h.get("city")) for h in hops]
 
@@ -88,6 +97,13 @@ def test_web_and_pdf_build_the_same_route(monkeypatch: pytest.MonkeyPatch, route
     assert _view(web["hops"]) == _view(pdf_hops)
     assert [p["ip"] for p in web["geo_points"]] == [p["ip"] for p in pdf_points]
     assert web["has_interpolation"] == pdf_interp
+
+
+def test_the_fragment_route_passes_the_map_rules_to_the_template(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_sources(monkeypatch, ROUTES[sorted(ROUTES)[0]])
+    web = _web_context(monkeypatch)
+    assert web["map_style"] == route_map_rules.map_style()
+    assert web["map_labels"] == route_map_rules.select_labels(web["geo_points"])
 
 
 def test_blocked_middle_is_collapsed_and_flagged_in_both_views(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -179,13 +195,7 @@ def _owner_route_context(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
 def test_table_and_map_agree_on_places_pins_and_counts(monkeypatch: pytest.MonkeyPatch) -> None:
     ctx = _owner_route_context(monkeypatch)
     rows = {h["hop"]: h for h in ctx["hops"] if not h.get("_collapsed")}
-    plotted = {}
-    for point in ctx["geo_points"]:
-        first, last = (
-            (int(v) for v in point["_hop_range"].split("-")) if point.get("_hop_range") else (point["hop"],) * 2
-        )
-        for number in range(first, last + 1):
-            plotted[number] = point
+    plotted = _points_by_hop(ctx["geo_points"])
     # Every located table row has a matching city or country-center point.
     assert set(plotted) == {number for number, row in rows.items() if row["on_map"]} == {3, 5, 7, 8, 10, 11, 13}
     for number, point in plotted.items():
@@ -250,15 +260,8 @@ def test_country_centers_and_unlocated_hops_match_in_web_and_pdf(monkeypatch: py
     pdf_hops, pdf_points, _interpolated = pdf_report._run_traceroute_with_interpolation(HOST)
 
     for points in (web_points, pdf_points):
-        by_hop = {}
-        for point in points:
-            first, last = (
-                tuple(int(v) for v in point["_hop_range"].split("-"))
-                if point.get("_hop_range")
-                else (point["hop"], point["hop"])
-            )
-            for number in range(first, last + 1):
-                by_hop[number] = point
+        by_hop = _points_by_hop(points)
+        assert set(by_hop) == mapped_hop_numbers(points)
         assert set(by_hop) == {2, 3, 5, 6}
         assert (by_hop[2]["lat"], by_hop[2]["lon"]) == traceroute_geo.country_center("DE")
         assert (by_hop[5]["lat"], by_hop[5]["lon"]) == traceroute_geo.country_center("IL")

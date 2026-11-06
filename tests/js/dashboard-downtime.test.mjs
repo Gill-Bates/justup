@@ -91,6 +91,23 @@ test("a successful response shows the table with the affected count", async () =
   assert.equal(h.requests[0].includes("limit="), false);
 });
 
+test("each row is one stretched link to the target with the widget's 24h range", async () => {
+  const hostile = { ...incident, target_id: "7/../x?y=1#z", name: "<img src=x onerror=alert(1)>" };
+  const h = harness([ok({ targets: [incident, hostile] })]);
+  await h.load();
+  const rows = h.nodes["table-body"].children;
+  assert.equal(rows.length, 2);
+  const anchors = rows.map(row => row.children[0].children[0]);
+  assert.equal(anchors[0].href, "/ui/targets/1?range=24h");
+  assert.equal(anchors[1].href, "/ui/targets/" + encodeURIComponent(hostile.target_id) + "?range=24h");
+  for (const [i, row] of rows.entries()) {
+    assert.match(anchors[i].className, /\bstretched-link\b/);
+    // Nested links would break the stretched target and keyboard order.
+    assert.equal(row.children.flatMap(td => td.children).filter(c => c.href).length, 1);
+  }
+  assert.equal(anchors[1].children[1].textContent, hostile.name);
+});
+
 test("a failure after a success shows the error state instead of stale rows or the empty state", async () => {
   for (const failure of [{ ok: false, status: 500 }, { ok: true, json: async () => { throw new SyntaxError("bad"); } }]) {
     const h = harness([ok({ targets: [incident] }), failure]);

@@ -235,7 +235,7 @@ def test_parallel_deliveries_are_all_counted(tmp_path):
     sqlite_db.init_schema(boot)
     now = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
     key = f"delivery.signal.sent:{int(now.timestamp()) // inbox.SENT_GROUP_SECONDS}"
-    barrier = threading.Barrier(4)
+    barrier = threading.Barrier(4, timeout=10)
 
     def work():
         c = sqlite_db.connect(path)
@@ -247,7 +247,8 @@ def test_parallel_deliveries_are_all_counted(tmp_path):
     for t in threads:
         t.start()
     for t in threads:
-        t.join()
+        t.join(timeout=15)
+    assert not any(t.is_alive() for t in threads)
     assert _count_of(boot, key) == 4
     sqlite_db.close_connection(boot)
 

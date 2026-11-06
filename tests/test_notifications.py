@@ -555,6 +555,11 @@ def test_retries_are_silent_until_the_final_permanent_failure(db, spooler):
 
 def test_quiesce_refuses_notification_writes_and_the_triggering_operation(client):
     c, tokens = client
+    conn = sqlite_db.connect(c.app.state.db_path)
+    try:
+        attempts_before = conn.execute("SELECT COUNT(*) FROM login_attempts").fetchone()[0]
+    finally:
+        sqlite_db.close_connection(conn)
     assert sqlite_db.begin_quiesce(timeout=5) is True
     try:
         with pytest.raises(sqlite_db.DatabaseQuiescedError):
@@ -570,10 +575,8 @@ def test_quiesce_refuses_notification_writes_and_the_triggering_operation(client
         sqlite_db.end_quiesce()
     conn = sqlite_db.connect(c.app.state.db_path)
     try:
-        assert (
-            conn.execute("SELECT COUNT(*) FROM notifications WHERE event_type='security.login.success'").fetchone()[0]
-            == 0
-        )
+        # The refused login must not have been recorded as an attempt either.
+        assert conn.execute("SELECT COUNT(*) FROM login_attempts").fetchone()[0] == attempts_before
     finally:
         sqlite_db.close_connection(conn)
 

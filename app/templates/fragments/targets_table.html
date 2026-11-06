@@ -1,4 +1,4 @@
-{% from "fragments/_state_badge.html" import state_badge %}
+{% from "fragments/_state_badge.html" import state_badge, cert_badge %}
 {# Targets Table Fragment (HTMX) - Grouped by Group Name #}
 {# Out-of-band update of the page carrier in targets.html (hx-include of polling/refresh); rendered in every state #}
 <input type="hidden" id="targets-page-state" name="page" value="{{ page }}" hx-swap-oob="true">
@@ -59,7 +59,7 @@
 									{% if t.enable_ping %}{{ state_badge('Ping', t.ping_status) }}{% endif %}
 									{% if t.enable_http_check %}{{ state_badge('HTTP', t.http_status) }}{% endif %}
 									{% if t.enable_cert_expiration %}
-									<span class="badge {% if t.cert_status == 'ok' %}ju-status-badge--success{% elif t.cert_status == 'warning' %}ju-status-badge--warning{% elif t.cert_status in ('critical', 'expired') %}ju-status-badge--danger{% else %}ju-status-badge--neutral{% endif %}">Cert</span>
+									{{ cert_badge('Cert', t.cert_status) }}
 									{% endif %}
 									{% for endpoint in t.endpoints|default([]) if endpoint.kind == 'port' %}
 									{{ state_badge(endpoint.protocol|upper ~ ':' ~ endpoint.port, endpoint.status, endpoint.state_note or endpoint.name) }}

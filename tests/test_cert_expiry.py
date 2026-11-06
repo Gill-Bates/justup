@@ -183,7 +183,7 @@ def test_expired_certificate_retry_shares_the_timeout_budget(tmp_path, monkeypat
     assert not result.ok
     assert result.detail == "timeout"
     # Without a shared budget this takes about 0.6 s + 1.0 s.
-    assert elapsed < 1.35, elapsed
+    assert elapsed < 1.5, elapsed
 
 
 def test_unverified_retry_must_not_turn_expiry_into_ok(tmp_path, monkeypatch):

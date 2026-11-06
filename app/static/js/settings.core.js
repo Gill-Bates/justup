@@ -209,18 +209,30 @@ export function formatErrorDetail(detail) {
  * @returns {Promise<string>} Error message
  */
 export async function getErrorMessage(resp) {
+    return (await getErrorInfo(resp)).message;
+}
+
+/**
+ * Message plus the machine-readable `detail.code` (or null) of an error response.
+ * @param {Response} resp
+ * @returns {Promise<{message: string, code: string|null}>}
+ */
+export async function getErrorInfo(resp) {
     // Read body as text once, then try JSON parsing
     try {
         const text = await resp.text();
         try {
             const data = JSON.parse(text);
-            return window.JuApiError.fromBody(data, text.trim() || 'Unknown error');
+            return {
+                message: window.JuApiError.fromBody(data, text.trim() || 'Unknown error'),
+                code: window.JuApiError.code(data?.detail),
+            };
         } catch {
             // Not JSON - use plain text error message
-            return text.trim() || 'Unknown error';
+            return { message: text.trim() || 'Unknown error', code: null };
         }
     } catch {
-        return 'Unknown error';
+        return { message: 'Unknown error', code: null };
     }
 }
 

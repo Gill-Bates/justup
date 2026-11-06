@@ -18,7 +18,6 @@ import {
     SIGNAL_API, 
     signalStatusGuard, 
     isSignalBusy,
-    maskPhone,
     setOnPanelEnabled
 } from './settings.signal-core.js';
 
@@ -228,7 +227,7 @@ export async function loadSignalStatus() {
 
 /**
  * Show linked account section with account info and unlink button
- * @param {string[]} accounts - List of registered accounts (masked phone numbers)
+ * @param {string[]} accounts - List of registered accounts (phone numbers)
  */
 function showLinkedAccountSection(accounts) {
     const setupCollapse = document.getElementById('signal-setup-collapse');
@@ -250,8 +249,6 @@ function showLinkedAccountSection(accounts) {
     
     section.replaceChildren();
 
-    const maskedAccounts = accounts;
-
     // Alert box - build with DOM API to prevent XSS
     var alert = document.createElement('div');
     alert.className = 'alert alert-success small py-2 mb-3';
@@ -265,7 +262,7 @@ function showLinkedAccountSection(accounts) {
     strong.textContent = 'Device linked';
     var acctSpan = document.createElement('span');
     acctSpan.className = 'text-body-secondary ms-2';
-    acctSpan.textContent = 'Account: ' + maskedAccounts.join(', ');
+    acctSpan.textContent = 'Account: ' + accounts.join(', ');
     alertInner.append(icon, strong, acctSpan);
     alert.appendChild(alertInner);
     section.appendChild(alert);

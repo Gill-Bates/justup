@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -771,37 +772,23 @@ def test_check_whose_lock_was_taken_over_and_released_still_discards_results(db_
     append.assert_not_called()
 
 
-def test_slow_tsdb_writes_do_not_stall_the_event_loop_and_share_one_cycle_stamp(db_path, tmp_path):
+def test_slow_tsdb_writes_run_off_the_event_loop_and_share_one_cycle_stamp(db_path, tmp_path):
     target_id = _target(db_path, enable_http_check=True, enable_ping=True)
     sched = _sched(db_path, tmp_path)
     sched._refresh_targets(utcnow())
     http_ok = scheduler.checks.CheckResult(ok=True, latency_ms=1.0, value={"status": 200})
     ping_ok = scheduler.checks.CheckResult(ok=True, latency_ms=2.0)
     written: list[tuple[str, object]] = []
+    write_threads: list[int] = []
 
     def slow_append(_dir, *, target_id, metric, value, retention_days, at):  # noqa: ARG001 - mirrors append_point
-        time.sleep(0.3)  # a slow volume; blocks only its worker thread
+        write_threads.append(threading.get_ident())
         written.append((metric, at))
 
     async def scenario():
-        gaps: list[float] = []
-        stop = asyncio.Event()
-
-        async def ticker():
-            last = time.monotonic()
-            while not stop.is_set():
-                await asyncio.sleep(0.01)
-                now = time.monotonic()
-                gaps.append(now - last)
-                last = now
-
-        task = asyncio.create_task(ticker())
-        await asyncio.sleep(0.05)
+        loop_thread = threading.get_ident()
         await sched._run_target(target_id, utcnow())
-        await asyncio.sleep(0.05)  # lets the ticker record a gap that ended with the run
-        stop.set()
-        await task
-        return max(gaps)
+        return loop_thread
 
     with (
         mock.patch.object(scheduler.checks, "http_head", mock.AsyncMock(return_value=http_ok)),
@@ -809,11 +796,11 @@ def test_slow_tsdb_writes_do_not_stall_the_event_loop_and_share_one_cycle_stamp(
         mock.patch.object(scheduler.tsdb_db, "query", return_value=[]),
         mock.patch.object(scheduler.tsdb_db, "append_point", slow_append),
     ):
-        max_gap = asyncio.run(scenario())
+        loop_thread = asyncio.run(scenario())
 
     assert [m for m, _ in written] == ["ping_up", "ping_ms", "http_up", "http_ms", "http_status"]
     assert len({at for _, at in written}) == 1
-    assert max_gap < 0.25, max_gap  # five writes take about 1.5 s in total
+    assert write_threads and loop_thread not in write_threads  # blocking writes never run on the loop thread
 
 
 def test_metric_points_of_a_lost_lock_are_discarded_before_any_write(db_path, tmp_path):

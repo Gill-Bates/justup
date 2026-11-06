@@ -12,6 +12,7 @@
 	}
 
 	const LOOKBACK_WINDOW_MS = 24 * 60 * 60 * 1000; // 24h — time window for downtime stats
+	const LOOKBACK_RANGE_PRESET = '24h'; // Target-detail preset equal to LOOKBACK_WINDOW_MS
 	const POLL_INTERVAL_MS = 30 * 1000;         // 30s — polling interval when tab is visible
 
 
@@ -102,8 +103,9 @@
 			tdName.dataset.label = 'Target';
 			tdName.headers = 'downtime-heading-target';
 			const a = document.createElement('a');
-			a.href = '/ui/targets/' + encodeURIComponent(target.target_id);
-			a.className = 'text-decoration-none text-reset fw-semibold';
+			// The preset (not fixed timestamps) keeps the link correct however long the page stays open.
+			a.href = '/ui/targets/' + encodeURIComponent(target.target_id) + '?range=' + LOOKBACK_RANGE_PRESET;
+			a.className = 'text-decoration-none text-reset fw-semibold stretched-link';
 			const icon = document.createElement('span');
 			icon.className = 'material-icons text-danger me-1';
 			icon.setAttribute('aria-hidden', 'true');

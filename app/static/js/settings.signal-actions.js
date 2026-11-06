@@ -427,15 +427,11 @@ function initEnableToggle() {
 // Signal Template Preview
 // ─────────────────────────────────────────────────────────────────────────────
 
-const TEMPLATE_PLACEHOLDERS = new Set([
-    'target.name', 'target.host', 'target.group', 'target.check_type',
-    'alert.status', 'alert.started_at', 'alert.resolved_at', 'alert.duration', 'alert.reason',
-    'status.emoji', 'status.color', 'status.text',
-    'downtime.minutes', 'downtime.human',
-    'sla.threshold', 'sla.actual',
-    'system.name', 'system.url', 'system.timestamp', 'system.github_url',
-]);
+// The sample context is the only client-side placeholder list: keys missing from it render empty,
+// like the server's whitelist does for unknown names.
 const PLACEHOLDER_RE = /\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}/g;
+// Mirrors the server's named conditional blocks ({{#if flag}}...{{/if flag}}), which the default templates use.
+const CONDITIONAL_RE = /\{\{#if\s+([a-zA-Z0-9_]+)\s*\}\}(.*?)\{\{\/if\s+\1\s*\}\}/gs;
 
 function pad2(n) {
     return String(n).padStart(2, '0');
@@ -445,7 +441,7 @@ function fmtUtc(d) {
     return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())} ${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}:${pad2(d.getUTCSeconds())} UTC`;
 }
 
-function sampleContext(variant) {
+export function sampleContext(variant) {
     const now = new Date();
     const started = new Date(now.getTime() - 12 * 60 * 1000);
     const resolved = new Date(now.getTime() - 1 * 60 * 1000);
@@ -455,13 +451,18 @@ function sampleContext(variant) {
         status: {
             emoji: isUp ? '🟢' : '🔴',
             color: isUp ? '#16a34a' : '#dc2626',
+            accent_color: isUp ? '#198754' : '#dc3545',
+            foreground_color: '#ffffff',
+            text_color: isUp ? '#146c43' : '#b02a37',
             text: isUp ? 'Service RESOLVED' : 'Service DOWN',
+            label: isUp ? 'RESOLVED' : 'DOWN',
         },
         target: {
             name: 'Example API',
             host: 'api.example.com',
             group: 'Production',
             check_type: 'HTTP',
+            check_badges: 'HTTP',
         },
         alert: {
             status: isUp ? 'RESOLVED' : 'OPEN',
@@ -484,6 +485,8 @@ function sampleContext(variant) {
             timestamp: fmtUtc(now),
             github_url: 'https://github.com/Gill-Bates/justup',
         },
+        logo_url: '/static/img/justup_email_logo.png',
+        flags: { sla: true, cta: true, resolved: isUp, group: true },
     };
 }
 
@@ -497,11 +500,12 @@ function getPlaceholderValue(ctx, dottedKey) {
     return value == null ? '' : String(value);
 }
 
-function renderTemplatePreview(template, ctx) {
+export function renderTemplatePreview(template, ctx) {
     if (!template || template.indexOf('{{') === -1) return template || '';
-    return String(template).replace(PLACEHOLDER_RE, (_, key) => {
+    const flags = ctx?.flags || {};
+    const kept = String(template).replace(CONDITIONAL_RE, (_, name, body) => (flags[name] ? body : ''));
+    return kept.replace(PLACEHOLDER_RE, (_, key) => {
         const p = String(key || '').trim();
-        if (!TEMPLATE_PLACEHOLDERS.has(p)) return '';
         return getPlaceholderValue(ctx, p);
     });
 }

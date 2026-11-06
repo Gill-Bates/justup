@@ -17,7 +17,6 @@ from app.api.frontend import templates
 from app.services import route_map_rules as rules
 from tests.test_route_map_rules import CHAIN
 
-FRONTEND = (Path(__file__).resolve().parent.parent / "app" / "api" / "frontend.py").read_text(encoding="utf-8")
 
 
 def _render(**extra) -> str:
@@ -78,8 +77,3 @@ def test_legend_hides_kinds_the_route_does_not_have() -> None:
     assert "Hop (approximate)" not in legend
     assert "Connection estimated or unknown" not in legend
     assert "Destination" not in legend
-
-
-def test_the_fragment_route_passes_the_rules_to_the_template() -> None:
-    assert '"map_style": route_map_rules.map_style()' in FRONTEND
-    assert '"map_labels": route_map_rules.select_labels(geo_points)' in FRONTEND

@@ -25,6 +25,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from app.services.notifications.email_template import (
+    ALLOWED_PLACEHOLDERS,
     DEFAULT_HTML_TEMPLATE,
     DEFAULT_SUBJECT,
     LOGO_CID,
@@ -528,3 +529,15 @@ def test_header_keeps_the_logo_left_and_the_status_line():
     assert 'alt="justUp!"' in header
     assert "<!-- STATUS ACCENT LINE -->" in header
     assert "border-left" not in header  # the divider belonged to the removed label
+
+
+def test_signal_preview_placeholders_match_server_whitelist():
+    """The Signal editor preview must know exactly the placeholders the real renderer replaces."""
+    import re
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parent.parent / "app/static/js/settings.signal-actions.js").read_text(
+        encoding="utf-8"
+    )
+    block = re.search(r"const TEMPLATE_PLACEHOLDERS = new Set\(\[(.*?)\]\)", source, re.DOTALL).group(1)
+    assert set(re.findall(r"'([^']+)'", block)) == set(ALLOWED_PLACEHOLDERS)

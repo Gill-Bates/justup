@@ -94,6 +94,7 @@ def _raw(path: Path, *statements: str) -> None:
         raw.execute(statement)
     raw.commit()
     raw.close()
+    raw.close()
 
 
 def _target(conn: sqlite3.Connection, name: str = "t", group_id: int | None = None) -> int:

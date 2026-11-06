@@ -78,12 +78,11 @@
 
 								{# Step 1: Enter phone number (optional) #}
 								<div id="signal-link-step-number" class="mb-3">
-									<label class="form-label small">Your Signal phone number <span
+									<label class="form-label small" for="signal-link-number">Your Signal phone number <span
 											class="text-body-secondary">(optional)</span></label>
 									<div class="input-group input-group-sm">
 										<input type="tel" class="form-control" id="signal-link-number"
-											placeholder="+49 123 456789"
-											aria-label="Your Signal phone number (optional)">
+											placeholder="+49 123 456789">
 										<button type="button" class="btn btn-primary" id="signal-link-generate-qr-btn"
 											onclick="signalGenerateQrCode()">
 											<span class="material-icons me-1" style="font-size: 18px;" aria-hidden="true">qr_code_2</span>
@@ -124,11 +123,11 @@
 								{# Profile Name (optional) #}
 								<div class="mt-3 pt-3 border-top" id="signal-link-profile-section"
 									style="display: none;">
-									<label class="form-label small">Display name <span
+									<label class="form-label small" for="signal-link-profile-name">Display name <span
 											class="text-body-secondary">(optional)</span></label>
 									<div class="input-group input-group-sm">
 										<input type="text" class="form-control" id="signal-link-profile-name"
-											placeholder="justUp Monitor" aria-label="Signal display name">
+											placeholder="justUp Monitor">
 										<button type="button" class="btn btn-outline-secondary" aria-label="Apply display name"
 											onclick="signalSetProfileNameLink()">
 											<span class="material-icons" style="font-size: 18px;" aria-hidden="true">check</span>

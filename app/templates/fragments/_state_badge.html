@@ -6,3 +6,10 @@
 {%- set look = state_look[known] -%}
 <span class="badge ju-status-badge--{{ look[2] }} ju-state-badge ju-state-badge--{{ known }}"{% if title %} title="{{ title }}"{% endif %}><span class="material-icons" aria-hidden="true">{{ look[1] }}</span>{{ label }}<span class="visually-hidden">: {{ look[0] }}</span></span>
 {%- endmacro %}
+{# Certificate status -> tone; shared by the badge and the expiry text colour. #}
+{% macro cert_level(status) -%}
+{%- if status == 'ok' %}success{% elif status == 'warning' %}warning{% elif status in ('critical', 'expired') %}danger{% else %}neutral{% endif -%}
+{%- endmacro %}
+{% macro cert_badge(label, status) -%}
+<span class="badge ju-status-badge--{{ cert_level(status) }}">{{ label }}<span class="visually-hidden">: {{ status or 'unknown' }}</span></span>
+{%- endmacro %}

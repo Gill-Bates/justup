@@ -101,24 +101,31 @@ class TestSettingsCache:
         finally:
             sqlite_db.close_connection(other)
 
-    def test_cache_is_thread_safe_smoke(self, conn):
+    def test_cache_is_thread_safe_smoke(self, conn, tmp_path):
         sqlite_db.set_setting(conn, "k", "v")
         assert settings_cache.get_setting_cached(conn, "k") == "v"
         errors: list[BaseException] = []
+        seen: list[object] = []
 
         def work():
+            reader = sqlite_db.connect(tmp_path / "a.db")  # connections are bound to their thread
             try:
                 for _ in range(50):
                     settings_cache.invalidate_settings_cache("k")
+                    seen.append(settings_cache.get_setting_cached(reader, "k"))
             except Exception as exc:  # noqa: BLE001 - collected and asserted below
                 errors.append(exc)
+            finally:
+                sqlite_db.close_connection(reader)
 
         threads = [threading.Thread(target=work) for _ in range(4)]
         for t in threads:
             t.start()
         for t in threads:
-            t.join()
+            t.join(timeout=30)
+        assert not any(t.is_alive() for t in threads)
         assert not errors
+        assert seen == ["v"] * 200  # every interleaved read returns the stored value
 
 
 class TestSettingsCacheConvenienceHelpers:

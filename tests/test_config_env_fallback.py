@@ -17,20 +17,18 @@ from app.utils.config import Config, ConfigValidationError, load_config
 from tests import _support  # noqa: F401 - imported for its sys.path side effect
 
 
-def test_invalid_log_level_and_port_fall_back_with_warning(monkeypatch, tmp_path, caplog):
-    monkeypatch.setenv("JUSTUP_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("LOG_LEVEL", "LOUD")
-    monkeypatch.setenv("JUSTUP_PORT", "eighty")
+def test_invalid_log_level_and_port_fall_back_with_warning(clean_env, caplog):
+    clean_env.setenv("LOG_LEVEL", "LOUD")
+    clean_env.setenv("JUSTUP_PORT", "eighty")
     with caplog.at_level(logging.WARNING, logger="app.utils.config"):
         cfg = load_config()
     assert (cfg.log_level, cfg.port) == ("INFO", 8000)
     assert "LOG_LEVEL" in caplog.text and "JUSTUP_PORT" in caplog.text
 
 
-def test_valid_values_are_used_without_warning(monkeypatch, tmp_path, caplog):
-    monkeypatch.setenv("JUSTUP_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("LOG_LEVEL", "debug")
-    monkeypatch.setenv("JUSTUP_PORT", "9001")
+def test_valid_values_are_used_without_warning(clean_env, caplog):
+    clean_env.setenv("LOG_LEVEL", "debug")
+    clean_env.setenv("JUSTUP_PORT", "9001")
     with caplog.at_level(logging.WARNING, logger="app.utils.config"):
         cfg = load_config()
     assert (cfg.log_level, cfg.port) == ("DEBUG", 9001)

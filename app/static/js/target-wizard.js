@@ -79,9 +79,6 @@
     return form.querySelector('input[name="profile"]:checked')?.value || 'website';
   }
 
-  function errorDetailMessage(detail, fallback) {
-    return window.JuApiError.message(detail, fallback);
-  }
   function clearError() {
     errorBox.classList.add('d-none');
     errorBox.textContent = '';
@@ -274,7 +271,7 @@
     if (!response.ok) {
       let detail;
       try { detail = (await response.json()).detail; } catch (_) { /* use status below */ }
-      throw new Error(errorDetailMessage(detail, `Unable to preview target (${response.status}).`));
+      throw new Error(window.JuApiError.message(detail, `Unable to preview target (${response.status}).`));
     }
     return response.json();
   }
@@ -507,7 +504,7 @@
           conflicts = detail.conflicts;
           renderReview();
         }
-        throw new Error(errorDetailMessage(detail, `Unable to create target (${response.status}).`));
+        throw new Error(window.JuApiError.message(detail, `Unable to create target (${response.status}).`));
       }
       const target = await response.json();
       window.location.assign(`/ui/targets/${encodeURIComponent(target.id)}`);

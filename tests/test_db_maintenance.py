@@ -350,14 +350,15 @@ def test_inbox_retention_runs_in_batches_across_runs(conn, monkeypatch):
     real = retention.delete_in_batches
     ticks = iter([0.0, 1e12])  # stop the first run after one batch
 
-    def limited(c, table, where, params=(), **kw):
-        if table == "notifications" and kw.get("deadline") is not None:
-            monkeypatch.setattr(retention.time, "monotonic", lambda: next(ticks))
-        return real(c, table, where, params, **kw)
+    with monkeypatch.context() as patch:
 
-    monkeypatch.setattr(retention, "delete_in_batches", limited)
-    first = retention.run_retention(conn)
-    monkeypatch.undo()
+        def limited(c, table, where, params=(), **kw):
+            if table == "notifications" and kw.get("deadline") is not None:
+                patch.setattr(retention.time, "monotonic", lambda: next(ticks))
+            return real(c, table, where, params, **kw)
+
+        patch.setattr(retention, "delete_in_batches", limited)
+        first = retention.run_retention(conn)
     assert not first.complete
     assert count() == 1500
     assert retention.run_retention(conn).complete

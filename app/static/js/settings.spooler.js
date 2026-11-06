@@ -52,7 +52,7 @@
 
 	// Failed handoffs of the last 24 h (server window) keep the queue from looking healthy.
 	function _healthState(data) {
-		const failed = Number.isInteger(data.failed_recent) ? data.failed_recent : (data.failed || 0);
+		const failed = Number.isInteger(data.failed_recent) && data.failed_recent >= 0 ? data.failed_recent : (data.failed || 0);
 		if (failed > 0) {
 			return { icon: 'error_outline', tone: 'text-danger', text: failed + ' handoff failure(s) in the last 24 h' };
 		}

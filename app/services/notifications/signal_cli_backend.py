@@ -183,6 +183,10 @@ def _finish_pipe_drain(proc: subprocess.Popen, threads: list[threading.Thread]) 
                 stream.close()
 
 
+# signal-cli wording that means the number already has an account; classified once here, not in the UI.
+_ALREADY_REGISTERED_MARKERS = ("already registered", "existing account", "already linked")
+
+
 class SignalCliBackend(SignalBackend):
     """Signal backend using local signal-cli subprocess.
 
@@ -378,8 +382,11 @@ class SignalCliBackend(SignalBackend):
         if code == -5 and operation in {"registration", "verification"}:
             raise SignalRateLimited(f"Signal {operation} rate limited", retry_after_seconds=retry_seconds)
         message = error.get("message")
-        if operation == "registration" and (code == -6 or (isinstance(message, str) and "captcha" in message.lower())):
-            raise SignalSendFailed("Captcha required")
+        lowered = message.lower() if isinstance(message, str) else ""
+        if operation == "registration" and (code == -6 or "captcha" in lowered):
+            raise SignalSendFailed("Captcha required", code="captcha_required")
+        if operation == "registration" and any(marker in lowered for marker in _ALREADY_REGISTERED_MARKERS):
+            raise SignalSendFailed("Number already registered", code="already_registered")
         raise SignalSendFailed(f"Signal {operation} failed")
 
     def invalidate_cache(self) -> None:

@@ -105,5 +105,5 @@ def test_signal_api_hides_backend_error_details(monkeypatch) -> None:
 
 
 def test_signal_qr_js_does_not_send_unused_number_param() -> None:
-    src = Path("app/static/js/settings.signal-registration.js").read_text(encoding="utf-8")
+    src = (_support.ROOT / "app/static/js/settings.signal-registration.js").read_text(encoding="utf-8")
     assert "?number=" not in src

@@ -85,7 +85,7 @@ def test_fragment_pages_by_default_and_lists_every_target_for_the_search(client)
     assert 'data-total-pages="1"' in everything.text and 'data-scope="all"' in everything.text
     # Leaving the search returns to the page the user was on.
     assert re.search(r'id="targets-page-state"[^>]*value="2"', everything.text)
-    assert "T054" in "".join(_rows(everything.text))
+    assert f"T{UI_PAGE_SIZE_TARGETS + EXTRA - 1:03d}" in "".join(_rows(everything.text))  # a row from page 2
 
 
 def test_search_data_lists_name_host_and_group_but_no_unrelated_defaults(client) -> None:

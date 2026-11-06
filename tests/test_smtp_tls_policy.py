@@ -311,13 +311,14 @@ def _message():
 
 def test_every_smtp_connection_and_tls_decision_goes_through_the_shared_modules():
     """Alert mail and test mail share one spooler closure; no other module may open SMTP or re-decide TLS."""
-    opener = re.compile(r"smtplib\.SMTP(_SSL)?\(|from smtplib import")
+    opener = re.compile(r"^\s*(?:import smtplib|from smtplib import)", re.MULTILINE)
     tls_key = re.compile(r"SettingKeys\.SMTP_USE_TLS")
     offenders = []
     for path in APP_ROOT.rglob("*.py"):
         text = path.read_text(encoding="utf-8")
-        if path.name != "smtp_transport.py" and opener.search(text):
-            offenders.append(f"{path.name}: opens SMTP itself")
-        if path.name not in {"smtp_settings.py", "settings.py"} and tls_key.search(text):
-            offenders.append(f"{path.name}: reads smtp_use_tls itself")
+        rel = path.relative_to(APP_ROOT).as_posix()
+        if rel != "services/notifications/smtp_transport.py" and opener.search(text):
+            offenders.append(f"{rel}: opens SMTP itself")
+        if rel not in {"services/notifications/smtp_settings.py", "api/settings.py"} and tls_key.search(text):
+            offenders.append(f"{rel}: reads smtp_use_tls itself")
     assert offenders == []

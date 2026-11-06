@@ -626,6 +626,7 @@ def _fresh_pool():
 def test_log_label_drops_query_of_schemeless_target(caplog):
     caplog.set_level(logging.DEBUG)
     tls_scanner.scan_tls("bad host/p?token=SECRETTOKEN")
+    assert any("TLS scan refused for bad host" in r.getMessage() for r in caplog.records)  # it did log
     assert "SECRETTOKEN" not in caplog.text
 
 
@@ -713,10 +714,11 @@ def test_blocking_dns_is_admission_bounded_and_deadline_bound():
         for t in threads:
             t.start()
         for _ in range(200):
-            if not tls_scanner._admission.acquire(blocking=False):
+            if tls_scanner._admission._value == 0:  # read-only: never take permits from the test
                 break
-            tls_scanner._admission.release()
             threading.Event().wait(0.02)
+        else:
+            pytest.fail("pending scans never saturated admission")
         extra = tls_scanner.scan_tls("slow.example", deadline=30)
         release.set()
         for t in threads:
@@ -750,7 +752,9 @@ def test_secrets_are_not_logged(caplog):
     caplog.set_level(logging.DEBUG)
     with mock.patch.object(tls_scanner, "_run_sslyze", side_effect=RuntimeError("token=SECRETTOKEN")):
         tls_scanner.scan_tls("https://user:hunter2@127.0.0.1:9/p?token=SECRETTOKEN")
+    before = len(caplog.records)
     tls_scanner.scan_tls("https://user:hunter2@:bad/p?token=SECRETTOKEN")
+    assert len(caplog.records) > before  # the second call logged, so the absence check below is meaningful
     text = caplog.text
     assert "hunter2" not in text and "SECRETTOKEN" not in text
 

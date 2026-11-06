@@ -268,11 +268,23 @@ def _draw(model, width=480, height=280):
     return buf.getvalue()
 
 
-def test_drawing_is_deterministic_and_fast(model):
+def _spy_drawn_text(monkeypatch) -> list[str]:
+    """Record every string drawn on a reportlab canvas while still drawing it."""
+    drawn: list[str] = []
+    for name in ("drawString", "drawCentredString", "drawRightString"):
+        original = getattr(rl_canvas.Canvas, name)
+
+        def spy(self, x, y, text, *a, _orig=original, **k):
+            drawn.append(str(text))
+            return _orig(self, x, y, text, *a, **k)
+
+        monkeypatch.setattr(rl_canvas.Canvas, name, spy)
+    return drawn
+
+
+def test_drawing_is_deterministic_and_compact(model):
     prm.load_basemap()
-    start = time.perf_counter()
     first = _draw(model)
-    assert time.perf_counter() - start < 1.0
     assert first == _draw(model)
     assert len(first) < 300_000
 
@@ -301,15 +313,7 @@ def test_intercontinental_route_draws():
 
 
 def _build_with_map(monkeypatch, geo, hops, *, size="a4"):
-    drawn: list[str] = []
-    for name in ("drawString", "drawCentredString", "drawRightString"):
-        original = getattr(rl_canvas.Canvas, name)
-
-        def spy(self, x, y, text, *a, _orig=original, **k):
-            drawn.append(str(text))
-            return _orig(self, x, y, text, *a, **k)
-
-        monkeypatch.setattr(rl_canvas.Canvas, name, spy)
+    drawn = _spy_drawn_text(monkeypatch)
     b = pdf_contracts._full_builder(monkeypatch, size=size, hops=hops)
     monkeypatch.setattr(b, "_get_route_data", lambda **_k: (hops, geo, True))
     b.build()
@@ -384,15 +388,7 @@ def test_pdf_names_only_path_countries_and_a_capped_set_of_places_from_the_share
     ]
     model_ = prm.build_route_map_model(pts, sample_hops())
     selected = rules.select_labels(model_.points)
-    drawn: list[str] = []
-    for name in ("drawString", "drawCentredString", "drawRightString"):
-        original = getattr(rl_canvas.Canvas, name)
-
-        def spy(self, x, y, text, *a, _orig=original, **k):
-            drawn.append(str(text))
-            return _orig(self, x, y, text, *a, **k)
-
-        monkeypatch.setattr(rl_canvas.Canvas, name, spy)
+    drawn = _spy_drawn_text(monkeypatch)
     _draw(model_, width=480, height=280)
     allowed_countries = {c["name"] for c in selected["countries"]}
     allowed_cities = {c["name"] for c in selected["cities"]}

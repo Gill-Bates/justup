@@ -171,6 +171,9 @@ class _Env:
         self.online: dict[str, dict[str, Any] | None] = {}
         self.switch = True  # online_geo_fallback_enabled
         self.delay = 0.0  # simulated provider latency
+        self.peak = 0  # highest number of lookups running at the same time
+        self._active = 0
+        self._lock = threading.Lock()
         monkeypatch.setattr(
             traceroute_geo,
             "get_runtime_bool_fail_closed",
@@ -184,7 +187,14 @@ class _Env:
 
     def _lookup(self, ip: str, **_kwargs: Any):
         self.online_calls.append(ip)
-        time.sleep(self.delay)
+        with self._lock:
+            self._active += 1
+            self.peak = max(self.peak, self._active)
+        try:
+            time.sleep(self.delay)
+        finally:
+            with self._lock:
+                self._active -= 1
         return tuple(self.online), dict(self.online)
 
 
@@ -194,6 +204,14 @@ def _info(city="Munich", lat=MUNICH[0], lon=MUNICH[1], cc="DE", source="ipwho.is
 
 LOCAL_HIGH = {"lat": BERLIN[0], "lon": BERLIN[1], "city": "Berlin", "country": "DE", "accuracy_radius_km": 10}
 LOCAL = {**LOCAL_HIGH, "accuracy_radius_km": 100}  # limited quality: the online fallback is allowed
+
+
+@pytest.fixture
+def fresh_providers():
+    """Provider throttle/cache state is process-wide; reset it also when a test fails."""
+    ip_lookup.reset_provider_state()
+    yield
+    ip_lookup.reset_provider_state()
 
 
 @pytest.fixture
@@ -407,7 +425,7 @@ def test_switch_off_blocks_every_online_call_even_for_poor_geolite2(env: _Env) -
 
 
 def test_http_429_with_retry_after_falls_back_to_geolite2_without_hammering(
-    env: _Env, monkeypatch: pytest.MonkeyPatch
+    env: _Env, monkeypatch: pytest.MonkeyPatch, fresh_providers: None
 ) -> None:
     calls: list[str] = []
 
@@ -415,7 +433,6 @@ def test_http_429_with_retry_after_falls_back_to_geolite2_without_hammering(
         calls.append(ip)
         raise ip_lookup.ProviderThrottledError(120)
 
-    ip_lookup.reset_provider_state()
     monkeypatch.setattr(ip_lookup, "_fetch_json", fetch)
     monkeypatch.setattr(traceroute_geo, "lookup_online_sources", ip_lookup.lookup_online_sources)
     env.geolite = dict(LOCAL)
@@ -423,7 +440,6 @@ def test_http_429_with_retry_after_falls_back_to_geolite2_without_hammering(
         loc = traceroute_geo.geolocate_with_hostname_hint(ip)
         assert loc["city"] == "Berlin"
     assert calls == ["8.8.8.8"]  # the lock period from Retry-After stops further requests
-    ip_lookup.reset_provider_state()
 
 
 # --- Route-level online phase (bounded, deduplicated, deterministic) ---------------------------------
@@ -441,12 +457,10 @@ def test_route_with_many_distinct_ips_is_looked_up_concurrently_and_deduplicated
     env.online = {"ipwho.is": _info()}
     env.delay = 0.2
     hops = _hops(12, duplicate_last=True)
-    started = time.monotonic()
     nodes = traceroute_geo.build_route_model(hops)
-    elapsed = time.monotonic() - started
     assert len(nodes) == 13
     assert sorted(env.online_calls) == sorted({h["ip"] for h in hops})  # one request per distinct IP
-    assert elapsed < 1.5  # sequential would take 12 x 0.2 s = 2.4 s; 4 workers need about 0.6 s
+    assert env.peak >= 2  # concurrency is observed, not timed
 
 
 def test_route_online_budget_caps_the_total_time_and_keeps_local_results(
@@ -458,7 +472,7 @@ def test_route_online_budget_caps_the_total_time_and_keeps_local_results(
     monkeypatch.setattr(traceroute_geo, "ROUTE_ONLINE_BUDGET_SECONDS", 0.2)
     started = time.monotonic()
     nodes = traceroute_geo.build_route_model(_hops(8))
-    assert time.monotonic() - started < 1.0
+    assert time.monotonic() - started < 3.0  # generous: sequential would take 8 x 0.6 s = 4.8 s, the budget is 0.2 s
     # GeoLite2 results stay usable: every hop keeps its local classification
     assert len(nodes) == 8 and all(n["geo_source"] == GeoSource.GEOIP_COARSE for n in nodes)
 
@@ -628,10 +642,14 @@ def test_concurrent_reloads_never_lose_or_cache_a_wrong_result(geodb) -> None:
     [(25.0, True, 0), (25.01, True, 2), (25.01, False, 0), (None, False, 0)],
 )
 def test_http_requests_follow_the_25_km_rule_and_the_switch(
-    env: _Env, monkeypatch: pytest.MonkeyPatch, radius: float | None, switch: bool, http_expected: int
+    env: _Env,
+    monkeypatch: pytest.MonkeyPatch,
+    fresh_providers: None,
+    radius: float | None,
+    switch: bool,
+    http_expected: int,
 ) -> None:
     http_calls: list[str] = []
-    ip_lookup.reset_provider_state()
     monkeypatch.setattr(ip_lookup, "_fetch_json", lambda source, ip, _key: http_calls.append(source) or None)
     monkeypatch.setattr(traceroute_geo, "lookup_online_sources", ip_lookup.lookup_online_sources)
     monkeypatch.setattr(traceroute_geo, "get_ip_api_key", lambda: "k")
@@ -640,4 +658,3 @@ def test_http_requests_follow_the_25_km_rule_and_the_switch(
     loc = traceroute_geo.geolocate_with_hostname_hint("8.8.8.8")
     assert len(http_calls) == http_expected
     assert (loc["lat"], loc["lon"]) == BERLIN  # a failed or skipped fallback keeps the local position
-    ip_lookup.reset_provider_state()

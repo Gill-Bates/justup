@@ -291,8 +291,16 @@ def signal_register(body: RegisterRequest, _admin=Depends(require_admin)):
         ) from e
 
     except SignalSendFailed as e:
-        if "captcha" in str(e).lower():
-            raise HTTPException(status_code=400, detail="Signal requires a captcha to continue registration") from e
+        if e.code == "captcha_required":
+            raise HTTPException(
+                status_code=400,
+                detail={"code": e.code, "message": "Signal requires a captcha to continue registration"},
+            ) from e
+        if e.code == "already_registered":
+            raise HTTPException(
+                status_code=400,
+                detail={"code": e.code, "message": "This number is already registered"},
+            ) from e
         raise HTTPException(status_code=400, detail="Signal registration failed; check the number and try again") from e
 
     except (SignalUnavailable, SignalTimeout) as e:

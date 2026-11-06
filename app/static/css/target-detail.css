@@ -1242,14 +1242,6 @@ details[open]>summary .target-details-chevron {
 		font-size: 1.375rem;
 	}
 
-	.target-detail-actions {
-		flex-wrap: wrap;
-	}
-
-	.target-kpi-value {
-		font-size: 1.75rem;
-	}
-
 	/* Range label, select, Dates and zoom reset share one row; the select absorbs the slack. */
 	.target-toolbar-group--range {
 		gap: 0.5rem;

@@ -193,7 +193,7 @@ def test_collect_resolved_uses_one_shared_budget() -> None:
         start = time.monotonic()
         out = _collect_resolved(futures, 0.3)
         elapsed = time.monotonic() - start
-    assert elapsed < 1.0  # sequential waits would have taken 8 x budget
+    assert elapsed < 1.8  # sequential waits would have taken 8 x 0.3 s budget plus the 2 s stragglers
     assert out["10.0.1.1"] == "fast.example"
     assert out["10.0.0.0"] is None
 

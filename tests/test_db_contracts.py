@@ -5,11 +5,6 @@
 #
 
 # ruff: noqa: S106
-#!/usr/bin/env python3
-#
-# tests/test_db_contracts.py
-# Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
-#
 
 """SQLite DAL contracts: scheduler bookkeeping durability and token lookup write behaviour."""
 
@@ -41,15 +36,17 @@ def _fresh(path: Path) -> sqlite3.Connection:
     return conn
 
 
-def test_heartbeat_is_durable_after_connection_close(db_path: Path):
+def test_heartbeat_is_durable_after_connection_close(db_path: Path, monkeypatch: pytest.MonkeyPatch):
     c = _fresh(db_path)
     sqlite_db.register_scheduler_run(c, "run-a")
     before = c.execute("SELECT heartbeat_at FROM scheduler_runs WHERE run_id='run-a'").fetchone()[0]
+    later = utcnow() + timedelta(minutes=5)
+    monkeypatch.setattr("app.db.sqlite.scheduler_runs.utcnow", lambda: later)
     sqlite_db.update_scheduler_heartbeat(c, "run-a")
     sqlite_db.close_connection(c)
     c2 = _fresh(db_path)
     after = c2.execute("SELECT heartbeat_at FROM scheduler_runs WHERE run_id='run-a'").fetchone()[0]
-    assert after >= before
+    assert after > before  # the update was committed, not merely re-read
     sqlite_db.close_connection(c2)
 
 

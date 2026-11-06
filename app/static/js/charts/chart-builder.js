@@ -209,12 +209,6 @@ function buildAvailabilitySeriesChart(canvasId, data) {
 
   // Golden-angle hue per TCP/UDP port; null for other services. TCP and UDP of one port share the
   // hue and differ by the line style (UDP is dashed), so the protocol is not told by colour alone.
-  function getTcpPortColor(serviceName) {
-    if (!/^(TCP|UDP):/.test(serviceName)) return null;
-    var port = parseInt(serviceName.split(":")[1], 10);
-    if (isNaN(port)) return null;
-    return tcpPortColorFor(tcpPortHueFor(port), theme.mode);
-  }
 
   const datasets = [];
   for (const [serviceName, points] of Object.entries(seriesData)) {
@@ -226,9 +220,7 @@ function buildAvailabilitySeriesChart(canvasId, data) {
       observed: !!p.observed,
     }));
 
-    const color =
-      serviceColors[serviceName] || getTcpPortColor(serviceName) || "#6c757d";
-    // Store TCP port hue for theme-aware color updates
+    // Port hue is kept on the dataset for theme-aware color updates
     var tcpPortHue = null;
     if (/^(TCP|UDP):/.test(serviceName)) {
       var port = parseInt(serviceName.split(":")[1], 10);
@@ -236,6 +228,9 @@ function buildAvailabilitySeriesChart(canvasId, data) {
         tcpPortHue = tcpPortHueFor(port);
       }
     }
+    const color =
+      serviceColors[serviceName] ||
+      (tcpPortHue !== null ? tcpPortColorFor(tcpPortHue, theme.mode) : "#6c757d");
 
     var dataset = {
       label: serviceName,

@@ -94,7 +94,7 @@ def test_failing_handshake_is_not_ready_even_with_a_socket(tmp_path):
 
 
 def test_worker_that_ends_after_being_ready_is_restarted_with_backoff_then_given_up(tmp_path):
-    result, status, launches = run_supervisor(tmp_path, bind=True, lifetime=0.6)
+    result, status, launches = run_supervisor(tmp_path, bind=True, lifetime=1.5)
     assert launches == 3
     assert result.stdout.count("worker ready") == 3
     assert "exited with status" in status["detail"]
@@ -114,6 +114,18 @@ def test_status_detail_is_sanitised_and_file_is_world_readable(tmp_path):
     _, status, _ = run_supervisor(tmp_path, bind=False, lifetime=0, max_failures=1)
     assert set(status) == {"state", "detail", "restarts", "since"}
     assert (tmp_path / "status.json").stat().st_mode & 0o044 == 0o044
+
+
+def test_write_status_sanitises_hostile_detail(tmp_path):
+    status = tmp_path / "status.json"
+    script = f"source '{SCRIPT}'; restarts=0; write_status failed 'a\"b\\c<x>'"
+    subprocess.run(
+        ["bash", "-c", script],
+        env={**os.environ, "NMAP_WORKER_STATUS_FILE": str(status)},
+        check=True,
+        timeout=10,
+    )
+    assert json.loads(status.read_text())["detail"] == "a_b_c_x_"
 
 
 def test_client_reports_the_published_worker_state_as_the_unavailable_reason(tmp_path, monkeypatch):

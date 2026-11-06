@@ -18,14 +18,16 @@ def test_application_css_loads_no_external_assets() -> None:
     """DESIGN.md: CSS, fonts and icons are local; no stylesheet fetches an asset at runtime."""
     css_dir = _REPO / "app" / "static" / "css"
     external = re.compile(r"(?:url\(\s*|@import\s+)[\"']?(?:https?:)?//", re.IGNORECASE)
-    owned = (
-        "ui",
-        "gentelella-layout",
-        "dashboard",
-        "traceroute-map",
-        "target-detail",
-        "notifications",
-        "target-wizard",
-    )
-    offenders = [name for name in owned if external.search((css_dir / f"{name}.css").read_text(encoding="utf-8"))]
+    sheets = [p for p in css_dir.glob("*.css") if ".min." not in p.name]
+    assert sheets, "no application stylesheet found"
+    offenders = [p.name for p in sheets if external.search(p.read_text(encoding="utf-8"))]
     assert not offenders, f"external runtime assets in: {offenders}"
+
+
+def test_dashboard_downtime_link_preset_exists_on_target_detail() -> None:
+    """The widget's range preset must be one the target page's time-range select (and parser) offers."""
+    widget = (_REPO / "app/static/js/dashboard.js").read_text(encoding="utf-8")
+    selector = (_REPO / "app/templates/fragments/target_detail/time_range_selector.html").read_text(encoding="utf-8")
+    match = re.search(r"LOOKBACK_RANGE_PRESET = '([a-z0-9]+)'", widget)
+    assert match is not None, "dashboard.js must name the preset its downtime links carry"
+    assert f'<option value="{match.group(1)}"' in selector

@@ -68,4 +68,11 @@ class SignalRecipientInvalid(SignalError):  # noqa: N818 - public Signal excepti
 
 
 class SignalSendFailed(SignalError):  # noqa: N818 - public Signal exception name, kept for API stability
-    """Message sending failed."""
+    """Message sending failed.
+
+    ``code`` is an optional stable identifier (e.g. ``captcha_required``) the API passes to the UI.
+    """
+
+    def __init__(self, message: str = "", code: str | None = None) -> None:
+        super().__init__(message)
+        self.code = code

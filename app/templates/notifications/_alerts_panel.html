@@ -228,7 +228,6 @@
                method: 'POST'
             });
             if (resp.ok) {
-               window.justUpToast?.success?.('Alert acknowledged');
                window.location.reload();
             } else {
                // Try to extract error detail from response
@@ -260,8 +259,6 @@
                method: 'POST'
             });
             if (resp.ok) {
-               const data = await resp.json();
-               window.justUpToast?.success?.(`${data.updated || 0} alert(s) closed`);
                window.location.reload();
             } else {
                let errorMsg = 'Failed to close alerts';

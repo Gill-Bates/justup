@@ -1,4 +1,4 @@
-{% from "fragments/_state_badge.html" import state_badge %}
+{% from "fragments/_state_badge.html" import state_badge, cert_badge, cert_level %}
 {# KPI summary: health signals first, check configuration second. #}
 <section class="target-kpi-row" aria-label="Target summary">
 
@@ -28,13 +28,7 @@
 {% if target.enable_http_check %}{{ state_badge('HTTP', target.http_status) }}{% endif %}
 					{% if target.enable_ping %}{{ state_badge('PING', target.ping_status) }}{% endif %}
 					{% if target.enable_cert_expiration %}
-					<span class="badge
-{% if target.cert_status == 'ok' %}ju-status-badge--success
-{% elif target.cert_status == 'warning' %}ju-status-badge--warning
-{% elif target.cert_status in ('critical', 'expired') %}ju-status-badge--danger
-{% else %}ju-status-badge--neutral{% endif %}">
-						CERT<span class="visually-hidden">: {{ target.cert_status or 'unknown' }}</span>
-					</span>
+					{{ cert_badge('CERT', target.cert_status) }}
 					{% endif %}
 					{% for endpoint in target.endpoints|default([]) if endpoint.kind == 'port' %}
 					{{ state_badge(endpoint.protocol|upper ~ ':' ~ endpoint.port, endpoint.status, endpoint.state_note or endpoint.name) }}
@@ -52,10 +46,7 @@
 			<div class="card-body">
 				<p class="target-kpi-label">Cert expiry</p>
 				<p id="cert-days-value" class="target-kpi-value
-{% if target.cert_status == 'ok' %}text-success
-{% elif target.cert_status == 'warning' %}text-warning
-{% elif target.cert_status in ('critical', 'expired') %}text-danger
-{% else %}text-body-secondary{% endif %}">--</p>
+text-{{ 'body-secondary' if cert_level(target.cert_status) == 'neutral' else cert_level(target.cert_status) }}">--</p>
 				<p id="cert-days-hint" class="target-kpi-hint">No certificate data yet</p>
 			</div>
 		</div>

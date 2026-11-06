@@ -844,10 +844,11 @@ def _damaged_newest_segment(tmp_path):
     tsdb.compact_target(tmp_path, 1, throttle=False)
     victim = _segments(tmp_path)[-1].path
     intact = victim.read_bytes()
-    before = len(full) - seg.segment_info(victim)[0]  # points held by the older segments
+    intact_count = seg.segment_info(victim)[0]
+    before = len(full) - intact_count  # points held by the older segments
     _damage(victim, victim.stat().st_size - 20)
     readable = len(seg.read_lines_safely(victim)[0])
-    assert 5 <= readable < seg.segment_info(victim)[0] + 1_000_000  # a real, non-empty prefix
+    assert 5 <= readable < intact_count  # a real, non-empty, strictly shorter prefix
     tsdb._tail_cache.clear()
     return victim, intact, full, before + readable
 

@@ -175,8 +175,17 @@ class TestFilenameAndHmac:
         monkeypatch.setenv("SECRET_KEYS", f"{Fernet.generate_key().decode('ascii')},{old}")
         assert verify_backup_hmac(archive, digest)
 
-    def test_signing_key_is_not_stored_in_the_database(self):
-        assert "backup_hmac_secret" not in Path(backup_mod.__file__).read_text().replace("backup_hmac_secret(", "")
+    def test_signing_key_is_not_stored_in_the_database(self, env):
+        client, token, _ = env
+        headers = {"Authorization": f"Bearer {token}", "X-CSRF-Token": client.cookies.get("csrf_token")}
+        assert client.post("/settings/backup", headers=headers).status_code == 200
+        conn = sqlite_db.connect(client.app.state.db_path)
+        try:
+            stored = "\n".join(str(v) for row in conn.execute("SELECT value FROM settings") for v in row)
+        finally:
+            sqlite_db.close_connection(conn)
+        for key in backup_mod.backup_hmac_keys():
+            assert key.decode("utf-8", "replace") not in stored
 
     def test_legacy_format_is_rejected_with_clear_message(self):
         with pytest.raises(BackupError, match="legacy backup format"):
@@ -724,7 +733,9 @@ class TestRestoreEndpoint:
         assert live.read_bytes() == before
 
     def test_backup_from_newer_application_is_rejected(self, env, tmp_path: Path):
-        name, payload = _named(_good(tmp_path / "newer-app.tar.bz2", app_version="1.0.4"))
+        major, *_rest = get_version().split(".")
+        newer = f"{int(major) + 1}.0.0"  # always newer than the installed application
+        name, payload = _named(_good(tmp_path / "newer-app.tar.bz2", app_version=newer))
         resp = _post(env, name, payload)
         assert resp.status_code == 400
         assert "newer application version" in resp.json()["detail"]
