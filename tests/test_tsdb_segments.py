@@ -997,11 +997,13 @@ def test_availability_samples_never_show_half_of_a_concurrent_batch(tmp_path):
             # A snapshot-consistent reader is blocked by the batch lock and cannot finish here.
             reader_done.wait(timeout=1.0)
 
-    result: list[list[dict]] = []
+    result: list[tsdb.AvailabilitySeries] = []
 
     def read_report_samples():
         first_line_written.wait(timeout=5)
-        result.append(tsdb.query_availability_samples(tmp_path, target_id=1, metrics=("http_up", "ping_up")))
+        result.append(
+            tsdb.query_availability_runs(tmp_path, target_id=1, metrics=("http_up", "ping_up"), interval_seconds=30)
+        )
         reader_done.set()
 
     reader = threading.Thread(target=read_report_samples)
@@ -1012,4 +1014,5 @@ def test_availability_samples_never_show_half_of_a_concurrent_batch(tmp_path):
     reader.join(timeout=10)
     assert not reader.is_alive()
     # Either nothing yet or the complete cycle (ping down makes the sample 0); never http alone (1).
-    assert result in ([[]], [[{"ts": NOW.isoformat(), "value": 0}]])
+    (series,) = result
+    assert [(run.value, run.first) for run in series.runs] in ([], [(0, NOW)])

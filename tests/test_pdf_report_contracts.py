@@ -898,8 +898,8 @@ def test_ongoing_outage_duration_is_measured_to_the_last_sample_not_the_period_e
 def test_ongoing_outage_kpi_matches_log_with_naive_samples(monkeypatch):
     b = _full_builder(monkeypatch, hops=[], ssl=None, fail=(118, 119))
     uptime_data = [
-        {**point, "ts": datetime.fromisoformat(point["ts"]).replace(tzinfo=None).isoformat()}
-        for point in b.report_data.uptime_data
+        {"ts": ts.replace(tzinfo=None).isoformat(), "value": value}
+        for ts, value in b.report_data.uptime_data.outage_points()
     ]
     data = dataclasses.replace(b.report_data, uptime_data=uptime_data, downtime_periods=b.downtime_events)
     report = PDFReportBuilder(data)

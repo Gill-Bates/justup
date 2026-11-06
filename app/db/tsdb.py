@@ -944,7 +944,7 @@ def _availability_cycles(
         yield from combine_availability(heapq.merge(*streams, key=lambda e: e[0]))
 
 
-def query_availability_series(
+def query_availability_runs(
     tsdb_dir: Path,
     *,
     target_id: int,

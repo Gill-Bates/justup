@@ -1523,7 +1523,7 @@ async function auditSelfTest(browser) {
 			.target-kpi-pair { position: relative; height: 40px; }
 			.target-kpi-label { position: absolute; inset: 0 auto auto 0; }
 			#combined-card { position: relative; height: 60px; }
-			.combined-footer { position: relative; top: 80px; height: 20px; }
+			#combined-summary { position: relative; top: 80px; height: 20px; }
 			.target-combined-plot { height: 12px; }
 			#availability-card { position: relative; height: 80px; }
 			#availability-card > .card-body { height: 40px; padding: 0; }
@@ -1536,7 +1536,7 @@ async function auditSelfTest(browser) {
 		</style><main id="main-content" class="ju-content">
 			<div class="target-kpi-pair"><div><p class="target-kpi-label">Uptime 24h</p><p class="target-kpi-value">100%</p></div><div><p class="target-kpi-label">Uptime 30d</p><p class="target-kpi-value">100%</p></div></div>
 			<section id="target-dashboard-pane" style="position:relative;width:400px;height:40px"><div id="target-info-cards" style="display:contents"><div class="target-kpi-row" style="width:200px;height:20px"></div></div></section>
-			<div class="card" id="combined-card"><div class="target-combined-plot"></div><div class="combined-footer"></div></div>
+			<div class="card" id="combined-card"><div class="target-combined-plot"></div><p id="combined-summary"></p></div>
 			<div class="card" id="availability-card"><div class="card-body"><div class="target-availability-plot"><canvas id="chart-uptime"></canvas></div></div></div>
 			<div id="downtime-history-card"><div class="card-body"><div class="target-empty-state"></div></div></div>
 			<div data-widget-id="delivery-queue"><div class="dashboard-monitor-body" style="height:10px;overflow-y:auto"><div style="height:40px"></div></div></div>

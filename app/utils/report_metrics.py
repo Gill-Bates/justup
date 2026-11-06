@@ -16,6 +16,7 @@ from typing import Any
 
 from ..db import tsdb as tsdb_db
 from .availability_rules import downtime_series
+from .availability_series import AvailabilitySeries
 from .metric_limits import choose_display_bucket_seconds, choose_points_limit
 from .tcp_ports import DEFAULT_TCP_PORTS
 from .uptime_metric import enabled_availability_metrics
@@ -184,7 +185,7 @@ def collect_report_inputs(
     availability_metrics = enabled_availability_metrics(target)
     if availability_metrics:
         try:
-            uptime_data = tsdb_db.query_availability_series(
+            uptime_data = tsdb_db.query_availability_runs(
                 tsdb_dir,
                 target_id=target_id,
                 metrics=availability_metrics,

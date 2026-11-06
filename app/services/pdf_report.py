@@ -90,6 +90,7 @@ from app.services.traceroute_service import (
     trace_sync,
 )
 from app.utils.availability_rules import MIN_DOWNTIME_SECONDS, measured_outages
+from app.utils.availability_series import AvailabilitySeries
 from app.utils.cert_target import resolve_cert_target
 from app.utils.downtime_view import display_seconds
 from app.utils.ssrf import redact_url
@@ -325,7 +326,7 @@ class ReportData:
     from_date: datetime
     to_date: datetime
     http_data: list[dict]
-    uptime_data: list[dict]
+    uptime_data: AvailabilitySeries | list[dict]  # a point list is folded into runs on construction
     ping_data: list[dict]
     tcp_data: list[dict]
     cert_data: list[dict]
@@ -334,6 +335,9 @@ class ReportData:
     display_data: dict[str, list[dict]] | None = None
     status_counts_exact: bool = False
     downtime_periods: list[DowntimePeriod] | None = None
+
+    def __post_init__(self) -> None:
+        self.uptime_data = _as_series(self.uptime_data, self.target.get("interval_seconds") or 60)
 
 
 @dataclass
@@ -1110,8 +1114,48 @@ def _create_tcp_chart(
     )
 
 
+def _as_series(data: AvailabilitySeries | list[dict] | None, interval_seconds: float) -> AvailabilitySeries:
+    """The run form of availability data; a point list is folded with the given check interval."""
+    if isinstance(data, AvailabilitySeries):
+        return data
+    return AvailabilitySeries.from_points(data or [], interval_seconds)
+
+
+def _uptime_blocks(
+    series: AvailabilitySeries, from_date: datetime, to_date: datetime, tz: tzinfo
+) -> dict[str, list[tuple[float, float]]]:
+    """Up and down blocks of the status strip, one per run; a gap between runs stays empty.
+
+    A run reaches up to the next run when that is within three median sample spacings, otherwise one
+    spacing past its last sample. Short outages get a minimum visible width.
+    """
+    runs = series.measured_runs
+    step = series.median_step or timedelta(minutes=1)
+    limit = step * 3
+    min_width = (to_date - from_date) * 0.004  # keep short outages visible in print
+    blocks: dict[str, list[tuple[float, float]]] = {"up": [], "down": []}
+    for i, run in enumerate(runs):
+        first, last = _to_tz(run.first, tz), _to_tz(run.last, tz)
+        nxt = _to_tz(runs[i + 1].first, tz) if i + 1 < len(runs) else None
+        tail = nxt if nxt is not None and nxt - last <= limit else last + step
+        end = min(tail, to_date)
+        start = max(first, from_date)
+        if end <= start:
+            continue
+        key = "up" if run.value == 1 else "down"
+        if key == "down":
+            last_start, last_end = max(last, from_date), end
+            if end - start < min_width:
+                end = start + min_width
+            # The last sample's own block is widened too and may reach past the end of the run.
+            if last_end > last_start and last_end - last_start < min_width:
+                end = max(end, last_start + min_width)
+        blocks[key].append((mdates.date2num(start), mdates.date2num(end) - mdates.date2num(start)))
+    return blocks
+
+
 def _create_uptime_chart(
-    data: list[dict],
+    data: AvailabilitySeries | list[dict],
     from_date: datetime,
     to_date: datetime,
     width: float = 6.7,
@@ -1124,29 +1168,12 @@ def _create_uptime_chart(
     plot_left_in leaves the Y-axis gutter of the latency charts empty so the time axes align.
     """
     tz = _report_tz(from_date)
-    points = [(t, v) for t, v in zip(*_parse_series(data, tz), strict=True) if not math.isnan(v)] if data else []
-    if not points:
+    series = _as_series(data, 0)  # a plain point list: every point is its own run
+    if not series.measured_runs:
         return None
+    blocks = _uptime_blocks(series, from_date, to_date, tz)
 
     _setup_matplotlib_style()
-    ts = [t for t, _ in points]
-    step = _median_step(ts) or timedelta(minutes=1)
-    limit = step * 3
-    span = to_date - from_date
-    min_width = span * 0.004  # keep short outages visible in print
-    blocks: dict[str, list[tuple[float, float]]] = {"up": [], "down": []}
-    for i, (t, v) in enumerate(points):
-        nxt = ts[i + 1] if i + 1 < len(ts) else None
-        end = nxt if nxt is not None and nxt - t <= limit else t + step
-        end = min(end, to_date)
-        start = max(t, from_date)
-        if end <= start:
-            continue
-        key = "up" if v == 1 else "down"
-        if key == "down" and end - start < min_width:
-            end = start + min_width
-        blocks[key].append((mdates.date2num(start), mdates.date2num(end) - mdates.date2num(start)))
-
     with _safe_figure(figsize=(width, height)) as (fig, ax):
         ax.broken_barh(blocks["up"], (0, 1), facecolors=CHART_COLORS["uptime_up"], linewidth=0)
         ax.broken_barh(blocks["down"], (0, 1), facecolors=CHART_COLORS["uptime_down"], linewidth=0)
@@ -1176,18 +1203,25 @@ def _coverage_blocks(
     stamps: list[datetime], interval: timedelta, from_date: datetime, to_date: datetime
 ) -> list[tuple[float, float]]:
     """Observed spans: each check covers one configured interval, so the sum matches coverage_pct."""
+    return _coverage_span_blocks([(t, t) for t in sorted(stamps)], interval, from_date, to_date)
+
+
+def _coverage_span_blocks(
+    spans: list[tuple[datetime, datetime]], interval: timedelta, from_date: datetime, to_date: datetime
+) -> list[tuple[float, float]]:
+    """Like ``_coverage_blocks`` for runs: checks from the first to the last sample of a span are contiguous."""
     blocks: list[tuple[datetime, datetime]] = []
-    for t in sorted(stamps):
-        end = min(t + interval, to_date)
-        if blocks and t <= blocks[-1][1]:
+    for first, last in spans:
+        end = min(last + interval, to_date)
+        if blocks and first <= blocks[-1][1]:
             blocks[-1] = (blocks[-1][0], max(blocks[-1][1], end))
-        elif end > t:
-            blocks.append((t, end))
+        elif end > first:
+            blocks.append((first, end))
     return [(mdates.date2num(a), mdates.date2num(b) - mdates.date2num(a)) for a, b in blocks if b > from_date]
 
 
 def _create_coverage_bar(
-    data: list[dict],
+    data: AvailabilitySeries | list[dict],
     from_date: datetime,
     to_date: datetime,
     width: float = 6.7,
@@ -1197,12 +1231,15 @@ def _create_coverage_bar(
 ) -> bytes | None:
     """Compact bar over the whole reporting period: where checks exist and where the period is empty."""
     tz = _report_tz(from_date)
-    ts, vals = _parse_series(data, tz)
-    stamps = [t for t, v in zip(ts, vals, strict=True) if not math.isnan(v)]
-    if not stamps:
+    if isinstance(data, AvailabilitySeries):
+        spans = [(_to_tz(run.first, tz), _to_tz(run.last, tz)) for run in data.measured_runs]
+    else:
+        ts, vals = _parse_series(data, tz)
+        spans = [(t, t) for t, v in zip(ts, vals, strict=True) if not math.isnan(v)]
+    if not spans:
         return None
     _setup_matplotlib_style()
-    blocks = _coverage_blocks(stamps, timedelta(seconds=interval_seconds), from_date, to_date)
+    blocks = _coverage_span_blocks(spans, timedelta(seconds=interval_seconds), from_date, to_date)
     with _safe_figure(figsize=(width, height)) as (fig, ax):
         ax.broken_barh(
             [(mdates.date2num(from_date), mdates.date2num(to_date) - mdates.date2num(from_date))],
@@ -1482,20 +1519,17 @@ def _coverage_pct(report_data: ReportData, total_checks: int, interval_seconds: 
     return round(min(100.0, total_checks * interval_seconds / window * 100), 1)
 
 
-def _latest_uptime_sample(uptime_data: list[dict], tz: tzinfo, fallback: datetime | None = None) -> datetime | None:
-    stamps = []
-    for point in uptime_data or []:
-        try:
-            stamps.append(_to_tz(datetime.fromisoformat(point["ts"]), tz))
-        except (KeyError, TypeError, ValueError):
-            continue
-    if stamps:
-        return max(stamps)
+def _latest_uptime_sample(
+    uptime_data: AvailabilitySeries | list[dict], tz: tzinfo, fallback: datetime | None = None
+) -> datetime | None:
+    last = _as_series(uptime_data, 0).last_sample
+    if last is not None:
+        return _to_tz(last, tz)
     return _to_tz(fallback, tz) if fallback is not None else None
 
 
 def _downtime_minutes(
-    uptime_data: list[dict],
+    uptime_data: AvailabilitySeries | list[dict],
     interval_seconds: float,
     events: list[DowntimeEvent] | None = None,
     *,
@@ -1522,10 +1556,10 @@ def _compute_kpis(report_data: ReportData) -> KPIMetrics:
 
     response = _valid_values(report_data.http_data)
     ping = _valid_values(report_data.ping_data)
-    checks = _valid_values(report_data.uptime_data)
+    availability = report_data.uptime_data
 
-    up_count = sum(1 for v in checks if v == 1)
-    total_checks = len(checks)
+    up_count = availability.up
+    total_checks = availability.total
     down_count = total_checks - up_count
     return KPIMetrics(
         uptime_percent=_availability_pct(up_count, total_checks),
@@ -1548,39 +1582,22 @@ def _compute_kpis(report_data: ReportData) -> KPIMetrics:
 
 
 def _extract_downtime_events(
-    uptime_data: list[dict], interval_seconds: float = 60, now: datetime | None = None
+    uptime_data: AvailabilitySeries | list[dict], interval_seconds: float = 60, now: datetime | None = None
 ) -> list[DowntimeEvent]:
     """Extract downtime periods from uptime data by the shared rule in ``availability_rules``.
 
     Points without a value are UNKNOWN, and a gap between two points is neither downtime nor uptime.
     """
-    points: list[tuple[datetime, int | None]] = []
-    skipped_count = 0
-    for p in sorted(uptime_data or [], key=lambda p: p.get("ts", "")):
-        ts_raw = p.get("ts")
-        if not ts_raw:
-            skipped_count += 1
-            continue
-        try:
-            ts = datetime.fromisoformat(ts_raw)
-        except (ValueError, AttributeError):
-            skipped_count += 1
-            continue
-        value = p.get("value")
-        points.append((ts, value if value in (0, 1) else None))
-
-    events = [
+    series = _as_series(uptime_data, interval_seconds)
+    return [
         DowntimeEvent(
             start=o.start,
             end=o.end,
             duration_minutes=None if o.end is None else display_seconds(o.start, o.end) // 60,
         )
-        for o in measured_outages(points, interval_seconds=interval_seconds, now=now)
+        for o in measured_outages(series.outage_points(), interval_seconds=interval_seconds, now=now)
         if o.end is None or (o.seconds() or 0) >= MIN_DOWNTIME_SECONDS
     ]
-    if skipped_count > 0:
-        _log.warning("Downtime extraction: skipped %d datapoints with invalid/missing timestamps", skipped_count)
-    return events
 
 
 def _report_downtime_events(report_data: ReportData) -> list[DowntimeEvent]:
@@ -3914,7 +3931,9 @@ class PDFReportBuilder:
         if not self._is_low_coverage():
             return None
         stamps: list[datetime] = []
-        series = [data.uptime_data, data.http_data, data.ping_data, data.tcp_data, *(data.tcp_port_data or {}).values()]
+        if data.uptime_data.measured_runs:
+            stamps.extend(_to_tz(t, self.tz) for t in (data.uptime_data.measured_first, data.uptime_data.measured_last))
+        series = [data.http_data, data.ping_data, data.tcp_data, *(data.tcp_port_data or {}).values()]
         for points in series:
             ts, vals = _parse_series(points, self.tz)
             stamps.extend(t for t, v in zip(ts, vals, strict=True) if not math.isnan(v))

@@ -29,6 +29,7 @@ from app.db import tsdb as tsdb_db
 from app.services import pdf_report
 from app.services.pdf_worker import PDFJobRequest, PDFWorker
 from app.utils import crypto
+from app.utils.availability_series import AvailabilitySeries
 from app.utils.deps import get_conn
 from app.utils.metric_limits import choose_points_limit
 from app.utils.rate_limit import RateLimitExceededError, rate_limit_exceeded_handler, reset_all
@@ -62,14 +63,15 @@ class _FakeTsdb:
         self.queried.append(metric)
         return self.series.get(metric, [])
 
-    def query_availability_samples(self, _tsdb_dir, *, metrics, **_kwargs):
+    def query_availability_runs(self, _tsdb_dir, *, metrics, interval_seconds, **_kwargs):
         """One sample per timestamp across the requested series; down if any of them is down."""
         self.availability_metrics = tuple(metrics)
         samples: dict[datetime, int] = {}
         for metric in metrics:
             for point in self.series.get(metric, []):
                 samples[point.ts] = min(samples.get(point.ts, 1), int(point.value))
-        return [{"ts": ts.isoformat(), "value": value} for ts, value in sorted(samples.items())]
+        points = [{"ts": ts.isoformat(), "value": value} for ts, value in sorted(samples.items())]
+        return AvailabilitySeries.from_points(points, interval_seconds)
 
     def query_display_series(self, _tsdb_dir, **_kwargs):
         return {"points": [], "status_counts": {}}
@@ -80,7 +82,7 @@ def fake_tsdb(monkeypatch: pytest.MonkeyPatch):
     def install(series: dict[str, list[SimpleNamespace]]) -> _FakeTsdb:
         fake = _FakeTsdb(series)
         monkeypatch.setattr(tsdb_db, "query_auto_resolution", fake.query_auto_resolution)
-        monkeypatch.setattr(tsdb_db, "query_availability_samples", fake.query_availability_samples)
+        monkeypatch.setattr(tsdb_db, "query_availability_runs", fake.query_availability_runs)
         monkeypatch.setattr(tsdb_db, "query_display_series", fake.query_display_series)
         return fake
 

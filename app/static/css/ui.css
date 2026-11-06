@@ -2232,7 +2232,6 @@ textarea.smtp-editor-frame {
 	box-shadow: var(--ui-shadow-subtle);
 	max-height: 260px;
 	overflow: auto;
-	scrollbar-gutter: stable both-edges;
 }
 
 .alert-recipients-grid {

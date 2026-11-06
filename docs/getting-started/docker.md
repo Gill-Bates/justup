@@ -24,7 +24,7 @@ services:
       SECRET_KEY: ${SECRET_KEY:?Set a persistent key for justUp}
       SECRET_KEYS: ${SECRET_KEYS:-}
     volumes:
-      - ${JUSTUP_DATA:-justup-data}:/app/data
+      - ./:/app/data
     tmpfs:
       - /app/data/pdf_reports:size=256m,mode=0700,uid=1000,gid=1000
 ```
@@ -32,19 +32,10 @@ services:
 The file also sets log rotation (50 MB x 5), a health check on `/healthz`, and
 the hardening options below.
 
-- Data lives in the named volume `justup-data`, not in the repository. Set
-  `JUSTUP_DATA` (in `.env` or the shell) to a host path (absolute such as
-  `/srv/justup`, or relative to `docker/`) to use a directory instead; the
-  container then owns that directory (`PUID`/`PGID`) and the entrypoint runs
-  `chown -R` over it when the owner differs. Never point it at a directory with
-  source files (`./` is the `docker/` directory itself).
-  A different volume or path mounts an empty data directory: the database,
-  users and sessions seem gone.
-- Upgrading from a release that stored data in `docker/` (`./:/app/data`):
-  copy `sqlite`, `tsdb`, `signal` and `geoip` into the new location before the
-  first start. `JUSTUP_DATA=./` keeps the old layout working, but only as a
-  stopgap until the copy is done: it is the source directory the rule above
-  warns about.
+- `./` is relative to the Compose file, so data lands in the repository's
+  `docker/` directory. Change the mount for another location. Starting the same
+  stack from another directory (a copied Compose file, a re-imported stack) mounts an
+  empty data directory: the database, users and sessions seem gone.
 - Compose reads `.env` from the directory of the Compose file (`docker/`), not
   from the directory you run the command in. Use `--env-file` to be explicit.
 - PDF reports live in a 256 MiB `tmpfs` and are gone after a restart.

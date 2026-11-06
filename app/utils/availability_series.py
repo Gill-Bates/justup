@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
-from .availability_rules import is_gap
+from .availability_rules import gap_threshold_seconds, is_gap
 
 _log = logging.getLogger(__name__)
 
@@ -87,14 +87,21 @@ class AvailabilitySeries:
         return self.runs[-1].last if self.runs else None
 
     def outage_points(self) -> Iterator[tuple[datetime, int | None]]:
-        """``(ts, 1 | 0 | None)`` for ``measured_outages``: the first and last sample of every run.
+        """``(ts, 1 | 0 | None)`` for ``measured_outages``, generated lazily without materialising samples.
 
-        Inside a run neighbours are never a gap apart and share one state, so dropping the samples between
-        them leaves the outcome of the shared outage rule unchanged.
+        Inside a run neighbours are never a gap apart and share one state. The first and last sample are real;
+        between them one stand-in point per gap threshold keeps the shared outage rule from seeing a gap that
+        only exists because the samples in between were folded away.
         """
+        step = timedelta(seconds=gap_threshold_seconds(self.interval_seconds))
         for run in self.runs:
             yield run.first, run.value
             if run.count > 1:
+                if step > timedelta(0):
+                    stand_in = run.first + step
+                    while stand_in < run.last:
+                        yield stand_in, run.value
+                        stand_in += step
                 yield run.last, run.value
 
     def gaps(self) -> list[tuple[datetime, datetime]]:
@@ -170,4 +177,3 @@ class AvailabilityBuilder:
             ordered = sorted(self._steps)
             median = ordered[len(ordered) // 2] * _MICROSECOND
         return AvailabilitySeries(tuple(self._runs), self._interval, median)
-
