@@ -59,3 +59,14 @@ test("preview renders flags and objects empty like the server", () => {
   const ctx = sampleContext("down");
   assert.equal(renderTemplatePreview("[{{flags.cta}}|{{flags}}|{{status}}]", ctx), "[||]");
 });
+
+test("preview mirrors the server's conditional block syntax and flag whitelist", () => {
+  const server = readFileSync(new URL("../../app/services/notifications/email_template.py", import.meta.url), "utf8");
+  const client = readFileSync(new URL("../../app/static/js/settings.signal-actions.js", import.meta.url), "utf8");
+  const serverPattern = server.match(/_CONDITIONAL_RE = re\.compile\(\s*r"([^"]+)"/)[1];
+  const clientPattern = client.match(/const CONDITIONAL_RE = \/(.+)\/gs;/)[1].replaceAll("\\/", "/");
+  assert.equal(clientPattern, serverPattern);
+  const block = server.match(/CONDITIONAL_FLAGS = frozenset\(\s*\{(.*?)\}\s*\)/s)[1];
+  const serverFlags = [...block.replace(/#.*$/gm, "").matchAll(/"([^"]+)"/g)].map(m => m[1]).sort();
+  assert.deepEqual(Object.keys(sampleContext("down").flags).sort(), serverFlags);
+});

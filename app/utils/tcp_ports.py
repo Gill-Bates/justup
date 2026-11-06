@@ -56,6 +56,11 @@ def _is_whole(number: float | Decimal | Fraction) -> bool:
 DEFAULT_TCP_PORTS = "80"
 
 
+def tcp_ports_or_default(value: Any) -> list[int]:
+    """Parsed TCP ports, or the default port when the value is empty; invalid entries raise ``ValueError``."""
+    return parse_port_list(value) or parse_port_list(DEFAULT_TCP_PORTS)
+
+
 def protocol_scan_hosts(target: Any) -> dict[str, str]:
     """Return the host each protocol is probed on: TCP uses ``tcp_host`` (else ``host``), UDP uses ``host``.
 

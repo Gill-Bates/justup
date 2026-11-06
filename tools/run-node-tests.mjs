@@ -23,7 +23,10 @@ export function nodeTestConcurrency(budget, env = process.env) {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-	const files = readdirSync(dir).filter((name) => name.endsWith(".test.mjs")).sort().map((name) => path.join("tests/js", name));
+	const requested = process.argv.slice(2);
+	const files = requested.length
+		? requested
+		: readdirSync(dir).filter((name) => name.endsWith(".test.mjs")).sort().map((name) => path.join("tests/js", name));
 	const result = spawnSync(process.execPath, ["--test", `--test-concurrency=${nodeTestConcurrency(currentBudget())}`, ...files], { cwd: repo, stdio: "inherit" });
 	if (result.error) throw result.error;
 	process.exitCode = result.status ?? 2;

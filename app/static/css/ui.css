@@ -3627,6 +3627,7 @@ main:focus {
 /* Keep every switch label visibly separated from its track, including outside modal rows. */
 .form-check.form-switch {
 	display: flex;
+	flex-wrap: wrap;
 	align-items: center;
 	gap: var(--ui-control-gap);
 	padding-left: 0;
@@ -3642,8 +3643,9 @@ main:focus {
 	margin: 0;
 }
 
-.ju-switch .form-check-input {
-	margin-top: calc((var(--ui-target-min) - 1em) / 2);
+/* Help text inside a switch row starts its own line below the track and label. */
+.form-check.form-switch > .form-text {
+	flex-basis: 100%;
 }
 
 .ju-switch .form-check-label {

@@ -112,7 +112,7 @@ from ..utils.status_helper import (
     get_status_defaults,
 )
 from ..utils.storage_stats import compute_storage_stats
-from ..utils.tcp_ports import DEFAULT_TCP_PORTS, parse_port_list
+from ..utils.tcp_ports import parse_port_list, tcp_ports_or_default
 from ..utils.time import assume_utc, utcnow
 from ..utils.uptime_metric import enabled_availability_metrics, uptime_level
 from ..utils.version import BUILD_INFO, VERSION
@@ -524,7 +524,7 @@ def _fill_tcp_status_from_series(target: dict, tsdb_dir) -> None:
     stored = {(p["protocol"], p["port"]): p for p in target["network_ports"] if p.get("checked_at")}
     cache = dict(target.get("tcp_port_status") or {})
     try:
-        ports = parse_port_list(str(target.get("tcp_ports") or "")) or parse_port_list(DEFAULT_TCP_PORTS)
+        ports = tcp_ports_or_default(str(target.get("tcp_ports") or ""))
     except ValueError:
         return
     for port in ports:

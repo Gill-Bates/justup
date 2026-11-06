@@ -16,7 +16,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-from .tcp_ports import DEFAULT_TCP_PORTS, parse_port_list
+from .tcp_ports import parse_port_list, tcp_ports_or_default
 
 STATUS_UP = "up"
 STATUS_DOWN = "down"
@@ -54,9 +54,9 @@ def _get(source: Mapping[str, Any] | Any, key: str) -> Any:
         return None
 
 
-def _ports(value: object, *, default: list[int] | None = None) -> list[int]:
+def _ports(value: object) -> list[int]:
     try:
-        return parse_port_list(str(value or "")) or (default or [])
+        return parse_port_list(str(value or ""))
     except ValueError:
         return []
 
@@ -140,7 +140,11 @@ def build_endpoint_views(
         )
     legacy = _get(target, "tcp_port_status") or {}
     if _get(target, "enable_tcp_connect"):
-        for port in _ports(_get(target, "tcp_ports"), default=parse_port_list(DEFAULT_TCP_PORTS)):
+        try:
+            tcp_ports = tcp_ports_or_default(str(_get(target, "tcp_ports") or ""))
+        except ValueError:
+            tcp_ports = []
+        for port in tcp_ports:
             row = stored.get(("tcp", port))
             # A row never written (migration 7 seeds it empty) defers to the status cache.
             if row and row.get("checked_at"):

@@ -40,9 +40,11 @@ the hardening options below.
   source files (`./` is the `docker/` directory itself).
   A different volume or path mounts an empty data directory: the database,
   users and sessions seem gone.
-- Upgrading from a release that stored data in `docker/` (`./:/app/data`): set
-  `JUSTUP_DATA=./` once to keep using it, or copy `sqlite`, `tsdb`, `signal` and
-  `geoip` into the new location before the first start.
+- Upgrading from a release that stored data in `docker/` (`./:/app/data`):
+  copy `sqlite`, `tsdb`, `signal` and `geoip` into the new location before the
+  first start. `JUSTUP_DATA=./` keeps the old layout working, but only as a
+  stopgap until the copy is done: it is the source directory the rule above
+  warns about.
 - Compose reads `.env` from the directory of the Compose file (`docker/`), not
   from the directory you run the command in. Use `--env-file` to be explicit.
 - PDF reports live in a 256 MiB `tmpfs` and are gone after a restart.

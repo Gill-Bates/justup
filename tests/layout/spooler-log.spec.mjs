@@ -211,13 +211,14 @@ test("delivery queue log toolbar actions keep filters, refresh and confirmations
 		await openSpooler(page, app, "light", { entries: ENTRIES, total: 3 });
 		const toolbar = page.locator(".spooler-toolbar");
 		const logCalls = () => requests.filter((r) => r.includes("/notification-queue/log"));
-		let before = logCalls().length;
+		const nextLogCall = (check = () => true) => page.waitForRequest((r) => r.url().includes("/notification-queue/log") && check(r.url()));
+		const filtered = nextLogCall((url) => url.includes("status=failed"));
 		await toolbar.getByLabel("Status", { exact: true }).selectOption("failed");
-		await page.waitForTimeout(300);
-		assert.ok(logCalls().length > before && logCalls().at(-1).includes("status=failed"), "the status filter reloads the log");
-		before = logCalls().length;
+		await filtered;
+		const before = logCalls().length;
+		const refreshed = nextLogCall();
 		await toolbar.getByRole("button", { name: "Refresh", exact: true }).click();
-		await page.waitForTimeout(300);
+		await refreshed;
 		assert.ok(logCalls().length > before, "Refresh reloads the log");
 
 		await toolbar.getByRole("button", { name: "Clear log", exact: true }).click();

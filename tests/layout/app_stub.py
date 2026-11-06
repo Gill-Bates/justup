@@ -101,8 +101,27 @@ def _exit_with_parent() -> None:
         sys.exit(0)
 
 
+def _reset_rate_limits_periodically() -> None:
+    """Keep the per-client budgets from accumulating across the specs that share this app.
+
+    The limits are product behaviour and covered by pytest; here a spec must see only its own requests.
+    """
+    import threading
+    import time
+
+    from app.utils.rate_limit import reset_all
+
+    def loop() -> None:
+        while True:
+            time.sleep(1.0)
+            reset_all()
+
+    threading.Thread(target=loop, name="layout-rate-limit-reset", daemon=True).start()
+
+
 if __name__ == "__main__":
     _exit_with_parent()
+    _reset_rate_limits_periodically()
     from app.__main__ import main
 
     sys.exit(main() or 0)

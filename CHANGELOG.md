@@ -1,6 +1,6 @@
 ## [Unreleased]
 
-- `Changed` The Docker Compose example stores data in the named volume `justup-data` instead of the repository's `docker/` directory, which the entrypoint used to `chown` recursively. Existing installs must set `JUSTUP_DATA=./` (or copy `sqlite`, `tsdb`, `signal` and `geoip` into the volume) before the next start, otherwise the app starts with an empty database.
+- `Changed` The Docker Compose example stores data in the named volume `justup-data` instead of the repository's `docker/` directory, which the entrypoint used to `chown` recursively. Existing installs must copy `sqlite`, `tsdb`, `signal` and `geoip` into the volume before the next start, otherwise the app starts with an empty database; `JUSTUP_DATA=./` keeps the old directory only as a stopgap.
 - `Fix` Mail subjects show `&`, `<` and quotes from the target name as typed instead of HTML entities such as `&amp;`; this covers alert mails, the test mail and the template preview.
 
 ## [1.0.3] - 2026-11-05

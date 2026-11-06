@@ -67,10 +67,20 @@ def test_protocol_scan_hosts(target, expected) -> None:
     assert tcp_ports.protocol_scan_hosts(target) == expected
 
 
+@pytest.mark.parametrize("empty", [None, "", "  "])
+def test_shared_fallback_gives_the_default_for_empty_values(empty) -> None:
+    assert tcp_ports.tcp_ports_or_default(empty) == [80]
+
+
+@pytest.mark.parametrize("bad", ["80,abc", "0", "70000"])
+def test_shared_fallback_rejects_an_invalid_list_instead_of_defaulting(bad) -> None:
+    with pytest.raises(ValueError):
+        tcp_ports.tcp_ports_or_default(bad)
+
+
 def test_display_paths_take_the_default_from_the_shared_constant(monkeypatch) -> None:
     # A distinct sentinel proves each path reads DEFAULT_TCP_PORTS instead of a literal 80.
-    for module in (availability_rules, endpoint_view, frontend):
-        monkeypatch.setattr(module, "DEFAULT_TCP_PORTS", "8081")
+    monkeypatch.setattr(tcp_ports, "DEFAULT_TCP_PORTS", "8081")
 
     series = availability_rules.downtime_series({"enable_tcp_connect": True, "tcp_ports": ""})
     assert series == [("tcp_up_8081", "TCP:8081")]

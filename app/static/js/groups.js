@@ -54,8 +54,7 @@
 			});
 
 			if (!res.ok) {
-				const err = await res.json().catch(() => ({}));
-				window.justUpToast?.error?.(err.detail || 'Failed to save group');
+				window.justUpToast?.error?.(await window.JuApiError.fromResponse(res, 'Failed to save group'));
 				return;
 			}
 
@@ -73,8 +72,7 @@
 				method: 'DELETE',
 			});
 			if (!res.ok) {
-				const err = await res.json().catch(() => ({}));
-				window.justUpToast?.error?.(err.detail || 'Failed to delete group');
+				window.justUpToast?.error?.(await window.JuApiError.fromResponse(res, 'Failed to delete group'));
 				return;
 			}
 			location.reload();

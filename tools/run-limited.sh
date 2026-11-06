@@ -144,6 +144,14 @@ function load_budget() {
 
 # Nested call: the outer wrapper already holds the slot and the budget; only caps and env apply.
 function run_nested() {
+    local name
+    # The inherited caps reach bash arithmetic, which would evaluate anything but a plain number.
+    for name in JUSTUP_LIMIT_PY JUSTUP_LIMIT_NODE JUSTUP_LIMIT_PW; do
+        if [[ ! "${!name:-1}" =~ ^[1-9][0-9]{0,5}$ ]]; then
+            printf "Error: %s must be a positive integer, got '%s'\n" "$name" "${!name}" >&2
+            exit 125
+        fi
+    done
     PY_WORKERS="${JUSTUP_LIMIT_PY:-1}" NODE_WORKERS="${JUSTUP_LIMIT_NODE:-1}" PW_WORKERS="${JUSTUP_LIMIT_PW:-1}"
     finalize_environment "$@"
     exec "${CMD[@]}"
@@ -211,8 +219,13 @@ function adjust_command() {
         fi
     done
 
-    if [[ "${in[0]##*/}" == "npm" ]] && [[ "${in[*]}" == "npm test" || "${in[*]}" == "npm run test" ]]; then
-        CMD=(npm run test:local)
+    # `npm test [-- files]` would run node --test without a concurrency cap; the local script has one.
+    if [[ "${in[0]##*/}" == "npm" && "${in[1]:-}" == "test" ]]; then
+        CMD=(npm run test:local "${in[@]:2}")
+        return 0
+    fi
+    if [[ "${in[0]##*/}" == "npm" && "${in[1]:-}" == "run" && "${in[2]:-}" == "test" ]]; then
+        CMD=(npm run test:local "${in[@]:3}")
         return 0
     fi
 

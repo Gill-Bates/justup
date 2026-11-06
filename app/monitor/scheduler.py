@@ -51,7 +51,7 @@ from app.utils.constants import (
 from app.utils.crypto import decrypt_secret
 from app.utils.ssrf import redact_url
 from app.utils.status_helper import cert_severity
-from app.utils.tcp_ports import DEFAULT_TCP_PORTS, parse_port_list, protocol_scan_hosts
+from app.utils.tcp_ports import parse_port_list, protocol_scan_hosts, tcp_ports_or_default
 from app.utils.time import utcnow
 from app.utils.uptime_metric import enabled_availability_metrics
 
@@ -244,7 +244,7 @@ def _stored_tcp_ports(value: str | int | None) -> list[int]:
     the target as misconfigured (see ``_run_target``).
     """
     try:
-        return parse_port_list(value) or parse_port_list(DEFAULT_TCP_PORTS)
+        return tcp_ports_or_default(value)
     except ValueError:
         return []
 
@@ -598,11 +598,13 @@ class MonitorScheduler:
                 if failure is not None:
                     raise failure
 
-                def pending_dispatches() -> bool:
-                    with maintenance.work_section(generation), self._db_conn() as conn:
+                def pending_dispatches(expected_generation: int) -> bool:
+                    with maintenance.work_section(expected_generation), self._db_conn() as conn:
                         return sqlite_db.has_pending_alert_dispatches(conn)
 
-                has_pending = await asyncio.to_thread(self._thread_call(self._epoch_for_thread(), pending_dispatches))
+                has_pending = await asyncio.to_thread(
+                    self._thread_call(self._epoch_for_thread(), pending_dispatches), generation
+                )
                 if not has_pending:
                     self._notification_failure_active = False
                 if not self._notification_failure_active and self.on_notification_ok is not None:
@@ -783,7 +785,7 @@ class MonitorScheduler:
                     )
                     conn.commit()
 
-            await asyncio.to_thread(store_probe)
+            await asyncio.to_thread(self._thread_call(self._epoch_for_thread(), store_probe))
             with maintenance.work_section(generation):
                 old_state = self._quality_state
                 self._quality_state = result.state  # result.state is already a string
@@ -1718,21 +1720,7 @@ class MonitorScheduler:
                             uptime_percent_30d = (
                                 row["uptime_percent_30d"] if (row and "uptime_percent_30d" in row.keys()) else None  # noqa: SIM118
                             )
-                        if cfg["enable_http_check"]:
-                            _update_service("http", snapshot.get("http_up"))
-                        if cfg["enable_ping"]:
-                            _update_service("ping", snapshot.get("ping_up"))
-                        if cfg["enable_tcp_connect"]:
-                            _update_service("tcp", snapshot.get("tcp_up"))
-                        if cfg.get("enable_udp_scan") and cfg.get("udp_ports"):
-                            _update_service("udp", snapshot.get("udp_up"))
-                            if snapshot.get("udp_up") is None:
-                                rt.down_since_by_service["udp"] = None  # UNKNOWN restarts the confirmation
                         self._persist_tcp_ports(conn, target_id, tcp_checks)
-                        if cfg["enable_cert_expiration"] and snapshot.get("cert_days_left") is not None:
-                            _update_service("cert", 1)
-                        if calculate_uptime and uptime_percent is not None:
-                            rt.last_uptime_calc_at = now
                         sqlite_db.set_target_status_snapshot(
                             conn,
                             target_id,
@@ -1755,6 +1743,27 @@ class MonitorScheduler:
                 if not await asyncio.to_thread(self._thread_call(self._epoch_for_thread(), persist_status)):
                     self._refresh_requested = True
                     return
+                # Runtime state belongs to the event loop; a check disabled by a refresh during the
+                # await must not get its down timer back from this (older) result.
+                live = self._targets.get(target_id) or {}
+
+                def still_enabled(flag: str) -> bool:
+                    return bool(cfg.get(flag) and live.get(flag))
+
+                if still_enabled("enable_http_check"):
+                    _update_service("http", snapshot.get("http_up"))
+                if still_enabled("enable_ping"):
+                    _update_service("ping", snapshot.get("ping_up"))
+                if still_enabled("enable_tcp_connect"):
+                    _update_service("tcp", snapshot.get("tcp_up"))
+                if still_enabled("enable_udp_scan") and cfg.get("udp_ports"):
+                    _update_service("udp", snapshot.get("udp_up"))
+                    if snapshot.get("udp_up") is None:
+                        rt.down_since_by_service["udp"] = None  # UNKNOWN restarts the confirmation
+                if still_enabled("enable_cert_expiration") and snapshot.get("cert_days_left") is not None:
+                    _update_service("cert", 1)
+                if calculate_uptime and uptime_percent is not None:
+                    rt.last_uptime_calc_at = now
                 event_bus.publish("target.status", {"target_id": target_id, "status": str(overall_status)})
             except maintenance.MaintenanceActiveError:
                 return
@@ -2297,9 +2306,9 @@ class MonitorScheduler:
                     # Create the database record first; the id becomes active only after the commit,
                     # so a failed insert is retried in the next cycle without a phantom open alert.
                     try:
-
+                        # The caller's work section already covers this thread; sections must not nest.
                         def store_alert() -> None:
-                            with maintenance.work_section(generation), self._db_conn() as conn:
+                            with self._db_conn() as conn:
                                 sqlite_db.create_alert(
                                     conn,
                                     alert_id=alert_id,
@@ -2337,14 +2346,16 @@ class MonitorScheduler:
                 if auto_close and rt.current_alert_id:
                     # Read started_at from database (single source of truth)
                     # This handles cases where down_since_by_service was reset by quality gate
+                    open_alert_id = rt.current_alert_id
+
                     def resolve_alert() -> datetime:
-                        with maintenance.work_section(generation), self._db_conn() as conn:
-                            alert_row = sqlite_db.get_alert(conn, rt.current_alert_id)
+                        with self._db_conn() as conn:
+                            alert_row = sqlite_db.get_alert(conn, open_alert_id)
                             started = None
                             if alert_row and alert_row["started_at"]:
                                 started = _stored_datetime(alert_row["started_at"])
                             started = started or now
-                            sqlite_db.resolve_alert(conn, rt.current_alert_id, now, dispatch_outbox=True)
+                            sqlite_db.resolve_alert(conn, open_alert_id, now, dispatch_outbox=True)
                             conn.commit()
                             return started
 
@@ -2352,10 +2363,11 @@ class MonitorScheduler:
                     duration_seconds = int((now - started_at).total_seconds())
                     event_bus.publish("alert.changed", {"target_id": target_id})
                 elif rt.current_alert_id:
+                    open_alert_id = rt.current_alert_id
 
                     def deactivate_alert() -> None:
-                        with maintenance.work_section(generation), self._db_conn() as conn:
-                            sqlite_db.deactivate_alert(conn, rt.current_alert_id)
+                        with self._db_conn() as conn:
+                            sqlite_db.deactivate_alert(conn, open_alert_id)
                             conn.commit()
 
                     await asyncio.to_thread(self._thread_call(self._epoch_for_thread(), deactivate_alert))
@@ -2461,7 +2473,7 @@ class MonitorScheduler:
                         cert_alert_id = rt.cert_alert_id
 
                         def resolve_cert_alert() -> None:
-                            with maintenance.work_section(generation), self._db_conn() as conn:
+                            with self._db_conn() as conn:
                                 sqlite_db.resolve_alert(conn, cert_alert_id, now, dispatch_outbox=True)
                                 conn.commit()
 
@@ -2492,7 +2504,7 @@ class MonitorScheduler:
                 alert_id = str(uuid.uuid4())
 
                 def store_cert_alert() -> None:
-                    with maintenance.work_section(generation), self._db_conn() as conn:
+                    with self._db_conn() as conn:
                         sqlite_db.create_alert(
                             conn,
                             alert_id=alert_id,
