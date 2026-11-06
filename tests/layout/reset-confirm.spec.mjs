@@ -93,6 +93,8 @@ for (const viewport of VIEWPORTS) {
 				await page.click("#ju-confirm-ok");
 				await request;
 				await settled(page, false);
+				// Deliberate negative window: a duplicate request would arrive shortly after the first.
+				await page.waitForTimeout(300);
 				assert.equal(state.posts.length, 1, "confirm must send exactly one request");
 				assert.ok(state.posts[0].endsWith(oldHref), `the request went to ${state.posts[0]}`);
 				assert.equal(state.nativeDialogs, 0, "a native popup appeared");

@@ -77,7 +77,6 @@
 			<details class="card shadow-sm settings-card settings-details egress-card" open data-public-egress data-endpoint="/settings/network/public-egress">
 				<summary class="card-header"><h2 class="h6 mb-0">Public outbound IPs</h2></summary>
 				<div class="card-body settings-compact">
-					<p class="form-text mb-0" id="egress_privacy_hint"><strong>Privacy:</strong> to find these addresses, justUp! connects to icanhazip.com and ipify.org over HTTPS. They see this server's public address and nothing else. The check runs when you open this tab and on Refresh; results are not saved.</p>
 					<dl class="egress-list mb-0">
 						<div class="egress-row" data-egress-family="ipv4">
 							<dt class="egress-label">IPv4</dt>
@@ -87,7 +86,7 @@
 									<span class="badge ju-status-badge--neutral" data-egress-badge>Checking&hellip;</span>
 									<button type="button" class="btn btn-icon btn-sm" data-egress-copy aria-label="Copy IPv4 address" title="Copy IPv4 address" disabled><span class="material-icons" aria-hidden="true">content_copy</span></button>
 								</span>
-								<span class="form-text d-block" data-egress-detail></span>
+								<span class="form-text" data-egress-detail></span>
 							</dd>
 						</div>
 						<div class="egress-row" data-egress-family="ipv6">
@@ -98,16 +97,17 @@
 									<span class="badge ju-status-badge--neutral" data-egress-badge>Checking&hellip;</span>
 									<button type="button" class="btn btn-icon btn-sm" data-egress-copy aria-label="Copy IPv6 address" title="Copy IPv6 address" disabled><span class="material-icons" aria-hidden="true">content_copy</span></button>
 								</span>
-								<span class="form-text d-block" data-egress-detail></span>
+								<span class="form-text" data-egress-detail></span>
 							</dd>
 						</div>
 					</dl>
 					<div class="egress-actions">
 						<button type="button" class="btn btn-outline-secondary btn-sm" data-egress-refresh><span class="material-icons" aria-hidden="true">refresh</span> Refresh</button>
-						<span class="form-text mb-0">Last checked: <time data-egress-checked>&hellip;</time></span>
-						<span class="form-text mb-0" data-egress-cached hidden>Cached result, not re-measured.</span>
+						<span class="form-text mb-0">Last checked <time data-egress-checked>&hellip;</time></span>
+						<span class="form-text mb-0" data-egress-cached hidden>Cached</span>
+						<a class="egress-doc-link" href="https://gill-bates.github.io/justup/features/network-monitoring/#public-outbound-ips" target="_blank" rel="noopener noreferrer">Documentation <span aria-hidden="true">↗</span><span class="visually-hidden"> (opens in a new tab)</span></a>
 					</div>
-					<p class="form-text text-warning-emphasis mb-0" data-egress-proxy hidden>A proxy is set in this container's environment. These addresses are measured directly, not through the proxy; HTTP monitors that use it may appear with another address.</p>
+					<p class="form-text text-warning-emphasis mb-0" data-egress-proxy hidden>Proxy configured; addresses measured directly.</p>
 					<div class="visually-hidden" role="status" aria-live="polite" data-egress-live></div>
 				</div>
 			</details>

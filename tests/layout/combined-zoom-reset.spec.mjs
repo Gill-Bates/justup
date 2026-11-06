@@ -29,7 +29,7 @@ const settle = (page) => waitForVisualStability(page);
 
 // Drag over the given fraction of the plot area (not of the canvas, which includes the axes). Unless
 // `settleAfter` is off, it returns once the zoom-detail answer has been delivered and painted.
-async function drag(page, from = 0.9, to = 0.99, { settleAfter = true } = {}) {
+async function drag(page, detail, from = 0.9, to = 0.99, { settleAfter = true } = {}) {
 	const detailResponse = settleAfter ? page.waitForResponse((response) => response.url().includes("display=true")) : null;
 	const area = await page.evaluate(() => {
 		const canvas = document.getElementById("chart-combined");
@@ -43,25 +43,30 @@ async function drag(page, from = 0.9, to = 0.99, { settleAfter = true } = {}) {
 	await page.mouse.up();
 	if (detailResponse) {
 		await (await detailResponse).finished();
+		await detail.drain();
 		await settle(page);
 	}
 }
 
 // Zoom-detail requests (made while `detail.on`) return values four times as large and may be slow, so a
 // zoomed chart has clearly different scales from the load state.
+// `detail.drain()` resolves once every intercepted detail request (one per metric) was answered or dropped.
 async function mockDetail(page, detail) {
+	detail.pending = 0;
+	detail.drain = async () => { while (detail.pending > 0) await new Promise((resolve) => setTimeout(resolve, 25)); };
 	await page.route("**/metrics/**", async (route) => {
 		if (!detail.on || !route.request().url().includes("display=true")) return route.continue();
-		const response = await route.fetch();
-		const body = await response.json();
-		for (const point of body.points || []) for (const key of ["value", "min", "max"]) if (typeof point[key] === "number" && !/_up|status/.test(body.metric)) point[key] *= 4;
-		if (detail.delayMs) await new Promise((resolve) => setTimeout(resolve, detail.delayMs));
+		detail.pending += 1;
 		try {
+			const response = await route.fetch();
+			const body = await response.json();
+			for (const point of body.points || []) for (const key of ["value", "min", "max"]) if (typeof point[key] === "number" && !/_up|status/.test(body.metric)) point[key] *= 4;
+			if (detail.delayMs) await new Promise((resolve) => setTimeout(resolve, detail.delayMs));
 			return await route.fulfill({ response, json: body });
 		} catch {
 			return undefined; // the page aborted the stale request
 		} finally {
-			detail.onServed?.();
+			detail.pending -= 1;
 		}
 	});
 }
@@ -89,7 +94,7 @@ for (const theme of THEMES) {
 
 					// Zoom with larger detail values: the zoomed scales differ from the load scales.
 					detail.on = true;
-					await drag(page);
+					await drag(page, detail);
 					const zoomed = await snapshot(page);
 					assert.notDeepEqual(zoomed.scales.x, load.scales.x, "the drag zoomed the time axis");
 					assert.ok(zoomed.scales.y[1] !== load.scales.y[1] || zoomed.points.join() !== load.points.join(), "zoom detail changed the chart");
@@ -101,19 +106,19 @@ for (const theme of THEMES) {
 					await reset();
 					await settle(page);
 					assert.deepEqual(await snapshot(page), load, "second reset");
-					await drag(page, 0.7, 0.99);
+					await drag(page, detail, 0.7, 0.99);
 					await reset();
 					await settle(page);
 					assert.deepEqual(await snapshot(page), load, "after a second cycle");
 
 					// Reset while the detail request is still in flight: its late answer must not repaint.
 					detail.delayMs = 1500;
-					const served = new Promise((resolve) => { detail.onServed = resolve; });
 					const requested = page.waitForRequest((request) => request.url().includes("display=true"));
-					await drag(page, 0.9, 0.99, { settleAfter: false });
+					await drag(page, detail, 0.9, 0.99, { settleAfter: false });
 					await requested;
+					while (!detail.pending) await new Promise((resolve) => setTimeout(resolve, 10));
 					await reset();
-					await served;
+					await detail.drain();
 					await waitForVisualStability(page);
 					assert.deepEqual(await snapshot(page), load, "late detail response ignored");
 					assert.deepEqual(problems, []);

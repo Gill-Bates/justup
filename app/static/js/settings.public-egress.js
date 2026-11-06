@@ -75,8 +75,6 @@ export function describeFamily(label, family) {
         view.address = family.address;
         view.canCopy = true;
         view.observedAt = hasText(family.observed_at) ? family.observed_at : '';
-        const sources = Array.isArray(family.sources) ? family.sources.length : 0;
-        view.detail = sources > 1 ? 'Confirmed by ' + sources + ' independent services.' : 'Reported by one service.';
     } else if (status === 'stale') {
         view.address = family.address;
         view.observedAt = hasText(family.observed_at) ? family.observed_at : '';
@@ -85,7 +83,7 @@ export function describeFamily(label, family) {
         const seen = Array.isArray(family.observed) ? family.observed.filter((a) => typeof a === 'string') : [];
         view.detail = reason + (seen.length ? ' Observed: ' + seen.join(', ') + '.' : '');
     } else if (status === 'unavailable') {
-        view.detail = label + ' is not available from this server. ' + reason;
+        view.detail = reason || label + ' is not available from this server.';
     } else if (status === 'failed') {
         view.detail = reason || 'The lookup failed.';
     }
@@ -95,7 +93,7 @@ export function describeFamily(label, family) {
 /** While a refresh runs, keep the last known address visible but not copyable. */
 export function describeLoading(previous) {
     if (previous && hasText(previous.address)) {
-        return stateView('loading', { address: previous.address, observedAt: previous.observedAt, detail: 'Checking\u2026' });
+        return stateView('loading', { address: previous.address, observedAt: previous.observedAt });
     }
     return stateView('loading');
 }
