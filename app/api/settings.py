@@ -1066,6 +1066,7 @@ def preview_email_template(payload: EmailTemplatePreviewRequest, _admin=Depends(
     from ..services.notifications.email_template import (
         build_alert_context,
         build_test_alert_sample,
+        render_subject,
         render_template,
         template_to_preview,
     )
@@ -1088,7 +1089,7 @@ def preview_email_template(payload: EmailTemplatePreviewRequest, _admin=Depends(
     subject_template = payload.subject if payload.subject is not None else _DEF_SUBJECT
     html_template = payload.html if payload.html is not None else _DEF_HTML
 
-    subject = render_template(subject_template, context)
+    subject = render_subject(subject_template, context)
     html = template_to_preview(render_template(html_template, context))
     return EmailTemplatePreviewResponse(subject=subject, html=html)
 
@@ -1113,6 +1114,7 @@ async def send_test_email(
         build_test_alert_sample,
         html_to_text,
         load_email_templates,
+        render_subject,
         render_template,
     )
     from ..services.notifications.spooler import (
@@ -1133,7 +1135,7 @@ async def send_test_email(
 
     context = build_alert_context(test_alert_data, test_target_data)
 
-    subject = render_template(subject_template, context)
+    subject = render_subject(subject_template, context)
     html_body = render_template(html_template, context)
     text_body = html_to_text(html_body)
 

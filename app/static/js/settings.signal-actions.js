@@ -40,6 +40,7 @@ import { loadSignalStatus } from './settings.signal-status.js';
 
 // Use global apiFetch for authenticated API calls
 const apiFetch = window.apiFetch;
+let signalActionsBound = false;
 
 function refreshStatus() { loadSignalStatus(); }
 
@@ -689,10 +690,12 @@ export async function initSignal() {
         'skip-profile': registration.signalSkipProfile,
         'send-test': sendTestMessage,
     };
+    if (signalActionsBound) return;
     document.addEventListener('click', (event) => {
         const el = event.target.closest('[data-signal-action]');
         if (!el || el.disabled) return;
         const run = actions[el.dataset.signalAction];
         if (run) run(el);
     });
+    signalActionsBound = true;
 }

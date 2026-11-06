@@ -693,10 +693,12 @@ class MonitorScheduler:
             or (now - self._last_heartbeat_at).total_seconds() >= self._heartbeat_interval_seconds
         ):
             try:
-                with maintenance.work_section(generation):
-                    with self._db_conn() as conn:
+                def update_heartbeat() -> None:
+                    with maintenance.work_section(generation), self._db_conn() as conn:
                         sqlite_db.update_scheduler_heartbeat(conn, self._run_id)
-                    self._last_heartbeat_at = now
+
+                await asyncio.to_thread(self._thread_call(self._epoch_for_thread(), update_heartbeat))
+                self._last_heartbeat_at = now
             except Exception as e:  # noqa: BLE001 - scheduler-loop resilience boundary: log and continue
                 _log.warning("Failed to update heartbeat: %s", e)
 
@@ -765,9 +767,8 @@ class MonitorScheduler:
         try:
             result: QualityResult = await run_quality_probe()
 
-            with maintenance.work_section(generation):
-                # Store the probe result only if its data generation is still current.
-                with self._db_conn() as conn:
+            def store_probe() -> None:
+                with maintenance.work_section(generation), self._db_conn() as conn:
                     sqlite_db.insert_monitor_quality(
                         conn,
                         score=result.score,
@@ -777,6 +778,8 @@ class MonitorScheduler:
                     )
                     conn.commit()
 
+            await asyncio.to_thread(self._thread_call(self._epoch_for_thread(), store_probe))
+            with maintenance.work_section(generation):
                 old_state = self._quality_state
                 self._quality_state = result.state  # result.state is already a string
                 self._quality_probe_failed = False
@@ -1002,7 +1005,9 @@ class MonitorScheduler:
         try:
             with maintenance.work_section(generation), self._db_conn() as conn:
                 existing = sqlite_db.get_target_status(conn, target_id)
-                uptime_percent = existing["uptime_percent"] if (existing and "uptime_percent" in existing) else None
+                uptime_percent = (
+                    existing["uptime_percent"] if (existing and "uptime_percent" in existing.keys()) else None  # noqa: SIM118
+                )
 
                 sqlite_db.set_target_status_snapshot(
                     conn,
@@ -1115,6 +1120,12 @@ class MonitorScheduler:
             }
             previous = self._targets.get(tid)
             self._targets[tid] = cfg
+            if tid in self._rt:
+                rt = self._rt[tid]
+                enabled = set(_restorable_services(cfg, "")) if cfg["is_enabled"] else set()
+                for service in rt.down_since_by_service:
+                    if service not in enabled:
+                        rt.down_since_by_service[service] = None
             if (
                 previous is not None
                 and tid in self._rt
@@ -1667,9 +1678,9 @@ class MonitorScheduler:
                         return
                     if not calculate_uptime:
                         row = sqlite_db.get_target_status(conn, target_id)
-                        uptime_percent = row["uptime_percent"] if (row and "uptime_percent" in row) else None
+                        uptime_percent = row["uptime_percent"] if (row and "uptime_percent" in row.keys()) else None  # noqa: SIM118
                         uptime_percent_30d = (
-                            row["uptime_percent_30d"] if (row and "uptime_percent_30d" in row) else None
+                            row["uptime_percent_30d"] if (row and "uptime_percent_30d" in row.keys()) else None  # noqa: SIM118
                         )
                     if cfg["enable_http_check"]:
                         _update_service("http", snapshot.get("http_up"))

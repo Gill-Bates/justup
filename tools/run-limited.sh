@@ -18,7 +18,7 @@
 #                           acquired (default 60; the run then starts with the reduced budget)
 #   JUSTUP_TEST_CGROUP      auto (default) or off; auto uses systemd-run --scope CPUQuota when it works
 #   JUSTUP_TEST_LOCK_DIR    lock directory (default $XDG_RUNTIME_DIR/justup-test-slots or
-#                           /tmp/justup-test-slots-$UID), mode 0700, owned by the current user
+#                           ${TMPDIR:-/tmp}/justup-test-slots-$UID), mode 0700, owned by the current user
 #
 # Exit codes: the command's own exit code; 124 = no slot within JUSTUP_TEST_WAIT;
 #             125 = wrapper setup error; 130/143 = interrupted by SIGINT/SIGTERM.
@@ -258,7 +258,7 @@ function prepare_lock_dir() {
     if [[ -n "${XDG_RUNTIME_DIR:-}" && -d "$XDG_RUNTIME_DIR" && -O "$XDG_RUNTIME_DIR" ]]; then
         default_dir="$XDG_RUNTIME_DIR/justup-test-slots"
     else
-        default_dir="/tmp/justup-test-slots-$(id -u)"
+        default_dir="${TMPDIR:-/tmp}/justup-test-slots-$(id -u)"
     fi
     LOCK_DIR="${JUSTUP_TEST_LOCK_DIR:-$default_dir}"
     if [[ -L "$LOCK_DIR" ]]; then

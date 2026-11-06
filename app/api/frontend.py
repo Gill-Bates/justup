@@ -750,7 +750,7 @@ def fragment_settings_network(request: Request, conn=Depends(get_conn)):
 @router.get("/ui/fragments/settings-storage", response_class=HTMLResponse)
 async def fragment_settings_storage(request: Request, conn=Depends(get_conn)):
     """Render Storage settings tab fragment with pre-computed stats."""
-    user = require_admin_htmx(request, conn)
+    user = await run_in_threadpool(require_admin_htmx, request, conn)
     if isinstance(user, Response):
         return user
 
@@ -778,13 +778,16 @@ async def fragment_settings_storage(request: Request, conn=Depends(get_conn)):
             return f"{n / 1_000:.0f}k"
         return str(n)
 
+    purge_enabled = await run_in_threadpool(
+        sqlite_db.get_setting, conn, SettingKeys.PURGE_ENABLED, DEFAULT_PURGE_ENABLED
+    )
     return templates.TemplateResponse(
         request,
         "settings/storage.html",
         {
             "current_user": user,
             "settings": {
-                "purge_enabled": sqlite_db.get_setting(conn, SettingKeys.PURGE_ENABLED, DEFAULT_PURGE_ENABLED),
+                "purge_enabled": purge_enabled,
             },
             "storage": {
                 "sql_size": format_bytes(sql_size_bytes),
@@ -1566,11 +1569,11 @@ async def fragment_availability_series(
       }
     }
     """
-    _ = resolve_user_or_htmx_redirect(request, conn)
+    _ = await run_in_threadpool(resolve_user_or_htmx_redirect, request, conn)
     if isinstance(_, Response):
         return _
 
-    row = sqlite_db.get_target(conn, target_id)
+    row = await run_in_threadpool(sqlite_db.get_target, conn, target_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Target not found")
 
@@ -1642,11 +1645,11 @@ async def fragment_downtime_history(
     """
     HTMX fragment: Recent downtime periods for a target.
     """
-    _ = resolve_user_or_htmx_redirect(request, conn)
+    _ = await run_in_threadpool(resolve_user_or_htmx_redirect, request, conn)
     if isinstance(_, Response):
         return _
 
-    row = sqlite_db.get_target(conn, target_id)
+    row = await run_in_threadpool(sqlite_db.get_target, conn, target_id)
     if row is None:
         return HTMLResponse(_html_muted("Target not found"), status_code=404)
 
@@ -1733,7 +1736,7 @@ async def fragment_downtime_history(
         {
             "history": build_history(entries, now=utcnow()),
             "has_data": has_data,
-            "use_utc": use_utc_dashboard(conn),
+            "use_utc": await run_in_threadpool(use_utc_dashboard, conn),
             "range_label": range_label,
         },
     )
@@ -1771,11 +1774,11 @@ async def fragment_traceroute(
     The browser also uses it for an automatic scan after its own 24 h entry expired, so
     that a result still sitting in the five-minute cache is not taken for a new one.
     """
-    _ = resolve_user_or_htmx_redirect(request, conn)
+    _ = await run_in_threadpool(resolve_user_or_htmx_redirect, request, conn)
     if isinstance(_, Response):
         return _
 
-    row = sqlite_db.get_target(conn, target_id)
+    row = await run_in_threadpool(sqlite_db.get_target, conn, target_id)
     if row is None:
         return templates.TemplateResponse(
             request,

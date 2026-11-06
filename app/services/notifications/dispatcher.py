@@ -223,6 +223,7 @@ class NotificationDispatcher:
         from .email_template import (
             build_alert_context,
             load_email_templates,
+            render_subject,
             render_template,
             resolve_sla_values,
         )
@@ -303,7 +304,7 @@ class NotificationDispatcher:
         }
 
         context = build_alert_context(alert_data, target_data)
-        subject = render_template(subject_template, context)
+        subject = render_subject(subject_template, context)
         html_body = render_template(html_template, context)
         return subject, html_body
 

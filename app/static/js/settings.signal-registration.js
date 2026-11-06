@@ -83,7 +83,7 @@ export function signalSelectMode(mode) {
     
     if (!modeSelection) return;
     
-    modeSelection.classList.add('d-none');
+    modeSelection.hidden = true;
     
     if (mode === 'link') {
         flowLink?.classList.remove('d-none');
@@ -102,13 +102,13 @@ export function signalBackToModeSelection() {
     
     flowLink?.classList.add('d-none');
     flowRegister?.classList.add('d-none');
-    modeSelection?.classList.remove('d-none');
+    if (modeSelection) modeSelection.hidden = false;
     
     // Reset link flow UI
     const stepNumber = document.getElementById('signal-link-step-number');
     const stepQr = document.getElementById('signal-link-step-qr');
     if (stepNumber) stepNumber.style.display = 'block';
-    if (stepQr) stepQr.style.display = 'none';
+    if (stepQr) stepQr.hidden = true;
     
     // Cleanup QR resources
     const qrContainer = DOM.signalQrContainerLink();
@@ -152,7 +152,7 @@ export async function signalGenerateQrCode() {
     
     // Hide number input, show QR step
     if (stepNumber) stepNumber.style.display = 'none';
-    if (stepQr) stepQr.style.display = 'block';
+    if (stepQr) stepQr.hidden = false;
     
     // Load QR code (number is optional)
     await signalLoadQrCode(number || null);
@@ -187,7 +187,7 @@ export async function signalLoadQrCode(number) {
             const stepQr = document.getElementById('signal-link-step-qr');
             const statusEl = DOM.signalLinkStatus();
             
-            if (stepQr) stepQr.style.display = 'none';
+            if (stepQr) stepQr.hidden = true;
             if (stepNumber) stepNumber.style.display = 'block';
             if (statusEl) setError(statusEl, errorMessage);
             container.innerHTML = '';
@@ -266,7 +266,7 @@ export async function signalConfirmLink() {
                     if (numberStatus) setError(numberStatus, 'Linking timed out. Generate a new QR code to try again.');
                     const stepNumber = document.getElementById('signal-link-step-number');
                     const stepQr = document.getElementById('signal-link-step-qr');
-                    if (stepQr) stepQr.style.display = 'none';
+                    if (stepQr) stepQr.hidden = true;
                     if (stepNumber) stepNumber.style.display = 'block';
                     revokeCurrentQrBlobUrl();
                 } else {
@@ -317,7 +317,7 @@ export async function signalConfirmLink() {
             notify('success', 'Signal account linked');
             
             const stepQr = document.getElementById('signal-link-step-qr');
-            if (stepQr) stepQr.style.display = 'none';
+            if (stepQr) stepQr.hidden = true;
             
             // Clear QR code container and cleanup blob URL
             const qrContainer = DOM.signalQrContainerLink();

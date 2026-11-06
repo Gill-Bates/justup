@@ -83,3 +83,12 @@ test("overrides change the result and are validated", () => {
 		assert.throws(() => budget(machine(), { [name]: value }), new RegExp(`${name} must be`), `${name}=${value}`);
 	}
 });
+
+test("GitHub-hosted runner profiles stay valid (the CI keeps its fixed commands)", () => {
+	const small = budget(machine({ cpus: 2, memKb: 7 * GB }));
+	assert.deepEqual([small.budgetCores, small.coresPerRun, small.slots, small.playwrightWorkers, small.pytestWorkers], [1, 1, 1, 1, 1]);
+	const standard = budget(machine({ cpus: 4, memKb: 16 * GB }));
+	assert.deepEqual([standard.budgetCores, standard.coresPerRun, standard.slots, standard.playwrightWorkers, standard.pytestWorkers], [2, 1, 2, 1, 1]);
+	// Sharing the whole runner (CPU_SHARE=1) is what a single job per VM may ask for.
+	assert.equal(budget(machine({ cpus: 4, memKb: 16 * GB }), { JUSTUP_TEST_CPU_SHARE: "1", JUSTUP_TEST_RUN_SHARE: "1" }).playwrightWorkers, 4);
+});

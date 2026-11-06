@@ -173,7 +173,7 @@ test("cancel in the editor returns to the targets overview @edit-target-save", a
 	await page.getByRole("link", { name: "Cancel" }).click();
 	await page.waitForURL((url) => url.pathname === OVERVIEW);
 });
-test("the wizard still ends on the new target's detail page @edit-target-save @wizard", async ({ app, page }) => {
+test("the wizard still ends on the new target's detail page @edit-target-save", async ({ app, page }) => {
 	await page.goto(`${app.base}${OVERVIEW}/new`);
 	await page.locator('input[name="profile"][value="custom"]').check({ force: true });
 	await page.getByRole("button", { name: "Continue" }).click();

@@ -110,6 +110,7 @@ __all__ = [
     "html_to_text",
     "load_email_templates",
     "load_template_preview",
+    "render_subject",
     "render_template",
     "template_to_preview",
 ]
@@ -652,6 +653,13 @@ def render_template(template: str, context: dict[str, Any], *, mode: str = "html
         return html.escape(raw)
 
     return _PLACEHOLDER_RE.sub(replace_placeholder, template)
+
+
+def render_subject(template: str, context: dict[str, Any]) -> str:
+    """Render the mail subject for the plain-text header: raw characters, no line breaks."""
+    rendered = render_template(template, context, mode="plain_text")
+    # A line break would split the header; collapse it so a target name cannot inject headers.
+    return re.sub(r"[\r\n]+\s*", " ", rendered).strip()
 
 
 def _to_utc(dt: datetime) -> datetime:

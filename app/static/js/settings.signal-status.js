@@ -74,14 +74,14 @@ export async function loadSignalStatus() {
         
         // Show loading state and hide mode selection until we know the status
         container.innerHTML = '<span class="badge ju-status-badge--neutral"><span class="spinner-border spinner-border-sm me-1" style="width: 12px; height: 12px;"></span>Checking...</span>';
-        if (modeSelection) modeSelection.style.display = 'none';
+        if (modeSelection) modeSelection.hidden = true;
 
         try {
             const resp = await apiFetch(SIGNAL_API.status);
             if (!resp.ok) {
                 container.innerHTML = '<span class="badge ju-status-badge--neutral">Status unavailable</span>';
                 if (deviceInfo) deviceInfo.textContent = 'Could not connect to signal-cli';
-                if (modeSelection) modeSelection.style.display = 'block';
+                if (modeSelection) modeSelection.hidden = false;
                 return;
             }
             
@@ -190,7 +190,7 @@ export async function loadSignalStatus() {
             
             if (registered) {
                 // Hide mode selection (Link/Register buttons)
-                if (modeSelection) modeSelection.style.display = 'none';
+                if (modeSelection) modeSelection.hidden = true;
                 
                 // Show linked account info section (created dynamically if needed)
                 showLinkedAccountSection(accounts);
@@ -204,7 +204,7 @@ export async function loadSignalStatus() {
                 if (flowLink) flowLink.classList.add('d-none');
                 if (flowRegister) flowRegister.classList.add('d-none');
             } else {
-                if (modeSelection) modeSelection.style.display = 'block';
+                if (modeSelection) modeSelection.hidden = false;
                 
                 if (linkedAccountSection) linkedAccountSection.style.display = 'none';
                 
@@ -215,7 +215,7 @@ export async function loadSignalStatus() {
             console.warn('Failed to load Signal status:', e);
             container.innerHTML = '<span class="badge ju-status-badge--neutral">Status unavailable</span>';
             if (deviceInfo) deviceInfo.textContent = 'Connection error';
-            if (modeSelection) modeSelection.style.display = 'block';
+            if (modeSelection) modeSelection.hidden = false;
             
             const testSection = document.getElementById('signal-test-section');
             if (testSection) {
@@ -397,5 +397,5 @@ function resetModeSelection() {
     container.append(linkBtn, regBtn);
     modeSelection.appendChild(container);
     modeSelection.classList.remove('d-none');
-    modeSelection.style.display = 'block';
+    modeSelection.hidden = false;
 }

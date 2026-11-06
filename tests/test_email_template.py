@@ -33,6 +33,7 @@ from app.services.notifications.email_template import (
     build_email_message,
     build_test_alert_sample,
     html_to_text,
+    render_subject,
     render_template,
     template_to_preview,
 )
@@ -186,6 +187,35 @@ def test_hostile_values_are_html_escaped():
     assert "<script>alert(1)</script>" not in html
     assert "&lt;script&gt;" in html
     assert "<b>Pwn</b>" not in html
+
+
+def _hostile_name_ctx(name):
+    return build_alert_context(
+        {"status": "OPEN", "started_at": _FIXED_NOW.isoformat(), "reason": "x", "system_url": "#"},
+        {"name": name, "host": "example.com", "group": "Production", "check_type": "HTTP"},
+    )
+
+
+def test_subject_header_carries_raw_characters_while_body_stays_escaped():
+    name = "Tom & Jerry <b>\"q\" 'x'"
+    ctx = _hostile_name_ctx(name)
+    subject = render_subject(DEFAULT_SUBJECT, ctx)
+    assert name in subject and "&amp;" not in subject
+    msg = build_email_message(
+        subject=subject,
+        html_body=render_template(DEFAULT_HTML_TEMPLATE, ctx),
+        from_addr="a@example.com",
+        to_addr="b@example.com",
+    )
+    assert name in str(msg["Subject"])
+    assert "<b>Tom" not in render_template(DEFAULT_HTML_TEMPLATE, ctx)
+
+
+def test_subject_cannot_inject_headers_via_line_breaks():
+    subject = render_subject(DEFAULT_SUBJECT, _hostile_name_ctx("A\r\nBcc: evil@example.com"))
+    assert "\r" not in subject and "\n" not in subject
+    msg = build_email_message(subject=subject, html_body="<p>x</p>", from_addr="a@example.com", to_addr="b@example.com")
+    assert msg["Bcc"] is None
 
 
 def test_status_color_cannot_inject_css():

@@ -33,7 +33,7 @@ JOB = 'touch "$1/started-$2"; echo $$ > "$1/pid-$2"; while [ ! -e "$1/release-$2
 def _env(tmp_path: Path, **extra: str) -> dict[str, str]:
     env = {k: v for k, v in os.environ.items() if not k.startswith("JUSTUP_") and k != "PYTEST_ADDOPTS"}
     env.update({"JUSTUP_TEST_LOCK_DIR": str(tmp_path / "locks"), "JUSTUP_TEST_CGROUP": "off",
-                "JUSTUP_TEST_SLOTS": "2", "JUSTUP_TEST_CORES_PER_RUN": "4", "JUSTUP_TEST_LOAD_AWARE": "0",
+                "JUSTUP_TEST_SLOTS": "2", "JUSTUP_TEST_CPU_SHARE": "1", "JUSTUP_TEST_CORES_PER_RUN": "4", "JUSTUP_TEST_LOAD_AWARE": "0",
                 "JUSTUP_TEST_RAM_PER_WORKER_MB": "1", "JUSTUP_TEST_LOAD_WAIT": "0"})
     env.update(extra)
     return env
@@ -276,7 +276,7 @@ def test_lock_dir_must_be_private_and_not_a_symlink(tmp_path: Path) -> None:
 
 
 def _adjusted(tmp_path: Path, *args: str, **extra: str) -> list[str]:
-    script = f'source "{WRAPPER}"; validate_settings; adjust_command "$@"; printf "%s\\n" "${{CMD[@]}}"'
+    script = f'source "{WRAPPER}"; validate_settings; load_budget; adjust_command "$@"; printf "%s\\n" "${{CMD[@]}}"'
     result = subprocess.run(
         ["bash", "-c", script, "bash", *args], env=_env(tmp_path, **extra), capture_output=True, text=True, check=True
     )

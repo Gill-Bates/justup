@@ -11,6 +11,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from app.api.frontend import templates
+
 from tests._modal_html import divs_with_class
 
 TEMPLATES = Path(__file__).resolve().parent.parent / "app" / "templates"
@@ -96,6 +98,11 @@ def test_template_element_ids_are_unique_per_file() -> None:
     ids = re.findall(r'\bid="([^"{]+)"', text)
     duplicates = {i for i in ids if ids.count(i) > 1}
     assert not duplicates, duplicates
+
+
+def test_all_page_templates_compile() -> None:
+    for path in TEMPLATES.rglob("*.html"):
+        templates.env.get_template(path.relative_to(TEMPLATES).as_posix())
 
 
 def test_status_icons_with_accessible_name_are_not_aria_hidden() -> None:
@@ -279,7 +286,7 @@ def test_focus_is_managed_by_one_module_not_the_autofocus_attribute() -> None:
 def test_form_validation_uses_inline_field_errors() -> None:
     for name in ("settings.recipients.js", "settings.users.js"):
         assert "JuFieldErrors.show(" in (_JS / name).read_text(encoding="utf-8"), name
-    groups = (TEMPLATES / "groups.html").read_text(encoding="utf-8")
+    groups = (_JS / "groups.js").read_text(encoding="utf-8")
     assert "JuFieldErrors.show(" in groups
     module = (_JS / "utils" / "field-errors.js").read_text(encoding="utf-8")
     assert "aria-invalid" in module and "aria-describedby" in module
