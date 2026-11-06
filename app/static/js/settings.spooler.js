@@ -120,7 +120,7 @@
 				return loadLog();
 			}
 
-			_renderLogTable(data.entries);
+			_renderLogTable(data.entries, Boolean(statusVal || channelVal));
 			_renderPagination(data.total);
 			_setText('spooler-log-info', data.total > 0 ? `(${data.total} entries)` : '');
 		} catch (err) {
@@ -129,12 +129,13 @@
 		}
 	}
 
-	function _renderLogTable(entries) {
+	function _renderLogTable(entries, filtered) {
 		const tbody = document.getElementById('spooler-log-body');
 		if (!tbody) return;
 
 		if (!entries || entries.length === 0) {
-			tbody.innerHTML = '<tr><td colspan="8" class="text-center text-body-secondary py-4">No entries</td></tr>';
+			tbody.innerHTML = '<tr><td colspan="8" class="spooler-log__state text-body-secondary">'
+				+ (filtered ? 'No matching entries' : 'No entries') + '</td></tr>';
 			return;
 		}
 

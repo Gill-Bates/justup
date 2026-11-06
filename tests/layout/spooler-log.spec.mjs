@@ -231,7 +231,7 @@ test("delivery queue log toolbar actions keep filters, refresh and confirmations
 		const dialog = page.locator(".modal.show");
 		await dialog.waitFor();
 		assert.equal(requests.some((r) => r.includes("/flush")), false, "Flush queue asks before it deletes");
-		await dialog.getByRole("button", { name: "Cancel" }).click();
+		await dialog.locator("#ju-confirm-cancel").click();
 		await page.waitForTimeout(400);
 		assert.equal(requests.some((r) => r.includes("/flush") || r.includes("clear-log")), false, "cancelling deletes nothing");
 	} finally {

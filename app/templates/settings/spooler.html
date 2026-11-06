@@ -69,38 +69,44 @@
 	</div>
 </div>
 <p class="small text-body-secondary mb-0">A successful SMTP handoff only confirms that the mail server accepted the message. justUp! cannot detect later non-delivery without a return channel.</p>
-{# Action Bar #}
-<div class="d-flex justify-content-between align-items-center">
-	<div class="d-flex align-items-center gap-2">
-		<h2 class="h6 mb-0">Delivery Queue Log</h2>
-		<small class="text-body-secondary" id="spooler-log-info"></small>
-	</div>
-	<div class="d-flex flex-wrap gap-2 justify-content-end">
-		{# Filters #}
-		<select class="form-select form-select-sm ju-select-auto" id="spooler-filter-status" aria-label="Filter by status">
-			<option value="">All Status</option>
-			<option value="pending">Waiting</option>
-			<option value="processing">Processing</option>
-			<option value="sent">Sent</option>
-			<option value="failed">Handoff failed</option>
-		</select>
-		<select class="form-select form-select-sm ju-select-auto" id="spooler-filter-channel" aria-label="Filter by channel">
-			<option value="">All Channels</option>
-			<option value="signal">Signal</option>
-			<option value="email">Email</option>
-		</select>
-		<div class="d-flex gap-2 flex-nowrap">
-			<button type="button" class="btn btn-sm btn-outline-secondary btn-icon" id="spooler-refresh-btn"
-				title="Refresh" aria-label="Refresh">
-				<i class="material-icons" aria-hidden="true">refresh</i>
-			</button>
+{# Toolbar: title row (title, Refresh), filter row, management row; layout in ui.css (.spooler-toolbar) #}
+<div class="spooler-toolbar">
+	<div class="spooler-toolbar__grid">
+		<div class="spooler-toolbar__title">
+			<h2 class="h6 mb-0">Delivery Queue Log</h2>
+			<small class="text-body-secondary" id="spooler-log-info"></small>
+		</div>
+		<button type="button" class="btn btn-sm btn-outline-secondary spooler-toolbar__refresh" id="spooler-refresh-btn">
+			<i class="material-icons me-1" aria-hidden="true">refresh</i>Refresh
+		</button>
+		<div class="spooler-toolbar__filters">
+			<div class="spooler-toolbar__field">
+				<label class="form-label small text-body-secondary mb-1" for="spooler-filter-status">Status</label>
+				<select class="form-select form-select-sm" id="spooler-filter-status">
+					<option value="">All Status</option>
+					<option value="pending">Waiting</option>
+					<option value="processing">Processing</option>
+					<option value="sent">Sent</option>
+					<option value="failed">Handoff failed</option>
+				</select>
+			</div>
+			<div class="spooler-toolbar__field">
+				<label class="form-label small text-body-secondary mb-1" for="spooler-filter-channel">Channel</label>
+				<select class="form-select form-select-sm" id="spooler-filter-channel">
+					<option value="">All Channels</option>
+					<option value="signal">Signal</option>
+					<option value="email">Email</option>
+				</select>
+			</div>
+		</div>
+		<div class="spooler-toolbar__actions">
 			<button type="button" class="btn btn-sm btn-outline-secondary" id="spooler-clear-log-btn"
-				title="Clear sent entries from log" aria-label="Clear sent entries from log" data-bs-toggle="modal" data-bs-target="#spoolerClearLogModal">
-				<i class="material-icons me-1" aria-hidden="true">playlist_remove</i><span class="d-none d-sm-inline">Clear Log</span>
+				title="Clear sent entries from log" data-bs-toggle="modal" data-bs-target="#spoolerClearLogModal">
+				<i class="material-icons me-1" aria-hidden="true">playlist_remove</i>Clear log
 			</button>
 			<button type="button" class="btn btn-sm btn-outline-danger" id="spooler-flush-btn"
-				title="Flush pending & failed" aria-label="Flush pending and failed entries">
-				<i class="material-icons me-1" aria-hidden="true">delete_sweep</i><span class="d-none d-sm-inline">Flush</span>
+				title="Flush pending and failed entries">
+				<i class="material-icons me-1" aria-hidden="true">delete_sweep</i>Flush queue
 			</button>
 		</div>
 	</div>
@@ -124,7 +130,7 @@
 			</thead>
 			<tbody id="spooler-log-body">
 				<tr>
-					<td colspan="8" class="text-center py-4">
+					<td colspan="8" class="spooler-log__state">
 						<span class="spinner-border spinner-border-sm" role="status"><span class="visually-hidden">Loading delivery log…</span></span>
 					</td>
 				</tr>

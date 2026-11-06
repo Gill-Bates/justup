@@ -405,18 +405,16 @@ export async function executeRestore() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Initialize purge metrics handler
+ * Bind a password-confirmed destructive form (purge dialogs).
+ * `boundKey` guards against double binding: initStorage() re-runs on every HTMX settle.
+ * @param {{form: string, boundKey: string, button: Element, password: Element, error: Element, modal: Element,
+ *   url: string, onSuccess: (resp: Response) => Promise<void>|void}} cfg
  */
-function initPurgeMetrics() {
-    const confirmBtn = DOM.confirmPurgeBtn();
-    const passwordInput = DOM.purgePassword();
-    const errorDiv = DOM.purgeError();
-    const purgeModal = DOM.purgeModal();
-    const form = document.getElementById('purge-form');
-
-    // initStorage() re-runs on every HTMX settle; the modal markup is static
-    if (!form || !confirmBtn || form.dataset.purgeBound === '1') return;
-    form.dataset.purgeBound = '1';
+function bindPasswordPurge(cfg) {
+    const form = document.getElementById(cfg.form);
+    const { button, password: passwordInput, error: errorDiv, modal } = cfg;
+    if (!form || !button || form.dataset[cfg.boundKey] === '1') return;
+    form.dataset[cfg.boundKey] = '1';
 
     form.addEventListener('submit', async (e) => {
         e.preventDefault();
@@ -436,24 +434,21 @@ function initPurgeMetrics() {
         showError(errorDiv, null);
 
         setDestructiveOpBusy(true);
-        await withSpinner(confirmBtn, async () => {
+        await withSpinner(button, async () => {
             try {
-                const resp = await apiFetch(SETTINGS_API.tsdbPurge, {
+                const resp = await apiFetch(cfg.url, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ password })
                 });
 
                 if (resp.ok) {
-                    hideModal(purgeModal);
-                    notify('success', 'TSDB data deleted successfully.');
-                    loadStorageStats();
+                    await cfg.onSuccess(resp);
                 } else {
-                    const error = await getErrorMessage(resp);
-                    showError(errorDiv, error);
+                    showError(errorDiv, await getErrorMessage(resp));
                 }
-            } catch (e) {
-                console.warn('Purge metrics error:', e);
+            } catch (err) {
+                console.warn('Purge error:', err);
                 showError(errorDiv, 'Network error.');
             } finally {
                 setDestructiveOpBusy(false);
@@ -462,8 +457,8 @@ function initPurgeMetrics() {
     });
 
     // Clear modal state when hidden
-    if (purgeModal) {
-        purgeModal.addEventListener('hidden.bs.modal', () => {
+    if (modal) {
+        modal.addEventListener('hidden.bs.modal', () => {
             if (passwordInput) passwordInput.value = '';
             showError(errorDiv, null);
         });
@@ -471,68 +466,45 @@ function initPurgeMetrics() {
 }
 
 /**
+ * Initialize purge metrics handler
+ */
+function initPurgeMetrics() {
+    const modal = DOM.purgeModal();
+    bindPasswordPurge({
+        form: 'purge-form',
+        boundKey: 'purgeBound',
+        button: DOM.confirmPurgeBtn(),
+        password: DOM.purgePassword(),
+        error: DOM.purgeError(),
+        modal,
+        url: SETTINGS_API.tsdbPurge,
+        onSuccess: () => {
+            hideModal(modal);
+            notify('success', 'TSDB data deleted successfully.');
+            loadStorageStats();
+        },
+    });
+}
+
+/**
  * Initialize purge alerts handler
  */
 function initPurgeAlerts() {
-    const confirmBtn = DOM.confirmPurgeAlertsBtn();
-    const passwordInput = DOM.purgeAlertsPassword();
-    const errorDiv = DOM.purgeAlertsError();
-    const purgeModal = DOM.purgeAlertsModal();
-    const form = document.getElementById('purge-alerts-form');
-
-    if (!form || !confirmBtn || form.dataset.purgeAlertsBound === '1') return;
-    form.dataset.purgeAlertsBound = '1';
-
-    form.addEventListener('submit', async (e) => {
-        e.preventDefault();
-
-        // Prevent concurrent destructive operations
-        if (isDestructiveOpBusy()) {
-            showError(errorDiv, 'Another operation is in progress. Please wait.');
-            return;
-        }
-
-        const password = passwordInput?.value;
-        if (!password) {
-            showError(errorDiv, 'Please enter your password.');
-            return;
-        }
-
-        showError(errorDiv, null);
-
-        setDestructiveOpBusy(true);
-        await withSpinner(confirmBtn, async () => {
-            try {
-                const resp = await apiFetch(SETTINGS_API.alertsPurge, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ password })
-                });
-
-                if (resp.ok) {
-                    const data = await resp.json();
-                    hideModal(purgeModal);
-                    notify('success', `${data.deleted} alerts deleted successfully.`);
-                } else {
-                    const error = await getErrorMessage(resp);
-                    showError(errorDiv, error);
-                }
-            } catch (e) {
-                console.warn('Purge alerts error:', e);
-                showError(errorDiv, 'Network error.');
-            } finally {
-                setDestructiveOpBusy(false);
-            }
-        }, 'Deleting...');
+    const modal = DOM.purgeAlertsModal();
+    bindPasswordPurge({
+        form: 'purge-alerts-form',
+        boundKey: 'purgeAlertsBound',
+        button: DOM.confirmPurgeAlertsBtn(),
+        password: DOM.purgeAlertsPassword(),
+        error: DOM.purgeAlertsError(),
+        modal,
+        url: SETTINGS_API.alertsPurge,
+        onSuccess: async (resp) => {
+            const data = await resp.json();
+            hideModal(modal);
+            notify('success', `${data.deleted} alerts deleted successfully.`);
+        },
     });
-
-    // Clear modal state when hidden
-    if (purgeModal) {
-        purgeModal.addEventListener('hidden.bs.modal', () => {
-            if (passwordInput) passwordInput.value = '';
-            showError(errorDiv, null);
-        });
-    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
