@@ -259,7 +259,7 @@ def test_rollup_keeps_unknown_visible_and_down_dominant(tmp_path):
 def test_udp_only_target_has_an_uptime_metric_and_availability_series(tmp_path):
     from app.utils.uptime_metric import enabled_availability_metrics, select_uptime_metric
 
-    row = {"enable_udp_scan": 1}
+    row = {"enable_udp_scan": 1, "udp_ports": "53"}
     assert select_uptime_metric(row) == "udp_up" and enabled_availability_metrics(row) == ("udp_up",)
     put(tmp_path, "udp_up_53", [(1, 1), (2, 0), (3, 1)])
     series = tsdb.query_availability_series(

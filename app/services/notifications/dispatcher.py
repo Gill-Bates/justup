@@ -37,6 +37,7 @@ from typing import Any
 from ...db import sqlite as sqlite_db
 from ...utils.constants import SettingKeys
 from ...utils.public_url import get_public_base_url, target_url
+from ...utils.uptime_metric import AVAILABILITY_CHECKS, availability_check_enabled
 
 _log = logging.getLogger(__name__)
 
@@ -194,6 +195,7 @@ class NotificationDispatcher:
                 """
                 SELECT t.name, t.host, g.name AS group_name, t.sla_enabled, t.sla_availability_pct,
                        t.enable_ping, t.enable_http_check, t.enable_tcp_connect,
+                       t.enable_udp_scan, t.udp_ports,
                        ts.uptime_percent
                 FROM targets t
                 LEFT JOIN groups g ON g.id = t.group_id
@@ -209,14 +211,11 @@ class NotificationDispatcher:
             if str(alert.failed_service or "").upper().startswith("CERT"):
                 check_type = "CERT"
             else:
+                # Same rule as availability: UDP only counts once ports are configured.
                 enabled_checks = [
-                    label
-                    for label, column in (
-                        ("HTTP", "enable_http_check"),
-                        ("PING", "enable_ping"),
-                        ("TCP", "enable_tcp_connect"),
-                    )
-                    if target_row[column]
+                    service.upper()
+                    for service, flag, _metric in AVAILABILITY_CHECKS
+                    if availability_check_enabled(target_row, service, flag)
                 ]
                 check_type = " + ".join(enabled_checks) if enabled_checks else "N/A"
             target_data = {

@@ -257,3 +257,31 @@ def test_signal_and_mail_render_the_same_check_type_and_reason(conn, failed_serv
     # a missing target row degrades the same way on both channels
     gone = AlertPayload("a2", 99999, "Gone", failed_service, "open", utcnow())
     assert dispatcher._render_signal_message(gone) == dispatcher._render_email_content(gone)[0]  # noqa: SLF001
+
+
+@pytest.mark.parametrize(
+    ("ping", "http", "tcp", "udp", "udp_ports", "expected"),
+    [
+        (1, 0, 0, 1, "53", "PING + UDP"),
+        (0, 0, 0, 1, "53", "UDP"),
+        (0, 1, 1, 1, "53", "HTTP + TCP + UDP"),
+        (0, 0, 0, 1, "", "N/A"),  # UDP without ports is no availability check
+    ],
+)
+def test_udp_check_is_named_in_signal_and_mail_templates(conn, ping, http, tcp, udp, udp_ports, expected):
+    from app.services.notifications.email_template import EMAIL_TEMPLATE_SUBJECT_KEY
+
+    template = "{{target.check_type}}"
+    sqlite_db.set_setting(conn, SettingKeys.SIGNAL_MESSAGE_TEMPLATE_DOWN, template)
+    sqlite_db.set_setting(conn, EMAIL_TEMPLATE_SUBJECT_KEY, template)
+    cur = conn.execute(
+        "INSERT INTO targets (name, interval_seconds, retention_days, enable_ping, enable_http_check, "
+        "enable_cert_expiration, enable_tcp_connect, enable_udp_scan, udp_ports, host, created_at, updated_at) "
+        "VALUES ('U1', 60, 30, ?, ?, 0, ?, ?, ?, 'h.example', ?, ?)",
+        (ping, http, tcp, udp, udp_ports, utcnow(), utcnow()),
+    )
+    conn.commit()
+    alert = AlertPayload("a1", int(cur.lastrowid), "U1", "UDP:53", "open", utcnow())
+    dispatcher = NotificationDispatcher(conn)
+    assert dispatcher._render_signal_message(alert) == expected  # noqa: SLF001
+    assert dispatcher._render_email_content(alert)[0] == expected  # noqa: SLF001

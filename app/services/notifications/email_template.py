@@ -165,7 +165,7 @@ PLACEHOLDER_DOCS: dict[str, tuple[str, str]] = {
     "target.name": ("Target", "Target display name"),
     "target.host": ("Target", "Target hostname, IP or URL"),
     "target.group": ("Target", "Target group"),
-    "target.check_type": ("Target", "Check type (HTTP/PING/TCP/CERT)"),
+    "target.check_type": ("Target", "Check type (HTTP/PING/TCP/UDP/CERT)"),
     "target.check_badges": ("Target", "Check type badges (HTML, email only)"),
     "alert.status": ("Alert", "OPEN or RESOLVED"),
     "alert.started_at": ("Alert", "Alert start time"),
