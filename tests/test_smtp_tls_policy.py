@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import re
+from html import unescape
 from pathlib import Path
 
 import pytest
@@ -317,3 +318,12 @@ def test_every_smtp_connection_and_tls_decision_goes_through_the_shared_modules(
         if rel not in {"services/notifications/smtp_settings.py", "api/settings.py"} and tls_key.search(text):
             offenders.append(f"{rel}: reads smtp_use_tls itself")
     assert offenders == []
+
+
+@pytest.mark.parametrize("fragment", ["settings-smtp", "settings-signal"])
+def test_settings_fragments_list_every_allowed_placeholder(client, fragment):
+    from app.services.notifications.email_template import ALLOWED_PLACEHOLDERS
+
+    html = unescape(client.get(f"/ui/fragments/{fragment}").text)
+    missing = [p for p in sorted(ALLOWED_PLACEHOLDERS) if f"<code>{{{{{p}}}}}</code>" not in html]
+    assert not missing

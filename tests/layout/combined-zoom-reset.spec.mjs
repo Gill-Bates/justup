@@ -6,6 +6,7 @@
 // Combined response-time chart: double-click and the "Reset zoom" button return the chart to its load
 // state (all scales, series and peaks), identically (DESIGN.md, "Charts and data visualization").
 import assert from "node:assert/strict";
+import { expect } from "@playwright/test";
 import { test } from "./fixtures.mjs";
 import { waitForVisualStability } from "./harness.mjs";
 import { waitForChartReady } from "./test-support.mjs";
@@ -53,7 +54,11 @@ async function drag(page, detail, from = 0.9, to = 0.99, { settleAfter = true } 
 // `detail.drain()` resolves once every intercepted detail request (one per metric) was answered or dropped.
 async function mockDetail(page, detail) {
 	detail.pending = 0;
-	detail.drain = async () => { while (detail.pending > 0) await new Promise((resolve) => setTimeout(resolve, 25)); };
+	// Zero must hold across several polls, so a metric whose request has not reached the route yet is not missed.
+	detail.drain = async () => {
+		let quiet = 0;
+		await expect.poll(() => { quiet = detail.pending === 0 ? quiet + 1 : 0; return quiet; }, { intervals: [50], timeout: 20000 }).toBeGreaterThanOrEqual(4);
+	};
 	await page.route("**/metrics/**", async (route) => {
 		if (!detail.on || !route.request().url().includes("display=true")) return route.continue();
 		detail.pending += 1;
@@ -116,7 +121,7 @@ for (const theme of THEMES) {
 					const requested = page.waitForRequest((request) => request.url().includes("display=true"));
 					await drag(page, detail, 0.9, 0.99, { settleAfter: false });
 					await requested;
-					while (!detail.pending) await new Promise((resolve) => setTimeout(resolve, 10));
+					await expect.poll(() => detail.pending, { timeout: 10000, message: "the delayed detail request is in flight" }).toBeGreaterThan(0);
 					await reset();
 					await detail.drain();
 					await waitForVisualStability(page);

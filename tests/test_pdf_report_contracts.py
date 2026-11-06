@@ -1934,7 +1934,8 @@ def _combined_availability_data(tmp_path: Path, *, with_periods: bool) -> Report
     for i in range(12):
         at = start + timedelta(minutes=5 * i)
         tsdb.append_point(tmp_path, target_id=1, metric="http_up", value=1, retention_days=365, at=at)
-        tsdb.append_point(tmp_path, target_id=1, metric="tcp_up", value=0 if i in (3, 4) else 1, retention_days=365, at=at)
+        tcp = 0 if i in (3, 4) else 1
+        tsdb.append_point(tmp_path, target_id=1, metric="tcp_up", value=tcp, retention_days=365, at=at)
     inputs = collect_report_inputs(tmp_path, 1, target, start, end)
     down_at = start + timedelta(minutes=15)
     exact = [tsdb.DowntimePeriod(down_at, down_at + timedelta(minutes=10), 600, ["TCP:443"])]

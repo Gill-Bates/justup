@@ -135,19 +135,19 @@ _DISPATCHABLE_SQL = "status = 'pending' AND alert_id IN (SELECT id FROM alerts)"
 def list_pending_alert_dispatches(conn: sqlite3.Connection, *, limit: int = 100) -> list[sqlite3.Row]:
     return list(
         conn.execute(
-            f"""
-            SELECT * FROM alert_dispatch_outbox
-            WHERE {_DISPATCHABLE_SQL} AND next_attempt_at <= ?
-            ORDER BY created_at, id
-            LIMIT ?
-            """,
+            "SELECT * FROM alert_dispatch_outbox WHERE "  # noqa: S608 - constant fragment, no user input
+            + _DISPATCHABLE_SQL
+            + " AND next_attempt_at <= ? ORDER BY created_at, id LIMIT ?",
             (utcnow(), limit),
         ).fetchall()
     )
 
 
 def has_pending_alert_dispatches(conn: sqlite3.Connection) -> bool:
-    return conn.execute(f"SELECT 1 FROM alert_dispatch_outbox WHERE {_DISPATCHABLE_SQL} LIMIT 1").fetchone() is not None
+    return (
+        conn.execute("SELECT 1 FROM alert_dispatch_outbox WHERE " + _DISPATCHABLE_SQL + " LIMIT 1").fetchone()
+        is not None
+    )  # noqa: S608
 
 
 def resolve_alert(

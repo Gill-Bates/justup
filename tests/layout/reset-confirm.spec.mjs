@@ -77,16 +77,12 @@ for (const viewport of VIEWPORTS) {
 				// Cancel and Escape send nothing and return focus to the trigger.
 				await page.click("#ju-confirm-cancel");
 				await settled(page, false);
-				await page.waitForFunction((id) => document.activeElement?.id === id, triggerId, { timeout: 5000 }).catch(async () => {
-					assert.equal(await page.evaluate(() => document.activeElement?.id), triggerId, "focus did not return after Cancel");
-				});
+				await expect.poll(() => page.evaluate(() => document.activeElement?.id), { timeout: 5000, message: "focus did not return after Cancel" }).toBe(triggerId);
 				await trigger.click();
 				await settled(page, true);
 				await page.keyboard.press("Escape");
 				await settled(page, false);
-				await page.waitForFunction((id) => document.activeElement?.id === id, triggerId, { timeout: 5000 }).catch(async () => {
-					assert.equal(await page.evaluate(() => document.activeElement?.id), triggerId, "focus did not return after Escape");
-				});
+				await expect.poll(() => page.evaluate(() => document.activeElement?.id), { timeout: 5000, message: "focus did not return after Escape" }).toBe(triggerId);
 				assert.equal(state.posts.length, 0, "a cancelled dialog sent a request");
 
 				// A live update replaces the table; the new button works the same way. The old node is marked

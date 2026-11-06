@@ -133,7 +133,7 @@ class _ProfileBackend:
         self.error = error
         self.senders: list[str | None] = []
 
-    def update_profile(self, name: str, avatar_path: str | None = None, sender: str | None = None) -> None:
+    def update_profile(self, name: str, avatar_path: str | None = None, sender: str | None = None) -> None:  # noqa: ARG002
         self.senders.append(sender)
         if self.error:
             raise self.error

@@ -26,7 +26,7 @@
 		<section class="tab-pane active show" id="target-dashboard-pane" role="tabpanel"
 			aria-labelledby="target-dashboard-tab" tabindex="0">
 			{# Refreshed by the live event channel (see live-events.js); display: contents keeps the layout #}
-			<div id="target-info-cards" style="display: contents"
+			<div id="target-info-cards"
 				hx-get="/ui/fragments/target-info-cards/{{ target.id }}"
 				hx-trigger="justup-target-{{ target.id }} from:body throttle:3s, justup-live-sync from:body throttle:3s"
 				hx-swap="innerHTML">

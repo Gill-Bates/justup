@@ -329,6 +329,22 @@ export function restoreBackup(input) {
 }
 
 /**
+ * Wire the backup tab buttons (no inline handlers: initStorage() re-runs on every HTMX settle).
+ */
+function initBackupControls() {
+    const bind = (id, type, handler) => {
+        const el = document.getElementById(id);
+        const key = `${type}Bound`;
+        if (!el || el.dataset[key] === '1') return;
+        el.dataset[key] = '1';
+        el.addEventListener(type, handler);
+    };
+    bind('backup-btn', 'click', () => createBackup());
+    bind('restore-btn', 'click', () => document.getElementById('restore-file')?.click());
+    bind('restore-file', 'change', (e) => restoreBackup(e.currentTarget));
+}
+
+/**
  * Execute the restore from pending file
  */
 export async function executeRestore() {
@@ -1114,11 +1130,9 @@ export function initStorage() {
     initPurgeMetrics();
     initPurgeAlerts();
     initRestoreModal();
+    initBackupControls();
     initAuthToggle();
 
-    // Expose functions to global scope (for onclick handlers)
-    window.createBackup = createBackup;
-    window.restoreBackup = restoreBackup;
     // Ensure SMTP UI is consistent on initial load / swaps
     updateSmtpUiFromDom();
 }

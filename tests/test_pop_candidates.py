@@ -341,14 +341,24 @@ def test_valid_coordinates_and_has_coords_agree(lat, lon, ok):
     from app.db.pop_locations import valid_coordinates
 
     assert valid_coordinates(lat, lon) is ok
-    assert traceroute_geo._has_coords({"lat": lat, "lon": lon}) is ok
+    assert traceroute_geo._has_coords({"lat": lat, "lon": lon}) is ok  # noqa: SLF001
 
 
 @pytest.mark.parametrize(
     ("value", "ok"),
-    [(1, True), (0, True), (-3.5, True), (50.0, True), (True, False), (False, False), (None, False), ("1", False),
-     (float("nan"), False), (float("inf"), False), (float("-inf"), False)],
+    [
+        (1, True),
+        (0, True),
+        (-3.5, True),
+        (50.0, True),
+        (True, False),
+        (False, False),
+        (None, False),
+        ("1", False),
+        (float("nan"), False),
+        (float("inf"), False),
+        (float("-inf"), False),
+    ],
 )
 def test_finite_number(value, ok):
-    assert traceroute_geo._finite_number(value) is ok
-
+    assert traceroute_geo._finite_number(value) is ok  # noqa: SLF001

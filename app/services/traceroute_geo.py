@@ -34,6 +34,7 @@ from pathlib import Path
 from threading import Lock
 from typing import Any, TypedDict
 
+from app.db.pop_locations import valid_coordinates
 from app.services import geo_resolver as gr
 from app.services import ixp_index
 from app.services.geo_resolver import MAX_CITY_RADIUS_KM
@@ -340,11 +341,7 @@ def _to_geo_location(ip: str, record: dict[str, Any]) -> GeoLocation | None:
         "lon": float(lon),
         "city": city or subdivision,
         "country": record["country"],
-        "accuracy_radius_km": (
-            float(radius)
-            if _finite_number(radius) and radius >= 0
-            else None
-        ),
+        "accuracy_radius_km": (float(radius) if _finite_number(radius) and radius >= 0 else None),
         "city_is_region": city is None and subdivision is not None,
     }
 
@@ -762,11 +759,7 @@ def _classify_location(loc: dict[str, Any] | None) -> tuple[GeoSource, GeoAccura
     if source == GeoSource.HOSTNAME:
         return source, GeoAccuracy.PRECISE
     radius = loc.get("accuracy_radius_km")
-    if (
-        source == GeoSource.GEOIP
-        and _finite_number(radius)
-        and 0 <= radius <= MAX_CITY_RADIUS_KM
-    ):
+    if source == GeoSource.GEOIP and _finite_number(radius) and 0 <= radius <= MAX_CITY_RADIUS_KM:
         return source, GeoAccuracy.PRECISE
     return _coarse_source(source), GeoAccuracy.APPROXIMATE
 

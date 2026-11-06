@@ -220,9 +220,12 @@ def review(
                 or not valid_coordinates(lat, lon)
             ):
                 raise ValueError("Reviewed location conflicts with the observed country or coordinates")
-            if guess_lat is not None and guess_lon is not None:
-                if great_circle_km((lat, lon), (guess_lat, guess_lon)) > LOCATION_CONFLICT_KM:
-                    raise ValueError("Reviewed coordinates conflict with the observed location")
+            if (
+                guess_lat is not None
+                and guess_lon is not None
+                and great_circle_km((lat, lon), (guess_lat, guess_lon)) > LOCATION_CONFLICT_KM
+            ):
+                raise ValueError("Reviewed coordinates conflict with the observed location")
             if conn.execute("SELECT 1 FROM pop_locations WHERE alias_code = ? AND retired = 0", (code,)).fetchone():
                 raise ValueError("An active location already owns this alias")
             chosen_code = (canonical or code).strip().lower()

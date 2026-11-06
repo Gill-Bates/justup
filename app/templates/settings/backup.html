@@ -13,14 +13,13 @@
 				</div>
 				<hr class="my-3">
 				<div class="d-flex gap-2 flex-wrap">
-					<button type="button" class="btn btn-outline-secondary" id="backup-btn" aria-describedby="backup-confidentiality-hint" onclick="createBackup()">
+					<button type="button" class="btn btn-outline-secondary" id="backup-btn" aria-describedby="backup-confidentiality-hint">
 						<span class="material-icons me-1" aria-hidden="true">download</span> Download Backup
 					</button>
-					<button type="button" class="btn btn-outline-secondary" id="restore-btn"
-						onclick="document.getElementById('restore-file').click()">
+					<button type="button" class="btn btn-outline-secondary" id="restore-btn">
 						<span class="material-icons me-1" aria-hidden="true">upload</span> Restore Backup
 					</button>
-					<input type="file" id="restore-file" accept=".tar.bz2" class="d-none" onchange="restoreBackup(this)">
+					<input type="file" id="restore-file" accept=".tar.bz2" class="d-none">
 				</div>
 				<p class="text-body-secondary small mb-0 mt-2" id="backup-confidentiality-hint">
 					<span class="material-icons me-1" aria-hidden="true">lock_open</span>Backups contain sensitive data and are not encrypted. Store them access-protected and encrypt them before external storage.

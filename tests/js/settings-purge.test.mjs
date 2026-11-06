@@ -22,7 +22,8 @@ function el(extra = {}) {
 }
 const nodes = {};
 for (const id of ["purge-form", "purge-password", "purge-error", "confirm-purge-btn", "purgeModal",
-  "purge-alerts-form", "purge-alerts-password", "purge-alerts-error", "confirm-purge-alerts-btn", "purgeAlertsModal", "settings-form"]) {
+  "purge-alerts-form", "purge-alerts-password", "purge-alerts-error", "confirm-purge-alerts-btn", "purgeAlertsModal", "settings-form",
+  "backup-btn", "restore-btn", "restore-file"]) {
   nodes[id] = el();
 }
 globalThis.document = {
@@ -79,3 +80,13 @@ for (const d of dialogs) {
     assert.deepEqual(toasts, []);
   });
 }
+
+test("backup tab buttons are bound by script, once, without inline handlers", async () => {
+  let picked = 0;
+  nodes["restore-file"].click = () => { picked++; };
+  initStorage(); // HTMX settle re-runs init: must not bind twice
+  await nodes["restore-btn"].fire("click");
+  assert.equal(picked, 1);
+  assert.equal(nodes["backup-btn"].dataset.clickBound, "1");
+  assert.equal(nodes["restore-file"].dataset.changeBound, "1");
+});

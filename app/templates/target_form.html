@@ -420,7 +420,7 @@
 										type="button" data-bs-toggle="collapse" data-bs-target="#http-options-request"
 										aria-expanded="{{ 'true' if http_req_open else 'false' }}"
 										aria-controls="http-options-request">
-										<span class="material-icons me-2" style="font-size: 18px;" aria-hidden="true">tune</span> Request
+										<span class="material-icons ju-icon-18 me-2" aria-hidden="true">tune</span> Request
 									</button>
 								</h2>
 								<div id="http-options-request"
@@ -486,7 +486,7 @@
 										type="button" data-bs-toggle="collapse" data-bs-target="#http-options-auth"
 										aria-expanded="{{ 'true' if http_auth_open else 'false' }}"
 										aria-controls="http-options-auth">
-										<span class="material-icons me-2" style="font-size: 18px;" aria-hidden="true">vpn_key</span>
+										<span class="material-icons ju-icon-18 me-2" aria-hidden="true">vpn_key</span>
 										Authentication
 									</button>
 								</h2>
@@ -513,14 +513,14 @@
 											</div>
 
 											<!-- BasicAuth Fields (visible when enabled) -->
-											<div class="col-md-5 auth-field" style="display:none;">
+											<div class="col-md-5 auth-field" hidden>
 												<label for="http_username" class="form-label">Username</label>
 												<input type="text" class="form-control" id="http_username"
 													name="http_username" autocomplete="off" data-lpignore="true"
 													data-form-type="other"
 													placeholder="{{ 'Stored; leave empty to keep' if target.http_username else '' }}">
 											</div>
-											<div class="col-md-7 auth-field" style="display:none;">
+											<div class="col-md-7 auth-field" hidden>
 												<label for="http_password" class="form-label">Password</label>
 												<div class="input-group">
 													<input type="password" class="form-control" id="http_password"
@@ -553,7 +553,7 @@
 										type="button" data-bs-toggle="collapse" data-bs-target="#http-options-tls"
 										aria-expanded="{{ 'true' if http_tls_open else 'false' }}"
 										aria-controls="http-options-tls">
-										<span class="material-icons me-2" style="font-size: 18px;" aria-hidden="true">verified_user</span>
+										<span class="material-icons ju-icon-18 me-2" aria-hidden="true">verified_user</span>
 										TLS / Certificate
 									</button>
 								</h2>
@@ -575,8 +575,7 @@
 										</div>
 
 										<div class="small text-uppercase text-warning fw-semibold mb-2 mt-3">
-											<span class="material-icons me-1"
-												style="font-size: 0.875rem;" aria-hidden="true">warning</span> Danger Zone
+											<span class="material-icons ju-icon-14 me-1" aria-hidden="true">warning</span> Danger Zone
 										</div>
 
 										<div class="option-card option-card-warning">
@@ -591,7 +590,7 @@
 														name="ignore_cert_errors" id="ignore_cert_errors" aria-label="Ignore certificate errors" {{ 'checked'
 														if target.ignore_cert_errors else '' }}>
 													<span class="material-icons text-warning" id="ignore_cert_warning"
-														style="display: {{ 'inline' if target.ignore_cert_errors else 'none' }};" aria-hidden="true">warning</span>
+														{{ '' if target.ignore_cert_errors else 'hidden' }} aria-hidden="true">warning</span>
 												</div>
 											</div>
 										</div>
@@ -743,8 +742,7 @@
 					</div>
 				</div>
 
-				<div id="sla-fields" class="mb-4"
-					style="{{ '' if target.sla_enabled else 'display: none;' }}">
+				<div id="sla-fields" class="mb-4"{{ '' if target.sla_enabled else ' hidden' }}>
 					<div class="alert alert-light border small mb-3 py-2">
 						<span class="material-icons me-1" aria-hidden="true">info</span>
 						Affects <strong>reports & charts only</strong> – does not trigger alerts.
@@ -981,7 +979,7 @@
 	const slaFields = document.getElementById('sla-fields');
 	if (slaToggle && slaFields) {
 		slaToggle.addEventListener('change', function () {
-			slaFields.style.display = this.checked ? '' : 'none';
+			slaFields.hidden = !this.checked;
 		});
 	}
 
@@ -1004,7 +1002,7 @@
 	function _applyBasicAuthUiState(enabled) {
 		if (basicAuthToggle) basicAuthToggle.checked = !!enabled;
 		authFields.forEach(field => {
-			field.style.display = enabled ? '' : 'none';
+			field.hidden = !enabled;
 		});
 	}
 
@@ -1113,7 +1111,7 @@
 	const ignoreCertWarningIcon = document.getElementById('ignore_cert_warning');
 	if (ignoreCertToggleUi && ignoreCertWarningIcon) {
 		const updateIgnoreCertIcon = () => {
-			ignoreCertWarningIcon.style.display = ignoreCertToggleUi.checked ? 'inline' : 'none';
+			ignoreCertWarningIcon.hidden = !ignoreCertToggleUi.checked;
 		};
 		ignoreCertToggleUi.addEventListener('change', updateIgnoreCertIcon);
 		updateIgnoreCertIcon();
