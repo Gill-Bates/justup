@@ -31,7 +31,7 @@ for (const viewport of [{ name: "1280x720", width: 1280, height: 720 }, { name: 
 			await waitForVisualStability(page);
 			const result = await page.evaluate(() => {
 				const note = document.getElementById("combined-status-note");
-				const area = document.querySelector("#combined-status-note")?.closest(".target-combined, .combined-footer, section, div") || document.body;
+				const area = document.querySelector("#combined-status-note")?.closest(".target-combined, section, div") || document.body;
 				return {
 					noteText: note.textContent.trim(),
 					noteBox: note.getBoundingClientRect().height,

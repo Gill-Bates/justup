@@ -156,20 +156,20 @@ def render_cards(t: dict) -> str:
 
 
 def badge_markup(html: str, label: str) -> str:
-    """Markup of the one badge that contains ``label``."""
+    """Markup of the one status item that contains ``label``."""
     match = re.search(
-        rf'<span class="badge[^>]*>(?:(?!<span class="badge).)*?{label}.*?</span></span>', html, re.DOTALL
+        rf'<span class="ju-status-item[^>]*>(?:(?!<span class="ju-status-item).)*?{label}.*?</span></span>', html, re.DOTALL
     )
     assert match, f"no badge with {label!r}"
     return match.group(0)
 
 
 def check_badges(html: str) -> dict[str, str]:
-    """Label -> markup of every badge in the Checks hero (CERT included), in document order."""
+    """Label -> markup of every status item in the Checks hero (CERT included), in document order."""
     hero = re.search(r'<div class="ju-badges target-kpi-badges">(.*?)</div>\s*</div>\s*</div>', html, re.DOTALL).group(
         1
     )
-    badges = re.findall(r'<span class="badge.*?</span></span>', hero, re.DOTALL)
+    badges = re.findall(r'<span class="ju-status-item.*?</span></span>', hero, re.DOTALL)
     out: dict[str, str] = {}
     for badge in badges:
         text = re.sub(r"<[^>]+>", "", re.sub(r'<span class="material-icons"[^>]*>[^<]*</span>', "", badge))
@@ -199,12 +199,12 @@ def test_detail_checks_show_up_down_and_unknown_apart_without_an_endpoint_table(
     html = render_cards(t)
     assert_no_endpoint_table(html)
     up, down, unknown = (badge_markup(html, label) for label in ("TCP:25", "TCP:587", "UDP:161"))
-    assert "ju-status-badge--success" in up and ": Up<" in up
-    assert "ju-status-badge--danger" in down and ": Down<" in down
-    assert "ju-status-badge--neutral" in unknown and ": Unknown<" in unknown
-    assert not any("material-icons" in badge for badge in (up, down, unknown)), "a status badge holds no icon"
-    assert "ju-state-badge--unknown" in unknown and "ju-state-badge--unknown" not in down
-    assert "ju-status-badge--danger" not in unknown and "Down" not in unknown
+    assert "ju-status-dot--success" in up and ": Up<" in up
+    assert "ju-status-dot--danger" in down and ": Down<" in down
+    assert "ju-status-dot--neutral" in unknown and ": Unknown<" in unknown
+    assert not any("material-icons" in badge for badge in (up, down, unknown)), "a status dot holds no icon"
+    assert "ju-status-dot--unknown" in unknown and "ju-status-dot--unknown" not in down
+    assert "ju-status-dot--danger" not in unknown and "Down" not in unknown
     assert "uncertain" in unknown, "the Nmap note stays reachable as tooltip"
 
 
@@ -228,7 +228,7 @@ def test_unmeasured_ports_are_unknown_badges_not_missing() -> None:
     html = render_cards(target(enable_ping=False))
     for label in ("TCP:25", "TCP:587", "UDP:53", "UDP:161"):
         badge = badge_markup(html, label)
-        assert ": Unknown<" in badge and "ju-state-badge--unknown" in badge
+        assert ": Unknown<" in badge and "ju-status-dot--unknown" in badge
     assert "Waiting for first measurement" not in html
 
 
@@ -241,7 +241,7 @@ def test_disabled_checks_and_removed_ports_have_no_badge() -> None:
         assert label not in html
 
 
-def test_http_and_cert_badges_are_unchanged() -> None:
+def test_http_and_cert_dots_are_unchanged() -> None:
     t = target(
         enable_ping=False,
         enable_tcp_connect=False,
@@ -253,9 +253,9 @@ def test_http_and_cert_badges_are_unchanged() -> None:
     )
     html = render_cards(t)
     http = badge_markup(html, "HTTP")
-    assert "ju-status-badge--danger" in http and ": Down<" in http
-    cert = re.search(r'<span class="badge\s+ju-status-badge--warning\s*">\s*CERT.*?</span>\s*</span>', html, re.DOTALL)
-    assert cert and 'CERT<span class="visually-hidden">: warning</span>' in cert.group(0)
+    assert "ju-status-dot--danger" in http and ": Down<" in http
+    cert = badge_markup(html, "CERT")
+    assert "ju-status-dot--warning" in cert and 'CERT<span class="visually-hidden">: warning</span>' in cert
 
 
 def test_target_without_any_check_says_so_and_has_no_table() -> None:
@@ -269,13 +269,13 @@ def test_many_ports_are_all_badges_in_one_wrapping_group() -> None:
     ports = ",".join(str(n) for n in range(1000, 1040))
     t = target(enable_ping=False, enable_udp_scan=False, tcp_ports=ports)
     html = render_cards(t)
-    assert len(re.findall(r"ju-state-badge--unknown", html)) == 40
+    assert len(re.findall(r"ju-status-dot--unknown", html)) == 40
     assert 'class="ju-badges target-kpi-badges"' in html
 
 
-def test_state_badge_escapes_label_and_title() -> None:
+def test_state_dot_escapes_label_and_title() -> None:
     macro = templates.env.from_string(
-        '{% from "fragments/_state_badge.html" import state_badge %}{{ state_badge(label, "up", title) }}'
+        '{% from "fragments/_state_dot.html" import state_dot %}{{ state_dot(label, "up", title) }}'
     )
     html = macro.render(label="<img src=x onerror=alert(1)>", title='"><script>alert(1)</script>')
     assert "<img src=x" not in html and "<script>" not in html
@@ -342,7 +342,7 @@ def test_target_without_stored_port_rows_still_shows_its_tcp_badge(tmp_path) -> 
 def test_legacy_target_without_port_rows_takes_its_state_from_the_tcp_status_cache() -> None:
     t = target(enable_ping=False, enable_udp_scan=False, tcp_ports="25", tcp_port_status={"25": "up"})
     badge = check_badges(render_cards(t))["TCP"]
-    assert "ju-status-badge--success" in badge and ": Up<" in badge
+    assert "ju-status-dot--success" in badge and ": Up<" in badge
 
 
 def test_unmeasured_port_row_defers_to_the_tcp_status_cache() -> None:
@@ -351,7 +351,7 @@ def test_unmeasured_port_row_defers_to_the_tcp_status_cache() -> None:
     t["network_ports"] = [stored("tcp", 25, None, checked_at=None)]
     [view] = build_endpoint_views(t, t["network_ports"])
     assert (view["status"], view["measured"]) == ("down", True)
-    assert "ju-status-badge--danger" in check_badges(render_cards(t))["TCP"]
+    assert "ju-status-dot--danger" in check_badges(render_cards(t))["TCP"]
 
 
 def test_detail_view_takes_an_unmeasured_tcp_port_state_from_the_series_the_charts_plot(tmp_path) -> None:

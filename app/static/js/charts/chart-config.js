@@ -30,6 +30,60 @@ function formatCompactAxisValue(value) {
 }
 
 /**
+ * One place for chart units. Axis ticks, tooltips and descriptions read the unit from here,
+ * so a metric never gets its unit from a per-chart literal.
+ */
+const CHART_UNITS = Object.freeze({
+  ms: Object.freeze({ suffix: "ms", axisTitle: "Response time (ms)" }),
+  percent: Object.freeze({ suffix: "%", axisTitle: "Percent (%)" }),
+  checks: Object.freeze({ suffix: "checks", axisTitle: "Checks" }),
+});
+/** "123 ms": value plus the unit suffix of the metric. */
+function formatChartValue(unit, value) {
+  const def = CHART_UNITS[unit];
+  return def ? value + " " + def.suffix : String(value);
+}
+/** Axis tick: compact number; carries the unit itself when the axis title is hidden. */
+function formatChartTick(unit, value, withUnit) {
+  const text = formatCompactAxisValue(value);
+  const def = CHART_UNITS[unit];
+  return withUnit && def && text !== "" ? text + " " + def.suffix : text;
+}
+/** Locale number formatter shared by chart counts and shares (same locale as the axis ticks). */
+function formatChartCount(value) {
+  return new Intl.NumberFormat(navigator.language || "en").format(value);
+}
+/**
+ * Shares of a total in 0.1 % steps whose sum is exactly 100 % (largest-remainder rounding).
+ * @param {number[]} counts
+ * @returns {number[]} fractions (0..1) in the order of the input
+ */
+function chartShares(counts) {
+  const total = counts.reduce((sum, c) => sum + c, 0);
+  if (!(total > 0)) return counts.map(() => 0);
+  const exact = counts.map((c) => (c / total) * 1000);
+  const tenths = exact.map(Math.floor);
+  let rest = 1000 - tenths.reduce((sum, t) => sum + t, 0);
+  exact
+    .map((value, index) => ({ index, frac: value - Math.floor(value) }))
+    .sort((a, b) => b.frac - a.frac || a.index - b.index)
+    .forEach((item) => {
+      if (rest > 0) {
+        tenths[item.index] += 1;
+        rest -= 1;
+      }
+    });
+  return tenths.map((t) => t / 1000);
+}
+/** "97,5 %" / "97.5%" in the page locale, one decimal. */
+function formatChartShare(fraction) {
+  return new Intl.NumberFormat(navigator.language || "en", {
+    style: "percent",
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1,
+  }).format(fraction);
+}
+/**
  * Scriptable fill: vertical gradient from the line color down to transparent.
  * Resolved lazily because chartArea is unavailable until the first layout pass.
  * @param {string} color - Line color
@@ -254,3 +308,9 @@ window.createAreaGradient = createAreaGradient;
 window.createZoomOptions = createZoomOptions;
 window.createSlaAnnotation = createSlaAnnotation;
 window.formatCompactAxisValue = formatCompactAxisValue;
+window.CHART_UNITS = CHART_UNITS;
+window.formatChartValue = formatChartValue;
+window.formatChartTick = formatChartTick;
+window.formatChartCount = formatChartCount;
+window.chartShares = chartShares;
+window.formatChartShare = formatChartShare;

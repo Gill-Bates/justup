@@ -128,22 +128,25 @@ for (const viewport of VIEWPORTS) {
 		});
 	}
 }
-test("targets table: endpoint badges carry the state as text, colour and edge, without an icon @endpoint-state", async ({ browser, app, adminState }) => {
+test("targets table: endpoint states are a coloured dot with a text alternative, no badge @endpoint-state", async ({ browser, app, adminState }) => {
 	const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, storageState: adminState });
 	const page = await context.newPage();
 	try {
 		await page.goto(`${app.base}/ui/targets`, { waitUntil: "load" });
 		const row = page.locator("tr[data-target-id]", { hasText: BODY.name });
 		await row.waitFor();
-		const badge = (label) => row.locator(".ju-state-badge", { hasText: label }).first();
+		const badge = (label) => row.locator(".ju-status-item", { hasText: label }).first();
 		assert.match(await badge("TCP:587").innerText(), /Down/);
 		assert.match(await badge("UDP:161").innerText(), /Unknown/);
 		assert.match(await badge("UDP:53").innerText(), /Up/);
-		assert.equal(await row.locator(".ju-state-badge .material-icons, .ju-state-badge svg").count(), 0, "no icon inside a status badge");
+		assert.equal(await row.locator(".ju-status-item .material-icons, .ju-status-item svg, .ju-status-item .badge").count(), 0, "no icon and no badge inside a status item");
 		const size = (label) => badge(label).evaluate((node) => { const box = node.getBoundingClientRect(); return [box.height]; });
-		assert.deepEqual(await size("TCP:587"), await size("UDP:161"), "UNKNOWN and DOWN badges are equally high");
-		assert.equal(await badge("UDP:161").evaluate((node) => getComputedStyle(node).borderTopStyle), "dashed");
-		assert.equal(await row.locator(".ju-state-badge", { hasText: "TCP:587" }).count(), 1, "TCP and UDP of one port number never share a badge");
+		assert.deepEqual(await size("TCP:587"), await size("UDP:161"), "UNKNOWN and DOWN items are equally high");
+		const dotColor = (label) => badge(label).locator(".ju-status-dot").evaluate((node) => getComputedStyle(node).backgroundColor);
+		assert.equal(await dotColor("UDP:161"), "rgba(0, 0, 0, 0)", "UNKNOWN is a hollow ring");
+		assert.notEqual(await dotColor("TCP:587"), await dotColor("UDP:53"), "DOWN and UP dots differ in colour");
+		assert.equal(await badge("TCP:587").locator(".ju-status-dot").getAttribute("aria-hidden"), "true", "the dot is decorative; the hidden word is the text alternative");
+		assert.equal(await row.locator(".ju-status-item", { hasText: "TCP:587" }).count(), 1, "TCP and UDP of one port number never share an item");
 	} finally {
 		await context.close();
 	}

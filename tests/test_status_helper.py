@@ -76,7 +76,7 @@ def test_templates_color_every_cert_status_the_helper_can_emit():
 
     templates = Path(__file__).resolve().parents[1] / "app" / "templates"
     env = Environment(loader=FileSystemLoader(templates), autoescape=select_autoescape(["html"]))
-    cert_level = env.get_template("fragments/_state_badge.html").module.cert_level
+    cert_level = env.get_template("fragments/_state_dot.html").module.cert_level
 
     emitted = {_cert_status_for(d) for d in (-1, 0, 3, 7, 8)}
     assert emitted == {"expired", "critical", "warning", "ok"}
@@ -87,7 +87,7 @@ def test_templates_color_every_cert_status_the_helper_can_emit():
     # Both views must colour the status through the shared macro, not through a private copy of the mapping.
     for rel in ("fragments/targets_table.html", "fragments/target_detail/info_cards.html"):
         source = (templates / rel).read_text()
-        assert "cert_badge(" in source, f"{rel} does not use the shared cert badge"
+        assert "cert_dot(" in source, f"{rel} does not use the shared cert badge"
         assert "ju-status-badge--" not in source, f"{rel} maps cert statuses to badge colours itself"
 
 

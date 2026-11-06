@@ -259,3 +259,44 @@ test("peaks render as red triangles with solid stems to the median and no connec
 		await context.close();
 	}
 });
+
+for (const viewport of VIEWPORTS) {
+	test(`status donut legend shows counts and shares, y axis shows its unit at ${viewport.w}x${viewport.h} @combined-legend`, async ({ browser, app, adminState }) => {
+		const { context, page, problems } = await openTarget(browser, app, adminState, viewport);
+		try {
+			await page.waitForFunction(() => document.querySelectorAll("#status-donut-legend li").length > 0, null, { timeout: 30000 });
+			for (const theme of THEMES) {
+				await setTheme(page, theme);
+				const state = await page.evaluate(() => {
+					const items = Array.from(document.querySelectorAll("#status-donut-legend li"));
+					const chart = window.Chart.getChart(document.getElementById("chart-combined"));
+					const y = chart.scales.y;
+					const rects = items.map((li) => li.getBoundingClientRect());
+					return {
+						keyExists: !!document.getElementById("combined-status-key"),
+						classKeyText: Array.from(document.querySelectorAll("#combined-card .combined-swatch")).filter((s) => !s.closest("#combined-legend") && !s.closest("#status-donut-legend")).length,
+						rows: items.map((li) => ({
+							name: li.querySelector(".combined-donut-legend-name")?.textContent.trim(),
+							value: li.querySelector(".combined-donut-legend-value")?.textContent.trim(),
+						})),
+						overlap: rects.some((a, i) => rects.some((b, j) => i < j && a.bottom > b.top + 1 && a.top < b.bottom - 1)),
+						titleShown: !!y.options.title.display,
+						titleText: y.options.title.text,
+						ticks: y.ticks.map((tick) => tick.label).filter((label) => label !== ""),
+					};
+				});
+				assert.equal(state.keyExists, false, `${theme}: the class key above the donut is gone`);
+				assert.equal(state.classKeyText, 0, `${theme}: no second swatch legend besides toggles and donut`);
+				assert.ok(state.rows.length > 0 && state.rows.every((row) => /^(HTTP \d{3}|Error)/.test(row.name) && /^[\d.,\s]+ \([\d.,]+\s?%\)$/.test(row.value)), `${theme}: every row has count and share (${JSON.stringify(state.rows)})`);
+				const sum = state.rows.reduce((total, row) => total + parseFloat(row.value.match(/\(([\d.,]+)/)[1].replace(",", ".")), 0);
+				assert.ok(Math.abs(sum - 100) < 0.05, `${theme}: shares add up to 100 % (${sum})`);
+				assert.equal(state.overlap, false, `${theme}: legend rows do not overlap`);
+				if (state.titleShown) assert.match(state.titleText, /\(ms\)/, `${theme}: axis title names the unit`);
+				else assert.ok(state.ticks.length > 0 && state.ticks.every((label) => /\bms$/.test(label)), `${theme}: ticks carry the unit (${state.ticks})`);
+			}
+		} finally {
+			await context.close();
+		}
+		assert.deepEqual(problems, [], "no console or page errors");
+	});
+}

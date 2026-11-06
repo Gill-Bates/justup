@@ -174,14 +174,14 @@ test("combined legend accessible names match visible labels and titles retain de
   let textRenders = 0;
   const chart = {
     data: { datasets }, _palette: { series: ["#123456", "#222222", "#654321"], down: "#c0283a" },
-    _bandCount: 1, _bandsVisible: true, _bandSourceLabel: "HTTP", _presentClasses: [],
+    _bandCount: 1, _bandsVisible: true, _bandSourceLabel: "HTTP",
     options: { plugins: { annotation: { annotations: { down0: {} } } } },
     isDatasetVisible: index => visibility.get(index) ?? true,
     setDatasetVisibility(index, visible) { visibility.set(index, visible); },
     update() {}, _renderText() { textRenders += 1; },
   };
   const legend = makeElement();
-  context._renderCombinedLegend(chart, legend, makeElement());
+  context._renderCombinedLegend(chart, legend);
   assert.deepEqual(legend.children.map((button) => button.children.at(-1).textContent), [
     "HTTP", "TCP 443", "Status", "Down (HTTP)",
   ]);
@@ -711,4 +711,16 @@ test("a target without an HTTP check shows no status note under the chart", () =
   assert.equal(note({ statusEnabled: true }, []), "No HTTP status codes recorded in this range.");
   assert.equal(note({ statusEnabled: true }, [{}]), "");
   assert.equal(note({ statusEnabled: false, upError: true }, []).trim(), "Downtime bands could not be loaded.");
+});
+
+test("chart units: ticks carry the unit only without an axis title; shares sum to exactly 100 %", () => {
+  const context = { window: {}, navigator: { language: "en" } };
+  vm.runInNewContext(readFileSync(new URL("../../app/static/js/charts/chart-config.js", import.meta.url), "utf8"), context);
+  assert.equal(context.formatChartTick("ms", 300, true), "300 ms");
+  assert.equal(context.formatChartTick("ms", 300, false), "300");
+  assert.equal(context.formatChartValue("ms", 12), "12 ms");
+  const shares = context.chartShares([1380, 36, 3, 1]);
+  assert.equal(Math.round(shares.reduce((sum, v) => sum + v, 0) * 1000), 1000);
+  assert.equal(context.formatChartShare(shares[0]), "97.2%");
+  assert.equal(context.formatChartCount(1380), "1,380");
 });

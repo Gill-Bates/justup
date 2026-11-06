@@ -23,9 +23,6 @@
 					<i class="material-icons" aria-hidden="true">query_stats</i>
 					<span data-role="message"></span>
 				</div>
-				<div class="combined-footer">
-					<div id="combined-status-key" class="combined-status-key" aria-label="Status code markers"></div>
-				</div>
 			</div>
 			{% if target.enable_http_check %}
 			<section class="combined-donut" aria-labelledby="status-donut-title">
@@ -34,6 +31,7 @@
 				<div id="status-donut-plot" class="combined-donut-plot">
 					<canvas id="chart-status-code" role="img" aria-label="HTTP status code distribution. Loading data."></canvas>
 				</div>
+				<ul id="status-donut-legend" class="combined-donut-legend" aria-label="HTTP status codes with counts and shares" hidden></ul>
 				<p id="status-donut-empty" class="combined-empty combined-empty--small" role="status" hidden></p>
 			</section>
 			{% endif %}

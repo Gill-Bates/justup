@@ -78,7 +78,7 @@ export function recipientScripts({ listFilter = false } = {}) {
 }
 
 
-// In-page reader for the state_badge macro (app/templates/fragments/_state_badge.html): the label is
+// In-page reader for the state_dot macro (app/templates/fragments/_state_dot.html): the label is
 // the text node next to the icon, the state is the visually hidden ": Up|Down|Unknown" suffix.
 function readStateBadgesInPage(selector) {
 	return [...document.querySelectorAll(selector)].map((badge) => ({

@@ -25,18 +25,18 @@ ICON = re.compile(r"material-icons|<i\b|<svg\b", re.IGNORECASE)
 STATUS_BADGE = re.compile(r"ju-status-badge|ju-state-badge|StatusBadge")
 
 
-def test_jinja_state_and_cert_badges_have_no_icon_for_every_status() -> None:
+def test_jinja_state_and_cert_dots_have_no_icon_for_every_status() -> None:
     env = templates.env
     for status in ("up", "down", "unknown", "paused", None, ""):
         html = env.from_string(
-            '{% from "fragments/_state_badge.html" import state_badge %}{{ state_badge("TCP:22", status, "tip") }}'
+            '{% from "fragments/_state_dot.html" import state_dot %}{{ state_dot("TCP:22", status, "tip") }}'
         ).render(status=status)
         assert not ICON.search(html), html
         assert "TCP:22" in html and 'class="visually-hidden">: ' in html
-        assert ("ju-state-badge--unknown" in html) == (status not in ("up", "down"))
+        assert ("ju-status-dot--unknown" in html) == (status not in ("up", "down"))
     for status in ("ok", "warning", "critical", "expired", "unknown", None):
         html = env.from_string(
-            '{% from "fragments/_state_badge.html" import cert_badge %}{{ cert_badge("CERT", status) }}'
+            '{% from "fragments/_state_dot.html" import cert_dot %}{{ cert_dot("CERT", status) }}'
         ).render(status=status)
         assert not ICON.search(html), html
 

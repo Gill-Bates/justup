@@ -23,33 +23,6 @@ function initTooltips() {
     });
 }
 
-// Tabs: horizontal scroll strip (keep the active tab visible)
-
-function initSettingsTabStrip() {
-    const tabs = document.getElementById('settingsTabs');
-    if (!tabs || tabs.dataset.stripBound === '1') return;
-    tabs.dataset.stripBound = '1';
-
-    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
-
-    // Scroll only the strip (not the page) so the active tab is fully visible.
-    const revealTab = (tab) => {
-        if (!tab) return;
-        const left = tab.offsetLeft - (tabs.clientWidth - tab.offsetWidth) / 2;
-        tabs.scrollTo({ left: Math.max(0, left), behavior: reduceMotion.matches ? 'auto' : 'smooth' });
-    };
-
-    tabs.addEventListener('shown.bs.tab', (e) => revealTab(e.target));
-    // Keyboard focus only: scrolling on a mouse press moves the tab away before mouseup and the click is lost.
-    tabs.addEventListener('focusin', (e) => {
-        if (e.target.matches?.('[role="tab"]:focus-visible')) revealTab(e.target);
-    });
-    // Initial tab may have been restored from the URL hash.
-    const active = tabs.querySelector('[role="tab"].active');
-    if (active) tabs.scrollLeft = Math.max(0, active.offsetLeft - (tabs.clientWidth - active.offsetWidth) / 2);
-}
-
-
 function initRegisteredAccountDisplay(senderNumber) {
     if (!senderNumber) return;
     
@@ -77,7 +50,6 @@ function initRegisteredAccountDisplay(senderNumber) {
 
 document.addEventListener('DOMContentLoaded', () => {
     initTooltips();
-    initSettingsTabStrip();
 
     // Re-init modules after HTMX fragments load (tabs are lazy-loaded)
     document.body.addEventListener('htmx:afterSettle', () => {

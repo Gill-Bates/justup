@@ -1,4 +1,4 @@
-{% from "fragments/_state_badge.html" import state_badge, cert_badge, cert_level %}
+{% from "fragments/_state_dot.html" import state_dot, cert_dot, cert_level %}
 {# KPI summary: health signals first, check configuration second. #}
 <section class="target-kpi-row" aria-label="Target summary">
 
@@ -25,13 +25,13 @@
 			<div class="card-body">
 				<p class="target-kpi-label">Checks</p>
 				<div class="ju-badges target-kpi-badges">
-{% if target.enable_http_check %}{{ state_badge('HTTP', target.http_status) }}{% endif %}
-					{% if target.enable_ping %}{{ state_badge('PING', target.ping_status) }}{% endif %}
+{% if target.enable_http_check %}{{ state_dot('HTTP', target.http_status) }}{% endif %}
+					{% if target.enable_ping %}{{ state_dot('PING', target.ping_status) }}{% endif %}
 					{% if target.enable_cert_expiration %}
-					{{ cert_badge('CERT', target.cert_status) }}
+					{{ cert_dot('CERT', target.cert_status) }}
 					{% endif %}
 					{% for endpoint in target.endpoints|default([]) if endpoint.kind == 'port' %}
-					{{ state_badge(endpoint.protocol|upper ~ ':' ~ endpoint.port, endpoint.status, endpoint.state_note or endpoint.name) }}
+					{{ state_dot(endpoint.protocol|upper ~ ':' ~ endpoint.port, endpoint.status, endpoint.state_note or endpoint.name) }}
 					{% endfor %}
 					{% if not (target.enable_http_check or target.enable_ping or target.enable_cert_expiration or target.enable_tcp_connect or target.enable_udp_scan) %}
 					<span class="target-kpi-hint">No checks enabled</span>

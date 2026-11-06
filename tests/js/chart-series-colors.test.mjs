@@ -185,7 +185,7 @@ test("legend lists one entry per series and no peak entries; a toggle updates th
   });
   chart.data.datasets.forEach((d, i) => { d._slot = i < 2 ? 2 : 3; d.label = d._kind + i; d._srcId = "tcp"; });
   const legend = makeElement();
-  context._renderCombinedLegend(chart, legend, makeElement());
+  context._renderCombinedLegend(chart, legend);
   assert.deepEqual(legend.children.map((b) => b.attributes["aria-label"]), ["TCP 25", "TCP 587"]);
   assert.ok(legend.children.every((b) => !/peak/i.test(b.attributes["aria-label"])));
   legend.children[1].listeners.click();

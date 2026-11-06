@@ -637,6 +637,7 @@ textarea.smtp-editor-frame {
 .ju-tabs {
 	--bs-nav-pills-link-active-bg: var(--bs-primary);
 	--bs-nav-pills-link-active-color: var(--ju-primary-contrast);
+
 	flex-wrap: nowrap;
 	gap: var(--ui-tab-gap);
 	min-width: 0;
@@ -650,6 +651,22 @@ textarea.smtp-editor-frame {
 
 .ju-tabs .nav-item {
 	flex: 0 0 auto;
+}
+
+/* Overflow hint: tabs fade out at an edge that can still be scrolled (classes set by utils/tabs-overflow.js). */
+.ju-tabs.has-overflow {
+	--ui-tab-fade-start: 1.5rem;
+	--ui-tab-fade-end: 1.5rem;
+
+	mask-image: linear-gradient(to right, transparent, black var(--ui-tab-fade-start), black calc(100% - var(--ui-tab-fade-end)), transparent);
+}
+
+.ju-tabs.has-overflow.is-at-start {
+	--ui-tab-fade-start: 0rem;
+}
+
+.ju-tabs.has-overflow.is-at-end {
+	--ui-tab-fade-end: 0rem;
 }
 
 .ju-tabs .nav-link {
@@ -1791,23 +1808,52 @@ textarea.smtp-editor-frame {
 	color: var(--bs-white);
 }
 
-/* Check/endpoint state badge (DESIGN.md, "Endpoint state"): no icon; colour and word carry UP and DOWN, a dashed edge marks UNKNOWN.
-   Every state keeps the same 1px edge so the badges in one column stay equally sized. */
+/* Port-scan result badge (network-scan-picker.js): a finding, not a monitoring status; unclear results keep a dashed edge. */
 .ju-state-badge {
 	border: 1px solid transparent;
 }
-
 .ju-state-badge--unknown {
 	border: 1px dashed currentcolor;
 }
-
 @media (forced-colors: active) {
 	.ju-state-badge {
 		border: 1px solid CanvasText;
 	}
-
 	.ju-state-badge--unknown {
 		border-style: dashed;
+	}
+}
+/* Status dot (DESIGN.md, "Status display"): the one place that colours a status marker. Tone comes from the Bootstrap
+   semantic tokens; shape repeats the state (circle up, square down, diamond warning, hollow ring unknown) so colour is never the only cue. */
+.ju-status-item {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--ui-control-gap, 0.5rem);
+	white-space: nowrap;
+}
+.ju-status-dot {
+	--ju-dot-color: var(--bs-secondary);
+	flex: none;
+	box-sizing: border-box;
+	width: 0.625rem;
+	height: 0.625rem;
+	border: 2px solid var(--ju-dot-color);
+	border-radius: 50%;
+	background: var(--ju-dot-color);
+}
+.ju-status-dot--success { --ju-dot-color: var(--bs-success); }
+.ju-status-dot--warning { --ju-dot-color: var(--bs-warning); border-radius: 1px; transform: rotate(45deg); }
+.ju-status-dot--danger { --ju-dot-color: var(--bs-danger); border-radius: 1px; }
+.ju-status-dot--info { --ju-dot-color: var(--bs-info); }
+.ju-status-dot--unknown { background: transparent; }
+@media (forced-colors: active) {
+	.ju-status-dot {
+		forced-color-adjust: none;
+		border-color: CanvasText;
+		background: CanvasText;
+	}
+	.ju-status-dot--unknown {
+		background: transparent;
 	}
 }
 
@@ -2953,11 +2999,11 @@ textarea.smtp-editor-frame {
 			color: var(--bs-secondary-color);
 		}
 
-		.ui-page .targets-table .check-badges .badge:nth-child(n+4) {
+		.ui-page .targets-table .check-badges :is(.badge, .ju-status-item):nth-child(n+4) {
 			display: none;
 		}
 
-		.ui-page .targets-table .targets-checks-expanded .check-badges .badge:nth-child(n+4) {
+		.ui-page .targets-table .targets-checks-expanded .check-badges :is(.badge, .ju-status-item):nth-child(n+4) {
 			display: inline-flex;
 		}
 
@@ -3014,7 +3060,7 @@ textarea.smtp-editor-frame {
 			width: 100%;
 		}
 
-		.ui-page .targets-table .check-badges .badge {
+		.ui-page .targets-table .check-badges :is(.badge, .ju-status-item) {
 			min-width: 0;
 			max-width: 100%;
 			white-space: normal;

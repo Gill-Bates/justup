@@ -15,6 +15,9 @@
 - `Fix` Delivery queue log: the "No entries" / loading row spans the full table width again on wide screens.
 - `Changed` All tab bars (Notifications, Edit Target, Target detail, Settings) now look the same: filled teal active tab and a thin teal scrollbar when the bar is wider than the screen.
 
+- `Changed` Check and endpoint states (HTTP, Ping, TCP, UDP, certificate) on the Targets list and the target page are now a coloured dot in front of the label instead of a status badge. The state word stays available to screen readers and as tooltip; UNKNOWN is a hollow ring.
+- `Changed` The HTTP status donut lists each code with its count and share (for example `1,380 (97.2 %)`); the separate class legend under the response-time chart is gone.
+- `Fix` The response-time axis shows its unit (`ms`) also on narrow charts, and chart tooltips use the same unit format.
 ## [1.0.3] - 2026-11-05
 
 - `New` UDP monitoring: UDP ports are checked next to TCP and shown per endpoint (for example `TCP:53`, `UDP:53`). `closed` counts as down only after two confirming scans; uncertain results stay unknown.

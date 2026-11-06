@@ -342,6 +342,10 @@
 	font-size: 0.8125rem;
 	font-weight: 600;
 }
+.target-kpi-badges .ju-status-item {
+	font-size: 0.8125rem;
+	font-weight: 600;
+}
 
 /* ---- 3. Control toolbar ---- */
 
@@ -805,8 +809,7 @@
 	display: none;
 }
 
-.combined-legend,
-.combined-status-key {
+.combined-legend {
 	display: flex;
 	flex-wrap: wrap;
 	gap: 0.5rem 0.75rem;
@@ -838,27 +841,6 @@
 	display: none;
 }
 
-.combined-status-key {
-	margin-top: 0.75rem;
-	color: var(--bs-secondary-color);
-}
-
-.combined-footer {
-	display: flex;
-	align-items: flex-start;
-	justify-content: space-between;
-	flex-wrap: wrap;
-	gap: 0 1rem;
-}
-
-.combined-footer .combined-status-key {
-	flex: 1 1 auto;
-}
-
-.combined-status-key:empty {
-	display: none;
-}
-
 .combined-legend-btn {
 	display: inline-flex;
 	align-items: center;
@@ -887,11 +869,6 @@
 	text-decoration: line-through;
 }
 
-.combined-key-item {
-	display: inline-flex;
-	align-items: center;
-	gap: 0.35rem;
-}
 
 .combined-swatch {
 	display: inline-block;
@@ -1036,6 +1013,41 @@
 
 .combined-donut-plot[hidden] {
 	display: none;
+}
+
+/* HTML legend under the donut: swatch shape + code + count (share); wraps, never overlaps. */
+.combined-donut-legend {
+	display: grid;
+	gap: 0.35rem;
+	margin: 0.75rem 0 0;
+	padding: 0;
+	list-style: none;
+	font-size: 0.8125rem;
+}
+
+.combined-donut-legend[hidden] {
+	display: none;
+}
+
+.combined-donut-legend-item {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 0.15rem 0.5rem;
+}
+
+.combined-donut-legend-item .combined-swatch {
+	align-self: center;
+}
+
+.combined-donut-legend-class {
+	color: var(--bs-secondary-color);
+}
+
+.combined-donut-legend-value {
+	margin-inline-start: auto;
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
 }
 
 .combined-empty--small {
@@ -1274,7 +1286,6 @@
 		inset: 0;
 	}
 
-	#target-dashboard-pane.active .combined-status-key,
 	#target-dashboard-pane.active .combined-note {
 		margin-top: 0.35rem;
 	}

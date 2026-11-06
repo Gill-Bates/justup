@@ -20,6 +20,9 @@ const LOOK = (selector) => {
 	const link = (el) => pick(el, ["color", "backgroundColor", "fontWeight", "borderRadius", "paddingLeft", "minHeight", "borderTopWidth"]);
 	return {
 		hasShared: strip.classList.contains("ju-tabs"),
+		// The overflow hint (edge fade) is present exactly when tabs are out of view.
+		overflowMarked: (strip.scrollWidth - strip.clientWidth > 1) === strip.classList.contains("has-overflow"),
+		fadeEnd: strip.classList.contains("has-overflow") ? !strip.classList.contains("is-at-end") : null,
 		strip: pick(strip, ["flexWrap", "overflowX", "overflowY", "columnGap", "scrollbarColor", "scrollbarWidth"]),
 		inactive: link(strip.querySelector(".nav-link:not(.active)")),
 		active: link(strip.querySelector(".nav-link.active")),
@@ -38,6 +41,8 @@ for (const theme of ["light", "dark"]) {
 					await page.goto(app.base + page_.path, { waitUntil: "load" });
 					await page.evaluate((mode) => document.documentElement.setAttribute("data-bs-theme", mode), theme);
 					await page.waitForSelector(page_.strip);
+					// Bootstrap tabs transition colour; measure only after the theme switch has settled.
+					await page.waitForFunction(() => document.getAnimations().length === 0);
 					looks[page_.name] = await page.evaluate(LOOK, page_.strip);
 					await page.close();
 				}
@@ -50,7 +55,10 @@ for (const theme of ["light", "dark"]) {
 			assert.equal(reference.strip.flexWrap, "nowrap");
 			for (const [name, look] of Object.entries(looks)) {
 				assert.ok(look.hasShared, `${name}: strip is not .ju-tabs`);
-				assert.deepEqual(look, { ...reference, hasShared: true }, `${name} differs from the Notifications tab look`);
+				assert.ok(look.overflowMarked, `${name}: has-overflow does not match the real overflow`);
+				const { overflowMarked, fadeEnd, ...rest } = look;
+				const { overflowMarked: _o, fadeEnd: _f, ...ref } = reference;
+				assert.deepEqual(rest, ref, `${name} differs from the Notifications tab look`);
 			}
 		});
 	}

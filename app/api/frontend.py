@@ -601,7 +601,6 @@ def target_detail_page(target_id: int, request: Request, conn=Depends(get_conn))
             "pdf_page_size": get_pdf_page_size(conn),
             "rollup_days": _rollup_days(),
             "has_recipients": len(sqlite_db.get_target_recipient_ids(conn, target_id)) > 0,
-            "alert_recipients": [dict(row) for row in sqlite_db.get_target_recipients(conn, target_id)],
         },
     )
 

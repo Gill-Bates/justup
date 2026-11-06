@@ -210,14 +210,6 @@ function _statusStripAnnotations(buckets, palette) {
   return ann;
 }
 
-/** Status classes actually present in the given buckets, in severity order, for the legend key. */
-function _presentStatusClasses(buckets) {
-  return ["2xx", "info", "3xx", "4xx", "5xx", "err"].filter(function (k) {
-    return buckets.some(function (b) {
-      return b.cls === k;
-    });
-  });
-}
 
 /**
  * Chart-local plugin: one thin solid stem per peak, from the interval median up to the peak on
@@ -352,9 +344,9 @@ function _syncPeaks(chart) {
 }
 
 // Re-rendering replaces the buttons; keep keyboard focus on the button at the same position.
-function _rerenderCombinedLegend(chart, legendEl, keyEl, activeBtn) {
+function _rerenderCombinedLegend(chart, legendEl, activeBtn) {
   var index = Array.prototype.indexOf.call(legendEl.children, activeBtn);
-  _renderCombinedLegend(chart, legendEl, keyEl);
+  _renderCombinedLegend(chart, legendEl);
   var next = legendEl.children[index];
   if (next) next.focus();
 }
@@ -375,10 +367,10 @@ function _combinedLegendLabel(dataset) {
 }
 
 /**
- * Render legend toggle buttons + status-class key.
+ * Render the legend toggle buttons.
  * Buttons use aria-pressed so state is exposed without relying on color.
  */
-function _renderCombinedLegend(chart, legendEl, keyEl) {
+function _renderCombinedLegend(chart, legendEl) {
   var palette = chart._palette;
   legendEl.textContent = "";
   chart.data.datasets.forEach(function (ds, i) {
@@ -402,7 +394,7 @@ function _renderCombinedLegend(chart, legendEl, keyEl) {
       _syncPeaks(chart);
       chart.update("none");
       if (chart._renderText) chart._renderText();
-      _rerenderCombinedLegend(chart, legendEl, keyEl, btn);
+      _rerenderCombinedLegend(chart, legendEl, btn);
     });
     legendEl.appendChild(btn);
   });
@@ -427,19 +419,11 @@ function _renderCombinedLegend(chart, legendEl, keyEl) {
       });
       chart.update("none");
       if (chart._renderText) chart._renderText();
-      _rerenderCombinedLegend(chart, legendEl, keyEl, bandBtn);
+      _rerenderCombinedLegend(chart, legendEl, bandBtn);
     });
     legendEl.appendChild(bandBtn);
   }
 
-  keyEl.textContent = "";
-  (chart._presentClasses || []).forEach(function (key) {
-    var cls = CombinedChartData.STATUS_CLASSES[key];
-    var item = _el("span", "combined-key-item");
-    item.appendChild(_swatch(cls.shape, palette[key], false));
-    item.appendChild(_el("span", "", cls.label));
-    keyEl.appendChild(item);
-  });
 }
 
 function _summarizeSource(series, points) {
@@ -588,7 +572,6 @@ function _createCombinedZoomLoader(
     chart.config.options.plugins.annotation.annotations,
   );
   var originalBandCount = chart._bandCount;
-  var originalPresentClasses = chart._presentClasses;
   var generation =
     buildGeneration === undefined ? chart._buildGeneration : buildGeneration;
   var serial = 0;
@@ -616,7 +599,6 @@ function _createCombinedZoomLoader(
       chart._bandsVisible,
     );
     chart._bandCount = originalBandCount;
-    chart._presentClasses = originalPresentClasses;
     _syncPeaks(chart);
     chart.update("none");
     chart._renderLegend();
@@ -721,7 +703,6 @@ function _createCombinedZoomLoader(
             1,
           );
           view.statusBuckets = buckets;
-          chart._presentClasses = _presentStatusClasses(buckets);
           var statusDataset = chart.data.datasets.find(function (d) {
             return d._kind === "status";
           });
@@ -812,7 +793,6 @@ function buildCombinedChart(canvasId, input) {
   var plotEl = document.getElementById("combined-plot");
   var peaksEl = document.getElementById("combined-peaks");
   var legendEl = document.getElementById("combined-legend");
-  var keyEl = document.getElementById("combined-status-key");
   var summaryEl = document.getElementById("combined-summary");
 
   var fromMs = input.range.from.getTime();
@@ -943,7 +923,6 @@ function buildCombinedChart(canvasId, input) {
     if (plotEl) plotEl.hidden = true;
     if (legendEl) legendEl.textContent = "";
     if (peaksEl) peaksEl.hidden = true;
-    if (keyEl) keyEl.textContent = "";
     if (emptyEl) {
       emptyEl.hidden = false;
       emptyEl.querySelector('[data-role="message"]').textContent = allFailed
@@ -982,11 +961,13 @@ function buildCombinedChart(canvasId, input) {
   o.scales.y.stackWeight = 11;
   o.scales.y.title = {
     display: true,
-    text: "Response time (ms)",
+    text: CHART_UNITS.ms.axisTitle,
     color: theme.muted,
   };
   o.scales.y.ticks.callback = function (v) {
-    return Number.isInteger(v) ? formatCompactAxisValue(v) : "";
+    if (!Number.isInteger(v)) return "";
+    var titleShown = !!(this && this.options && this.options.title && this.options.title.display);
+    return formatChartTick("ms", v, !titleShown);
   };
   // Keep a visible SLA line in view even when every measurement is far below it.
   o.scales.y.afterDataLimits = function (scale) {
@@ -1019,9 +1000,9 @@ function buildCombinedChart(canvasId, input) {
     if (item.dataset._kind === "status") return _statusTooltip(item);
     if (item.dataset._kind === "peak") {
       var peakLabel =
-        " " + item.dataset.label + ": " + Math.round(item.raw.max) + " ms";
+        " " + item.dataset.label + ": " + formatChartValue("ms", Math.round(item.raw.max));
       if (item.raw.median !== null)
-        peakLabel += " (median " + Math.round(item.raw.median) + " ms)";
+        peakLabel += " (median " + formatChartValue("ms", Math.round(item.raw.median)) + ")";
       peakLabel +=
         " across " +
         item.raw.count +
@@ -1031,7 +1012,7 @@ function buildCombinedChart(canvasId, input) {
         ? peakLabel + "; drawn at the axis limit"
         : peakLabel;
     }
-    return " " + item.dataset.label + ": " + Math.round(item.parsed.y) + " ms";
+    return " " + item.dataset.label + ": " + formatChartValue("ms", Math.round(item.parsed.y));
   };
 
   var annotations = _downAnnotations(bands, palette, true);
@@ -1057,9 +1038,8 @@ function buildCombinedChart(canvasId, input) {
   chart._bandCount = bands.length;
   chart._bandsVisible = true;
   chart._bandSourceLabel = input.upSourceLabel || "primary check";
-  chart._presentClasses = _presentStatusClasses(statusBuckets);
   chart._renderLegend = function () {
-    _renderCombinedLegend(chart, legendEl, keyEl);
+    _renderCombinedLegend(chart, legendEl);
   };
   chart._themeHook = function (t) {
     _themeCombined(chart, t);

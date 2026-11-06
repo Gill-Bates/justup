@@ -368,8 +368,33 @@ function buildAvailabilitySeriesChart(canvasId, data) {
 }
 
 /**
+ * Fill the HTML legend under the donut: shape swatch (not colour alone), code, class name,
+ * absolute count and share. Shares sum to exactly 100 %; the list wraps instead of overlapping.
+ */
+function _renderStatusDonutLegend(listEl, keys, values, colors, clsOf, shares) {
+  if (!listEl) return;
+  listEl.textContent = "";
+  keys.forEach((k, i) => {
+    const cls = CombinedChartData.STATUS_CLASSES[clsOf(k)];
+    const item = _el("li", "combined-donut-legend-item");
+    item.appendChild(_swatch(cls ? cls.shape : "circle", colors[i], false));
+    const name = _el("span", "combined-donut-legend-name", k === "Error" ? "Error" : "HTTP " + k);
+    if (cls) {
+      name.appendChild(document.createTextNode(" "));
+      name.appendChild(_el("span", "combined-donut-legend-class", cls.label));
+    }
+    item.appendChild(name);
+    item.appendChild(
+      _el("span", "combined-donut-legend-value", formatChartCount(values[i]) + " (" + formatChartShare(shares[i]) + ")"),
+    );
+    listEl.appendChild(item);
+  });
+  listEl.hidden = false;
+}
+
+/**
  * Build the HTTP status-code doughnut shown next to the combined chart.
- * Colors follow the status classes of the combined chart markers; labels carry the code as text.
+ * Colors follow the status classes of the combined chart markers; counts and shares sit in the HTML legend.
  * @param {string} canvasId
  * @param {object} data - { points: [{ ts, value }, ...], error?: boolean }  (value: HTTP status code)
  */
@@ -380,6 +405,7 @@ function buildStatusCodeChart(canvasId, data) {
   const wrap = document.getElementById("status-donut-plot");
   const emptyEl = document.getElementById("status-donut-empty");
   const totalEl = document.getElementById("status-donut-total");
+  const legendEl = document.getElementById("status-donut-legend");
   const points = (data && data.points) || [];
   const exact = !!(data && data.status_counts);
   const statusCounts = exact ? data.status_counts : {};
@@ -405,6 +431,7 @@ function buildStatusCodeChart(canvasId, data) {
     _destroyExisting(canvasId);
     if (wrap) wrap.hidden = true;
     if (totalEl) totalEl.hidden = true;
+    if (legendEl) legendEl.hidden = true;
     if (emptyEl) {
       emptyEl.hidden = false;
       emptyEl.textContent =
@@ -419,7 +446,7 @@ function buildStatusCodeChart(canvasId, data) {
   if (emptyEl) emptyEl.hidden = true;
   if (totalEl) {
     const total = keys.reduce((sum, k) => sum + statusCounts[k], 0);
-    totalEl.textContent = total + " " + unit;
+    totalEl.textContent = formatChartCount(total) + " " + unit;
     totalEl.hidden = false;
   }
 
@@ -429,7 +456,9 @@ function buildStatusCodeChart(canvasId, data) {
     keys.map((k) => _combinedPalette(theme)[clsOf(k)]);
   const labels = keys.map((k) => (k === "Error" ? "Error" : "HTTP " + k));
   const values = keys.map((k) => statusCounts[k]);
+  const shares = chartShares(values);
   const theme = appState.theme;
+  _renderStatusDonutLegend(legendEl, keys, values, colorsFor(theme), clsOf, shares);
   const chart = _createOrUpdateChart(canvasId, ctx, {
     type: "doughnut",
     options: {
@@ -439,21 +468,12 @@ function buildStatusCodeChart(canvasId, data) {
       layout: { padding: 4 },
       animation: _prefersReducedMotion() ? false : { duration: 250 },
       plugins: {
-        legend: {
-          display: true,
-          position: "bottom",
-          labels: {
-            color: theme.text,
-            usePointStyle: true,
-            pointStyle: "rectRounded",
-            boxWidth: 10,
-            boxHeight: 10,
-            padding: 12,
-            font: { size: 12 },
-          },
-        },
+        legend: { display: false },
         tooltip: {
-          callbacks: { label: (c) => ` ${c.label}: ${c.raw} ${unit}` },
+          callbacks: {
+            label: (c) =>
+              ` ${c.label}: ${formatChartCount(c.raw)} ${unit} (${formatChartShare(shares[c.dataIndex])})`,
+          },
         },
         zoom: {
           zoom: {
@@ -481,12 +501,15 @@ function buildStatusCodeChart(canvasId, data) {
   chart._themeHook = function (t) {
     chart.data.datasets[0].backgroundColor = colorsFor(t);
     chart.data.datasets[0].borderColor = t.bg;
+    _renderStatusDonutLegend(legendEl, keys, values, colorsFor(t), clsOf, shares);
   };
   ctx.setAttribute("role", "img");
   ctx.setAttribute(
     "aria-label",
     "HTTP status code distribution: " +
-      labels.map((l, i) => l + " " + values[i] + " " + unit).join(", ") +
+      labels
+        .map((l, i) => l + " " + formatChartCount(values[i]) + " " + unit + " (" + formatChartShare(shares[i]) + ")")
+        .join(", ") +
       ".",
   );
   _registerChart(canvasId, chart, ctx, true);

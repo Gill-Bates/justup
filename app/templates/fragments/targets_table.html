@@ -1,4 +1,4 @@
-{% from "fragments/_state_badge.html" import state_badge, cert_badge %}
+{% from "fragments/_state_dot.html" import state_dot, cert_dot %}
 {# Targets Table Fragment (HTMX) - Grouped by Group Name #}
 {# Out-of-band update of the page carrier in targets.html (hx-include of polling/refresh); rendered in every state #}
 <input type="hidden" id="targets-page-state" name="page" value="{{ page }}" hx-swap-oob="true">
@@ -87,7 +87,7 @@
 									</div>
 									<div class="ju-badges check-badges" id="target-checks-{{ t.id }}">
 									{% for label, status, title, is_cert in all_checks %}
-										{% if is_cert %}{{ cert_badge(label, status) }}{% else %}{{ state_badge(label, status, title) }}{% endif %}
+										{% if is_cert %}{{ cert_dot(label, status) }}{% else %}{{ state_dot(label, status, title) }}{% endif %}
 									{% endfor %}
 									{% if all_checks|length > 3 %}
 									<button type="button" class="targets-check-toggle" aria-expanded="false" aria-controls="target-checks-{{ t.id }}" data-more="{{ all_checks|length - 3 }}">+{{ all_checks|length - 3 }} more</button>

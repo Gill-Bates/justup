@@ -171,7 +171,7 @@ async function inspectTargetDashboard(page) {
 			combinedCard: rect(combined), combinedBody: rect(combined?.querySelector(":scope > .card-body")),
 			combinedBodyScroll: scroll(combined?.querySelector(":scope > .card-body")),
 			combinedLegend: rect(node("#combined-legend")), combinedPlot: rect(node("#combined-plot")),
-			combinedFooter: rect(node(".combined-footer")), combinedStatusNote: rect(node("#combined-status-note")), combinedSummary: rect(node("#combined-summary")),
+			combinedStatusNote: rect(node("#combined-status-note")), combinedSummary: rect(node("#combined-summary")),
 			combinedChart: chart("chart-combined"), availabilityCard: rect(node("#availability-card")),
 			availabilityPlot: rect(node("#availability-plot")), availabilityChart: chart("chart-uptime"),
 			downtimeCard: rect(node("#downtime-history-card")), downtimeBody: rect(downtimeBody), downtimeBodyScroll: scroll(downtimeBody),

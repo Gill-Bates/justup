@@ -355,7 +355,7 @@
 	const combined = document.getElementById("combined-card");
 	if (combined) {
 		const card = combined.getBoundingClientRect();
-		for (const selector of [".combined-legend", ".target-combined-plot", ".combined-footer", "#combined-status-note", "#combined-summary"]) {
+		for (const selector of [".combined-legend", ".combined-donut-legend", ".target-combined-plot", "#combined-status-note", "#combined-summary"]) {
 			for (const el of combined.querySelectorAll(selector)) {
 				if (!visible(el)) continue;
 				const r = el.getBoundingClientRect();
@@ -364,7 +364,7 @@
 				}
 			}
 		}
-		const footerParts = Array.from(combined.querySelectorAll(".combined-status-key, #combined-status-note, #combined-summary"));
+		const footerParts = Array.from(combined.querySelectorAll("#combined-status-note, #combined-summary"));
 		compareText(footerParts, "combined-footer");
 	}
 

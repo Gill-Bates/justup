@@ -28,11 +28,11 @@ async function open(browser, app, adminState, viewport) {
 		const response = await route.fetch();
 		let body = await response.text();
 		if (mode === "changed") {
-			// Switch the first HTTP badge that is not yet "down" to down: one cell changes.
-			// Markup of the state_badge macro (fragments/_state_badge.html), with an optional title attribute.
-			const httpBadge = /ju-status-badge--(?:success|neutral) ju-state-badge ju-state-badge--(?:up|unknown)"( title="[^"]*")?>HTTP<span class="visually-hidden">: (?:Up|Unknown)<\/span>/;
-			assert.match(body, httpBadge, "the fixture needs an HTTP badge that is not down yet");
-			body = body.replace(httpBadge, 'ju-status-badge--danger ju-state-badge ju-state-badge--down"$1>HTTP<span class="visually-hidden">: Down</span>');
+			// Switch the first HTTP status item that is not yet "down" to down: one cell changes.
+			// Markup of the state_dot macro (fragments/_state_dot.html), with an optional title attribute.
+			const httpBadge = /<span class="ju-status-item"( title="[^"]*")?><span class="ju-status-dot ju-status-dot--(?:success|neutral) ju-status-dot--(?:up|unknown)" aria-hidden="true"><\/span>HTTP<span class="visually-hidden">: (?:Up|Unknown)<\/span>/;
+			assert.match(body, httpBadge, "the fixture needs an HTTP status item that is not down yet");
+			body = body.replace(httpBadge, '<span class="ju-status-item"$1><span class="ju-status-dot ju-status-dot--danger ju-status-dot--down" aria-hidden="true"></span>HTTP<span class="visually-hidden">: Down</span>');
 		}
 		await route.fulfill({ response, body });
 	});
