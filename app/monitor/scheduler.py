@@ -499,8 +499,7 @@ class MonitorScheduler:
     def start(self) -> None:
         if self._task is None or self._task.done():
             self._stop.clear()
-            self._register_run()
-            self._task = asyncio.create_task(self._run_loop())
+            self._task = asyncio.create_task(self.run())
 
     def _init_thread_call_state(self) -> None:
         """Initialise the run-epoch bookkeeping used by ``_thread_call``."""
@@ -554,18 +553,20 @@ class MonitorScheduler:
 
     async def run(self) -> None:
         """Run the scheduler loop in the calling task; restartable entry point for the supervisor."""
-        self._task = asyncio.current_task()
-        with self._epoch_lock:
-            self._run_epoch += 1
-            _RUN_EPOCH.set(self._run_epoch)
-        await self._drain_old_threads()
-        # A cancelled iteration never reached its cleanup, so drop stale in-flight markers.
-        self._inflight.clear()
-        self._register_run()
+        current_task = asyncio.current_task()
+        self._task = current_task
         try:
+            with self._epoch_lock:
+                self._run_epoch += 1
+                _RUN_EPOCH.set(self._run_epoch)
+            await self._drain_old_threads()
+            # A cancelled iteration never reached its cleanup, so drop stale in-flight markers.
+            self._inflight.clear()
+            await asyncio.to_thread(self._thread_call(self._epoch_for_thread(), self._register_run))
             await self._run_loop()
         finally:
-            self._task = None
+            if self._task is current_task:
+                self._task = None
 
     async def run_notification_worker(self) -> None:
         """Process alert outbox and delivery queue independently of monitoring and housekeeping."""

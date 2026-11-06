@@ -1880,10 +1880,10 @@ async function auditPage(browser, app, state, browserName, vp, pg) {
 				});
 				await page.screenshot({ path: path.join(shotsDir, `${browserName}-${pg.id}-${vp.name.replace("@", "_")}.png`) });
 			}
-			for (const error of errors) findings.push({ browser: browserName, vp: vp.name, page: pg.id, variant: "js", type: "page-error", node: error.slice(0, 160) });
 		} catch (error) {
 			findings.push({ browser: browserName, vp: vp.name, page: pg.id, variant: "-", type: "page-failed", node: String(error.message).split("\n")[0] });
 		}
+		for (const error of errors) findings.push({ browser: browserName, vp: vp.name, page: pg.id, variant: "js", type: "page-error", node: error.slice(0, 160) });
 		for (const error of unexpectedConsoleErrors(pg, consoleErrors)) findings.push({ browser: browserName, vp: vp.name, page: pg.id, variant: "console", type: "console-error", node: error.slice(0, 160) });
 		return findings;
 	} finally {

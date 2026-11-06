@@ -895,6 +895,19 @@ def test_ongoing_outage_duration_is_measured_to_the_last_sample_not_the_period_e
     assert b._last_uptime_sample() < b.report_data.to_date
 
 
+def test_ongoing_outage_kpi_matches_log_with_naive_samples(monkeypatch):
+    b = _full_builder(monkeypatch, hops=[], ssl=None, fail=(118, 119))
+    uptime_data = [
+        {**point, "ts": datetime.fromisoformat(point["ts"]).replace(tzinfo=None).isoformat()}
+        for point in b.report_data.uptime_data
+    ]
+    data = dataclasses.replace(b.report_data, uptime_data=uptime_data, downtime_periods=b.downtime_events)
+    report = PDFReportBuilder(data)
+    ongoing = report.downtime_events[-1]
+    expected = int((report._last_uptime_sample() - ongoing.start).total_seconds() / 60)
+    assert report.kpis.downtime_minutes == expected
+
+
 # ─── Blank pages: a chapter that ends exactly at the page end must not leave an empty page ─────
 
 

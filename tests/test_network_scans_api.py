@@ -221,14 +221,12 @@ class TestServiceDetectionWithRealScheduler:
     """The route and the real scheduler together: nothing is stored before a confirmation."""
 
     @pytest.fixture
-    def detection(self, client, tmp_path, monkeypatch):
+    def detection(self, client, db_path, tmp_path, monkeypatch):
         from app.db import sqlite as sqlite_db
         from app.monitor.scheduler import MonitorScheduler
         from app.services import nmap_client
 
-        db_path = tmp_path / "db" / "justup.db"
         conn = sqlite_db.connect(db_path)
-        sqlite_db.init_schema(conn)
         state = type("State", (), {})()
         state.tid = sqlite_db.create_target(
             conn,

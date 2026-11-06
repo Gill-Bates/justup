@@ -17,7 +17,7 @@ const plain = (w, h, extra = {}) => ({ name: `${w}x${h}`, width: w, height: h, d
 const zoom = (w, h, z) => ({ name: `${w}x${h}@${z * 100}%`, width: Math.round(w / z), height: Math.round(h / z), dsf: z });
 const tablet = (name, label) => ({ name: label, width: devices[name].viewport.width, height: devices[name].viewport.height, dsf: devices[name].deviceScaleFactor, descriptor: devices[name] });
 const VIEWPORTS = [
-	plain(1280, 720), plain(1024, 768), plain(390, 844), plain(320, 640),
+	plain(1280, 720), plain(1024, 768), plain(390, 844), plain(375, 812), plain(320, 640),
 	tablet("iPad Pro 11", "tablet-portrait"), tablet("iPad Pro 11 landscape", "tablet-landscape"),
 	zoom(1920, 1080, 1.25), zoom(1920, 1080, 1.5), zoom(1280, 720, 2), zoom(1280, 720, 4),
 ];
@@ -73,6 +73,7 @@ for (const viewport of VIEWPORTS) {
 					for (const tab of TABS) {
 						await page.click(`#target-${tab}-tab`);
 						await page.waitForSelector(`#target-${tab}-pane.show.active`);
+						if (tab === "alerts" && viewport.width <= 390) await page.waitForSelector(".alert-recipient-tile", { state: "visible" });
 						await waitForVisualStability(page);
 						// Everything open: disclosures, collapsed blocks and every check card.
 						await page.evaluate(() => {
@@ -95,6 +96,14 @@ for (const viewport of VIEWPORTS) {
 						assert.ok(m.mainBottomMeetsFooter, `a gap or overlap between main and footer (${label})`);
 						assert.equal(m.paneClipped, false, `the tab pane clips its content (${label})`);
 						assert.deepEqual(m.sideways, [], `content runs past the right edge (${label})`);
+						if (tab === "alerts" && viewport.width <= 390) {
+							const card = await page.evaluate(() => {
+								const grid = document.querySelector(".alert-recipients-grid").getBoundingClientRect();
+								const tile = document.querySelector(".alert-recipient-tile").getBoundingClientRect();
+								return { gridWidth: grid.width, tileWidth: tile.width };
+							});
+							assert.ok(Math.abs(card.tileWidth - card.gridWidth) <= 1, `recipient card does not use the narrow grid width (${JSON.stringify(card)})`);
+						}
 					}
 				} finally {
 					await context.close();

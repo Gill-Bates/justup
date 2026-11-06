@@ -16,6 +16,7 @@ function workers(env) {
 	const clean = { ...process.env };
 	delete clean.CI;
 	delete clean.JUSTUP_LAYOUT_WORKERS;
+	delete clean.JUSTUP_RUN_LIMITED;
 	for (const name of Object.keys(clean)) if (name.startsWith("JUSTUP_TEST_")) delete clean[name];
 	return spawnSync(process.execPath, ["--input-type=module", "-e", probe], { env: { ...clean, ...env }, encoding: "utf8" });
 }
@@ -30,6 +31,14 @@ test("CI keeps two Playwright workers, local runs use the machine budget", () =>
 test("JUSTUP_LAYOUT_WORKERS overrides the default with a positive integer", () => {
 	assert.equal(workers({ JUSTUP_LAYOUT_WORKERS: "5" }).stdout.trim(), "5");
 	assert.equal(workers({ CI: "true", JUSTUP_LAYOUT_WORKERS: "1" }).stdout.trim(), "1");
+});
+
+test("local unwrapped Playwright warns about its missing shared slot", () => {
+	const local = workers({ JUSTUP_TEST_LOAD_AWARE: "0" });
+	assert.equal(local.status, 0);
+	assert.match(local.stderr, /tools\/run-limited\.sh.*shared test slot/);
+	assert.equal(workers({ JUSTUP_RUN_LIMITED: "1" }).stderr, "");
+	assert.equal(workers({ CI: "true" }).stderr, "");
 });
 
 test("invalid JUSTUP_LAYOUT_WORKERS values are rejected with a clear message", () => {

@@ -83,6 +83,21 @@ for (const viewport of VIEWPORTS) {
 			const border = JSON.parse(await page.getAttribute("#traceroute-map", "data-map-style")).palette[theme].border.toLowerCase();
 			await page.waitForFunction((expected) => document.querySelector("#traceroute-map .leaflet-basemap-pane path")?.getAttribute("stroke")?.toLowerCase() === expected, border, { timeout: 10000 });
 			await waitForVisualStability(page);
+			if (viewport.width === 390) {
+				const status = await page.evaluate(() => {
+					const scroll = document.querySelector(".tr-table-scroll");
+					const cell = scroll.querySelector("tbody tr td:last-child");
+					const visible = () => {
+						const outer = scroll.getBoundingClientRect();
+						const inner = cell.getBoundingClientRect();
+						return inner.left >= outer.left - 1 && inner.right <= outer.right + 1;
+					};
+					const before = visible();
+					scroll.scrollLeft = scroll.scrollWidth - scroll.clientWidth;
+					return { scrollable: scroll.scrollWidth > scroll.clientWidth, before, after: visible() };
+				});
+				assert.ok(status.scrollable && status.before && status.after, `hop status must stay visible while scrolling: ${JSON.stringify(status)}`);
+			}
 			if (SHOTS) await page.locator(".tr-map-frame").screenshot({ path: path.join(SHOTS, `map-${theme}-${viewport.name}.png`) });
 			const m = await measure(page);
 			const rules = m.style;

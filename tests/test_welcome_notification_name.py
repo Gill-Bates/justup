@@ -29,6 +29,11 @@ def spooler(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     return fake
 
 
+@pytest.fixture(autouse=True)
+def _isolate_notification_tasks(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(targets_api, "_notification_tasks", {})
+
+
 def _prepare(tmp_path: Path, *, stored_name: str) -> tuple[Path, int, int]:
     db_path = tmp_path / "justup.db"
     conn = sqlite_db.connect(db_path)

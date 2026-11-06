@@ -3,7 +3,7 @@
 // Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 //
 
-// Runs under a non-UTC zone so local rendering differs from UTC; CI runs in UTC otherwise.
+// Keep this test non-UTC when run outside the CI node:test step.
 process.env.TZ = "Europe/Berlin";
 
 import assert from "node:assert/strict";

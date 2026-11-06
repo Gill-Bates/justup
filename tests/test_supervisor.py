@@ -601,6 +601,30 @@ def test_scheduler_run_bumps_the_epoch_per_restart(tmp_path: Path):
     assert sched._run_epoch == 2
 
 
+@pytest.mark.parametrize("entrypoint", ["run", "start"])
+def test_scheduler_run_registration_stays_off_the_event_loop(tmp_path: Path, entrypoint: str):
+    sched = _scheduler(tmp_path)
+    loop_thread = threading.get_ident()
+    registration_threads: list[int] = []
+    sched._register_run = lambda: registration_threads.append(threading.get_ident())
+
+    async def scenario():
+        if entrypoint == "run":
+            sched.request_stop()
+            await sched.run()
+        else:
+            sched.start()
+            task = sched._task
+            sched.request_stop()
+            await task
+
+    asyncio.run(scenario())
+    assert len(registration_threads) == 1
+    assert registration_threads[0] != loop_thread
+    assert sched._run_epoch == 1
+    assert sched._task is None
+
+
 def test_abandoned_run_cannot_pass_itself_off_as_the_current_run(tmp_path: Path):
     from app.monitor.scheduler import StaleRunError
 

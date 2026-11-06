@@ -715,7 +715,7 @@ code.tr-ip {
 .traceroute-fragment table.hop-table thead th {
     position: sticky;
     top: 0;
-    z-index: 1;
+    z-index: 3;
     background: var(--tr-surface);
     border-top: 1px solid var(--tr-line);
     color: var(--tr-muted);
@@ -725,6 +725,19 @@ code.tr-ip {
     white-space: nowrap;
 }
 
+/* Keep the most actionable value visible while the wider data columns scroll horizontally. */
+.traceroute-fragment table.hop-table > :not(caption) > * > :last-child {
+    position: sticky;
+    inset-inline-end: 0;
+    z-index: 2;
+    border-inline-start: 1px solid var(--tr-line);
+    background: var(--tr-surface);
+}
+
+.traceroute-fragment table.hop-table thead > tr > :last-child {
+    z-index: 4;
+}
+
 .traceroute-fragment table.hop-table tbody tr:last-child>* {
     border-bottom: 0;
 }
@@ -732,6 +745,11 @@ code.tr-ip {
 .traceroute-fragment table.hop-table tbody .tr-hop-row:hover>*,
 .traceroute-fragment table.hop-table tbody .tr-hop-row.is-linked>* {
     background: var(--tr-inset);
+}
+
+.traceroute-fragment table.hop-table tbody .tr-hop-row:hover > :last-child,
+.traceroute-fragment table.hop-table tbody .tr-hop-row.is-linked > :last-child {
+    background: color-mix(in srgb, var(--tr-surface) 95%, var(--bs-body-color));
 }
 
 .tr-hop-num {

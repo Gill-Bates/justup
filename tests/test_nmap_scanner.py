@@ -482,16 +482,28 @@ class TestTimeoutAndCancel:
 
 
 class TestLimits:
-    def test_second_scan_for_the_same_address_is_refused_as_busy(self, use):
-        use("time.sleep(1.5)\n" + OK_BODY)
+    def test_second_scan_for_the_same_address_is_refused_as_busy(self, use, tmp_path):
+        started = tmp_path / "started"
+        release = tmp_path / "release"
+        use(
+            f"open({str(started)!r}, 'w').close()\n"
+            f"while not os.path.exists({str(release)!r}): time.sleep(0.01)\n" + OK_BODY
+        )
 
         async def scenario():
             first = asyncio.create_task(scanner.scan_selected_ports("10.0.0.5", [22], [], timeout=10))
-            await asyncio.sleep(0.3)
-            with pytest.raises(NmapScannerError) as exc:
-                await scanner.scan_selected_ports("10.0.0.5", [22], [], timeout=10)
-            assert exc.value.error.code == "busy"
-            await first
+            try:
+                for _ in range(250):
+                    if started.exists():
+                        break
+                    await asyncio.sleep(0.02)
+                assert started.exists(), "the first scan did not start"
+                with pytest.raises(NmapScannerError) as exc:
+                    await scanner.scan_selected_ports("10.0.0.5", [22], [], timeout=10)
+                assert exc.value.error.code == "busy"
+            finally:
+                release.touch()
+                await first
 
         asyncio.run(scenario())
 

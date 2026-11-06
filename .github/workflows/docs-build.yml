@@ -72,6 +72,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
+          persist-credentials: false
           fetch-depth: 0  # Full history for git-based plugins
           # No explicit ref: on workflow_run the default checkout is the head of
           # the default branch, which is what must be deployed. The release's

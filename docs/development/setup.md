@@ -38,6 +38,14 @@ Dev tools are pinned in the `dev` extra; MkDocs tools are in the
 npm install
 ```
 
+For one-off interactive UX checks, the "Full browsers" block in `setup.conf`
+installs Playwright 1.64.1 and axe-core's Playwright integration 4.14.0 under
+`/opt/ux-test-tools`. The committed layout suite uses this repository's
+`node_modules` and `package-lock.json` instead. The block's `playwright install
+--with-deps chromium webkit firefox` also installs operating-system packages;
+it can request elevated privileges and changes the host, in addition to
+downloading browser binaries.
+
 ## Run locally
 
 ```bash

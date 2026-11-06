@@ -1482,23 +1482,32 @@ def _coverage_pct(report_data: ReportData, total_checks: int, interval_seconds: 
     return round(min(100.0, total_checks * interval_seconds / window * 100), 1)
 
 
-def _downtime_minutes(
-    uptime_data: list[dict], interval_seconds: float, events: list[DowntimeEvent] | None = None
-) -> int:
-    """Whole minutes of the downtime table; an ongoing outage counts up to its last sample."""
+def _latest_uptime_sample(uptime_data: list[dict], tz: tzinfo, fallback: datetime | None = None) -> datetime | None:
     stamps = []
-    for p in uptime_data or []:
+    for point in uptime_data or []:
         try:
-            stamps.append(datetime.fromisoformat(p["ts"]))
+            stamps.append(_to_tz(datetime.fromisoformat(point["ts"]), tz))
         except (KeyError, TypeError, ValueError):
             continue
-    last = max(stamps, default=None)
+    return max(stamps) if stamps else _to_tz(fallback, tz) if fallback is not None else None
+
+
+def _downtime_minutes(
+    uptime_data: list[dict],
+    interval_seconds: float,
+    events: list[DowntimeEvent] | None = None,
+    *,
+    tz: tzinfo = UTC,
+    fallback: datetime | None = None,
+) -> int:
+    """Whole minutes of the downtime table; an ongoing outage counts up to its last sample."""
+    last = _latest_uptime_sample(uptime_data, tz, fallback)
     total = 0
     for event in events if events is not None else _extract_downtime_events(uptime_data, interval_seconds):
         if event.end is not None:
             total += event.duration_minutes or 0
         elif last is not None:
-            total += int(max(0.0, (last - event.start).total_seconds()) / 60)
+            total += int(max(0.0, (last - _to_tz(event.start, tz)).total_seconds()) / 60)
     return total
 
 
@@ -1521,7 +1530,11 @@ def _compute_kpis(report_data: ReportData) -> KPIMetrics:
         avg_response_ms=round(sum(response) / len(response)) if response else None,
         max_response_ms=round(max(response)) if response else None,
         downtime_minutes=_downtime_minutes(
-            report_data.uptime_data, interval_seconds, _report_downtime_events(report_data)
+            report_data.uptime_data,
+            interval_seconds,
+            _report_downtime_events(report_data),
+            tz=_report_tz(report_data.from_date),
+            fallback=report_data.to_date,
         ),
         total_checks=total_checks,
         up_count=up_count,
@@ -4126,13 +4139,8 @@ class PDFReportBuilder:
 
     def _last_uptime_sample(self) -> datetime:
         """Time of the newest availability sample: the proven end of an ongoing outage."""
-        stamps = []
-        for p in self.report_data.uptime_data:
-            try:
-                stamps.append(_to_tz(datetime.fromisoformat(p["ts"]), self.tz))
-            except (KeyError, TypeError, ValueError):
-                continue
-        return max(stamps) if stamps else _to_tz(self.report_data.to_date, self.tz)
+        last = _latest_uptime_sample(self.report_data.uptime_data, self.tz, self.report_data.to_date)
+        return last if last is not None else _to_tz(self.report_data.to_date, self.tz)
 
     def _add_downtime_summary(self) -> None:
         """Compact downtime summary at the end of the performance page (no incidents recorded)."""

@@ -28,6 +28,11 @@ const workers = (() => {
 	}
 	return process.env.CI ? 2 : currentBudget().playwrightWorkers;
 })();
+
+if (!process.env.CI && !process.env.JUSTUP_RUN_LIMITED && !process.argv.includes("--list")) {
+	console.error("Warning: local Playwright runs need tools/run-limited.sh to acquire a shared test slot.");
+}
+
 export default defineConfig({
 	forbidOnly: true,
 	testDir: path.dirname(fileURLToPath(import.meta.url)),

@@ -2237,7 +2237,7 @@ textarea.smtp-editor-frame {
 
 .alert-recipients-grid {
 	display: grid;
-	grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+	grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
 	gap: var(--ui-space-tile-compact);
 }
 
@@ -2329,10 +2329,6 @@ textarea.smtp-editor-frame {
 @media (width <=576px) {
 	.alert-recipients-picker {
 		max-height: 320px;
-	}
-
-	.alert-recipients-grid {
-		grid-template-columns: repeat(2, minmax(0, 1fr));
 	}
 
 	.alert-recipient-channel .alert-recipient-channel-text {
