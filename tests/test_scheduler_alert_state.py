@@ -399,8 +399,17 @@ def test_outbox_retries_partial_dispatch_then_completes(db_path, tmp_path):
 
 def test_notification_worker_progresses_while_housekeeping_is_blocked(db_path, tmp_path):
     sched = _sched(db_path, tmp_path)
+    loop_thread = None
+    query_threads: list[int] = []
+    original_query = sqlite_db.has_pending_alert_dispatches
+
+    def query_off_loop(conn):
+        query_threads.append(threading.get_ident())
+        return original_query(conn)
 
     async def scenario():
+        nonlocal loop_thread
+        loop_thread = threading.get_ident()
         loop = asyncio.get_running_loop()
         sched._run_epoch = 1
         sched._last_refresh = loop.time()
@@ -431,7 +440,9 @@ def test_notification_worker_progresses_while_housekeeping_is_blocked(db_path, t
         release_housekeeping.set()
         assert await iteration
 
-    asyncio.run(scenario())
+    with mock.patch.object(scheduler.sqlite_db, "has_pending_alert_dispatches", query_off_loop):
+        asyncio.run(scenario())
+    assert query_threads and all(thread != loop_thread for thread in query_threads)
 
 
 def test_iteration_fails_for_internal_target_exception_not_down_result(db_path, tmp_path):
@@ -501,18 +512,17 @@ def test_tsdb_write_failure_is_retained_until_that_target_persists(db_path, tmp_
     assert (target_id, "tsdb") not in sched._persistence_failures
 
 
-def test_certificate_alert_dispatch_failure_is_retried_from_outbox(db_path, tmp_path):
+@pytest.mark.asyncio
+async def test_certificate_alert_dispatch_failure_is_retried_from_outbox(db_path, tmp_path):
     target_id = _target(db_path, enable_cert_expiration=True)
     sched = _sched(db_path, tmp_path)
     sched._refresh_targets(utcnow())
     with mock.patch.object(sched, "_dispatch_alert", mock.AsyncMock()):
-        asyncio.run(
-            sched._maybe_cert_alert(
-                target_id=target_id,
-                target_name="t",
-                days_left=3,
-                cert_host="t.example",
-            )
+        await sched._maybe_cert_alert(
+            target_id=target_id,
+            target_name="t",
+            days_left=3,
+            cert_host="t.example",
         )
 
     dispatcher = mock.MagicMock()
@@ -522,7 +532,7 @@ def test_certificate_alert_dispatch_failure_is_retried_from_outbox(db_path, tmp_
     ]
     sched._get_dispatcher = mock.Mock(return_value=dispatcher)
     with pytest.raises(RuntimeError, match="AlertDispatchPendingError"):
-        asyncio.run(sched._process_alert_dispatch_outbox())
+        await sched._process_alert_dispatch_outbox()
     conn = sqlite_db.connect(db_path)
     try:
         row = conn.execute("SELECT status, attempts FROM alert_dispatch_outbox WHERE event_type = 'open'").fetchone()
@@ -532,7 +542,7 @@ def test_certificate_alert_dispatch_failure_is_retried_from_outbox(db_path, tmp_
     finally:
         sqlite_db.close_connection(conn)
 
-    asyncio.run(sched._process_alert_dispatch_outbox())
+    await sched._process_alert_dispatch_outbox()
     assert dispatcher.dispatch_alert.call_count == 2
     conn = sqlite_db.connect(db_path)
     try:

@@ -597,8 +597,12 @@ class MonitorScheduler:
                     failure = failure or exc
                 if failure is not None:
                     raise failure
-                with maintenance.work_section(generation), self._db_conn() as conn:
-                    has_pending = sqlite_db.has_pending_alert_dispatches(conn)
+
+                def pending_dispatches() -> bool:
+                    with maintenance.work_section(generation), self._db_conn() as conn:
+                        return sqlite_db.has_pending_alert_dispatches(conn)
+
+                has_pending = await asyncio.to_thread(self._thread_call(self._epoch_for_thread(), pending_dispatches))
                 if not has_pending:
                     self._notification_failure_active = False
                 if not self._notification_failure_active and self.on_notification_ok is not None:
@@ -2454,13 +2458,18 @@ class MonitorScheduler:
                 now = utcnow()
                 if days_left > CERT_EXPIRY_ALERT_DAYS:
                     if rt.cert_alert_sent and rt.cert_alert_id:
-                        with self._db_conn() as conn:
-                            sqlite_db.resolve_alert(conn, rt.cert_alert_id, now, dispatch_outbox=True)
-                            conn.commit()
-                            event_bus.publish("alert.changed", {"target_id": target_id})
+                        cert_alert_id = rt.cert_alert_id
+
+                        def resolve_cert_alert() -> None:
+                            with maintenance.work_section(generation), self._db_conn() as conn:
+                                sqlite_db.resolve_alert(conn, cert_alert_id, now, dispatch_outbox=True)
+                                conn.commit()
+
+                        await asyncio.to_thread(self._thread_call(self._epoch_for_thread(), resolve_cert_alert))
+                        event_bus.publish("alert.changed", {"target_id": target_id})
                         _log.info(
                             "Cert alert %s resolved for target %d (cert renewed, %d days left)",
-                            rt.cert_alert_id,
+                            cert_alert_id,
                             target_id,
                             days_left,
                         )
@@ -2481,19 +2490,23 @@ class MonitorScheduler:
                     failed_service = f"CERT WARNING ({days_left}d) - {cert_host}"
 
                 alert_id = str(uuid.uuid4())
-                with self._db_conn() as conn:
-                    sqlite_db.create_alert(
-                        conn,
-                        alert_id=alert_id,
-                        target_id=target_id,
-                        target_name=target_name,
-                        failed_service=failed_service,
-                        started_at=now,
-                        recipients_notified=[],
-                        dispatch_outbox=True,
-                    )
-                    conn.commit()
-                    event_bus.publish("alert.changed", {"target_id": target_id})
+
+                def store_cert_alert() -> None:
+                    with maintenance.work_section(generation), self._db_conn() as conn:
+                        sqlite_db.create_alert(
+                            conn,
+                            alert_id=alert_id,
+                            target_id=target_id,
+                            target_name=target_name,
+                            failed_service=failed_service,
+                            started_at=now,
+                            recipients_notified=[],
+                            dispatch_outbox=True,
+                        )
+                        conn.commit()
+
+                await asyncio.to_thread(self._thread_call(self._epoch_for_thread(), store_cert_alert))
+                event_bus.publish("alert.changed", {"target_id": target_id})
                 rt.cert_alert_sent = True
                 rt.cert_alert_id = alert_id
                 alert_payload = AlertPayload(

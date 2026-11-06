@@ -5,6 +5,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { computeBudget, gatherInputs } from "../../tools/test-budget.mjs";
+import { nodeTestConcurrency } from "../../tools/run-node-tests.mjs";
 
 const GB = 1024 * 1024;
 
@@ -19,6 +20,14 @@ test("16 cores yield a half-machine budget split into runs of a quarter", () => 
 	const b = budget(machine());
 	assert.deepEqual([b.budgetCores, b.coresPerRun, b.slots, b.pytestWorkers, b.nodeConcurrency], [8, 4, 2, 4, 4]);
 	assert.equal(b.playwrightWorkers, 4);
+});
+
+test("the local Node runner caps a fresh budget at the wrapper's limit", () => {
+	const b = budget(machine());
+	assert.equal(b.nodeConcurrency, 4);
+	assert.equal(nodeTestConcurrency(b, { JUSTUP_LIMIT_NODE: "1" }), 1);
+	assert.equal(nodeTestConcurrency(b, {}), 4);
+	assert.throws(() => nodeTestConcurrency(b, { JUSTUP_LIMIT_NODE: "0" }), /positive integer/);
 });
 
 test("scales with core count", () => {

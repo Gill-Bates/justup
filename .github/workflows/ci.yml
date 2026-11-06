@@ -142,6 +142,19 @@ jobs:
       - name: Ruff format
         run: ruff format --check --diff .
 
+      - name: Layout stub cleanup regression
+        run: |
+          set -euo pipefail
+          pytest -q --junitxml="$RUNNER_TEMP/layout-stub-cleanup.xml" tests/test_layout_stub_cleanup.py
+          python - "$RUNNER_TEMP/layout-stub-cleanup.xml" <<'PY'
+          import sys
+          from xml.etree import ElementTree
+
+          cases = ElementTree.parse(sys.argv[1]).findall(".//testcase")
+          if len(cases) != 1 or any(case.find("skipped") is not None for case in cases):
+              raise SystemExit("layout stub cleanup test was skipped or not collected")
+          PY
+
       # Unit tests set their own environment; no production encryption key is
       # supplied to the PR gate. Tests are independent (own tmp_path, ephemeral
       # ports), so pytest-xdist spreads them over one worker per runner core.

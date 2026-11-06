@@ -18,11 +18,8 @@ from pathlib import Path
 import pytest
 
 STUB = Path(__file__).resolve().parent / "layout" / "app_stub.py"
-VENV_PYTHON = STUB.parents[2] / ".venv" / "bin" / "python"
 
-pytestmark = pytest.mark.skipif(
-    sys.platform != "linux" or not VENV_PYTHON.exists(), reason="needs Linux PR_SET_PDEATHSIG and the project .venv"
-)
+pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="needs Linux PR_SET_PDEATHSIG")
 
 
 def _alive(pid: int) -> bool:
@@ -52,7 +49,7 @@ def test_stub_exits_when_its_parent_is_killed(tmp_path: Path) -> None:
     }
     pidfile = tmp_path / "stub.pid"
     parent = subprocess.Popen(
-        ["sh", "-c", f'"$0" "$1" & echo $! > "{pidfile}"; wait', str(VENV_PYTHON), str(STUB)],
+        ["sh", "-c", f'"$0" "$1" & echo $! > "{pidfile}"; wait', sys.executable, str(STUB)],
         env=env,
         cwd=STUB.parents[2],
         stdout=subprocess.DEVNULL,

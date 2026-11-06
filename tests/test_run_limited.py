@@ -410,6 +410,28 @@ def test_npm_test_is_started_as_the_budgeted_local_script(tmp_path: Path) -> Non
     assert '"test:local": "node tools/run-node-tests.mjs"' in package
 
 
+def test_npm_runner_keeps_the_wrappers_smaller_node_budget(tmp_path: Path) -> None:
+    fake = tmp_path / "fakebin"
+    fake.mkdir()
+    module = (WRAPPER.parents[1] / "tools" / "run-node-tests.mjs").as_uri()
+    (fake / "npm").write_text(
+        "#!/bin/sh\n"
+        "node --input-type=module -e '"
+        f'import {{ nodeTestConcurrency }} from "{module}"; '
+        "console.log(nodeTestConcurrency({nodeConcurrency: 4}, process.env))'\n"
+    )
+    (fake / "npm").chmod(0o755)
+    result = _run(
+        tmp_path,
+        "npm",
+        "test",
+        PATH=f"{fake}:{os.environ['PATH']}",
+        JUSTUP_TEST_CORES_PER_RUN="1",
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "1\n"
+
+
 def test_without_verified_cpu_quota_only_one_run_is_allowed(tmp_path: Path) -> None:
     holder = _start(tmp_path, "a", JUSTUP_TEST_SLOTS=None)
     assert _wait_for(tmp_path / "started-a")

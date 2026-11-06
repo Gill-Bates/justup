@@ -12,7 +12,6 @@ import re
 from pathlib import Path
 
 from app.api.frontend import templates
-
 from tests._modal_html import divs_with_class
 
 TEMPLATES = Path(__file__).resolve().parent.parent / "app" / "templates"
