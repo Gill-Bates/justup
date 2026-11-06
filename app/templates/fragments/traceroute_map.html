@@ -10,16 +10,20 @@
 {% endif %}
 {% endmacro %}
 
+{# Hop result as the shared status dot plus its word (DESIGN.md, "Status display"); tones are the former badge tones. #}
+{% macro status_dot(tone, label, title='') -%}
+<span class="ju-status-item"{% if title %} title="{{ title }}"{% endif %}><span class="ju-status-dot ju-status-dot--{{ tone }}" aria-hidden="true"></span>{{ label }}</span>
+{%- endmacro %}
 {% macro status_badge(h) %}
 {% set status = h.status_display or h.status %}
 {% if status == 'ok' %}
-<span class="badge tr-badge ju-status-badge--success">OK</span>
+{{ status_dot('success', 'OK') }}
 {% elif h._synthetic_destination %}
-<span class="badge tr-badge ju-status-badge--warning" title="The destination did not answer the probes">{{ labels.no_reply }}</span>
+{{ status_dot('warning', labels.no_reply, 'The destination did not answer the probes') }}
 {% elif status == 'partial' %}
-<span class="badge tr-badge ju-status-badge--warning" title="Some probes were lost">Partial</span>
+{{ status_dot('warning', 'Partial', 'Some probes were lost') }}
 {% else %}
-<span class="badge tr-badge ju-status-badge--warning" title="No answer to the probes">{{ labels.no_reply }}</span>
+{{ status_dot('warning', labels.no_reply, 'No answer to the probes') }}
 {% endif %}
 {% endmacro %}
 
