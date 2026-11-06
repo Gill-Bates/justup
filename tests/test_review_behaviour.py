@@ -39,10 +39,7 @@ from tests import _support  # noqa: F401 - imported for its sys.path side effect
 @pytest.fixture
 def sched():
     s = MonitorScheduler.__new__(MonitorScheduler)
-    s._run_epoch = 0
-    s._epoch_lock = threading.Lock()
-    s._threads_active = 0
-    s._stale_logged_epoch = -1
+    MonitorScheduler._init_thread_call_state(s)
     s._rt = {1: TargetRuntime(next_due=dt.datetime.now(dt.UTC))}
 
     @contextmanager

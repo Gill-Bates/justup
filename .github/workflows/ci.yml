@@ -322,9 +322,9 @@ jobs:
           JUSTUP_LAYOUT_JUNIT: ${{ runner.temp }}/modal-browser-tests.xml
         run: npx playwright test --config tests/layout/playwright.config.mjs --grep @modal
 
-      - name: Run chart, recipient, route map, confirm dialog, target form and other Chromium browser checks
+      - name: Run chart, recipient, route map, confirm dialog, target form and other browser checks (Chromium + WebKit)
         env:
-          JUSTUP_LAYOUT_BROWSERS: chromium
+          JUSTUP_LAYOUT_BROWSERS: chromium,webkit
           JUSTUP_LAYOUT_OUTPUT: ${{ runner.temp }}/layout-artifacts
         run: npx playwright test --config tests/layout/playwright.config.mjs --grep '@combined-zoom-reset|@public-hostname-ui|@target-endpoints|@portpicker|@endpoint-state|@combined-legend|@recipients-search|@recipient-channels|@recipient-signal-recheck|@traceroute-map|@reset-confirm|@availability-clip|@targets-live-update|@smtp-link-field|@spooler-log|@combined-note|@edit-target-save|@network-diagnostics-layout|@public-egress|@service-detection|@downtime-widget-link'
       # These specs guard tab presses, edit-target tabs, load stability, card corners and overlays, chart clipping, the downtime card and dashboard metric labels.

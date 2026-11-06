@@ -342,10 +342,7 @@ def _to_geo_location(ip: str, record: dict[str, Any]) -> GeoLocation | None:
         "country": record["country"],
         "accuracy_radius_km": (
             float(radius)
-            if isinstance(radius, (int, float))
-            and not isinstance(radius, bool)
-            and math.isfinite(radius)
-            and radius >= 0
+            if _finite_number(radius) and radius >= 0
             else None
         ),
         "city_is_region": city is None and subdivision is not None,
@@ -731,17 +728,12 @@ def _coarse_source(source: GeoSource) -> GeoSource:
 
 
 def _has_coords(loc: dict[str, Any]) -> bool:
-    lat, lon = loc.get("lat"), loc.get("lon")
-    return (
-        isinstance(lat, (int, float))
-        and not isinstance(lat, bool)
-        and isinstance(lon, (int, float))
-        and not isinstance(lon, bool)
-        and math.isfinite(lat)
-        and math.isfinite(lon)
-        and -90 <= lat <= 90
-        and -180 <= lon <= 180
-    )
+    return valid_coordinates(loc.get("lat"), loc.get("lon"))
+
+
+def _finite_number(value: object) -> bool:
+    """True for a real, finite int/float; booleans, NaN and infinities are rejected."""
+    return isinstance(value, int | float) and not isinstance(value, bool) and math.isfinite(value)
 
 
 def _classify_location(loc: dict[str, Any] | None) -> tuple[GeoSource, GeoAccuracy]:
@@ -772,9 +764,7 @@ def _classify_location(loc: dict[str, Any] | None) -> tuple[GeoSource, GeoAccura
     radius = loc.get("accuracy_radius_km")
     if (
         source == GeoSource.GEOIP
-        and isinstance(radius, (int, float))
-        and not isinstance(radius, bool)
-        and math.isfinite(radius)
+        and _finite_number(radius)
         and 0 <= radius <= MAX_CITY_RADIUS_KM
     ):
         return source, GeoAccuracy.PRECISE
@@ -891,12 +881,12 @@ def location_note(loc: dict[str, Any] | None) -> str | None:
         ixp = loc.get("ixp") if isinstance(loc.get("ixp"), dict) else {}
         note = f"{ixp.get('name') or 'IXP'}, source {_SOURCE_LABEL[CONFIDENCE_IXP]}"
         radius = loc.get("accuracy_radius_km")
-        if isinstance(radius, int | float) and not isinstance(radius, bool) and math.isfinite(radius) and radius > 0:
+        if _finite_number(radius) and radius > 0:
             note += f", exchange region radius about {radius:g} km"
         return note + "; exact router location unknown"
     note = f"{_SOURCE_LABEL.get(loc.get(META_CONFIDENCE), 'Location')} estimate"
     radius = loc.get("accuracy_radius_km")
-    if isinstance(radius, int | float) and not isinstance(radius, bool) and math.isfinite(radius) and radius > 0:
+    if _finite_number(radius) and radius > 0:
         note += f", radius about {radius:g} km"
     return note
 
@@ -1235,7 +1225,7 @@ def route_hops_to_geo_points(
         points = _deduplicate_geo_points(points)
     for point in points:
         radius = point.get("accuracy_radius_km")
-        if point.get("_approximate") and isinstance(radius, int | float) and 0 < radius <= MAX_MAP_RADIUS_KM:
+        if point.get("_approximate") and _finite_number(radius) and 0 < radius <= MAX_MAP_RADIUS_KM:
             point[META_MAP_RADIUS_KM] = float(radius)
     return points
 
@@ -1306,10 +1296,7 @@ def _deduplicate_geo_points(points: list[dict]) -> list[dict]:
                 radii = [
                     pt["accuracy_radius_km"]
                     for pt in approximate
-                    if isinstance(pt.get("accuracy_radius_km"), int | float)
-                    and not isinstance(pt["accuracy_radius_km"], bool)
-                    and math.isfinite(pt["accuracy_radius_km"])
-                    and pt["accuracy_radius_km"] >= 0
+                    if _finite_number(pt.get("accuracy_radius_km")) and pt["accuracy_radius_km"] >= 0
                 ]
                 if radii:
                     point["accuracy_radius_km"] = max(radii)

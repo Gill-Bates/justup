@@ -170,15 +170,18 @@ def observe_unknown_pop(
                 **proposal,
                 "canonical_guess": city_code_for_country(proposal.get("city"), proposal.get("country")),
             }
-        pop_candidates.observe(
-            conn,
-            code=code,
-            hostname=hostname,
-            public_ip=ip,
-            provider=parser.provider if parser else "generic",
-            measurement_key=measurement_key,
-            proposal=proposal,
-        )
+        try:
+            pop_candidates.observe(
+                conn,
+                code=code,
+                hostname=hostname,
+                public_ip=ip,
+                provider=parser.provider if parser else "generic",
+                measurement_key=measurement_key,
+                proposal=proposal,
+            )
+        except sqlite3.OperationalError as exc:  # writer lock held elsewhere: skip, the next hop retries
+            _log.debug("PoP candidate observation skipped: %s", exc)
     finally:
         sqlite_db.close_connection(conn)
 

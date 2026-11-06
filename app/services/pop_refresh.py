@@ -48,7 +48,7 @@ from typing import Any
 
 from ..db import ixp_prefixes, pop_locations
 from ..db import sqlite as sqlite_db
-from ..db.pop_locations import SOURCE_PEERINGDB, SOURCE_UNLOCODE
+from ..db.pop_locations import CURATED_ANCHOR_KM, SOURCE_PEERINGDB, SOURCE_UNLOCODE
 from ..utils import maintenance
 from ..utils.time import parse_utc, utcnow
 from . import ixp_import, ixp_index
@@ -552,7 +552,7 @@ _SEED_COUNTRIES.update(
         "yyz": "CA",
     }
 )
-MAX_FACILITY_SPREAD_KM = 50.0
+MAX_FACILITY_SPREAD_KM = CURATED_ANCHOR_KM
 
 
 def city_code_for_country(city: object, country: object) -> str | None:
@@ -1053,28 +1053,40 @@ def compute_next_action(
     return RefreshPlan(0.0, "freshness window expired")
 
 
-def _attempt_timestamp(run: dict | None) -> datetime | None:
-    """Best-effort attempt time from an import-run row (finished, else started)."""
+def _run_time_raw(run: dict | None) -> str | None:
+    """Raw attempt time of an import-run row (finished, else started)."""
     if not run:
         return None
-    return parse_utc(run.get("finished_at")) or parse_utc(run.get("started_at"))
+    return run.get("finished_at") or run.get("started_at")
 
 
-def get_scheduler_state(conn: sqlite3.Connection) -> dict[str, Any]:
+def _attempt_timestamp(run: dict | None) -> datetime | None:
+    """Best-effort attempt time from an import-run row (finished, else started)."""
+    return parse_utc(_run_time_raw(run))
+
+
+def _scheduler_inputs(conn: sqlite3.Connection) -> tuple[dict | None, dict | None, int]:
+    """Last success, last attempt and consecutive failures of the PeeringDB import history."""
+    return (
+        pop_locations.get_last_import_run(conn, SOURCE_PEERINGDB),
+        pop_locations.get_last_import_attempt(conn, SOURCE_PEERINGDB),
+        pop_locations.count_consecutive_failures(conn, SOURCE_PEERINGDB),
+    )
+
+
+def get_scheduler_state(
+    conn: sqlite3.Connection, inputs: tuple[dict | None, dict | None, int] | None = None
+) -> dict[str, Any]:
     """Read the self-managing refresh state for PeeringDB from the import history.
 
     Returns the data the scheduler decides on and the diagnostics exposed through the admin status
     endpoint: last successful update, last attempt, its outcome, and the consecutive-failure count.
     """
-    last_success = pop_locations.get_last_import_run(conn, SOURCE_PEERINGDB)
-    last_attempt = pop_locations.get_last_import_attempt(conn, SOURCE_PEERINGDB)
-    consecutive_failures = pop_locations.count_consecutive_failures(conn, SOURCE_PEERINGDB)
+    last_success, last_attempt, consecutive_failures = inputs or _scheduler_inputs(conn)
     return {
         "source": SOURCE_PEERINGDB,
-        "last_success_at": last_success.get("finished_at") or last_success.get("started_at") if last_success else None,
-        "last_attempt_at": (last_attempt.get("finished_at") or last_attempt.get("started_at"))
-        if last_attempt
-        else None,
+        "last_success_at": _run_time_raw(last_success),
+        "last_attempt_at": _run_time_raw(last_attempt),
         "last_attempt_status": last_attempt.get("status") if last_attempt else None,
         "consecutive_failures": consecutive_failures,
     }
@@ -1090,12 +1102,14 @@ def _ixp_snapshot_missing(conn: sqlite3.Connection) -> bool:
 
 
 def plan_next_refresh(
-    conn: sqlite3.Connection, *, rng: random.Random | None = None, include_jitter: bool = True
+    conn: sqlite3.Connection,
+    *,
+    rng: random.Random | None = None,
+    include_jitter: bool = True,
+    inputs: tuple[dict | None, dict | None, int] | None = None,
 ) -> RefreshPlan:
     """Compute the next refresh action from the persisted PeeringDB import history."""
-    last_success = pop_locations.get_last_import_run(conn, SOURCE_PEERINGDB)
-    last_attempt = pop_locations.get_last_import_attempt(conn, SOURCE_PEERINGDB)
-    consecutive_failures = pop_locations.count_consecutive_failures(conn, SOURCE_PEERINGDB)
+    last_success, last_attempt, consecutive_failures = inputs or _scheduler_inputs(conn)
     return compute_next_action(
         now=utcnow(),
         last_success_at=_attempt_timestamp(last_success),
@@ -1170,8 +1184,9 @@ def get_refresh_status(get_conn) -> dict:
         outcome, consecutive failures and the next planned attempt).
     """
     with _db_connection(get_conn) as conn:
-        scheduler_state = get_scheduler_state(conn)
-        plan = plan_next_refresh(conn, include_jitter=False)
+        inputs = _scheduler_inputs(conn)
+        scheduler_state = get_scheduler_state(conn, inputs)
+        plan = plan_next_refresh(conn, include_jitter=False, inputs=inputs)
         next_attempt_at = (utcnow() + timedelta(seconds=plan.delay_seconds)).isoformat()
         jitter_seconds = 0
         if not scheduler_state["consecutive_failures"]:

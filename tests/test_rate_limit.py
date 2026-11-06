@@ -685,7 +685,7 @@ def _route_specs(router_or_app) -> dict[tuple[str, str], list[str]]:
     return found
 
 
-def test_all_48_rate_limited_routes_keep_their_limit_exactly_once():
+def test_all_rate_limited_routes_keep_their_limit_exactly_once():
     found: dict[tuple[str, str], list[str]] = {}
     for router in (
         users.router,

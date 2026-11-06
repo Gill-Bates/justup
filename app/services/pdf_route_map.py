@@ -27,6 +27,7 @@ from typing import Any
 
 from reportlab.lib import colors
 from reportlab.lib.units import mm
+from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.pdfgen.canvas import FILL_EVEN_ODD
 from reportlab.platypus import Flowable
@@ -638,6 +639,8 @@ class RouteMap(Flowable):
         c.setFillColor(_LABEL)
         for item in countries:
             name = item["name"]
+            if not self._has_glyphs(name):
+                continue
             x, y = view.project(item["lat"], item["lon"])
             w = stringWidth(name, self.font, 7)
             rect = (x - w / 2, y - 3, x + w / 2, y + 7)
@@ -647,6 +650,11 @@ class RouteMap(Flowable):
                 continue
             c.drawCentredString(x, y, name.upper() if len(name) <= 3 else name)
             placed.append(rect)
+
+    def _has_glyphs(self, text: str) -> bool:
+        """False when the embedded font lacks a glyph; such a name would render as boxes."""
+        glyphs = pdfmetrics.getFont(self.font).face.charToGlyph
+        return all(ord(ch) in glyphs for ch in text)
 
     def _draw_accuracy(self, view: View, groups: Sequence[MarkerGroup]) -> None:
         c = self.canv
@@ -778,6 +786,8 @@ class RouteMap(Flowable):
             if drawn >= MAX_CITY_LABELS:
                 break
             name = item["name"]
+            if not self._has_glyphs(name):
+                continue
             tw = stringWidth(name, self.font, FONT_SIZE)
             group = by_position.get((item["lat"], item["lon"]))
             if group is not None:

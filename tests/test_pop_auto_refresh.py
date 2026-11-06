@@ -50,8 +50,8 @@ def conn(monkeypatch) -> sqlite3.Connection:
         yield c
 
     monkeypatch.setattr(pop_refresh, "_db_connection", _same)
-    monkeypatch.setattr(pop_locations, "MIN_PROCESSED_FOR_RETIRE", 1)
-    monkeypatch.setattr(pop_locations, "MAX_RETIRE_PERCENT", 100)
+    # No IXP network access: a facility-only refresh must not depend on the IXP snapshot.
+    monkeypatch.setattr(pop_refresh, "_fetch_ixp_snapshot", lambda facilities: None)
     maintenance.end_maintenance()
     monkeypatch.setattr(maintenance, "_GENERATION", 0, raising=False)
     return c

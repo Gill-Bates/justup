@@ -315,3 +315,40 @@ def test_import_cannot_overwrite_approved_learned_row_but_may_after_revocation(c
     assert _import(40.0) is True
     row = conn.execute("SELECT source, lat, retired FROM pop_locations WHERE alias_code='xyz'").fetchone()
     assert (row[0], row[1], row[2]) == ("peeringdb", 40.0, 0)
+
+
+# --- Shared coordinate / number / anchor rules ----------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("lat", "lon", "ok"),
+    [
+        (50.0, 8.0, True),
+        (50, 8, True),
+        (90, 180, True),
+        (-90, -180, True),
+        (90.1, 0, False),
+        (0, 180.1, False),
+        (True, 8.0, False),
+        (50.0, False, False),
+        (None, 8.0, False),
+        (float("nan"), 8.0, False),
+        (float("inf"), 8.0, False),
+        (50.0, float("-inf"), False),
+    ],
+)
+def test_valid_coordinates_and_has_coords_agree(lat, lon, ok):
+    from app.db.pop_locations import valid_coordinates
+
+    assert valid_coordinates(lat, lon) is ok
+    assert traceroute_geo._has_coords({"lat": lat, "lon": lon}) is ok
+
+
+@pytest.mark.parametrize(
+    ("value", "ok"),
+    [(1, True), (0, True), (-3.5, True), (50.0, True), (True, False), (False, False), (None, False), ("1", False),
+     (float("nan"), False), (float("inf"), False), (float("-inf"), False)],
+)
+def test_finite_number(value, ok):
+    assert traceroute_geo._finite_number(value) is ok
+

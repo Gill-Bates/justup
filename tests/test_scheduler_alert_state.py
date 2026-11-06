@@ -498,7 +498,7 @@ def test_tsdb_write_failure_is_retained_until_that_target_persists(db_path, tmp_
     with (
         mock.patch.object(scheduler.checks, "ping", mock.AsyncMock(return_value=check_result)),
         mock.patch.object(scheduler.tsdb_db, "query", return_value=[]),
-        mock.patch.object(scheduler.tsdb_db, "append_point", side_effect=OSError("disk unavailable")),
+        mock.patch.object(scheduler.tsdb_db, "append_points", side_effect=OSError("disk unavailable")),
     ):
         asyncio.run(sched._run_target(target_id, utcnow()))
     assert (target_id, "tsdb") in sched._persistence_failures
@@ -506,7 +506,7 @@ def test_tsdb_write_failure_is_retained_until_that_target_persists(db_path, tmp_
     with (
         mock.patch.object(scheduler.checks, "ping", mock.AsyncMock(return_value=check_result)),
         mock.patch.object(scheduler.tsdb_db, "query", return_value=[]),
-        mock.patch.object(scheduler.tsdb_db, "append_point"),
+        mock.patch.object(scheduler.tsdb_db, "append_points"),
     ):
         asyncio.run(sched._run_target(target_id, utcnow()))
     assert (target_id, "tsdb") not in sched._persistence_failures
@@ -661,7 +661,7 @@ def test_scheduler_checks_certificate_on_explicit_cert_host_and_port(db_path, tm
     with (
         mock.patch.object(scheduler.checks, "cert_expiration", cert_check),
         mock.patch.object(scheduler.tsdb_db, "query", return_value=[]),
-        mock.patch.object(scheduler.tsdb_db, "append_point"),
+        mock.patch.object(scheduler.tsdb_db, "append_points"),
     ):
         asyncio.run(sched._run_target(target_id, utcnow()))
     assert cert_check.await_args.args[:2] == ("cert.example", 443)
@@ -682,7 +682,7 @@ def test_invalid_stored_tcp_ports_report_target_down_instead_of_checking_port_80
     with (
         mock.patch.object(scheduler.checks, "tcp_connect", tcp),
         mock.patch.object(scheduler.tsdb_db, "query", return_value=[]),
-        mock.patch.object(scheduler.tsdb_db, "append_point"),
+        mock.patch.object(scheduler.tsdb_db, "append_points"),
     ):
         asyncio.run(sched._run_target(target_id, utcnow()))
     tcp.assert_not_awaited()
@@ -721,7 +721,7 @@ def _run_with_slow_tcp_check(db_path, tmp_path, *, renew_period: float, release_
         mock.patch.object(scheduler, "_lock_renew_period", lambda _ttl: renew_period),
         mock.patch.object(scheduler.checks, "tcp_connect", slow_tcp),
         mock.patch.object(scheduler.tsdb_db, "query", return_value=[]),
-        mock.patch.object(scheduler.tsdb_db, "append_point", append),
+        mock.patch.object(scheduler.tsdb_db, "append_points", append),
     ):
         asyncio.run(sched._run_target(target_id, utcnow()))
     return takeover, append
@@ -880,9 +880,10 @@ def test_slow_tsdb_writes_run_off_the_event_loop_and_share_one_cycle_stamp(db_pa
     written: list[tuple[str, object]] = []
     write_threads: list[int] = []
 
-    def slow_append(_dir, *, target_id, metric, value, retention_days, at):  # noqa: ARG001 - mirrors append_point
+    def slow_append(_dir, *, target_id, points, retention_days, at, lock_lost):  # noqa: ARG001
         write_threads.append(threading.get_ident())
-        written.append((metric, at))
+        written.extend((metric, at) for metric, _value in points)
+        return not lock_lost()
 
     async def scenario():
         loop_thread = threading.get_ident()
@@ -893,7 +894,7 @@ def test_slow_tsdb_writes_run_off_the_event_loop_and_share_one_cycle_stamp(db_pa
         mock.patch.object(scheduler.checks, "http_head", mock.AsyncMock(return_value=http_ok)),
         mock.patch.object(scheduler.checks, "ping", mock.AsyncMock(return_value=ping_ok)),
         mock.patch.object(scheduler.tsdb_db, "query", return_value=[]),
-        mock.patch.object(scheduler.tsdb_db, "append_point", slow_append),
+        mock.patch.object(scheduler.tsdb_db, "append_points", slow_append),
     ):
         loop_thread = asyncio.run(scenario())
 
@@ -944,7 +945,7 @@ def test_metric_points_of_a_lost_lock_are_discarded_before_any_write(db_path, tm
     sched = _sched(db_path, tmp_path)
     lost = asyncio.Event()
     lost.set()
-    with mock.patch.object(scheduler.tsdb_db, "append_point") as append:
+    with mock.patch.object(scheduler.tsdb_db, "append_points") as append:
         written = sched._write_metric_points(None, 1, 30, utcnow(), [("ping_up", 1), ("ping_ms", 2.0)], lost)
     assert written is False
     append.assert_not_called()

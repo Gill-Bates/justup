@@ -300,7 +300,11 @@ lookup_pop_by_hostname = lkp_h
 # Refresh / import functions
 
 
-def _valid_coordinates(lat: object, lon: object) -> bool:
+# A reviewed location must lie this close to a curated anchor; facility spread uses the same distance.
+CURATED_ANCHOR_KM = 50.0
+
+
+def valid_coordinates(lat: object, lon: object) -> bool:
     """True for finite numeric WGS84 coordinates (-90..90, -180..180); booleans and non-numbers are invalid."""
     if any(isinstance(v, bool) or not isinstance(v, (int, float)) for v in (lat, lon)):
         return False
@@ -342,7 +346,7 @@ def upsert_pop_location(
 
     # Reject, never clamp: an out-of-range or non-finite value marks a corrupt source record, and clamping
     # would store a fabricated position at a pole or the antimeridian instead of dropping the record.
-    if not _valid_coordinates(lat, lon):
+    if not valid_coordinates(lat, lon):
         _log.debug("Skipping POP location %s/%s: invalid coordinates", canonical_code, alias_code)
         return False
     lat, lon = float(lat), float(lon)

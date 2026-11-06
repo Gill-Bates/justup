@@ -76,7 +76,7 @@ def _verify_mmdb(file_path: Path) -> bool:
     Verify that a file is a valid MaxMind MMDB database.
 
     Checks:
-    1. File exists and has reasonable size (>100KB for City DB)
+    1. File exists and is at least GEOIP_MIN_BYTES (10 MB)
     2. Contains the MMDB metadata marker
     3. Can be opened by geoip2 library (if available)
     """
@@ -84,7 +84,7 @@ def _verify_mmdb(file_path: Path) -> bool:
         return False
 
     file_size = file_path.stat().st_size
-    # City DB is ~60MB; the floor is a constant (tests patch it), never read from the environment.
+    # City DB is ~60MB; the floor is a constant, never read from the environment.
     _min_size = GEOIP_MIN_BYTES
 
     if file_size < _min_size:

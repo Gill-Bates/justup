@@ -195,68 +195,7 @@
 					</p>
 					<div class="collapse" id="placeholdersCollapse">
 						<div class="table-responsive">
-							<table class="table table-sm table-bordered small mb-0">
-								<thead class="table-light">
-									<tr>
-										<th scope="col">Placeholder</th>
-										<th scope="col">Description</th>
-									</tr>
-								</thead>
-								<tbody>
-									<tr>
-										<td><code>{{"{{"}}status.emoji{{"}}"}}</code></td>
-										<td>🚨 or ✅</td>
-									</tr>
-									<tr>
-										<td><code>{{"{{"}}status.text{{"}}"}}</code></td>
-										<td>Service DOWN / Service RESOLVED</td>
-									</tr>
-									<tr>
-										<td><code>{{"{{"}}status.label{{"}}"}}</code></td>
-										<td>Short status pill: DOWN / RESOLVED</td>
-									</tr>
-									<tr>
-										<td><code>{{"{{"}}target.name{{"}}"}}</code></td>
-										<td>Target display name</td>
-									</tr>
-									<tr>
-										<td><code>{{"{{"}}target.host{{"}}"}}</code></td>
-										<td>Host / URL</td>
-									</tr>
-									<tr>
-										<td><code>{{"{{"}}target.group{{"}}"}}</code></td>
-										<td>Group name</td>
-									</tr>
-									<tr>
-										<td><code>{{"{{"}}alert.started_at{{"}}"}}</code></td>
-										<td>Alert start time</td>
-									</tr>
-									<tr>
-										<td><code>{{"{{"}}alert.resolved_at{{"}}"}}</code></td>
-										<td>Resolution time</td>
-									</tr>
-									<tr>
-										<td><code>{{"{{"}}alert.duration{{"}}"}}</code></td>
-										<td>Downtime duration</td>
-									</tr>
-									<tr>
-										<td><code>{{"{{"}}alert.reason{{"}}"}}</code></td>
-										<td>Failure reason</td>
-									</tr>
-									<tr>
-										<td><code>{{"{{"}}sla.threshold{{"}}"}}</code></td>
-										<td>SLA target %</td>
-									</tr>
-									<tr>
-										<td><code>{{"{{"}}sla.actual{{"}}"}}</code></td>
-										<td>Current SLA %</td>
-									</tr>
-									<tr>
-										<td><code>{{"{{"}}logo_url{{"}}"}}</code></td>
-										<td>Logo image URL</td>
-									</tr>
-								</tbody>
-							</table>
+							{% include "settings/_placeholder_table.html" %}
 						</div>
 					</div>
 				</div>

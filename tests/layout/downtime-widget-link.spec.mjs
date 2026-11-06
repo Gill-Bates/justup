@@ -113,7 +113,11 @@ test("keyboard: the row link is focusable, shows a visible focus ring and Enter 
 			document.addEventListener("focusin", (event) => window.__focusLog.push({ href: event.target.getAttribute("href"), ring: getComputedStyle(event.target, "::after").outlineStyle }), true);
 		});
 		await page.locator("#dashboard-edit-toggle").focus();
-		for (let i = 0; i < 4; i++) await page.keyboard.press("Tab");
+		const rowLink = /^\/ui\/targets\/\d+\?range=24h$/;
+		for (let i = 0; i < 15; i++) {
+			await page.keyboard.press("Tab");
+			if ((await page.evaluate(() => window.__focusLog)).some((entry) => rowLink.test(entry.href ?? ""))) break;
+		}
 		const log = await page.evaluate(() => window.__focusLog);
 		const stop = log.find((entry) => /^\/ui\/targets\/\d+\?range=24h$/.test(entry.href ?? ""));
 		assert.ok(stop, `the row link is a tab stop: ${JSON.stringify(log)}`);

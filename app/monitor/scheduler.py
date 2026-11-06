@@ -1823,7 +1823,9 @@ class MonitorScheduler:
         """Overall status from the enabled checks; a confirmed outage outranks any unknown result."""
         # An unconfirmed UDP port (filtered, open|filtered, scan failure, stale result) is None, never 0.
         values: list[int | None] = [
-            snapshot.get(metric) for svc, flag, metric in AVAILABILITY_CHECKS if availability_check_enabled(cfg, svc, flag)
+            snapshot.get(metric)
+            for svc, flag, metric in AVAILABILITY_CHECKS
+            if availability_check_enabled(cfg, svc, flag)
         ]
         if not values:
             return TargetStatus.DISABLED
@@ -2137,6 +2139,8 @@ class MonitorScheduler:
     ) -> bool:
         """Persist one cycle's points together; discard the cycle if its lock was lost."""
         with maintenance.work_section(generation):
+            if lock_lost.is_set():
+                return False
             return tsdb_db.append_points(
                 self._tsdb_dir,
                 target_id=target_id,
@@ -2153,7 +2157,6 @@ class MonitorScheduler:
     async def _renew_target_lock(self, target_id: int, ttl_seconds: int, generation: int | None) -> bool:
         """Extend our lock; False when another run holds it or it cannot be verified (fail closed)."""
         try:
-
             return await asyncio.to_thread(
                 self._thread_call(self._epoch_for_thread(), self._renew_lock_sync), generation, target_id, ttl_seconds
             )
@@ -2168,9 +2171,11 @@ class MonitorScheduler:
         while True:
             await asyncio.sleep(_lock_renew_period(ttl_seconds))
             try:
-
                 held = await asyncio.to_thread(
-                    self._thread_call(self._epoch_for_thread(), self._renew_lock_sync), generation, target_id, ttl_seconds
+                    self._thread_call(self._epoch_for_thread(), self._renew_lock_sync),
+                    generation,
+                    target_id,
+                    ttl_seconds,
                 )
             except maintenance.MaintenanceActiveError:
                 continue

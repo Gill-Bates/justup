@@ -1462,8 +1462,11 @@ def _availability_pct(up: int, total: int) -> float | None:
     if not total:
         return None
     pct = round(up / total * 100, 2)
-    return pct if up == total else min(pct, 99.99)
+    return pct if up == total else min(pct, _IMPERFECT_CEILING_PCT)
 
+
+# Printed ceiling for any period that had at least one failed check (never rounds up to 100 %).
+_IMPERFECT_CEILING_PCT = 99.99
 
 # Below this share of the period covered by checks, a green availability result is not credible:
 # the status turns neutral ("Insufficient data"). 80 % leaves room for gaps (restarts, maintenance)
@@ -1808,7 +1811,7 @@ def _fmt_pct(value: float | None) -> str:
         return "n/a"
     if value >= 100:
         return "100%"
-    return f"{min(value, 99.99):.2f}%"
+    return f"{min(value, _IMPERFECT_CEILING_PCT):.2f}%"
 
 
 def _fmt_ms(value: float | None) -> str:
@@ -3033,6 +3036,7 @@ class PDFReportBuilder:
             ("PING", target.get("enable_ping"), COLORS["neutral"]),
             ("Cert", target.get("enable_cert_expiration"), COLORS["neutral"]),
             ("TCP", target.get("enable_tcp_connect"), COLORS["neutral"]),
+            ("UDP", target.get("enable_udp_scan") and target.get("udp_ports"), COLORS["neutral"]),
         ]
         enabled = [
             Badge(text=name, font=self.font, bg_color=color, padding_y=1 * mm, shadow=False)

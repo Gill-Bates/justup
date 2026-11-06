@@ -819,10 +819,7 @@ def test_certificate_expiry_threshold_creates_inbox_warning(db, days_left, expec
 
     sched = MonitorScheduler.__new__(MonitorScheduler)
     # Thread-call epoch state normally set by __init__.
-    sched._run_epoch = 0  # noqa: SLF001
-    sched._epoch_lock = threading.Lock()  # noqa: SLF001
-    sched._threads_active = 0  # noqa: SLF001
-    sched._stale_logged_epoch = -1  # noqa: SLF001
+    MonitorScheduler._init_thread_call_state(sched)  # noqa: SLF001
     sched._rt = {tid: TargetRuntime(next_due=utcnow())}  # noqa: SLF001
 
     @contextmanager

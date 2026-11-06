@@ -1936,11 +1936,10 @@ def _combined_availability_data(tmp_path: Path, *, with_periods: bool) -> Report
         tsdb.append_point(tmp_path, target_id=1, metric="http_up", value=1, retention_days=365, at=at)
         tsdb.append_point(tmp_path, target_id=1, metric="tcp_up", value=0 if i in (3, 4) else 1, retention_days=365, at=at)
     inputs = collect_report_inputs(tmp_path, 1, target, start, end)
-    periods = None
-    if with_periods:
-        down_at = start + timedelta(minutes=15)
-        periods = [tsdb.DowntimePeriod(down_at, down_at + timedelta(minutes=10), 600, ["TCP:443"])]
-    return ReportData(target=target, from_date=start, to_date=end, downtime_periods=periods, **inputs)
+    down_at = start + timedelta(minutes=15)
+    exact = [tsdb.DowntimePeriod(down_at, down_at + timedelta(minutes=10), 600, ["TCP:443"])]
+    inputs["downtime_periods"] = exact if with_periods else None  # None = sampled-event fallback
+    return ReportData(target=target, from_date=start, to_date=end, **inputs)
 
 
 @pytest.mark.parametrize("with_periods", [False, True], ids=["sampled-events", "exact-periods"])

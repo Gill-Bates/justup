@@ -548,3 +548,24 @@ def test_header_keeps_the_logo_left_and_the_status_line():
     assert 'alt="justUp!"' in header
     assert "<!-- STATUS ACCENT LINE -->" in header
     assert "border-left" not in header  # the divider belonged to the removed label
+
+
+# ── Placeholder reference docs (single source for both settings fragments) ──────
+
+
+def test_placeholder_docs_cover_exactly_the_whitelist():
+    from app.services.notifications.email_template import ALLOWED_PLACEHOLDERS, PLACEHOLDER_DOCS
+
+    assert set(PLACEHOLDER_DOCS) == ALLOWED_PLACEHOLDERS
+    assert all(cat and desc for cat, desc in PLACEHOLDER_DOCS.values())
+
+
+@pytest.mark.parametrize("fragment", ["settings-smtp", "settings-signal"])
+def test_settings_fragments_list_every_allowed_placeholder(client, fragment):
+    from html import unescape
+
+    from app.services.notifications.email_template import ALLOWED_PLACEHOLDERS
+
+    html = unescape(client.get(f"/ui/fragments/{fragment}").text)
+    missing = [p for p in sorted(ALLOWED_PLACEHOLDERS) if f"<code>{{{{{p}}}}}</code>" not in html]
+    assert not missing

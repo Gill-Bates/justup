@@ -298,14 +298,14 @@ def _copy_exact(src: Any, dst: Any, size: int) -> None:
 
 
 def snapshot_tsdb(tsdb_dir: Path, dest: Path) -> int:
-    """Copy every series (active file and all its segments) into ``dest``, one series at a time.
+    """Copy every series (active file and all its segments) into ``dest``.
 
     The series lock is held only while the files are opened and the active file's size is noted,
     so the active file and its segments belong to the same state (a compaction in between could
     otherwise duplicate or drop a day) and appends are not delayed by the copy. Segments are
     immutable, and the active file is copied up to the noted size, so no copied file is ever torn.
-    Different series can differ by the copy duration. Lock and temp files are skipped. Returns the
-    number of files copied.
+    All series of one target are opened under the shared target lock, so a check cycle is captured
+    entirely before or after it commits. Lock and temp files are skipped. Returns the number copied.
     """
     dest.mkdir(parents=True, exist_ok=True)
     copied = 0
@@ -313,10 +313,15 @@ def snapshot_tsdb(tsdb_dir: Path, dest: Path) -> int:
         if not tdir.is_dir():
             continue
         out_dir = dest / tdir.name
-        for stem in sorted(_series_stems(tdir)):
-            active = tdir / f"{stem}.jsonl"
-            snap = _open_snapshot(active, binary=True)
-            try:
+        with contextlib.ExitStack() as stack:
+            with _FileLock(tdir / ".batch", exclusive=False):
+                snapshots = []
+                for stem in sorted(_series_stems(tdir)):
+                    snap = _open_snapshot(tdir / f"{stem}.jsonl", binary=True)
+                    stack.callback(snap.close)
+                    snapshots.append((stem, snap))
+            for stem, snap in snapshots:
+                active = tdir / f"{stem}.jsonl"
                 out_dir.mkdir(parents=True, exist_ok=True)
                 for segment, handle in snap.segments:
                     with (out_dir / segment.path.name).open("wb") as out:
@@ -326,8 +331,6 @@ def snapshot_tsdb(tsdb_dir: Path, dest: Path) -> int:
                     with (out_dir / active.name).open("wb") as out:
                         _copy_exact(snap.active, out, snap.active_size)
                     copied += 1
-            finally:
-                snap.close()
     return copied
 
 
@@ -382,6 +385,18 @@ def _append_batch_line(path: Path, line: bytes) -> None:
         stream.write(line)
 
 
+def _rollback_batch(original: dict[Path, int | None]) -> None:
+    """Cut every series back to its pre-batch size (None: the file did not exist before)."""
+    for path, size in original.items():
+        if not path.exists():
+            continue
+        if size is None:
+            path.unlink()
+        else:
+            with path.open("r+b") as stream:
+                stream.truncate(size)
+
+
 def append_points(
     tsdb_dir: Path,
     *,
@@ -406,38 +421,28 @@ def append_points(
     if lock_lost():
         return False
     paths = sorted({path for path, _ in entries})
-    with _FileLock(_batch_path(tsdb_dir, target_id)):
-        with contextlib.ExitStack() as stack:
-            for path in paths:
-                stack.enter_context(_FileLock(path))
-            if lock_lost():
-                return False
-            original = {path: (path.exists(), path.stat().st_size if path.exists() else 0) for path in paths}
-            try:
-                for path, line in entries:
-                    if lock_lost():
-                        break
-                    _append_batch_line(path, line)
-                if not lock_lost() and all(path.exists() for path in paths):
+    with _FileLock(_batch_path(tsdb_dir, target_id)), contextlib.ExitStack() as stack:
+        for path in paths:
+            stack.enter_context(_FileLock(path))
+        if lock_lost():
+            return False
+        original = {path: path.stat().st_size if path.exists() else None for path in paths}
+        committed = False
+        try:
+            for path, line in entries:
+                if lock_lost():
+                    break
+                _append_batch_line(path, line)
+            else:
+                # The lock may also vanish right after the last line; all-or-nothing needs this check.
+                if not lock_lost():
                     committed = True
-                else:
-                    committed = False
-            except BaseException:
-                for path, (existed, size) in original.items():
-                    if path.exists():
-                        with path.open("r+b") as stream:
-                            stream.truncate(size)
-                        if not existed:
-                            path.unlink()
-                raise
-            if not committed:
-                for path, (existed, size) in original.items():
-                    if path.exists():
-                        with path.open("r+b") as stream:
-                            stream.truncate(size)
-                        if not existed:
-                            path.unlink()
-                return False
+        except BaseException:
+            _rollback_batch(original)
+            raise
+        if not committed:
+            _rollback_batch(original)
+            return False
     for path in paths:
         if _try_prune(f"{target_id}:{path.stem}"):
             try:
@@ -933,7 +938,8 @@ def query_availability_samples(
     ``query_auto_resolution``, which downsamples and would drop outages from the report.
     """
     return [
-        {"ts": ts.isoformat(), "value": value} for ts, value in _availability_cycles(tsdb_dir, target_id, metrics, since, until)
+        {"ts": ts.isoformat(), "value": value}
+        for ts, value in _availability_cycles(tsdb_dir, target_id, metrics, since, until)
     ]
 
 

@@ -923,3 +923,60 @@ def test_a_segment_changing_during_the_quarantine_copy_drops_the_attempt_cleanly
     tsdb.compact_target(tmp_path, 1, throttle=False)
     assert victim.read_bytes() == changed + b"\0"
     assert not list(tmp_path.rglob("*.tmp")) and not list(tmp_path.rglob("*.corrupt-*"))
+
+
+def _batch(tmp_path, lock_lost, metrics=(("http_up", 1), ("http_ms", 12.5), ("http_status", 200))):
+    return tsdb.append_points(
+        tmp_path, target_id=1, points=list(metrics), retention_days=30, at=NOW, lock_lost=lock_lost
+    )
+
+
+def _series_files(tmp_path) -> dict[str, bytes]:
+    return {p.name: p.read_bytes() for p in sorted((tmp_path / "target_1").glob("*.jsonl"))}
+
+
+def test_append_points_writes_every_series_of_the_cycle(tmp_path):
+    assert _batch(tmp_path, lambda: False) is True
+    assert set(_series_files(tmp_path)) == {"http_up.jsonl", "http_ms.jsonl", "http_status.jsonl"}
+    assert [p.value for p in tsdb.query(tmp_path, target_id=1, metric="http_ms")] == [12.5]
+
+
+def test_append_points_rolls_back_the_whole_cycle_when_the_lock_is_lost_after_an_append(tmp_path):
+    tsdb.append_point(
+        tmp_path, target_id=1, metric="http_up", value=0, retention_days=30, at=NOW - timedelta(minutes=1)
+    )
+    before = _series_files(tmp_path)
+    real_append = tsdb._append_batch_line
+    lost = threading.Event()
+
+    def append_then_lose_lock(path, line):
+        real_append(path, line)
+        lost.set()  # the lock is gone after the first successful append
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(tsdb, "_append_batch_line", append_then_lose_lock)
+        assert _batch(tmp_path, lost.is_set) is False
+
+    assert _series_files(tmp_path) == before  # pre-existing line kept, new series removed, no prefix left
+
+
+def test_append_points_rolls_back_and_raises_when_a_later_write_fails(tmp_path):
+    tsdb.append_point(
+        tmp_path, target_id=1, metric="http_up", value=0, retention_days=30, at=NOW - timedelta(minutes=1)
+    )
+    before = _series_files(tmp_path)
+    real_append = tsdb._append_batch_line
+    calls: list[str] = []
+
+    def fail_on_second(path, line):
+        calls.append(path.name)
+        if len(calls) == 2:
+            raise OSError("disk full")
+        real_append(path, line)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(tsdb, "_append_batch_line", fail_on_second)
+        with pytest.raises(OSError, match="disk full"):
+            _batch(tmp_path, lambda: False)
+
+    assert _series_files(tmp_path) == before

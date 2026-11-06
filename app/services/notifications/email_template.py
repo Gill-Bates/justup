@@ -103,6 +103,7 @@ __all__ = [
     "LOGO_SRC",
     "LOGO_URL",
     "LOGO_URL_PREVIEW",
+    "PLACEHOLDER_DOCS",
     "STATUS_DISPLAY_MAP",
     "build_alert_context",
     "build_email_message",
@@ -110,6 +111,7 @@ __all__ = [
     "html_to_text",
     "load_email_templates",
     "load_template_preview",
+    "placeholder_doc_groups",
     "render_subject",
     "render_template",
     "template_to_preview",
@@ -156,6 +158,46 @@ ALLOWED_PLACEHOLDERS = frozenset(
         "logo_url",
     }
 )
+
+# Reference shown next to the template editors: placeholder -> (category, description).
+# Keys must equal ALLOWED_PLACEHOLDERS (pinned by a test); dict order is display order.
+PLACEHOLDER_DOCS: dict[str, tuple[str, str]] = {
+    "target.name": ("Target", "Target display name"),
+    "target.host": ("Target", "Target hostname, IP or URL"),
+    "target.group": ("Target", "Target group"),
+    "target.check_type": ("Target", "Check type (HTTP/PING/TCP/CERT)"),
+    "target.check_badges": ("Target", "Check type badges (HTML, email only)"),
+    "alert.status": ("Alert", "OPEN or RESOLVED"),
+    "alert.started_at": ("Alert", "Alert start time"),
+    "alert.resolved_at": ("Alert", "Alert resolved time"),
+    "alert.duration": ("Alert", "Alert duration"),
+    "alert.reason": ("Alert", "Failure reason / service"),
+    "status.emoji": ("Status", "Status emoji"),
+    "status.color": ("Status", "Status color (hex)"),
+    "status.accent_color": ("Status", "Accent color (hex)"),
+    "status.foreground_color": ("Status", "Text color on the accent color (hex)"),
+    "status.text_color": ("Status", "Status text color (hex)"),
+    "status.text": ("Status", "Status text (Service DOWN / Service RESOLVED)"),
+    "status.label": ("Status", "Short status word (DOWN / RESOLVED)"),
+    "downtime.minutes": ("Downtime", "Downtime in minutes"),
+    "downtime.human": ("Downtime", "Human-readable downtime"),
+    "sla.threshold": ("SLA", "SLA threshold"),
+    "sla.actual": ("SLA", "Actual SLA"),
+    "system.name": ("System", "System name (justUp)"),
+    "system.url": ("System", "Dashboard URL"),
+    "system.timestamp": ("System", "Current timestamp"),
+    "system.github_url": ("System", "Project URL"),
+    "logo_url": ("System", "Logo image URL"),
+}
+
+
+def placeholder_doc_groups() -> list[tuple[str, list[tuple[str, str]]]]:
+    """Group PLACEHOLDER_DOCS by category as ``[(category, [(placeholder, description)])]``."""
+    groups: dict[str, list[tuple[str, str]]] = {}
+    for name, (category, description) in PLACEHOLDER_DOCS.items():
+        groups.setdefault(category, []).append((name, description))
+    return list(groups.items())
+
 
 # Pre-compiled regex: only allows alphanumeric, underscores, and dots
 # Rejects pipes, spaces, special chars, double-dots, etc.

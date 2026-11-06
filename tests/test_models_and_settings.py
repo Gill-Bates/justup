@@ -5,11 +5,6 @@
 #
 
 # ruff: noqa: S106
-#!/usr/bin/env python3
-#
-# tests/test_models_and_settings.py
-# Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
-#
 
 """Input normalisation of user/group models and the settings API round-trip."""
 
