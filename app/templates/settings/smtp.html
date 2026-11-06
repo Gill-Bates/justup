@@ -82,7 +82,11 @@
 					<div class="mb-2">
 						<label class="form-label" for="smtp_test_recipient">Test Recipient</label>
 						<input type="email" class="form-control" id="smtp_test_recipient" name="smtp_test_recipient"
-							value="" placeholder="you@example.com" autocomplete="off">
+							value="" placeholder="you@example.com" autocomplete="off"
+							aria-describedby="smtp_test_recipient_help">
+						<div class="form-text" id="smtp_test_recipient_help">
+							Sends a short welcome message to check the SMTP setup. It does not use the alert template.
+						</div>
 					</div>
 					<button type="button" class="btn btn-outline-primary btn-sm" id="test-smtp-btn">
 						Send Test Email

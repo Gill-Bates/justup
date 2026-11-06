@@ -750,37 +750,73 @@ def test_smtp_template_reset_returns_the_new_default(conn):
     assert sqlite_db.get_setting(conn, "smtp_mail_template_html", None) is None
 
 
-def test_test_mail_enqueues_a_non_empty_text_body(conn, monkeypatch):
+def _queue_test_mail(conn, monkeypatch, *, public_hostname=None, alert_html=None):
+    """POST /settings/smtp/test-mail with a fake spooler; returns (response, enqueue kwargs)."""
     from app.services.notifications import spooler as spooler_module
     from app.utils.constants import SettingKeys
 
-    for key, value in (
+    settings_to_set = [
         (SettingKeys.SMTP_ENABLED, True),
         (SettingKeys.SMTP_HOST, "smtp.example.com"),
         (SettingKeys.SMTP_FROM, "alerts@example.com"),
-    ):
+    ]
+    if public_hostname:
+        settings_to_set.append((SettingKeys.PUBLIC_HOSTNAME, public_hostname))
+    for key, value in settings_to_set:
         sqlite_db.set_setting(conn, key, value)
-
-    queued: list[tuple[tuple, dict]] = []
+    if alert_html is not None:
+        sqlite_db.set_setting(conn, "smtp_mail_template_html", alert_html)
+        sqlite_db.set_setting(conn, "smtp_mail_template_subject", "{{status.emoji}} {{status.text}}")
+    queued: list[dict] = []
 
     class FakeSpooler:
-        def enqueue(self, *args, **kwargs):
-            queued.append((args, kwargs))
+        def enqueue(self, **kwargs):
+            queued.append(kwargs)
             return 1
 
     monkeypatch.setattr(spooler_module, "get_spooler", lambda _factory: FakeSpooler())
     client = _client(conn, settings.router, user=_mk_user(conn, "adm", admin=True))
     client.app.state.db_path = Path(conn.execute("PRAGMA database_list").fetchone()[2])
-
     resp = client.post("/settings/smtp/test-mail", json={"recipient": "you@example.com"})
-    assert resp.status_code == 200, resp.text
+    return resp, queued
 
-    payload = queued[0][1]["payload"]
+
+def test_test_mail_enqueues_the_welcome_message_not_an_alert(conn, monkeypatch):
+    from app.services.notifications.spooler import ChannelType, NotificationType
+
+    resp, queued = _queue_test_mail(conn, monkeypatch)
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"ok": True, "message": "Test email queued."}
+    assert len(queued) == 1
+    kw = queued[0]
+    assert kw["notification_type"] is NotificationType.TEST
+    assert kw["channel_type"] is ChannelType.EMAIL
+    assert kw["recipient_address"] == "you@example.com"
+    payload = kw["payload"]
+    assert set(payload) == {"subject", "text_body", "html_body"}
+    assert payload["subject"] == "[justUp] Welcome \u2013 Email test"
     assert payload["text_body"].strip(), "test mail must carry a non-empty plain-text part"
-    assert "Service DOWN" in payload["text_body"]
-    # Realistic sample data, not the old hard-coded 2026-01-29 outage.
-    assert "2026-01-29" not in payload["html_body"]
+    assert "Welcome to justUp!" in payload["text_body"]
+    for part in (payload["text_body"], payload["html_body"]):
+        assert "Service DOWN" not in part
+        assert "503" not in part
     assert payload["html_body"].count("{{") == 0
+    # Without a public hostname there is no button and no placeholder host.
+    assert "Open in justUp!" not in payload["html_body"]
+    assert "justup.example.com" not in payload["html_body"]
+
+
+def test_test_mail_ignores_a_custom_alert_template_and_links_the_public_host(conn, monkeypatch):
+    resp, queued = _queue_test_mail(
+        conn, monkeypatch, public_hostname="up.example.org", alert_html="<p>{{status.text}} {{target.name}}</p>"
+    )
+    assert resp.status_code == 200, resp.text
+    payload = queued[0]["payload"]
+    assert payload["html_body"].startswith("<!DOCTYPE html>")
+    assert "Service DOWN" not in payload["html_body"]
+    assert "Test Target" not in payload["html_body"]
+    assert 'href="https://up.example.org/"' in payload["html_body"]
+    assert "Open in justUp!: https://up.example.org/" in payload["text_body"]
 
 
 def test_smtp_fragment_shows_preview_url_instead_of_placeholder(conn, monkeypatch):

@@ -1105,19 +1105,13 @@ class TestEmailRequest(BaseModel):
 async def send_test_email(
     request: Request, payload: TestEmailRequest, conn=Depends(get_conn), _admin=Depends(require_admin)
 ):
-    """Queue a test email using current template and SMTP settings.
+    """Queue the SMTP setup test email (a welcome message, not an alert).
 
-    All notifications go through the spooler for consistent visibility
-    and automatic retry handling.
+    The message is rendered by a dedicated renderer and ignores the saved alert template.
+    All notifications go through the spooler for consistent visibility and automatic
+    retry handling; a queued message is a handoff, not a delivery guarantee.
     """
-    from ..services.notifications.email_template import (
-        build_alert_context,
-        build_test_alert_sample,
-        html_to_text,
-        load_email_templates,
-        render_subject,
-        render_template,
-    )
+    from ..services.notifications.smtp_test_email import build_smtp_test_email
     from ..services.notifications.spooler import (
         ChannelType,
         NotificationType,
@@ -1129,19 +1123,12 @@ async def send_test_email(
     if readiness is SmtpReadiness.INCOMPLETE:
         raise HTTPException(status_code=400, detail="SMTP not configured (missing host or from address)")
 
-    stored = await run_in_threadpool(load_email_templates, conn)
-    subject_template, html_template = stored["subject"], stored["html"]
-
-    # The button must lead to this instance, never to the placeholder host of the editor preview.
-    test_alert_data, test_target_data = build_test_alert_sample(
-        system_url=target_url(await run_in_threadpool(get_public_base_url, conn), None)
+    # The button must lead to this instance; without a public hostname it is omitted.
+    message = build_smtp_test_email(
+        str(payload.recipient),
+        system_url=target_url(await run_in_threadpool(get_public_base_url, conn), None),
     )
-
-    context = build_alert_context(test_alert_data, test_target_data)
-
-    subject = render_subject(subject_template, context)
-    html_body = render_template(html_template, context)
-    text_body = html_to_text(html_body)
+    subject, html_body, text_body = message.subject, message.html_body, message.text_body
 
     # Enqueue to spooler (all notifications go through spooler)
     spooler = await run_in_threadpool(_request_spooler, request)

@@ -155,7 +155,8 @@ supervised: it runs no background task of its own (keep-alives belong to each cl
 
 Configure host, port, STARTTLS or implicit TLS, and credentials under Settings >
 SMTP. Credentials are stored encrypted. Subject and HTML template are editable
-with a fixed set of placeholders. A test email is queued like any other.
+with a fixed set of placeholders. **Send Test Email** queues a separate welcome message (marked TEST, no incident data) in the same
+design; it does not use the alert template. "Queued" means handed to the delivery queue, not delivered.
 
 Transport security (encrypted by default):
 

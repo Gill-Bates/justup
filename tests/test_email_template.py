@@ -558,3 +558,164 @@ def test_placeholder_docs_cover_exactly_the_whitelist():
 
     assert set(PLACEHOLDER_DOCS) == ALLOWED_PLACEHOLDERS
     assert all(cat and desc for cat, desc in PLACEHOLDER_DOCS.values())
+
+
+# ── SMTP setup test mail (welcome message, not an alert) ────────────────────────
+_INFO = STATUS_PALETTE["info"]
+_DANGER = STATUS_PALETTE["danger"]
+
+
+def _setup_mail(recipient="you@example.com", **kw):
+    from app.services.notifications.smtp_test_email import build_smtp_test_email
+
+    kw.setdefault("now", _FIXED_NOW)
+    return build_smtp_test_email(recipient, **kw)
+
+
+def test_default_template_is_the_concatenation_of_the_shared_blocks():
+    from app.services.notifications import email_template as et
+
+    assert DEFAULT_HTML_TEMPLATE == (
+        et.MAIL_BLOCK_HEAD
+        + et.MAIL_BLOCK_PREHEADER_ALERT
+        + et.MAIL_BLOCK_SHELL_OPEN
+        + et.MAIL_BLOCK_ALERT_BODY
+        + et.MAIL_BLOCK_CTA
+        + et.MAIL_BLOCK_FOOTER
+    )
+
+
+def test_setup_mail_is_a_welcome_message_marked_as_test():
+    mail = _setup_mail(system_url="https://up.example.org/")
+    assert mail.subject == "[justUp] Welcome \u2013 Email test"
+    for part in (mail.html_body, mail.text_body):
+        assert "Welcome to justUp!" in part
+        assert "TEST" in part
+        assert "No service incident has occurred." in part
+        for label, value in (
+            ("Channel", "Email"),
+            ("Purpose", "SMTP setup verification"),
+            ("Recipient", "you@example.com"),
+            ("Sent", "2026-11-01 19:18:00 UTC"),
+            ("Action required", "None"),
+        ):
+            assert label in part and value in part
+    assert "Email Test" in mail.html_body and "Next steps" in mail.html_body
+    assert mail.text_body.strip()
+
+
+def test_setup_mail_carries_no_incident_content():
+    mail = _setup_mail(system_url="https://up.example.org/")
+    banned = (
+        "Service DOWN",
+        "Service RESOLVED",
+        "OPEN",
+        "HTTP 503",
+        "503",
+        "Test Target",
+        "example.com",
+        "Production",
+        "Downtime",
+        "Duration",
+        "Threshold",
+        "SLA",
+        "Started",
+        "Resolved",
+        "Incident",
+        "\U0001f534",
+    )
+    visible = mail.html_body[mail.html_body.index("<body") :]
+    for word in banned:
+        if word == "example.com":
+            # The recipient's own domain and the instance URL are real data, not an invented host.
+            assert "example.com" not in visible.replace("you@example.com", "").replace("up.example.org", "")
+            continue
+        assert word not in visible, word
+        assert word not in mail.text_body, word
+    assert _DANGER.background not in mail.html_body and _DANGER.text not in mail.html_body
+
+
+def test_setup_mail_keeps_the_established_visual_design():
+    mail = _setup_mail(system_url="https://up.example.org/")
+    body = mail.html_body
+    for token in (
+        'class="ju-card"',
+        "max-width:600px",
+        "border-radius:14px",
+        "background-color:#eef1f5",
+        "background-color:#f7f9fb",
+        'class="ju-panel"',
+        "font-size:24px",
+        "border-radius:999px",
+        "background-color:#16815c",
+        "height:4px",
+        "@media only screen and (max-width:600px)",
+        "prefers-color-scheme: dark",
+        "<!--[if mso]>",
+        'content="light"',
+    ):
+        assert token in body, token
+        assert token in DEFAULT_HTML_TEMPLATE, token
+    # Same logo header and footer markup as the alert mail, informational accent instead of red.
+    assert f"background-color:{_INFO.background}" in body
+    assert body.count(f'src="{LOGO_SRC}"') == 2
+    assert 'width="150"' in body and 'width="96"' in body
+    assert "github.com/Gill-Bates/justup" in body
+    assert "Open in justUp!" in body
+
+
+def test_setup_mail_pill_and_text_contrast():
+    assert wcag_contrast(_INFO.text, "#ffffff") >= 4.5
+    assert wcag_contrast(_INFO.background, "#ffffff") >= 1.4  # accent line is decorative; TEST is text too
+
+
+def test_setup_mail_escapes_the_recipient_and_never_expands_placeholders():
+    nasty = '"<b>x</b>"{{target.name}}@example.com'
+    mail = _setup_mail(nasty)
+    assert "<b>x</b>" not in mail.html_body
+    assert "&lt;b&gt;x&lt;/b&gt;" in mail.html_body
+    assert "{{target.name}}" in mail.html_body  # literal, not substituted
+    assert mail.text_body.count("{{target.name}}") == 1
+
+
+@pytest.mark.parametrize("url", [None, "", "#", "javascript:alert(1)", "ftp://x.example.org", "https://"])
+def test_setup_mail_has_no_button_without_a_valid_instance_url(url):
+    mail = _setup_mail(system_url=url)
+    assert "Open in justUp!" not in mail.html_body
+    assert "CALL TO ACTION" not in mail.html_body
+    assert "Open in justUp!" not in mail.text_body
+    assert "justup.example.com" not in mail.html_body
+    assert mail.html_body.count("<!-- FOOTER -->") == 1
+
+
+def test_setup_mail_button_links_the_given_instance_and_escapes_it():
+    mail = _setup_mail(system_url='https://up.example.org/?a=1&b="2"')
+    assert 'href="https://up.example.org/?a=1&amp;b=&quot;2&quot;"' in mail.html_body
+    assert "Open in justUp!: " in mail.text_body
+
+
+def test_setup_mail_mime_structure_has_text_html_and_inline_logo():
+    mail = _setup_mail(system_url="https://up.example.org/")
+    msg = build_email_message(
+        subject=mail.subject,
+        html_body=mail.html_body,
+        text_body=mail.text_body,
+        from_addr="alerts@example.com",
+        to_addr="you@example.com",
+    )
+    assert msg.get_content_type() == "multipart/related" or msg.get_content_type() == "multipart/alternative"
+    parts = {p.get_content_type(): p for p in msg.walk()}
+    assert parts["text/plain"].get_content().strip() == mail.text_body.strip()
+    assert "Welcome to justUp!" in parts["text/html"].get_content()
+    logo = parts["image/png"]
+    assert logo["Content-ID"] == f"<{LOGO_CID}>"
+    assert logo.get_content_disposition() == "inline"
+
+
+def test_alert_preview_samples_still_support_down_and_resolved_variants():
+    alert, target = build_test_alert_sample(now=_FIXED_NOW)
+    assert alert["status"] == "OPEN"
+    html = render_template(DEFAULT_HTML_TEMPLATE, build_alert_context(alert, target))
+    assert "Service DOWN" in html
+    resolved = render_template(DEFAULT_HTML_TEMPLATE, build_alert_context({**alert, "status": "RESOLVED"}, target))
+    assert "Service RESOLVED" in resolved

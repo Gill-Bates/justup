@@ -260,7 +260,10 @@ DEFAULT_SUBJECT = "{{status.emoji}} {{target.name}} – {{status.text}}"
 # Default HTML email template (table-based for max compatibility)
 # Mobile-first responsive design - works in Gmail, Outlook, Apple Mail
 # Uses display:block on mobile for stacked layout
-DEFAULT_HTML_TEMPLATE = """<!DOCTYPE html>
+# Shared building blocks of the justUp! mail layout. DEFAULT_HTML_TEMPLATE is their exact
+# concatenation; the SMTP setup mail reuses every block except the alert-specific ones.
+# Document head, styles and <body> open.
+MAIL_BLOCK_HEAD = """<!DOCTYPE html>
 <html lang="en" xmlns="http://www.w3.org/1999/xhtml"
       xmlns:v="urn:schemas-microsoft-com:vml"
       xmlns:o="urn:schemas-microsoft-com:office:office">
@@ -319,13 +322,19 @@ DEFAULT_HTML_TEMPLATE = """<!DOCTYPE html>
 
 <body class="ju-bg" style="margin:0;padding:0;word-spacing:normal;background-color:#eef1f5;">
 
-<!-- preheader: shown in the inbox list, hidden in the body -->
+"""
+
+# Hidden inbox preheader of an alert.
+MAIL_BLOCK_PREHEADER_ALERT = """<!-- preheader: shown in the inbox list, hidden in the body -->
 <div style="display:none;max-height:0;overflow:hidden;opacity:0;mso-hide:all;
             font-size:1px;line-height:1px;color:#eef1f5;">
   {{status.text}} &ndash; {{target.name}} ({{target.host}}) &middot; {{alert.reason}}
 </div>
 
-<table role="presentation" width="100%" cellspacing="0" cellpadding="0" class="ju-bg"
+"""
+
+# Outer background, white card, logo header and accent line.
+MAIL_BLOCK_SHELL_OPEN = """<table role="presentation" width="100%" cellspacing="0" cellpadding="0" class="ju-bg"
        style="background-color:#eef1f5;">
   <tr>
     <td align="center" style="padding:24px 12px;">
@@ -361,7 +370,10 @@ DEFAULT_HTML_TEMPLATE = """<!DOCTYPE html>
                       font-size:1px;line-height:1px;">&nbsp;</div>
         </td></tr>
 
-        <!-- PRIMARY EVENT -->
+"""
+
+# Alert-specific sections: event, target, incident, SLA.
+MAIL_BLOCK_ALERT_BODY = """        <!-- PRIMARY EVENT -->
         <tr>
           <td class="ju-pad" style="padding:20px 28px 6px 28px;">
             <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
@@ -551,7 +563,10 @@ DEFAULT_HTML_TEMPLATE = """<!DOCTYPE html>
         </tr>
         {{/if sla}}
 
-        {{#if cta}}
+"""
+
+# Conditional "Open in justUp!" button.
+MAIL_BLOCK_CTA = """        {{#if cta}}
         <!-- CALL TO ACTION -->
         <tr>
           <td class="ju-pad ju-cta" align="center" style="padding:20px 28px 8px 28px;">
@@ -577,7 +592,10 @@ DEFAULT_HTML_TEMPLATE = """<!DOCTYPE html>
         </tr>
         {{/if cta}}
 
-        <!-- FOOTER -->
+"""
+
+# Footer with GitHub link and small logo; closes card, wrapper and document.
+MAIL_BLOCK_FOOTER = """        <!-- FOOTER -->
         <tr>
           <td class="ju-pad" style="padding:18px 28px 22px 28px;">
             <div style="border-top:1px solid #e9eef4;padding-top:16px;">
@@ -609,6 +627,15 @@ DEFAULT_HTML_TEMPLATE = """<!DOCTYPE html>
 </body>
 </html>
 """
+
+DEFAULT_HTML_TEMPLATE = (
+    MAIL_BLOCK_HEAD
+    + MAIL_BLOCK_PREHEADER_ALERT
+    + MAIL_BLOCK_SHELL_OPEN
+    + MAIL_BLOCK_ALERT_BODY
+    + MAIL_BLOCK_CTA
+    + MAIL_BLOCK_FOOTER
+)
 
 
 def render_template(template: str, context: dict[str, Any], *, mode: str = "html") -> str:
@@ -1156,13 +1183,11 @@ def build_email_message(
     return msg
 
 
-# ── Test-mail sample data ────────────────────────────────────────────────────
-# Realistic, self-consistent example for the "Send Test Email" button and the
-# template preview: a test outage that opened ~15 minutes ago and is still open,
-# clearly marked as a test notification. The outage age is derived from ``now`` so
-# the duration always reads "15m (ongoing)" and never a stale hard-coded date; the
-# ``now`` parameter keeps automated tests deterministic. Production alert data is
-# built from live targets and is not affected by this helper.
+# ── Template-preview sample data ─────────────────────────────────────────────
+# Example outage (opened ~15 minutes ago, still open) for the alert-template editor preview
+# only; the SMTP setup test mail has its own renderer (smtp_test_email). The outage age is
+# derived from ``now`` so the duration never reads a stale date; ``now`` keeps tests
+# deterministic. Production alert data is built from live targets and is not affected.
 TEST_SAMPLE_DOWNTIME_MINUTES = 15
 
 
