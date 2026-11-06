@@ -653,8 +653,18 @@ class RouteMap(Flowable):
 
     def _has_glyphs(self, text: str) -> bool:
         """False when the embedded font lacks a glyph; such a name would render as boxes."""
-        glyphs = pdfmetrics.getFont(self.font).face.charToGlyph
-        return all(ord(ch) in glyphs for ch in text)
+        font = pdfmetrics.getFont(self.font)
+        glyphs = getattr(font.face, "charToGlyph", None)
+        if glyphs is not None:
+            return all(ord(ch) in glyphs for ch in text)
+
+        # ReportLab's built-in Type 1 fonts use an encoding vector instead of a
+        # Unicode charToGlyph map. Check that vector so fallback fonts work too.
+        encoding = getattr(font, "encoding", None)
+        vector = getattr(encoding, "vector", None)
+        if vector is None:
+            return False
+        return all(ord(ch) < len(vector) and vector[ord(ch)] not in (None, ".notdef") for ch in text)
 
     def _draw_accuracy(self, view: View, groups: Sequence[MarkerGroup]) -> None:
         c = self.canv

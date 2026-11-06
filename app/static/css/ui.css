@@ -1622,9 +1622,9 @@ textarea.smtp-editor-frame {
 	line-height: 1.3;
 }
 
-/* Loading and empty rows are one centred message, never a label/value card row. */
+/* Loading and empty rows are one centred message, never a label/value card row. In table mode the cell
+   stays a table cell so colspan spans every column; only the card query below makes it a block. */
 .ui-page .spooler-log tbody td.spooler-log__state {
-	display: block;
 	padding: 2.5rem 1rem;
 	text-align: center;
 }
@@ -1695,6 +1695,11 @@ textarea.smtp-editor-frame {
 
 /* The channel is an icon in the table; the card row shows its name next to the icon. */
 @container ju-table (width <40rem) {
+	/* Beats the card layout's flex cell (.ui-page .rtable tbody td) so the message is one block, not a label/value row. */
+	.ui-page .spooler-log tbody td.spooler-log__state {
+		display: block;
+	}
+
 	/* One label size for every card row, independent of the value's own size (Status badge, Error text). */
 	.spooler-log tbody td::before {
 		font-size: 0.875rem;

@@ -1883,6 +1883,12 @@ def test_signal_qr_fragment_is_not_cacheable(conn, monkeypatch):
 # --- template handlers: validate everything first, then save atomically ------------------------
 
 
+_TEMPLATE_KEYS = {
+    "smtp": ("smtp_mail_template_subject", "smtp_mail_template_html"),
+    "signal": ("signal_message_template_down", "signal_message_template_up"),
+}
+
+
 def _fail_on_second_set_setting(monkeypatch):
     real = sqlite_db.set_setting
     calls = {"n": 0}
@@ -1899,8 +1905,8 @@ def _fail_on_second_set_setting(monkeypatch):
 @pytest.mark.parametrize(
     ("path", "valid", "invalid", "keys"),
     [
-        ("/settings/signal/template", "down", "up", ("signal_message_template_down", "signal_message_template_up")),
-        ("/settings/smtp/template", "subject", "html", ("smtp_mail_template_subject", "smtp_mail_template_html")),
+        ("/settings/signal/template", "down", "up", _TEMPLATE_KEYS["signal"]),
+        ("/settings/smtp/template", "subject", "html", _TEMPLATE_KEYS["smtp"]),
     ],
 )
 def test_template_update_with_one_invalid_field_saves_nothing(conn, path, valid, invalid, keys):
@@ -1919,12 +1925,12 @@ def test_template_update_with_one_invalid_field_saves_nothing(conn, path, valid,
         (
             "/settings/signal/template",
             {"down": "d", "up": "u"},
-            ("signal_message_template_down", "signal_message_template_up"),
+            _TEMPLATE_KEYS["signal"],
         ),
         (
             "/settings/smtp/template",
             {"subject": "s", "html": "<p>h</p>"},
-            ("smtp_mail_template_subject", "smtp_mail_template_html"),
+            _TEMPLATE_KEYS["smtp"],
         ),
     ],
 )
@@ -1943,8 +1949,8 @@ def test_template_update_write_failure_rolls_back_first_field(conn, monkeypatch,
 @pytest.mark.parametrize(
     ("path", "keys"),
     [
-        ("/settings/signal/template/reset", ("signal_message_template_down", "signal_message_template_up")),
-        ("/settings/smtp/template/reset", ("smtp_mail_template_subject", "smtp_mail_template_html")),
+        ("/settings/signal/template/reset", _TEMPLATE_KEYS["signal"]),
+        ("/settings/smtp/template/reset", _TEMPLATE_KEYS["smtp"]),
     ],
 )
 def test_template_reset_write_failure_rolls_back_first_field(conn, monkeypatch, path, keys):
@@ -1966,10 +1972,6 @@ def test_template_reset_write_failure_rolls_back_first_field(conn, monkeypatch, 
 _TEMPLATE_CASES = {
     "smtp": ("/settings/smtp/template", {"subject": "S", "html": "H"}, {"subject": "New", "html": "  "}),
     "signal": ("/settings/signal/template", {"down": "D", "up": "U"}, {"down": "New", "up": "  "}),
-}
-_TEMPLATE_KEYS = {
-    "smtp": ("smtp_mail_template_subject", "smtp_mail_template_html"),
-    "signal": ("signal_message_template_down", "signal_message_template_up"),
 }
 
 
@@ -1995,15 +1997,7 @@ def test_template_update_is_all_or_nothing_when_a_write_fails(conn, kind, monkey
     assert client.post(url, json=saved).status_code == 200
     before = _template_state(conn, kind)
     real = sqlite_db.set_setting
-    calls = {"n": 0}
-
-    def failing(connection, key, value, **kwargs):
-        calls["n"] += 1
-        if calls["n"] == 2:
-            raise sqlite3.OperationalError("disk full")
-        return real(connection, key, value, **kwargs)
-
-    monkeypatch.setattr(sqlite_db, "set_setting", failing)
+    _fail_on_second_set_setting(monkeypatch)
     update = {k: f"changed-{k}" for k in saved}
     with pytest.raises(sqlite3.OperationalError):
         client.post(url, json=update)
@@ -2018,15 +2012,7 @@ def test_template_reset_is_all_or_nothing_when_a_write_fails(conn, kind, monkeyp
     assert client.post(url, json=saved).status_code == 200
     before = _template_state(conn, kind)
     real = sqlite_db.set_setting
-    calls = {"n": 0}
-
-    def failing(connection, key, value, **kwargs):
-        calls["n"] += 1
-        if calls["n"] == 2:
-            raise sqlite3.OperationalError("disk full")
-        return real(connection, key, value, **kwargs)
-
-    monkeypatch.setattr(sqlite_db, "set_setting", failing)
+    _fail_on_second_set_setting(monkeypatch)
     with pytest.raises(sqlite3.OperationalError):
         client.post(url + "/reset")
     monkeypatch.setattr(sqlite_db, "set_setting", real)

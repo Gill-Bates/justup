@@ -9,6 +9,7 @@
 - `Fix` Deleting alerts or targets removes their pending notification events, and delivered events are pruned by retention.
 - `Fix` The PDF "Estimated downtime" card names its real source (sum of measured outages) instead of "failed checks x interval".
 - `Fix` Signal messages use the same check type and reason as alert mails. The UN/LOCODE refresh reports "not implemented" (HTTP 501) instead of a successful empty import.
+- `Fix` Delivery queue log: the "No entries" / loading row spans the full table width again on wide screens.
 
 ## [1.0.3] - 2026-11-05
 

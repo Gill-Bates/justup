@@ -60,8 +60,10 @@ for (const viewport of VIEWPORTS) {
 					if (!(await group.locator('button[title="Reset Metrics"]').first().isVisible()) && (await header.getAttribute("aria-expanded")) === "false") await header.click();
 					await expect(group.locator('button[title="Reset Metrics"]').first()).toBeVisible({ timeout: 1000 });
 				}).toPass({ timeout: 20000 });
-				const trigger = page.locator('#targets-table tr:has-text("wiedenest.de") button[title="Reset Metrics"]');
-				const triggerId = await trigger.evaluate((el) => { el.id = el.id || "reset-trigger"; return el.id; });
+				// The page is never mutated: an injected id would differ from the server markup and make the live update replace the opener.
+				const targetId = await page.locator('#targets-table tr:has-text("wiedenest.de")').first().getAttribute("data-target-id");
+				const trigger = page.locator(`#targets-table tr[data-target-id="${targetId}"] button[hx-post$="/reset"]`);
+				const hasFocus = () => trigger.evaluate((el) => el === document.activeElement);
 
 				// Open: names the target and the consequence; Cancel holds the first focus; the page behind is locked.
 				await trigger.click();
@@ -77,12 +79,12 @@ for (const viewport of VIEWPORTS) {
 				// Cancel and Escape send nothing and return focus to the trigger.
 				await page.click("#ju-confirm-cancel");
 				await settled(page, false);
-				await expect.poll(() => page.evaluate(() => document.activeElement?.id), { timeout: 5000, message: "focus did not return after Cancel" }).toBe(triggerId);
+				await expect.poll(hasFocus, { timeout: 5000, message: "focus did not return after Cancel" }).toBe(true);
 				await trigger.click();
 				await settled(page, true);
 				await page.keyboard.press("Escape");
 				await settled(page, false);
-				await expect.poll(() => page.evaluate(() => document.activeElement?.id), { timeout: 5000, message: "focus did not return after Escape" }).toBe(triggerId);
+				await expect.poll(hasFocus, { timeout: 5000, message: "focus did not return after Escape" }).toBe(true);
 				assert.equal(state.posts.length, 0, "a cancelled dialog sent a request");
 
 				// A live update replaces the table; the new button works the same way. The old node is marked

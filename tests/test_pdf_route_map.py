@@ -267,6 +267,13 @@ def _draw(model, width=480, height=280):
     return buf.getvalue()
 
 
+def test_builtin_font_glyph_check_uses_encoding_vector(model):
+    route_map = prm.RouteMap(model, "Helvetica", "Helvetica-Bold", 480)
+
+    assert route_map._has_glyphs("Düsseldorf")
+    assert not route_map._has_glyphs("東京")
+
+
 def _spy_drawn_text(monkeypatch) -> list[str]:
     """Record every string drawn on a reportlab canvas while still drawing it."""
     drawn: list[str] = []

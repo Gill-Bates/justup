@@ -7,6 +7,7 @@
 // label/value rows, a wide one the table. The channel is an icon with an accessible name in the table
 // and icon plus visible name in the card.
 import assert from "node:assert/strict";
+import { expect } from "@playwright/test";
 import { test } from "./fixtures.mjs";
 import { waitForVisualStability } from "./harness.mjs";
 
@@ -252,3 +253,140 @@ test("delivery queue log distinguishes an empty log from a filter without matche
 		await context.close();
 	}
 });
+
+// State row (loading spinner, "No entries", "No matching entries"): in table mode (container >= 40rem)
+// the cell is a real table cell spanning every column (colspan) and centred; only in card mode
+// (container < 40rem) it is a block with no label. Measured in both modes, both themes, all three states.
+const STATE_VIEWPORTS = [
+	{ name: "1280x720", width: 1280, height: 720, card: false },
+	{ name: "1024x768", width: 1024, height: 768, card: false },
+	{ name: "390x844", width: 390, height: 844, card: true },
+	{ name: "320x640", width: 320, height: 640, card: true },
+];
+const STATES = ["empty", "filtered", "loading"];
+
+// Opens the spooler tab. "loading" holds the log response until `release()` so the spinner row can be measured.
+async function openStateRow(page, app, theme, state) {
+	let release = () => {};
+	const gate = state === "loading" ? new Promise((resolve) => { release = resolve; }) : Promise.resolve();
+	await page.route("**/settings/notification-queue/log**", async (route) => {
+		await gate;
+		await route.fulfill({ json: { entries: [], total: 0 } });
+	});
+	await page.goto(app.base + "/ui/settings", { waitUntil: "load" });
+	await page.evaluate((mode) => document.documentElement.setAttribute("data-bs-theme", mode), theme);
+	await page.click("#spooler-tab");
+	if (state === "loading") {
+		await page.waitForSelector("#spooler-log-body td.spooler-log__state .spinner-border", { state: "visible", timeout: 15000 });
+	} else {
+		await page.waitForFunction(() => document.querySelector("#spooler-log-body td")?.textContent.trim() === "No entries", null, { timeout: 15000 });
+		if (state === "filtered") {
+			await page.locator("#spooler-filter-status").selectOption("failed");
+			await page.waitForFunction(() => document.querySelector("#spooler-log-body td")?.textContent.trim() === "No matching entries", null, { timeout: 15000 });
+		}
+	}
+	await waitForVisualStability(page);
+	return release;
+}
+
+const measureStateRow = (page) => page.evaluate(() => {
+	const table = document.getElementById("spooler-log-table");
+	const row = table.querySelector("tbody tr");
+	const cell = row.querySelector("td.spooler-log__state");
+	const rect = (el) => el.getBoundingClientRect();
+	const content = cell.querySelector(".spinner-border");
+	let contentBox;
+	if (content) {
+		contentBox = rect(content);
+	} else {
+		const range = document.createRange();
+		range.selectNodeContents(cell);
+		contentBox = range.getBoundingClientRect();
+	}
+	const rowStyle = getComputedStyle(row);
+	const de = document.documentElement;
+	const t = rect(table);
+	const c = rect(cell);
+	const head = rect(table.querySelector("thead"));
+	return {
+		display: getComputedStyle(cell).display,
+		colspan: cell.colSpan,
+		before: getComputedStyle(cell, "::before").content,
+		tableWidth: t.width,
+		tableCentre: (t.left + t.right) / 2,
+		cellWidth: c.width,
+		cellCentre: (c.left + c.right) / 2,
+		cellLeft: c.left,
+		cellRight: c.right,
+		contentCentre: (contentBox.left + contentBox.right) / 2,
+		rowContentWidth: row.clientWidth - parseFloat(rowStyle.paddingLeft) - parseFloat(rowStyle.paddingRight),
+		headWidth: head.width,
+		headHeight: head.height,
+		pageOverflow: de.scrollWidth > de.clientWidth + 1,
+		containerWidth: table.closest(".ju-table-viewport").clientWidth,
+		viewportWidth: de.clientWidth,
+	};
+});
+
+function assertStateRow(m, card, label) {
+	assert.equal(m.pageOverflow, false, `${label}: the page scrolls horizontally`);
+	assert.ok(["none", "normal"].includes(m.before), `${label}: no label content before the message (${m.before})`);
+	assert.ok(Math.abs(m.contentCentre - m.cellCentre) <= 2, `${label}: the message is centred in its cell (${m.contentCentre} vs ${m.cellCentre})`);
+	if (card) {
+		assert.equal(m.display, "block", `${label}: card mode: the state cell is a block`);
+		assert.ok(Math.abs(m.cellWidth - m.rowContentWidth) <= 2, `${label}: card mode: the cell fills its row (${m.cellWidth} vs ${m.rowContentWidth})`);
+		assert.ok(m.cellLeft >= -0.5 && m.cellRight <= m.viewportWidth + 0.5, `${label}: card mode: the cell is not clipped by the viewport`);
+		assert.ok(m.headWidth <= 1 && m.headHeight <= 1, `${label}: card mode: the table header is clipped away (${m.headWidth}x${m.headHeight})`);
+	} else {
+		assert.equal(m.display, "table-cell", `${label}: table mode: the state cell is a table cell`);
+		assert.equal(m.colspan, 8, `${label}: table mode: the cell spans every column`);
+		assert.ok(m.cellWidth >= m.tableWidth - 2, `${label}: table mode: the cell spans the full table (${m.cellWidth} vs ${m.tableWidth})`);
+		assert.ok(Math.abs(m.cellCentre - m.tableCentre) <= 2, `${label}: table mode: the cell is centred in the table (${m.cellCentre} vs ${m.tableCentre})`);
+	}
+}
+
+for (const viewport of STATE_VIEWPORTS) {
+	for (const theme of ["light", "dark"]) {
+		for (const state of STATES) {
+			test(`delivery queue log ${state} row in ${viewport.card ? "card" : "table"} mode at ${viewport.name} ${theme} @spooler-log`, async ({ browser, app, adminState }) => {
+				const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height }, storageState: adminState });
+				const page = await context.newPage();
+				let release = () => {};
+				try {
+					release = await openStateRow(page, app, theme, state);
+					const m = await measureStateRow(page);
+					assert.equal(m.containerWidth < 640, viewport.card, `the container is ${m.containerWidth}px wide`);
+					assertStateRow(m, viewport.card, `${state} ${viewport.name} ${theme}`);
+				} finally {
+					release();
+					await context.close();
+				}
+			});
+		}
+	}
+}
+
+// Boundary: the card query is `width < 40rem`, so 639 px is card mode and 640 px is table mode.
+// The inline width on the container is a measurement control only and is removed afterwards.
+for (const theme of ["light", "dark"]) {
+	test(`delivery queue log state row switches at the 40rem container boundary ${theme} @spooler-log`, async ({ browser, app, adminState }) => {
+		const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, storageState: adminState });
+		const page = await context.newPage();
+		try {
+			await openStateRow(page, app, theme, "empty");
+			const container = page.locator("#spooler-log-table").locator("xpath=ancestor::*[contains(@class,'ju-table-viewport')]");
+			for (const [width, card] of [[639, true], [640, false]]) {
+				await container.evaluate((el, w) => { el.style.width = `${w}px`; }, width);
+				await expect.poll(() => page.evaluate(() => getComputedStyle(document.querySelector("#spooler-log-body td.spooler-log__state")).display), {
+					message: `display at a ${width}px container`,
+				}).toBe(card ? "block" : "table-cell");
+				const m = await measureStateRow(page);
+				assert.equal(m.containerWidth, width, "the container has the forced width");
+				assertStateRow(m, card, `container ${width}px`);
+			}
+			await container.evaluate((el) => { el.style.removeProperty("width"); });
+		} finally {
+			await context.close();
+		}
+	});
+}
