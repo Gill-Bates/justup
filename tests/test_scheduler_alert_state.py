@@ -932,11 +932,12 @@ def test_scheduler_lock_status_and_alert_writes_run_off_event_loop(db_path, tmp_
             scheduler.sqlite_db, "set_target_status_snapshot", off_loop("status", sqlite_db.set_target_status_snapshot)
         ),
         mock.patch.object(scheduler.sqlite_db, "create_alert", off_loop("alert", sqlite_db.create_alert)),
+        mock.patch.object(scheduler.sqlite_db, "get_target", off_loop("snapshot", sqlite_db.get_target)),
         mock.patch.object(sched, "_dispatch_alert", mock.AsyncMock()),
     ):
         asyncio.run(scenario())
 
-    assert observed == {"lock", "status", "alert"}
+    assert observed == {"lock", "status", "alert", "snapshot"}
 
 
 def test_metric_points_of_a_lost_lock_are_discarded_before_any_write(db_path, tmp_path):

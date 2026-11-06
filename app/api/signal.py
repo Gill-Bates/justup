@@ -43,6 +43,7 @@ from ..services.notifications.signal_errors import (
     SignalTimeout,
     SignalUnavailable,
 )
+from ..utils.constants import SettingKeys
 from ..utils.deps import get_conn
 from ..utils.phone import normalize_phone
 from ..utils.rate_limit import RATE_LIMIT_DEFAULT, rate_limit, rate_limit_user
@@ -346,24 +347,26 @@ class ProfileRequest(BaseModel):
 
 
 @router.post("/profile-name", status_code=status.HTTP_204_NO_CONTENT)
-def signal_update_profile(request: ProfileRequest, _admin=Depends(require_admin)):
+def signal_update_profile(request: ProfileRequest, _admin=Depends(require_admin), conn=Depends(get_conn)):
     """Update Signal profile name and avatar (admin only).
 
     Sets the display name shown in Signal chats and the justUp avatar.
     Avatar path resolution is handled by the backend.
     """
     backend = get_signal_backend()
+    configured = sqlite_db.get_setting(conn, SettingKeys.SIGNAL_API_SENDER_NUMBER, None)
 
     try:
         # Backend handles avatar path resolution
-        backend.update_profile(name=request.name)
+        backend.update_profile(name=request.name, sender=configured or None)
         return Response(status_code=204)
 
     except SignalSendFailed as e:
         raise HTTPException(status_code=400, detail="Signal profile update failed; try again later") from e
 
     except SignalNotRegistered as e:
-        raise HTTPException(status_code=409, detail="No Signal account is linked") from e
+        detail = "Configured Signal sender is not registered" if configured else "No Signal account is linked"
+        raise HTTPException(status_code=409, detail=detail) from e
 
     except (SignalUnavailable, SignalTimeout) as e:
         _log.warning("Signal unavailable for profile update: %s", e)

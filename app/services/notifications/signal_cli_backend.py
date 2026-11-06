@@ -922,18 +922,19 @@ class SignalCliBackend(SignalBackend):
             self._require_rpc_success(response, "verification", number)
             _log.info("Signal registration verified for %s", _mask_phone(number))
 
-    def update_profile(self, name: str, avatar_path: str | None = None) -> None:
+    def update_profile(self, name: str, avatar_path: str | None = None, sender: str | None = None) -> None:
         """Update Signal profile name and avatar.
 
         Args:
             name: Display name shown in Signal chats
             avatar_path: Optional explicit path to avatar image. If None, tries default locations.
+            sender: Configured alert sender (SIGNAL_API_SENDER_NUMBER); falls back to the instance sender.
 
         Thread-safe: Uses lock to prevent concurrent state modifications.
         """
         with self._state_lock:
-            # The configured sender is the account that sends alerts; raises when none is registered.
-            account = self.get_valid_sender(self._sender)
+            # The caller passes the configured alert sender; raises when it is not registered.
+            account = self.get_valid_sender(sender or self._sender)
 
             profile = {"account": account, "givenName": name}
 

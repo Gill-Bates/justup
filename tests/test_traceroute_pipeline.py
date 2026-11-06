@@ -99,6 +99,24 @@ def test_web_and_pdf_build_the_same_route(monkeypatch: pytest.MonkeyPatch, route
     assert web["has_interpolation"] == pdf_interp
 
 
+def test_fragment_geo_points_are_built_off_the_event_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_sources(monkeypatch, ROUTES["reached"])
+    real = traceroute_geo.route_hops_to_geo_points
+    calls: list[int] = []
+
+    def off_loop(*args, **kwargs):
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            calls.append(1)
+            return real(*args, **kwargs)
+        raise AssertionError("route_hops_to_geo_points ran on the event loop")
+
+    monkeypatch.setattr(traceroute_geo, "route_hops_to_geo_points", off_loop)
+    web = _web_context(monkeypatch)
+    assert calls and web["geo_points"]
+
+
 def test_the_fragment_route_passes_the_map_rules_to_the_template(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_sources(monkeypatch, ROUTES[min(ROUTES)])
     web = _web_context(monkeypatch)

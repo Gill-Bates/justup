@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from .tcp_ports import parse_port_list, tcp_ports_or_default
+from .uptime_metric import read_flag
 
 # A gap is a distance between two points of one series above this many expected check intervals.
 GAP_FACTOR = 3
@@ -160,11 +161,7 @@ def downtime_series(target: object) -> list[tuple[str, str]]:
     Each TCP and UDP port has its own series; disabled checks and removed ports contribute nothing.
     """
 
-    def flag(key: str) -> bool:
-        try:
-            return bool(target[key])  # type: ignore[index]
-        except (KeyError, IndexError, TypeError):
-            return False
+    flag = lambda key: read_flag(target, key)  # noqa: E731
 
     def text(key: str) -> str:
         try:

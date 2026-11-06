@@ -18,7 +18,7 @@ from ..db import tsdb as tsdb_db
 from .availability_rules import downtime_series
 from .metric_limits import choose_display_bucket_seconds, choose_points_limit
 from .tcp_ports import DEFAULT_TCP_PORTS
-from .uptime_metric import select_uptime_metric
+from .uptime_metric import enabled_availability_metrics
 
 _log = logging.getLogger(__name__)
 
@@ -128,7 +128,7 @@ def collect_report_inputs(
 ) -> dict[str, Any]:
     """Collect every TSDB input of a PDF report as ``ReportData`` keyword arguments (blocking).
 
-    One uptime metric drives availability, with no fallback to another check. A failing fetch leaves
+    Availability combines all enabled checks (UP only if every one is up). A failing fetch leaves
     its series empty and, when ``errors`` is given, is recorded there so the report can be partial.
     ``tcp_port_data`` is always a dict; callers decide how to represent "no per-port data".
     """
@@ -150,7 +150,6 @@ def collect_report_inputs(
                 errors.append(f"{metric}: data unavailable")
             return None
 
-    uptime_metric = select_uptime_metric(target)
     # Separate lists: a chained assignment would alias one object across all series.
     http_data: list[dict[str, Any]] = []
     uptime_data: list[dict[str, Any]] = []
@@ -162,8 +161,6 @@ def collect_report_inputs(
 
     if target.get("enable_http_check"):
         http_data = fetch("http_ms")
-        if uptime_metric == "http_up":
-            uptime_data = fetch("http_up")
         status = display("http_status")
         if status is not None:
             status_code_data = [
@@ -172,14 +169,8 @@ def collect_report_inputs(
             ]
     if target.get("enable_ping"):
         ping_data = fetch("ping_ms")
-        if uptime_metric == "ping_up":
-            uptime_data = fetch("ping_up")
-    if uptime_metric == "udp_up":  # UDP is the only enabled check: its availability drives the report
-        uptime_data = fetch("udp_up")
     if target.get("enable_tcp_connect"):
         tcp_data = fetch("tcp_ms")
-        if uptime_metric == "tcp_up":
-            uptime_data = fetch("tcp_up")
         tcp_ports = parse_tcp_ports(str(target.get("tcp_ports") or DEFAULT_TCP_PORTS))
         if len(tcp_ports) > 1:
             for port in tcp_ports:
@@ -188,6 +179,18 @@ def collect_report_inputs(
                     tcp_port_data[port] = port_data
     if target.get("enable_cert_expiration"):
         cert_data = fetch("cert_days_left")
+
+    # Availability is the combined result of every enabled check, so it agrees with the listed outages.
+    availability_metrics = enabled_availability_metrics(target)
+    if availability_metrics:
+        try:
+            uptime_data = tsdb_db.query_availability_samples(
+                tsdb_dir, target_id=target_id, metrics=availability_metrics, since=since, until=until
+            )
+        except Exception:  # noqa: BLE001 - a partial report can omit availability history
+            _log.exception("Availability query failed for target %d", target_id)
+            if errors is not None:
+                errors.append("availability: data unavailable")
 
     chart_metrics = [
         metric

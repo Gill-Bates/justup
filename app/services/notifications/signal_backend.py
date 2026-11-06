@@ -265,11 +265,13 @@ class SignalBackend(ABC):
         self,
         name: str,
         avatar_path: str | None = None,
+        sender: str | None = None,
     ) -> None:
         """Update Signal profile name and avatar.
 
         Args:
             name: Display name shown in Signal chats
+            sender: Configured alert sender; the first registered account is used when None
             avatar_path: Optional path to avatar image
 
         Raises:

@@ -1912,3 +1912,42 @@ def test_logo_aspect_and_bounds_match_the_svg_viewbox():
     assert min(xs) >= -1 and max(xs) <= w + 1
     assert min(ys) >= -1 and max(ys) <= h + 1
     assert pdf_logo.logo_aspect() == pytest.approx(h / w)
+
+
+# --- Availability agrees with the listed outages -------------------------------------------------
+
+
+def _combined_availability_data(tmp_path: Path, *, with_periods: bool) -> ReportData:
+    from app.db import tsdb
+    from app.utils.report_metrics import collect_report_inputs
+
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    end = start + timedelta(hours=1)
+    target = {
+        "enable_http_check": True,
+        "enable_ping": False,
+        "enable_tcp_connect": True,
+        "tcp_ports": "443",
+        "interval_seconds": 300,
+        "sla_enabled": False,
+    }
+    for i in range(12):
+        at = start + timedelta(minutes=5 * i)
+        tsdb.append_point(tmp_path, target_id=1, metric="http_up", value=1, retention_days=365, at=at)
+        tsdb.append_point(tmp_path, target_id=1, metric="tcp_up", value=0 if i in (3, 4) else 1, retention_days=365, at=at)
+    inputs = collect_report_inputs(tmp_path, 1, target, start, end)
+    periods = None
+    if with_periods:
+        down_at = start + timedelta(minutes=15)
+        periods = [tsdb.DowntimePeriod(down_at, down_at + timedelta(minutes=10), 600, ["TCP:443"])]
+    return ReportData(target=target, from_date=start, to_date=end, downtime_periods=periods, **inputs)
+
+
+@pytest.mark.parametrize("with_periods", [False, True], ids=["sampled-events", "exact-periods"])
+def test_availability_includes_a_failing_check_that_the_outage_list_shows(tmp_path, with_periods):
+    data = _combined_availability_data(tmp_path, with_periods=with_periods)
+    builder = PDFReportBuilder(data)
+    assert builder.downtime_events
+    assert builder.kpis.uptime_percent is not None and builder.kpis.uptime_percent < 100
+    assert builder.kpis.down_count == 2
+    assert builder._status_info()[0] != "Operational"

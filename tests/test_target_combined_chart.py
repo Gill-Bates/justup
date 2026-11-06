@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from app.api.metrics import _is_allowed_metric
-from app.utils.uptime_metric import _PRIORITY
+from app.utils.uptime_metric import AVAILABILITY_CHECKS
 
 ROOT = Path(__file__).resolve().parent.parent
 TEMPLATE = ROOT / "app" / "templates" / "fragments" / "target_detail" / "charts_and_downtime.html"
@@ -34,7 +34,7 @@ def test_metrics_used_by_the_combined_chart_are_served(metric: str) -> None:
 def test_latency_source_priority_matches_uptime_metric_selection() -> None:
     js = DATA_JS.read_text(encoding="utf-8")
     js_up = re.findall(r"""upMetric: ['"]([a-z_]+)['"]""", js)
-    assert js_up == [metric for _flag, metric in _PRIORITY]
+    assert js_up == [metric for _svc, _flag, metric in AVAILABILITY_CHECKS[:3]]
 
 
 @pytest.mark.parametrize("theme", ["light", "dark"])

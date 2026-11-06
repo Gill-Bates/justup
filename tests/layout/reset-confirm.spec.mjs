@@ -8,6 +8,7 @@
 // send nothing, Confirm sends exactly one request, focus returns to the trigger, and the table stays
 // operable after a live update.
 import assert from "node:assert/strict";
+import { expect } from "@playwright/test";
 import { test } from "./fixtures.mjs";
 
 const VIEWPORTS = [{ name: "1280x720", width: 1280, height: 720 }, { name: "390x844", width: 390, height: 844 }];
@@ -51,13 +52,14 @@ for (const viewport of VIEWPORTS) {
 		test(`targets list: reset asks in the shared dialog at ${viewport.name} ${theme} @reset-confirm`, async ({ browser, app, adminState }) => {
 			const { context, page, state } = await open(browser, app, adminState, viewport, theme, "/ui/targets");
 			try {
-				// Below 768 px the groups start collapsed by design: open the target's group like a user would.
+				// Below 768 px the groups collapse by design, at a moment that differs per engine: open the
+				// target's group like a user would, until its button is visible.
 				const group = page.locator('#targets-table .accordion-item:has(tr:has-text("wiedenest.de"))');
-				await group.waitFor({ state: "attached", timeout: 20000 });
-				if (viewport.width < 768) await page.waitForFunction(() => document.getElementById("targets-accordion")?.dataset.mobileCollapsed === "1", null, { timeout: 10000 });
 				const header = group.locator(".accordion-button");
-				if ((await header.getAttribute("aria-expanded")) === "false") await header.click();
-				await page.waitForSelector('#targets-table button[title="Reset Metrics"]', { timeout: 20000 });
+				await expect(async () => {
+					if (!(await group.locator('button[title="Reset Metrics"]').first().isVisible()) && (await header.getAttribute("aria-expanded")) === "false") await header.click();
+					await expect(group.locator('button[title="Reset Metrics"]').first()).toBeVisible({ timeout: 1000 });
+				}).toPass({ timeout: 20000 });
 				const trigger = page.locator('#targets-table tr:has-text("wiedenest.de") button[title="Reset Metrics"]');
 				const triggerId = await trigger.evaluate((el) => { el.id = el.id || "reset-trigger"; return el.id; });
 

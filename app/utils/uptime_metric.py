@@ -14,12 +14,16 @@ from typing import Any
 
 from .constants import UPTIME_THRESHOLD_GREEN, UPTIME_THRESHOLD_YELLOW
 
-_PRIORITY = (("enable_http_check", "http_up"), ("enable_ping", "ping_up"), ("enable_tcp_connect", "tcp_up"))
-# UDP only counts when no other check is enabled for the chart/uptime source; it is a plain extra metric.
-_UDP = ("enable_udp_scan", "udp_up")
+# (service, config flag, metric) in priority order HTTP > Ping > TCP > UDP. Cert never counts as availability.
+AVAILABILITY_CHECKS = (
+    ("http", "enable_http_check", "http_up"),
+    ("ping", "enable_ping", "ping_up"),
+    ("tcp", "enable_tcp_connect", "tcp_up"),
+    ("udp", "enable_udp_scan", "udp_up"),
+)
 
 
-def _flag(target: Mapping[str, Any] | Any, key: str) -> bool:
+def read_flag(target: Mapping[str, Any] | Any, key: str) -> bool:
     """Read a flag from a dict or sqlite3.Row; a missing column counts as disabled."""
     try:
         return bool(target[key])
@@ -27,9 +31,16 @@ def _flag(target: Mapping[str, Any] | Any, key: str) -> bool:
         return False
 
 
+def availability_check_enabled(target: Mapping[str, Any] | Any, service: str, flag: str) -> bool:
+    """Whether a check counts for availability; UDP only counts with configured ports."""
+    if not read_flag(target, flag):
+        return False
+    return read_flag(target, "udp_ports") if service == "udp" else True
+
+
 def enabled_availability_metrics(target: Mapping[str, Any] | Any) -> tuple[str, ...]:
     """Return the availability metrics of the checks currently enabled for a target."""
-    return tuple(metric for flag, metric in (*_PRIORITY, _UDP) if _flag(target, flag))
+    return tuple(metric for svc, flag, metric in AVAILABILITY_CHECKS if availability_check_enabled(target, svc, flag))
 
 
 # Points written by the scheduler carry one shared timestamp per check cycle (``cycle_at``), so they
@@ -59,11 +70,12 @@ def combine_availability(events: Iterable[tuple[datetime, str, int]]) -> Iterato
 
 
 def select_uptime_metric(target: Mapping[str, Any] | Any) -> str | None:
-    """Return the uptime metric for a target. Priority: HTTP > Ping > TCP, then UDP; None if no check is enabled."""
-    for flag, metric in (*_PRIORITY, _UDP):
-        if _flag(target, flag):
-            return metric
-    return None
+    """Return the uptime metric for a target. Priority: HTTP > Ping > TCP, then UDP; None if no check is enabled.
+
+    Meant for a single chart series; the PDF availability and the outage list aggregate all enabled checks.
+    """
+    metrics = enabled_availability_metrics(target)
+    return metrics[0] if metrics else None
 
 
 def uptime_level(

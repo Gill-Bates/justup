@@ -1977,7 +1977,9 @@ async def _run_traceroute_fragment(
             final_rtt_hint_ms=final_latency,
         )
 
-    geo_points = route_hops_to_geo_points(
+    # GeoIP/SQLite/HTTP lookups block for up to ~10 s: keep them off the event loop.
+    geo_points = await run_in_threadpool(
+        route_hops_to_geo_points,
         interpolated_hops,
         destination_ip=target_ip,
         destination_geo=destination_geo,

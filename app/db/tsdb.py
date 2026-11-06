@@ -38,6 +38,7 @@ from collections import deque
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from functools import wraps
 from pathlib import Path
 from typing import Any, Self
 
@@ -137,6 +138,38 @@ def _series_path(tsdb_dir: Path, target_id: int, metric: str) -> Path:
 def _lock_path(series_path: Path) -> Path:
     """Return the lock file path for a series."""
     return series_path.with_suffix(".lock")
+
+
+def _batch_path(tsdb_dir: Path, target_id: int) -> Path:
+    return tsdb_dir / f"target_{target_id}" / ".batch"
+
+
+_target_read_state = threading.local()
+
+
+@contextlib.contextmanager
+def _target_read_lock(tsdb_dir: Path, target_id: int) -> Iterator[None]:
+    """Hold one target snapshot across queries of several metric files."""
+    path = _batch_path(tsdb_dir, target_id)
+    held = getattr(_target_read_state, "held", set())
+    if path in held:
+        yield
+        return
+    with _FileLock(path, exclusive=False):
+        _target_read_state.held = held | {path}
+        try:
+            yield
+        finally:
+            _target_read_state.held = held
+
+
+def _consistent_target_read(function: Callable[..., Any]) -> Callable[..., Any]:
+    @wraps(function)
+    def read(tsdb_dir: Path, *, target_id: int, **kwargs: Any) -> Any:
+        with _target_read_lock(tsdb_dir, target_id):
+            return function(tsdb_dir, target_id=target_id, **kwargs)
+
+    return read
 
 
 class _FileLock:
@@ -342,6 +375,76 @@ def append_point(
         # Rate-limited + probabilistic pruning to keep append O(1) in hot path
         if _try_prune(series_key):
             _prune_series_locked(p, retention_days)
+
+
+def _append_batch_line(path: Path, line: bytes) -> None:
+    with path.open("ab") as stream:
+        stream.write(line)
+
+
+def append_points(
+    tsdb_dir: Path,
+    *,
+    target_id: int,
+    points: Sequence[tuple[str, Any]],
+    retention_days: int,
+    at: datetime,
+    lock_lost: Callable[[], bool],
+) -> bool:
+    """Append a check cycle across series, or roll back every line if its lock is lost."""
+    retention_days = _validate_retention(retention_days)
+    if at.tzinfo is None:
+        raise ValueError("Naive timestamp is not allowed in TSDB")
+    stamp = ensure_utc(at).isoformat()
+    entries = [
+        (
+            _series_path(tsdb_dir, target_id, metric),
+            (json.dumps({"ts": stamp, "value": value}, ensure_ascii=False) + "\n").encode("utf-8"),
+        )
+        for metric, value in points
+    ]
+    if lock_lost():
+        return False
+    paths = sorted({path for path, _ in entries})
+    with _FileLock(_batch_path(tsdb_dir, target_id)):
+        with contextlib.ExitStack() as stack:
+            for path in paths:
+                stack.enter_context(_FileLock(path))
+            if lock_lost():
+                return False
+            original = {path: (path.exists(), path.stat().st_size if path.exists() else 0) for path in paths}
+            try:
+                for path, line in entries:
+                    if lock_lost():
+                        break
+                    _append_batch_line(path, line)
+                if not lock_lost() and all(path.exists() for path in paths):
+                    committed = True
+                else:
+                    committed = False
+            except BaseException:
+                for path, (existed, size) in original.items():
+                    if path.exists():
+                        with path.open("r+b") as stream:
+                            stream.truncate(size)
+                        if not existed:
+                            path.unlink()
+                raise
+            if not committed:
+                for path, (existed, size) in original.items():
+                    if path.exists():
+                        with path.open("r+b") as stream:
+                            stream.truncate(size)
+                        if not existed:
+                            path.unlink()
+                return False
+    for path in paths:
+        if _try_prune(f"{target_id}:{path.stem}"):
+            try:
+                prune_series(tsdb_dir, target_id=target_id, metric=path.stem, retention_days=retention_days)
+            except OSError as exc:
+                _log.warning("TSDB pruning of %s (target %s) failed, will retry: %s", path.stem, target_id, exc)
+    return True
 
 
 def _series_stems(tdir: Path) -> set[str]:
@@ -645,6 +748,7 @@ def _tail_segments(snap_segments: list[tuple[seg.Segment, Any]], need: int) -> l
     return collected[-need:]
 
 
+@_consistent_target_read
 def query(
     tsdb_dir: Path,
     *,
@@ -709,6 +813,7 @@ def query(
     return list(tail) if latest else head
 
 
+@_consistent_target_read
 def query_zero_points(
     tsdb_dir: Path,
     *,
@@ -736,6 +841,7 @@ def query_zero_points(
     return list(tail)
 
 
+@_consistent_target_read
 def count_binary_points(
     tsdb_dir: Path,
     *,
@@ -763,6 +869,7 @@ def count_binary_points(
     return up, total
 
 
+@_consistent_target_read
 def count_availability(
     tsdb_dir: Path,
     *,
@@ -778,6 +885,21 @@ def count_availability(
     """
     if len(metrics) == 1:
         return count_binary_points(tsdb_dir, target_id=target_id, metric=metrics[0], since=since, until=until)
+    up = total = 0
+    for _ts, value in _availability_cycles(tsdb_dir, target_id, metrics, since, until):
+        total += 1
+        up += value == 1
+    return up, total
+
+
+def _availability_cycles(
+    tsdb_dir: Path,
+    target_id: int,
+    metrics: Sequence[str],
+    since: datetime | None,
+    until: datetime | None,
+) -> Iterator[tuple[datetime, int]]:
+    """Stream one ``(ts, 0|1)`` availability sample per check cycle across the given binary metrics."""
     since_u = ensure_utc(since) if since else None
     until_u = ensure_utc(until) if until else None
 
@@ -787,7 +909,6 @@ def count_availability(
             if pt is not None and pt.value in (0, 1):
                 yield pt.ts, metric, int(pt.value)
 
-    up = total = 0
     with contextlib.ExitStack() as stack:
         streams = []
         for metric in metrics:
@@ -795,10 +916,25 @@ def count_availability(
             if _series_exists(p):
                 lines = stack.enter_context(contextlib.closing(_iter_series_lines(p, since_u, until_u)))
                 streams.append(events(metric, lines))
-        for _ts, value in combine_availability(heapq.merge(*streams, key=lambda e: e[0])):
-            total += 1
-            up += value == 1
-    return up, total
+        yield from combine_availability(heapq.merge(*streams, key=lambda e: e[0]))
+
+
+def query_availability_samples(
+    tsdb_dir: Path,
+    *,
+    target_id: int,
+    metrics: Sequence[str],
+    since: datetime | None = None,
+    until: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """Return every overall-availability sample as ``{"ts", "value"}``, never thinned.
+
+    Same streams and combination rule as ``count_availability``; deliberately not routed through
+    ``query_auto_resolution``, which downsamples and would drop outages from the report.
+    """
+    return [
+        {"ts": ts.isoformat(), "value": value} for ts, value in _availability_cycles(tsdb_dir, target_id, metrics, since, until)
+    ]
 
 
 def query_latest(
@@ -1608,6 +1744,7 @@ def housekeep_target(
     return result
 
 
+@_consistent_target_read
 def query_auto_resolution(
     tsdb_dir: Path,
     *,
@@ -1715,6 +1852,7 @@ def query_auto_resolution(
     return all_points
 
 
+@_consistent_target_read
 def query_display_series(
     tsdb_dir: Path,
     *,
@@ -1858,6 +1996,7 @@ def _series_points(
     return points
 
 
+@_consistent_target_read
 def query_downtime_periods(
     tsdb_dir: Path,
     *,
@@ -1954,6 +2093,7 @@ def _series_unmeasured(
     return found
 
 
+@_consistent_target_read
 def query_unmeasured_periods(
     tsdb_dir: Path,
     *,
@@ -2107,6 +2247,7 @@ def _limit_availability_points(points: list[dict[str, Any]], limit: int) -> list
     return [points[i] for i in sorted(keep)]
 
 
+@_consistent_target_read
 def query_availability_series(
     tsdb_dir: Path,
     *,

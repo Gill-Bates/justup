@@ -282,6 +282,7 @@ def test_outbox_row_of_a_cascade_deleted_alert_is_neither_dispatched_nor_kept(co
     conn.execute("DELETE FROM targets WHERE id = 1")  # alerts go with the target, the outbox row does not
     conn.commit()
     assert sqlite_db.list_pending_alert_dispatches(conn) == []
+    assert sqlite_db.has_pending_alert_dispatches(conn) is False
     retention.run_retention(conn)
     assert conn.execute("SELECT COUNT(*) FROM alert_dispatch_outbox").fetchone()[0] == 0
 

@@ -53,7 +53,7 @@ from app.utils.ssrf import redact_url
 from app.utils.status_helper import cert_severity
 from app.utils.tcp_ports import parse_port_list, protocol_scan_hosts, tcp_ports_or_default
 from app.utils.time import utcnow
-from app.utils.uptime_metric import enabled_availability_metrics
+from app.utils.uptime_metric import AVAILABILITY_CHECKS, availability_check_enabled, enabled_availability_metrics
 
 _log = logging.getLogger(__name__)
 
@@ -201,16 +201,7 @@ def _align_to_interval(now: datetime, interval_seconds: int, offset_seconds: int
 
 def _restorable_services(cfg: dict[str, Any], failed_service: str) -> list[str]:
     """Enabled availability checks to mark down again for a restored alert (cert never alerts here)."""
-    enabled = [
-        svc
-        for svc, flag in (
-            ("http", "enable_http_check"),
-            ("ping", "enable_ping"),
-            ("tcp", "enable_tcp_connect"),
-            ("udp", "enable_udp_scan"),
-        )
-        if cfg.get(flag)
-    ]
+    enabled = [svc for svc, flag, _metric in AVAILABILITY_CHECKS if availability_check_enabled(cfg, svc, flag)]
     # Endpoint tokens such as "tcp:25" name their service before the colon.
     named = {s.strip().lower().split(":")[0] for s in failed_service.split(",")}
     return [svc for svc in enabled if svc in named] or enabled
@@ -465,10 +456,7 @@ class MonitorScheduler:
         self._failed_iterations = 0
         # Run epoch: a supervisor restart (e.g. after a hang) bumps it, so worker threads that
         # belong to the abandoned run refuse to start work and the new run waits for them.
-        self._run_epoch = 0
-        self._epoch_lock = threading.Lock()
-        self._threads_active = 0
-        self._stale_logged_epoch = -1
+        self._init_thread_call_state()
         self._service_previews: dict[str, PendingServiceDetection] = {}
         self._service_previews_lock = threading.Lock()
         self._service_detections_running: set[int] = set()
@@ -513,6 +501,13 @@ class MonitorScheduler:
             self._stop.clear()
             self._register_run()
             self._task = asyncio.create_task(self._run_loop())
+
+    def _init_thread_call_state(self) -> None:
+        """Initialise the run-epoch bookkeeping used by ``_thread_call``."""
+        self._run_epoch = 0
+        self._epoch_lock = threading.Lock()
+        self._threads_active = 0
+        self._stale_logged_epoch = -1
 
     def _epoch_for_thread(self) -> int:
         """Epoch of the run the calling coroutine belongs to, never the (newer) current one."""
@@ -934,18 +929,19 @@ class MonitorScheduler:
 
         failed = False
         for row in rows:
-            payload = AlertPayload(
-                alert_id=row["alert_id"],
-                target_id=int(row["target_id"]),
-                target_name=row["target_name"],
-                failed_service=row["failed_service"],
-                status=AlertStatus.RESOLVED if row["event_type"] == "resolved" else AlertStatus.OPEN,
-                started_at=_stored_datetime(row["started_at"]) or utcnow(),
-                ended_at=_stored_datetime(row["ended_at"]),
-                duration_seconds=row["duration_seconds"],
-            )
             error_type = None
             try:
+                # An unparsable stored value fails this row only; it backs off like any other failure.
+                payload = AlertPayload(
+                    alert_id=row["alert_id"],
+                    target_id=int(row["target_id"]),
+                    target_name=row["target_name"],
+                    failed_service=row["failed_service"],
+                    status=AlertStatus.RESOLVED if row["event_type"] == "resolved" else AlertStatus.OPEN,
+                    started_at=_stored_datetime(row["started_at"]) or utcnow(),
+                    ended_at=_stored_datetime(row["ended_at"]),
+                    duration_seconds=row["duration_seconds"],
+                )
 
                 def dispatch(alert_payload: AlertPayload = payload) -> Any:
                     with maintenance.work_section(generation), self._db_conn() as conn:
@@ -984,7 +980,7 @@ class MonitorScheduler:
 
             await asyncio.to_thread(
                 self._thread_call(self._epoch_for_thread(), record_attempt),
-                payload.alert_id,
+                row["alert_id"],
                 row["event_type"],
                 succeeded,
                 retry_delay,
@@ -1230,6 +1226,10 @@ class MonitorScheduler:
         rt.udp_result_at = None
         rt.udp_last_started = None
         rt.udp_closed_streak.clear()
+
+    def _snapshot_current(self, generation: int | None, target_id: int, cfg: dict[str, Any]) -> bool:
+        with maintenance.work_section(generation), self._db_conn() as conn:
+            return self._target_matches_snapshot(conn, target_id, cfg)
 
     @staticmethod
     def _target_matches_snapshot(conn, target_id: int, cfg: dict[str, Any]) -> bool:
@@ -1583,10 +1583,14 @@ class MonitorScheduler:
             # Write-once policy: persist at most one point per metric per interval
             try:
                 with maintenance.work_section(generation):
-                    with self._db_conn() as conn:
-                        if not self._target_matches_snapshot(conn, target_id, cfg):
-                            self._refresh_requested = True
-                            return
+                    if not await asyncio.to_thread(
+                        self._thread_call(self._epoch_for_thread(), self._snapshot_current),
+                        generation,
+                        target_id,
+                        cfg,
+                    ):
+                        self._refresh_requested = True
+                        return
 
                     # One stamp for all points of this cycle: the availability aggregation relies on it
                     # (app/utils/uptime_metric.py) and must not depend on how long storing takes.
@@ -1756,7 +1760,7 @@ class MonitorScheduler:
                     _update_service("ping", snapshot.get("ping_up"))
                 if still_enabled("enable_tcp_connect"):
                     _update_service("tcp", snapshot.get("tcp_up"))
-                if still_enabled("enable_udp_scan") and cfg.get("udp_ports"):
+                if still_enabled("enable_udp_scan") and availability_check_enabled(cfg, "udp", "enable_udp_scan"):
                     _update_service("udp", snapshot.get("udp_up"))
                     if snapshot.get("udp_up") is None:
                         rt.down_since_by_service["udp"] = None  # UNKNOWN restarts the confirmation
@@ -1771,7 +1775,7 @@ class MonitorScheduler:
                 ):
                     if not still_enabled(flag):
                         rt.down_since_by_service[service] = None
-                if not (still_enabled("enable_udp_scan") and cfg.get("udp_ports")):
+                if not (still_enabled("enable_udp_scan") and availability_check_enabled(cfg, "udp", "enable_udp_scan")):
                     rt.down_since_by_service["udp"] = None
                 if calculate_uptime and uptime_percent is not None:
                     rt.last_uptime_calc_at = now
@@ -1817,16 +1821,10 @@ class MonitorScheduler:
     @staticmethod
     def _overall_status(cfg: dict[str, Any], snapshot: dict[str, Any]) -> str:
         """Overall status from the enabled checks; a confirmed outage outranks any unknown result."""
-        values: list[int | None] = []
-        if cfg["enable_http_check"]:
-            values.append(snapshot.get("http_up"))
-        if cfg["enable_ping"]:
-            values.append(snapshot.get("ping_up"))
-        if cfg["enable_tcp_connect"]:
-            values.append(snapshot.get("tcp_up"))
-        if cfg.get("enable_udp_scan") and cfg.get("udp_ports"):
-            # An unconfirmed port (filtered, open|filtered, scan failure, stale result) is None, never 0.
-            values.append(snapshot.get("udp_up"))
+        # An unconfirmed UDP port (filtered, open|filtered, scan failure, stale result) is None, never 0.
+        values: list[int | None] = [
+            snapshot.get(metric) for svc, flag, metric in AVAILABILITY_CHECKS if availability_check_enabled(cfg, svc, flag)
+        ]
         if not values:
             return TargetStatus.DISABLED
         if any(v == 0 for v in values):
@@ -1878,7 +1876,9 @@ class MonitorScheduler:
         udp_interval = udp_interval_seconds(interval)
         if not rt.udp_seeded:
             rt.udp_seeded = True
-            await asyncio.to_thread(self._seed_udp_result, target_id, rt)
+            await asyncio.to_thread(
+                self._thread_call(self._epoch_for_thread(), self._seed_udp_result), target_id, rt, generation
+            )
         elapsed = (now - rt.udp_last_started).total_seconds() if rt.udp_last_started else None
         # Below the UDP minimum the scan waits for it strictly (next regular cycle after it). At or above it the
         # target cycle is the cadence, so half a cycle only absorbs timing drift and avoids a skipped cycle.
@@ -1912,15 +1912,15 @@ class MonitorScheduler:
             outcome.append(known or checks.PortCheck("udp", port, PortStatus.UNKNOWN, None, "no fresh result"))
         return outcome
 
-    def _seed_udp_result(self, target_id: int, rt: TargetRuntime) -> None:
+    def _seed_udp_result(self, target_id: int, rt: TargetRuntime, generation: int | None) -> None:
         """After a restart, reuse the persisted per-port status so a fresh result is not thrown away."""
         try:
-            with self._db_conn() as conn:
+            with maintenance.work_section(generation), self._db_conn() as conn:
                 rows = sqlite_db.list_network_ports(conn, target_id)
         except Exception as exc:  # noqa: BLE001 - seeding is best effort; UNKNOWN is the safe default
             _log.debug("Target %s: could not seed UDP state: %s", target_id, exc)
             return
-        newest: datetime | None = None
+        oldest: datetime | None = None
         for row in rows:
             checked_at = _stored_datetime(row["checked_at"])
             if row["protocol"] != "udp" or checked_at is None or row["status"] not in (PortStatus.UP, PortStatus.DOWN):
@@ -1930,9 +1930,9 @@ class MonitorScheduler:
             )
             if row["status"] == PortStatus.DOWN:
                 rt.udp_closed_streak[row["port"]] = UDP_CONFIRM_SCANS  # a stored DOWN was already confirmed
-            newest = checked_at if newest is None else min(newest, checked_at)
-        rt.udp_result_at = newest
-        rt.udp_last_started = newest
+            oldest = checked_at if oldest is None else min(oldest, checked_at)
+        rt.udp_result_at = oldest
+        rt.udp_last_started = oldest
 
     @staticmethod
     def _confirm_udp_closed(rt: TargetRuntime, outcome: dict[int, checks.PortCheck]) -> dict[int, checks.PortCheck]:
@@ -2072,7 +2072,7 @@ class MonitorScheduler:
                     )
                 return tuple(sorted(candidates, key=lambda item: (item.protocol, item.port)))
 
-        candidates = await asyncio.to_thread(compare)
+        candidates = await asyncio.to_thread(self._thread_call(self._epoch_for_thread(), compare))
         if not candidates:
             return {"token": None, "changes": []}
         token = uuid.uuid4().hex
@@ -2135,30 +2135,28 @@ class MonitorScheduler:
         points: list[tuple[str, int | float]],
         lock_lost: asyncio.Event,
     ) -> bool:
-        """Persist one cycle's points with a shared stamp (worker thread); False if the lock was lost first."""
+        """Persist one cycle's points together; discard the cycle if its lock was lost."""
         with maintenance.work_section(generation):
-            for metric, value in points:
-                if lock_lost.is_set():
-                    return False
-                tsdb_db.append_point(
-                    self._tsdb_dir,
-                    target_id=target_id,
-                    metric=metric,
-                    value=value,
-                    retention_days=retention_days,
-                    at=at,
-                )
-        return True
+            return tsdb_db.append_points(
+                self._tsdb_dir,
+                target_id=target_id,
+                points=points,
+                retention_days=retention_days,
+                at=at,
+                lock_lost=lock_lost.is_set,
+            )
+
+    def _renew_lock_sync(self, generation: int | None, target_id: int, ttl_seconds: int) -> bool:
+        with maintenance.work_section(generation), self._db_conn() as conn:
+            return sqlite_db.renew_target_lock(conn, target_id, self._run_id, ttl_seconds)
 
     async def _renew_target_lock(self, target_id: int, ttl_seconds: int, generation: int | None) -> bool:
         """Extend our lock; False when another run holds it or it cannot be verified (fail closed)."""
         try:
 
-            def renew() -> bool:
-                with maintenance.work_section(generation), self._db_conn() as conn:
-                    return sqlite_db.renew_target_lock(conn, target_id, self._run_id, ttl_seconds)
-
-            return await asyncio.to_thread(self._thread_call(self._epoch_for_thread(), renew))
+            return await asyncio.to_thread(
+                self._thread_call(self._epoch_for_thread(), self._renew_lock_sync), generation, target_id, ttl_seconds
+            )
         except Exception as e:  # noqa: BLE001 - an unverifiable lock must not let the results through
             _log.warning("Failed to renew lock for target %d: %s", target_id, e)
             return False
@@ -2171,11 +2169,9 @@ class MonitorScheduler:
             await asyncio.sleep(_lock_renew_period(ttl_seconds))
             try:
 
-                def renew() -> bool:
-                    with maintenance.work_section(generation), self._db_conn() as conn:
-                        return sqlite_db.renew_target_lock(conn, target_id, self._run_id, ttl_seconds)
-
-                held = await asyncio.to_thread(self._thread_call(self._epoch_for_thread(), renew))
+                held = await asyncio.to_thread(
+                    self._thread_call(self._epoch_for_thread(), self._renew_lock_sync), generation, target_id, ttl_seconds
+                )
             except maintenance.MaintenanceActiveError:
                 continue
             except Exception as e:  # noqa: BLE001 - a failed beat is retried; the fence re-verifies before writing

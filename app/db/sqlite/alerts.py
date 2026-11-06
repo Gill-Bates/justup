@@ -128,13 +128,16 @@ def record_alert_dispatch_attempt(
         )
 
 
+# Outbox rows whose alert was removed by a cascade can never be dispatched; they must not count as pending.
+_DISPATCHABLE_SQL = "status = 'pending' AND alert_id IN (SELECT id FROM alerts)"
+
+
 def list_pending_alert_dispatches(conn: sqlite3.Connection, *, limit: int = 100) -> list[sqlite3.Row]:
     return list(
         conn.execute(
-            """
+            f"""
             SELECT * FROM alert_dispatch_outbox
-            WHERE status = 'pending' AND next_attempt_at <= ?
-              AND alert_id IN (SELECT id FROM alerts)
+            WHERE {_DISPATCHABLE_SQL} AND next_attempt_at <= ?
             ORDER BY created_at, id
             LIMIT ?
             """,
@@ -144,7 +147,7 @@ def list_pending_alert_dispatches(conn: sqlite3.Connection, *, limit: int = 100)
 
 
 def has_pending_alert_dispatches(conn: sqlite3.Connection) -> bool:
-    return conn.execute("SELECT 1 FROM alert_dispatch_outbox WHERE status = 'pending' LIMIT 1").fetchone() is not None
+    return conn.execute(f"SELECT 1 FROM alert_dispatch_outbox WHERE {_DISPATCHABLE_SQL} LIMIT 1").fetchone() is not None
 
 
 def resolve_alert(
