@@ -83,6 +83,46 @@ const geometry = (page) => page.evaluate(async () => {
 const shoot = async (page, name, theme, viewport) => {
 	if (SHOTS) await page.locator("#editRecipientModal .modal-content").screenshot({ path: path.join(SHOTS, `${name}-${theme}-${viewport}.png`) });
 };
+
+test("Add and Edit Recipient separate channel and recipient settings groups @modal @recipient-channels", async ({ page, base }) => {
+	await page.setViewportSize({ width: 390, height: 844 });
+	await page.goto(base);
+	for (const [modalId, prefix] of [["addRecipientModal", "recipient-"], ["editRecipientModal", "edit-recipient-"]]) {
+		await page.evaluate((id) => window.bootstrap.Modal.getOrCreateInstance(document.getElementById(id)).show(), modalId);
+		await page.waitForFunction((id) => document.getElementById(id).classList.contains("show"), modalId);
+		const structure = await page.evaluate((namePrefix) => {
+			const modal = document.querySelector(`#${namePrefix === "recipient-" ? "addRecipientModal" : "editRecipientModal"}`);
+			const groups = [...modal.querySelectorAll("fieldset")];
+			const channels = groups.find((group) => group.querySelector("legend")?.textContent.includes("Notification Channels"));
+			const settings = groups.find((group) => group.querySelector("legend")?.textContent.trim() === "Recipient Settings");
+			const channelSwitches = ["signal", "email"].map((channel) => channels?.querySelector(`#${namePrefix}${channel}-enabled`));
+			const settingSwitches = ["enabled", "all-targets"].map((setting) => settings?.querySelector(`#${namePrefix}${setting}`));
+			return {
+				channels: Boolean(channels && channelSwitches.every(Boolean)),
+				settings: Boolean(settings && settingSwitches.every(Boolean)),
+				channelHasRecipientSwitches: Boolean(channels?.querySelector(`#${namePrefix}enabled, #${namePrefix}all-targets`)),
+				settingBorder: settings ? getComputedStyle(settings).borderTopWidth : "0px",
+				separation: channels && settings ? settings.getBoundingClientRect().top - channels.getBoundingClientRect().bottom : -1,
+				settingIds: settingSwitches.map((control) => control?.id),
+			};
+		}, prefix);
+		assert.equal(structure.channels, true, `${modalId}: Signal and Email must remain in Notification Channels`);
+		assert.equal(structure.settings, true, `${modalId}: recipient-wide switches must be in Recipient Settings`);
+		assert.equal(structure.channelHasRecipientSwitches, false, `${modalId}: recipient settings leaked into channels`);
+		assert.notEqual(structure.settingBorder, "0px", `${modalId}: recipient settings need a visible section boundary`);
+		assert.ok(structure.separation >= 8, `${modalId}: groups are too close (${structure.separation}px)`);
+		for (const id of structure.settingIds) {
+			const control = page.locator(`#${id}`);
+			const before = await control.isChecked();
+			await control.focus();
+			await page.keyboard.press("Space");
+			assert.equal(await control.isChecked(), !before, `${id} must toggle from the keyboard`);
+		}
+		await page.evaluate((id) => window.bootstrap.Modal.getInstance(document.getElementById(id)).hide(), modalId);
+		await page.waitForFunction((id) => !document.getElementById(id).classList.contains("show"), modalId);
+	}
+});
+
 for (const viewport of VIEWPORTS) {
 	for (const theme of ["light", "dark"]) {
 		test(`Edit Recipient hides the fields of a switched-off channel at ${viewport.name} ${theme} @modal @recipient-channels`, async ({ page, base }) => {

@@ -924,10 +924,18 @@ def _route_node(
 
 
 def _normalize_hop_status(ip: str | None, status: str) -> str:
-    """Return a known hop status; a missing or unknown one is inferred from the IP (broken parsers)."""
-    if status in (STATUS_OK, STATUS_PARTIAL, STATUS_TIMEOUT, STATUS_INTERPOLATED):
+    """Return a known hop status; a hop without an address is never a response.
+
+    An interpolated gap stays interpolated even though it carries the placeholder of the
+    timeout it replaced. A missing or unknown status is inferred from the IP (broken parsers).
+    """
+    if status == STATUS_INTERPOLATED:
         return status
-    return STATUS_OK if ip and ip not in NO_IP_MARKERS else STATUS_TIMEOUT
+    if not ip or ip in NO_IP_MARKERS:
+        return STATUS_TIMEOUT
+    if status in (STATUS_OK, STATUS_PARTIAL, STATUS_TIMEOUT):
+        return status
+    return STATUS_OK
 
 
 def _destination_disposition(hops: list[dict], destination_ip: str | None) -> tuple[int, bool]:

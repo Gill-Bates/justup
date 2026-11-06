@@ -404,14 +404,14 @@ def _profile_backend(accounts: list[str]):
     from app.services.notifications.signal_cli_backend import SignalCliBackend
 
     backend = object.__new__(SignalCliBackend)
-    backend._state_lock = threading.RLock()  # noqa: SLF001
-    backend._sender = None  # noqa: SLF001 - production default
+    backend._state_lock = threading.RLock()
+    backend._sender = None  # production default
     backend.list_accounts = lambda: accounts  # type: ignore[method-assign]
     backend.rpc_calls = []
-    backend._run_signal_rpc = lambda method, params, timeout: (
+    backend._run_signal_rpc = lambda method, params, *_a, **_k: (
         backend.rpc_calls.append((method, params)) or SimpleNamespace()
-    )  # noqa: SLF001
-    backend._require_rpc_success = lambda *a, **k: None  # noqa: SLF001
+    )
+    backend._require_rpc_success = lambda *_a, **_k: None
     return backend
 
 

@@ -90,6 +90,8 @@ Every switch track and its text label have a visible inline gap of at least `--u
 
 Related settings such as notification channels use one reusable option-row or option-group pattern. A channel's icon, name, toggle, associated value, validation and secondary action align within that pattern. The channel group has a programmatic name (for example `fieldset`/`legend` or an equivalent accessible group). A disabled channel is visibly and semantically inactive; its data must not be silently lost or submitted as enabled. Prefer a flat shared group structure over nesting generic shadowed cards inside the modal. Nested cards are reserved for genuinely separate content surfaces, never used solely to create padding.
 
+The Add Recipient and Edit Recipient dialogs keep recipient-wide options separate from channel configuration: after the `Notification Channels` fieldset (and its saved-value test hint/result in Edit), a second native fieldset uses the legend `Recipient Settings` for `Recipient Enabled` and `Enable for all Targets`. Use the shared modal border and spacing tokens for this boundary; do not add a card, explanatory copy, or per-dialog styling.
+
 The form's primary task must dominate the visual hierarchy. Nonessential information is de-emphasized and concise. Do not distribute competing send/test controls among input adornments, a second action row, and the footer. Channel testing is a secondary action: use clear text labels (an icon alone is insufficient), consistent placement, and explicit disabled/loading/result states. If tests operate on saved values, state this next to the action and disable or explain invalid tests after unsaved edits. Retain the existing API and recipient-testing behavior.
 
 ### Action placement and interaction states

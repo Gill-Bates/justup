@@ -980,3 +980,36 @@ def test_append_points_rolls_back_and_raises_when_a_later_write_fails(tmp_path):
             _batch(tmp_path, lambda: False)
 
     assert _series_files(tmp_path) == before
+
+
+def test_availability_samples_never_show_half_of_a_concurrent_batch(tmp_path):
+    cycle = (("http_up", 1), ("ping_up", 0))
+    real_append = tsdb._append_batch_line
+    first_line_written = threading.Event()
+    reader_done = threading.Event()
+    appended: list[str] = []
+
+    def pause_after_first_line(path, line):
+        real_append(path, line)
+        appended.append(path.name)
+        if len(appended) == 1:
+            first_line_written.set()
+            # A snapshot-consistent reader is blocked by the batch lock and cannot finish here.
+            reader_done.wait(timeout=1.0)
+
+    result: list[list[dict]] = []
+
+    def read_report_samples():
+        first_line_written.wait(timeout=5)
+        result.append(tsdb.query_availability_samples(tmp_path, target_id=1, metrics=("http_up", "ping_up")))
+        reader_done.set()
+
+    reader = threading.Thread(target=read_report_samples)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(tsdb, "_append_batch_line", pause_after_first_line)
+        reader.start()
+        assert _batch(tmp_path, lambda: False, metrics=cycle) is True
+    reader.join(timeout=10)
+    assert not reader.is_alive()
+    # Either nothing yet or the complete cycle (ping down makes the sample 0); never http alone (1).
+    assert result in ([[]], [[{"ts": NOW.isoformat(), "value": 0}]])

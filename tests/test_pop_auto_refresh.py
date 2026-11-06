@@ -610,8 +610,8 @@ def test_status_reports_the_ixp_snapshot_and_the_ixp_reason(conn):
     ids=["none", "empty", "only-started", "both-prefers-finished"],
 )
 def test_attempt_time_is_finished_else_started(run, expected):
-    assert pop_refresh._run_time_raw(run) == expected  # noqa: SLF001
-    assert (pop_refresh._attempt_timestamp(run) is None) == (expected is None)  # noqa: SLF001
+    assert pop_refresh._run_time_raw(run) == expected
+    assert (pop_refresh._attempt_timestamp(run) is None) == (expected is None)
 
 
 def test_status_agrees_with_the_refresh_plan(conn):

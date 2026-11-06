@@ -310,14 +310,17 @@
 						</div>
 					</fieldset>
 
-					<div class="ju-switch form-check form-switch">
-						<input type="checkbox" role="switch" class="form-check-input" id="recipient-enabled" checked>
-						<label class="form-check-label" for="recipient-enabled">Recipient Enabled</label>
-					</div>
-					<div class="ju-switch form-check form-switch">
-						<input type="checkbox" role="switch" class="form-check-input" id="recipient-all-targets">
-						<label class="form-check-label" for="recipient-all-targets">Enable for all Targets</label>
-					</div>
+					<fieldset class="ju-fieldset ju-recipient-settings">
+						<legend class="ju-legend">Recipient Settings</legend>
+						<div class="ju-switch form-check form-switch">
+							<input type="checkbox" role="switch" class="form-check-input" id="recipient-enabled" checked>
+							<label class="form-check-label" for="recipient-enabled">Recipient Enabled</label>
+						</div>
+						<div class="ju-switch form-check form-switch">
+							<input type="checkbox" role="switch" class="form-check-input" id="recipient-all-targets">
+							<label class="form-check-label" for="recipient-all-targets">Enable for all Targets</label>
+						</div>
+					</fieldset>
 				</form>
 				<div id="add-recipient-error" class="ju-modal-error d-none" role="alert"></div>
 			</div>
@@ -404,22 +407,24 @@
 								</div>
 							</div>
 						</div>
+						<div class="ju-field" data-channel-hint>
+							<p class="form-text" id="edit-recipient-test-hint">Tests use the saved channels. Save changes first to
+								test new values.</p>
+							<div id="edit-recipient-test-result" class="ju-test-result" role="status" aria-live="polite"></div>
+						</div>
 					</fieldset>
 
-					<div class="ju-field" data-channel-hint>
-						<p class="form-text" id="edit-recipient-test-hint">Tests use the saved channels. Save changes first to
-							test new values.</p>
-						<div id="edit-recipient-test-result" class="ju-test-result" role="status" aria-live="polite"></div>
-					</div>
-
-					<div class="ju-switch form-check form-switch">
-						<input type="checkbox" role="switch" class="form-check-input" id="edit-recipient-enabled">
-						<label class="form-check-label" for="edit-recipient-enabled">Recipient Enabled</label>
-					</div>
-					<div class="ju-switch form-check form-switch">
-						<input type="checkbox" role="switch" class="form-check-input" id="edit-recipient-all-targets">
-						<label class="form-check-label" for="edit-recipient-all-targets">Enable for all Targets</label>
-					</div>
+					<fieldset class="ju-fieldset ju-recipient-settings">
+						<legend class="ju-legend">Recipient Settings</legend>
+						<div class="ju-switch form-check form-switch">
+							<input type="checkbox" role="switch" class="form-check-input" id="edit-recipient-enabled">
+							<label class="form-check-label" for="edit-recipient-enabled">Recipient Enabled</label>
+						</div>
+						<div class="ju-switch form-check form-switch">
+							<input type="checkbox" role="switch" class="form-check-input" id="edit-recipient-all-targets">
+							<label class="form-check-label" for="edit-recipient-all-targets">Enable for all Targets</label>
+						</div>
+					</fieldset>
 				</form>
 				<div id="edit-recipient-error" class="ju-modal-error d-none" role="alert"></div>
 			</div>

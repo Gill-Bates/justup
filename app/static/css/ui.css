@@ -3652,6 +3652,12 @@ main:focus {
 	border: 0;
 }
 
+/* Separate recipient-wide options from channel-specific configuration. */
+.ju-recipient-settings {
+	padding-top: var(--ui-modal-gap);
+	border-top: var(--ui-modal-border-width) solid var(--ui-modal-border);
+}
+
 .ju-fieldset>*+* {
 	margin-top: var(--ui-modal-gap-lg);
 }
@@ -3762,7 +3768,8 @@ main:focus {
 @media (forced-colors: active) {
 	.ju-modal-consequence,
 	.ju-modal-error,
-	.ju-channel {
+	.ju-channel,
+	.ju-recipient-settings {
 		border-color: CanvasText;
 	}
 }

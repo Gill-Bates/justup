@@ -219,8 +219,21 @@ def test_modal_groups_use_fieldset_with_legend_and_channels_share_one_pattern() 
     assert 'role="group"' not in text
     assert len(re.findall(r"<fieldset\b", text)) == len(re.findall(r"<legend\b", text)) >= 3
     for prefix in ("", "edit-"):
-        block = text.split(f'id="{prefix}recipient-signal-enabled"')[1].split("</fieldset>")[0]
-        assert block.count('class="ju-channel"') == 1  # the Signal row; the Email row follows in the same fieldset
+        signal = text.index(f'id="{prefix}recipient-signal-enabled"')
+        channel_start = text.rfind("<fieldset", 0, signal)
+        channel_end = text.index("</fieldset>", signal) + len("</fieldset>")
+        channel_group = text[channel_start:channel_end]
+        settings_start = text.index('<fieldset class="ju-fieldset ju-recipient-settings"', channel_end)
+        settings_end = text.index("</fieldset>", settings_start) + len("</fieldset>")
+        settings_group = text[settings_start:settings_end]
+
+        assert "Notification Channels" in channel_group
+        assert channel_group.count('class="ju-channel"') == 2
+        assert f'id="{prefix}recipient-enabled"' not in channel_group
+        assert f'id="{prefix}recipient-all-targets"' not in channel_group
+        assert "Recipient Settings" in settings_group
+        assert f'id="{prefix}recipient-enabled"' in settings_group
+        assert f'id="{prefix}recipient-all-targets"' in settings_group
     assert text.count("ju-channel-body") == 4 and text.count('class="ju-channel"') == 4
 
 

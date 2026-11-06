@@ -425,8 +425,16 @@ def test_no_ip_markers_are_the_four_placeholders() -> None:
 
 @pytest.mark.parametrize("marker", [*_NO_IP, None, ""])
 def test_a_hop_without_address_is_normalised_to_timeout(marker) -> None:
-    assert traceroute_geo._normalize_hop_status(marker, "") == traceroute_geo.STATUS_TIMEOUT
+    for status in ("", "ok", "partial", "timeout"):
+        assert traceroute_geo._normalize_hop_status(marker, status) == traceroute_geo.STATUS_TIMEOUT
     assert traceroute_geo._normalize_hop_status("192.0.2.1", "") == traceroute_geo.STATUS_OK
+    assert traceroute_geo._normalize_hop_status("192.0.2.1", "ok") == traceroute_geo.STATUS_OK
+    assert traceroute_geo._normalize_hop_status("192.0.2.1", "partial") == traceroute_geo.STATUS_PARTIAL
+
+
+@pytest.mark.parametrize("marker", [*_NO_IP, None, ""])
+def test_an_interpolated_gap_keeps_its_status_without_address(marker) -> None:
+    assert traceroute_geo._normalize_hop_status(marker, "interpolated") == traceroute_geo.STATUS_INTERPOLATED
 
 
 @pytest.mark.parametrize("marker", _NO_IP)
