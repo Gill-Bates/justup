@@ -17,7 +17,7 @@
       </div>
    </div>
 
-   <ul class="nav nav-pills ju-notif-tabs ju-scrollbar-accent" aria-label="Notification categories">
+   <ul class="nav nav-pills ju-tabs" aria-label="Notification categories">
       {% for key, label, icon in tabs %}
       <li class="nav-item">
          <a class="nav-link {% if key == category %}active{% endif %}" href="/ui/notifications?category={{ key }}"

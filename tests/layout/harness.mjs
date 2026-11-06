@@ -50,7 +50,7 @@ if (selectedViewports) {
 	VIEWPORTS.splice(0, VIEWPORTS.length, ...VIEWPORTS.filter((v) => only.includes(v.name)));
 }
 const CFG = {
-	scrollX: [".settings-tabs", ".nav-tabs", ".ju-notif-tabs", ".table-responsive", ".ju-table-viewport", "pre", ".leaflet-container"],
+	scrollX: [".ju-tabs", ".table-responsive", ".ju-table-viewport", "pre", ".leaflet-container"],
 	revealed: [".ju-notif-swipe-item"],
 	clipX: [".leaflet-container", ".progress"],
 	// Declared overflow areas inside dashboard widgets: the downtime list is capped and scrolls on its own.

@@ -23,25 +23,14 @@ function initTooltips() {
     });
 }
 
-// Tabs: horizontal scroll strip (edge fade state, keep active tab visible)
+// Tabs: horizontal scroll strip (keep the active tab visible)
 
 function initSettingsTabStrip() {
     const tabs = document.getElementById('settingsTabs');
     if (!tabs || tabs.dataset.stripBound === '1') return;
     tabs.dataset.stripBound = '1';
 
-    const EDGE_SLOP_PX = 1;
     const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
-
-    const updateEdges = () => {
-        const maxScroll = tabs.scrollWidth - tabs.clientWidth;
-        if (maxScroll <= EDGE_SLOP_PX) {
-            tabs.classList.add('is-at-start', 'is-at-end');
-            return;
-        }
-        tabs.classList.toggle('is-at-start', tabs.scrollLeft <= EDGE_SLOP_PX);
-        tabs.classList.toggle('is-at-end', tabs.scrollLeft >= maxScroll - EDGE_SLOP_PX);
-    };
 
     // Scroll only the strip (not the page) so the active tab is fully visible.
     const revealTab = (tab) => {
@@ -50,14 +39,11 @@ function initSettingsTabStrip() {
         tabs.scrollTo({ left: Math.max(0, left), behavior: reduceMotion.matches ? 'auto' : 'smooth' });
     };
 
-    tabs.addEventListener('scroll', updateEdges, { passive: true });
-    window.addEventListener('resize', updateEdges);
     tabs.addEventListener('shown.bs.tab', (e) => revealTab(e.target));
     // Keyboard focus only: scrolling on a mouse press moves the tab away before mouseup and the click is lost.
     tabs.addEventListener('focusin', (e) => {
         if (e.target.matches?.('[role="tab"]:focus-visible')) revealTab(e.target);
     });
-    updateEdges();
     // Initial tab may have been restored from the URL hash.
     const active = tabs.querySelector('[role="tab"].active');
     if (active) tabs.scrollLeft = Math.max(0, active.offsetLeft - (tabs.clientWidth - active.offsetWidth) / 2);

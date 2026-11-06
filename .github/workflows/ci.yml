@@ -332,7 +332,7 @@ jobs:
         env:
           JUSTUP_LAYOUT_BROWSERS: chromium,webkit
           JUSTUP_LAYOUT_OUTPUT: ${{ runner.temp }}/layout-artifacts
-        run: npx playwright test --config tests/layout/playwright.config.mjs --grep '@settings-tab-press|@edit-target-tabs|@load-stability|@card-corners|@card-overlays|@combined-clip|@downtime-history|@dashboard-metrics'
+        run: npx playwright test --config tests/layout/playwright.config.mjs --grep '@settings-tab-press|@tab-style|@edit-target-tabs|@load-stability|@card-corners|@card-overlays|@combined-clip|@downtime-history|@dashboard-metrics'
 
       - name: Run focus, cursor and targets search browser checks
         env:

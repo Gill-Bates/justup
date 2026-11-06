@@ -23,7 +23,6 @@
  *  11. target-detail/metrics.js
  *  12. target-detail/pdf-export.js
  *  13. target-detail/test-alert.js
- *  14. target-detail/auto-close.js
  *  (base.html, before app.js: target-detail/traceroute-cache.js -> window.TracerouteCache)
  *
  * @module target-detail
@@ -723,13 +722,6 @@ document.addEventListener('DOMContentLoaded', () => {
 			sendTestAlert(pageConfig.targetId);
 		});
 	}
-
-	// Auto-close alert toggle
-	const autoCloseToggle = document.getElementById('auto-close-alert-toggle');
-	if (autoCloseToggle) {
-		autoCloseToggle.addEventListener('change', () => saveAutoCloseAlert(autoCloseToggle, pageConfig.targetId));
-	}
-
 
 	window.addEventListener('beforeunload', _cleanup);
 

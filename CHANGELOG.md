@@ -13,6 +13,7 @@
 - `Changed` **Send Test Email** now sends a friendly justUp! welcome message in the usual mail design instead of a simulated "Service DOWN" alert. It shows the test recipient and send time, carries a TEST label, lists the next setup steps and ignores the alert template; the alert template preview is unchanged.
 - `Changed` The link in alert mails and Signal messages opens the target with the time range of the event (30 minutes before and after). An unauthenticated visit goes through the sign-in and then continues to that page, also after a required password change.
 - `Fix` Delivery queue log: the "No entries" / loading row spans the full table width again on wide screens.
+- `Changed` All tab bars (Notifications, Edit Target, Target detail, Settings) now look the same: filled teal active tab and a thin teal scrollbar when the bar is wider than the screen.
 
 ## [1.0.3] - 2026-11-05
 

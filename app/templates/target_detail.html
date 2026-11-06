@@ -5,7 +5,7 @@
 <div class="ui-page target-detail-page">
 	<header class="target-detail-heading">
 		{% include "fragments/target_detail/header.html" %}
-		<ul class="nav nav-tabs target-detail-tabs" id="target-detail-tabs" role="tablist" aria-label="Target views">
+		<ul class="nav nav-pills ju-tabs" id="target-detail-tabs" role="tablist" aria-label="Target views">
 			<li class="nav-item" role="presentation">
 				<button class="nav-link active" id="target-dashboard-tab" data-bs-toggle="tab"
 					data-bs-target="#target-dashboard-pane" type="button" role="tab"
@@ -34,7 +34,6 @@
 			</div>
 			<section class="target-toolbar" aria-label="Dashboard controls">
 				{% include "fragments/target_detail/time_range_selector.html" %}
-				{% include "fragments/target_detail/alert_recipients.html" %}
 			</section>
 			{% include "fragments/target_detail/charts_and_downtime.html" %}
 		</section>
@@ -84,7 +83,6 @@
 <script src="/static/js/target-detail/metrics.js"></script>
 <script src="/static/js/target-detail/pdf-export.js"></script>
 <script src="/static/js/target-detail/test-alert.js"></script>
-<script src="/static/js/target-detail/auto-close.js"></script>
 <script src="/static/js/target-detail.js"></script>
 <script src="/static/js/traceroute-map.js"></script>
 {% endblock %}

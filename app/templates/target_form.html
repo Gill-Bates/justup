@@ -3,20 +3,6 @@
 
 {% block styles %}
 <style>
-	.target-edit-tabs {
-		flex-wrap: nowrap;
-		overscroll-behavior-x: contain;
-		-webkit-overflow-scrolling: touch;
-	}
-
-	.target-edit-tabs .nav-item {
-		flex: 0 0 auto;
-	}
-
-	.target-edit-tabs .nav-link {
-		min-height: 44px;
-		white-space: nowrap;
-	}
 
 	/* Check Cards Pattern */
 	.check-card {
@@ -255,7 +241,7 @@
 		</div>
 		<div class="card-body">
 			<form id="target-form" autocomplete="off">
-				<ul class="nav nav-tabs target-edit-tabs overflow-x-auto mb-4" id="target-edit-tabs" role="tablist"
+				<ul class="nav nav-pills ju-tabs mb-4" id="target-edit-tabs" role="tablist"
 					aria-label="Target configuration sections">
 					<li class="nav-item" role="presentation">
 						<button class="nav-link active" id="target-general-tab" data-bs-toggle="tab"
@@ -356,15 +342,6 @@
 							<input class="form-check-input" type="checkbox" role="switch" name="is_enabled"
 								id="is_enabled" {{ 'checked' if target.is_enabled else '' }}>
 							<label class="form-check-label" for="is_enabled">Enabled</label>
-						</div>
-					</div>
-					<div class="col-md-2" role="group" aria-labelledby="auto_close_alert-group-label">
-						<span class="form-label d-inline-block" id="auto_close_alert-group-label">Alerts</span>
-						<div class="form-check form-switch mt-2">
-							<input class="form-check-input" type="checkbox" role="switch" name="auto_close_alert"
-								id="auto_close_alert" {{ 'checked' if target.auto_close_alert else ''
-								}}>
-							<label class="form-check-label" for="auto_close_alert">Auto-Close</label>
 						</div>
 					</div>
 				</div>
@@ -729,6 +706,16 @@
 						<div class="text-body-secondary small">Loading recipients...</div>
 					</div>
 					<div class="form-text">Select which recipients should be notified when this target goes down.</div>
+				</div>
+				<div class="section-header">
+					<span class="material-icons me-1" aria-hidden="true">rule</span> Alert Behavior
+				</div>
+				<div class="form-check form-switch mb-4">
+					<input class="form-check-input" type="checkbox" role="switch" name="auto_close_alert"
+						id="auto_close_alert" {{ 'checked' if target.auto_close_alert else '' }}
+						aria-describedby="auto_close_alert_help">
+					<label class="form-check-label" for="auto_close_alert">Auto-Close</label>
+					<div class="form-text" id="auto_close_alert_help">Close an open alert when this target recovers.</div>
 				</div>
 
 				<!-- ═══════════════════════════════════════════════════════════════════

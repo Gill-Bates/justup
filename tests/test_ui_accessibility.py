@@ -404,3 +404,41 @@ def test_port_picker_disclosures_chips_and_result_lists_have_accessible_names() 
     assert re.search(r'<span class="material-icons" aria-hidden="true">radar</span>', picker)
     manual = re.search(r"<input\b[^>]*data-manual-input[^>]*>", picker).group(0)
     assert "manual-help" in manual and "manual-ports-error" in manual
+
+
+# --- One tab component (DESIGN.md, "Tabs") ---
+_CSS_DIR = TEMPLATES.parent / "static" / "css"
+_TAB_SELECTOR = re.compile(r"nav-link\b|nav-pills|nav-tabs|ju-tabs|tablist|\[role=[\"']?tab")
+_TAB_OWNERS = {"ui.css", "gentelella-layout.css"}
+_VENDOR_CSS = {"bootstrap.min.css", "leaflet.css"}
+
+
+def _selectors(css: str) -> list[str]:
+    css = re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)
+    return [m.group(1).strip() for m in re.finditer(r"([^{}]+)\{", css) if not m.group(1).strip().startswith("@")]
+
+
+def test_tab_strips_use_the_shared_component_and_no_page_restyles_them() -> None:
+    # Every strip is a ju-tabs; the class of defect is a tab look defined anywhere but the shared owner.
+    for path in TEMPLATES.rglob("*.html"):
+        text = path.read_text(encoding="utf-8")
+        for tag in re.findall(r"<[a-z]+\b[^>]*class=\"[^\"]*\bnav-(?:tabs|pills)\b[^\"]*\"[^>]*>", text):
+            assert re.search(r'class="[^"]*\bju-tabs\b', tag) and "nav-tabs" not in tag, f"{path.name}: {tag}"
+        for style in re.findall(r"<style\b[^>]*>(.*?)</style>", text, flags=re.DOTALL):
+            assert not any(_TAB_SELECTOR.search(s) for s in _selectors(style)), f"{path.name}: inline tab CSS"
+    for path in _CSS_DIR.glob("*.css"):
+        if path.name in _TAB_OWNERS | _VENDOR_CSS:
+            continue
+        hits = [s for s in _selectors(path.read_text(encoding="utf-8")) if _TAB_SELECTOR.search(s)]
+        assert not hits, f"{path.name} styles tabs outside the shared component: {hits}"
+    shared = _selectors(_CSS.read_text(encoding="utf-8"))
+    page_scoped = [s for s in shared if "#" in s.replace("#fff", "") and re.search(r"nav-link|tablist", s)]
+    assert not page_scoped, f"ui.css restyles a tab strip by id: {page_scoped}"
+
+
+def test_tab_component_reads_tokens_only() -> None:
+    css = _CSS.read_text(encoding="utf-8")
+    section = css.split("TABS (DESIGN.md", 1)[1].split("/* Table negative margins", 1)[0]
+    assert not re.search(r"#[0-9a-fA-F]{3,8}\b|rgb\(|!important", section), "hard-coded color or !important"
+    assert "var(--bs-primary)" in section and "var(--ju-primary-contrast)" in section
+    assert re.search(r"\.ju-scrollbar-accent,\s*\.ju-tabs\s*\{[^}]*scrollbar-color:\s*var\(--bs-primary\)", css)

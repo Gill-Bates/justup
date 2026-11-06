@@ -67,6 +67,9 @@
 	--ui-modal-shadow: 0 0.5rem 1.5rem rgb(0 0 0 / 20%);
 	--ui-icon-inline: 1.125rem;
 	--ui-target-min: 1.5rem;
+	--ui-tab-gap: 0.5rem;
+	--ui-tab-min-height: 2.75rem;
+	--ui-tab-pad-x: 0.875rem;
 
 	/* Table row sizing - central control */
 	--table-row-padding-y: 0.75rem;
@@ -626,31 +629,53 @@ textarea.smtp-editor-frame {
 	margin-bottom: 0;
 }
 
-.ui-page .nav-tabs {
-	gap: 0.35rem;
-	border-bottom-color: var(--ju-panel-line);
+/* =============================================
+   TABS (DESIGN.md, "Tabs")
+   One component for every tab strip: <ul class="nav nav-pills ju-tabs">. Pages add
+   no tab colour, size or scrollbar rule; tokens: --ui-tab-*, --bs-primary, --ju-primary-contrast.
+   ============================================= */
+.ju-tabs {
+	--bs-nav-pills-link-active-bg: var(--bs-primary);
+	--bs-nav-pills-link-active-color: var(--ju-primary-contrast);
+	flex-wrap: nowrap;
+	gap: var(--ui-tab-gap);
+	min-width: 0;
+	max-width: 100%;
+	overflow: auto hidden;
+	overscroll-behavior-x: contain;
+	-webkit-overflow-scrolling: touch;
+	scroll-padding-inline: 1rem;
+	padding-block-end: 0.5rem;
 }
 
-.ui-page .nav-tabs .nav-link {
-	padding: 0.7rem 1rem;
-	border-radius: var(--bs-border-radius) var(--bs-border-radius) 0 0;
-	color: var(--bs-secondary-color);
+.ju-tabs .nav-item {
+	flex: 0 0 auto;
+}
+
+.ju-tabs .nav-link {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.375rem;
+	min-height: var(--ui-tab-min-height);
+	padding: 0.5rem var(--ui-tab-pad-x);
+	border: 1px solid transparent;
+	white-space: nowrap;
 	font-weight: 600;
 }
 
-.ui-page .nav-tabs .nav-link.active {
-	border-color: var(--ju-panel-line) var(--ju-panel-line) var(--ju-panel-bg);
-	background: var(--ju-panel-bg);
-	color: var(--ju-title);
+.ju-tabs .nav-link:not(.active, .disabled):hover {
+	background: var(--ui-muted-bg);
 }
 
-.ui-page .nav-pills {
-	gap: 0.4rem;
+.ju-tabs .nav-link .material-icons {
+	font-size: 1.25rem;
 }
 
-.ui-page .nav-pills .nav-link {
-	border-radius: var(--bs-border-radius);
-	font-weight: 600;
+@media (forced-colors: active) {
+	.ju-tabs .nav-link.active {
+		border-color: Highlight;
+		text-decoration: underline;
+	}
 }
 
 /* Table negative margins only on desktop - see media queries below */
@@ -2603,89 +2628,6 @@ textarea.smtp-editor-frame {
 	transform: rotate(180deg);
 }
 
-#settingsTabs .nav-link {
-	color: var(--bs-body-color);
-	border-color: transparent;
-	border-bottom: 2px solid transparent;
-	transition: all 0.2s ease;
-	display: flex;
-	align-items: center;
-	gap: 0.25rem;
-	padding: 0.75rem 1rem;
-}
-
-#settingsTabs .nav-link:hover {
-	border-color: transparent;
-	border-bottom-color: var(--bs-primary);
-	background-color: var(--ui-muted-bg);
-}
-
-#settingsTabs .nav-link.active {
-	color: var(--bs-primary);
-	background-color: transparent;
-	border-color: transparent;
-	border-bottom-color: var(--bs-primary);
-	font-weight: 500;
-}
-
-#settingsTabs .nav-link .material-icons {
-	font-size: 18px;
-}
-
-/* Desktop: active tab slightly bolder */
-#settingsTabs .nav-link.active {
-	font-weight: 600;
-}
-
-/* Settings tab strip: single row, swipe/scroll horizontally when it does not fit */
-.settings-tabs {
-	flex-wrap: nowrap;
-	overflow: auto hidden;
-	overscroll-behavior-x: contain;
-	scrollbar-width: none;
-	-webkit-overflow-scrolling: touch;
-	scroll-padding-inline: 1rem;
-	padding-inline: env(safe-area-inset-left) env(safe-area-inset-right);
-}
-
-.settings-tabs::-webkit-scrollbar {
-	display: none;
-}
-
-.settings-tabs .nav-item {
-	flex: 0 0 auto;
-}
-
-.settings-tabs .nav-link {
-	white-space: nowrap;
-	margin-bottom: 0;
-	min-height: 44px;
-}
-
-#settingsTabs .nav-link:focus-visible {
-	outline: 2px solid var(--ju-focus-ring);
-	outline-offset: -2px;
-}
-
-/* Fade both edges while more tabs are reachable; JS drops the fade at a reached edge */
-@media (width < 992px) {
-	.settings-tabs {
-		mask-image: linear-gradient(to right, transparent, #000 20px, #000 calc(100% - 20px), transparent);
-	}
-
-	.settings-tabs.is-at-start {
-		mask-image: linear-gradient(to right, #000, #000 calc(100% - 20px), transparent);
-	}
-
-	.settings-tabs.is-at-end {
-		mask-image: linear-gradient(to right, transparent, #000 20px, #000);
-	}
-
-	.settings-tabs.is-at-start.is-at-end {
-		mask-image: none;
-	}
-}
-
 /* =============================================
    SIGNAL TEMPLATE iOS PREVIEW
    ============================================= */
@@ -3297,10 +3239,6 @@ summary:focus-visible,
 	background-image: var(--ju-switch-thumb-off);
 }
 
-/* overflow-x: auto makes y auto too; the active tab's -1px margin over the bar border would give a 1px ghost scroll. */
-.target-edit-tabs {
-	overflow-y: hidden;
-}
 
 /* Operable controls show a hand, disabled toggles and selects not-allowed, text fields keep the I-beam. */
 a[href],
@@ -3422,29 +3360,30 @@ main:focus {
 	}
 }
 
-/* Shared accent scrollbar; add to any overflow container. Thin, no layout shift. */
-.ju-scrollbar-accent {
+/* Shared accent scrollbar; add to any overflow container, built into .ju-tabs. Thin, no layout shift. */
+.ju-scrollbar-accent,
+.ju-tabs {
 	scrollbar-width: thin;
 	scrollbar-color: var(--bs-primary) transparent;
 }
 
 /* Engines without scrollbar-color (older Safari/WebKit) use the pseudo-elements. */
 @supports not (scrollbar-color: auto) {
-	.ju-scrollbar-accent::-webkit-scrollbar {
+	:is(.ju-scrollbar-accent, .ju-tabs)::-webkit-scrollbar {
 		height: 5px;
 		width: 5px;
 	}
 
-	.ju-scrollbar-accent::-webkit-scrollbar-track {
+	:is(.ju-scrollbar-accent, .ju-tabs)::-webkit-scrollbar-track {
 		background: transparent;
 	}
 
-	.ju-scrollbar-accent::-webkit-scrollbar-thumb {
+	:is(.ju-scrollbar-accent, .ju-tabs)::-webkit-scrollbar-thumb {
 		background-color: var(--bs-primary);
 		border-radius: 999px;
 	}
 
-	.ju-scrollbar-accent::-webkit-scrollbar-thumb:hover {
+	:is(.ju-scrollbar-accent, .ju-tabs)::-webkit-scrollbar-thumb:hover {
 		background-color: color-mix(in srgb, var(--bs-primary) 80%, white);
 	}
 }

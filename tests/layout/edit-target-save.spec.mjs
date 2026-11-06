@@ -66,17 +66,24 @@ for (const viewport of VIEWPORTS) {
 			const renamed = `${name} renamed`;
 			const id = await createTarget(page, app, name);
 			try {
+				await page.goto(`${app.base}${OVERVIEW}/${id}`);
+				assert.equal(await page.locator("#auto-close-alert-toggle, .target-recipients-details, .target-recipients-empty").count(), 0);
 				await openEditor(page, app, id);
 				await page.locator("#name").first().fill(renamed);
+				await page.getByRole("tab", { name: "Alerts & SLA" }).click();
+				assert.equal(await page.locator("#alert-users-checkboxes").isVisible(), true);
+				await page.getByRole("switch", { name: "Auto-Close" }).uncheck();
 				const patched = page.waitForResponse((response) => isWrite(response.request(), `/targets/${id}`, "PATCH"));
 				await saveButton(page).click();
 				const response = await patched;
 				assert.equal(response.status(), 200);
 				assert.equal(response.request().postDataJSON().name, renamed);
+				assert.equal(response.request().postDataJSON().auto_close_alert, false);
 				await page.waitForURL((url) => url.pathname === OVERVIEW);
 				assert.equal(pathOf(page), OVERVIEW, "the editor must end on the overview, not on the target detail page");
-				const stored = await page.evaluate(async (targetId) => (await (await window.apiFetch(`/targets/${targetId}`)).json()).name, id);
-				assert.equal(stored, renamed);
+				const stored = await page.evaluate(async (targetId) => (await (await window.apiFetch(`/targets/${targetId}`)).json()), id);
+				assert.equal(stored.name, renamed);
+				assert.equal(stored.auto_close_alert, false);
 				await page.locator("#targets-table").getByText(renamed).first().waitFor({ state: "attached" });
 			} finally {
 				await deleteTarget(page, id);

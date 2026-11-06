@@ -313,7 +313,7 @@
 		}
 		// Controls that share a row must share a centre line, whatever their own height.
 		const controls = Array.from(toolbar.querySelectorAll(
-			"#quick-range, .target-custom-range > summary, #reset-zoom-btn, .target-recipients-summary, .target-recipients-empty, .target-autoclose-switch",
+			"#quick-range, .target-custom-range > summary, #reset-zoom-btn",
 		)).filter(visible).map((el) => ({ el, rect: el.getBoundingClientRect() }));
 		for (let i = 0; i < controls.length; i++) {
 			for (let j = i + 1; j < controls.length; j++) {
