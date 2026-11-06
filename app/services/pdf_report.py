@@ -1489,7 +1489,9 @@ def _latest_uptime_sample(uptime_data: list[dict], tz: tzinfo, fallback: datetim
             stamps.append(_to_tz(datetime.fromisoformat(point["ts"]), tz))
         except (KeyError, TypeError, ValueError):
             continue
-    return max(stamps) if stamps else _to_tz(fallback, tz) if fallback is not None else None
+    if stamps:
+        return max(stamps)
+    return _to_tz(fallback, tz) if fallback is not None else None
 
 
 def _downtime_minutes(

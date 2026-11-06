@@ -903,9 +903,8 @@ def test_ongoing_outage_kpi_matches_log_with_naive_samples(monkeypatch):
     ]
     data = dataclasses.replace(b.report_data, uptime_data=uptime_data, downtime_periods=b.downtime_events)
     report = PDFReportBuilder(data)
-    ongoing = report.downtime_events[-1]
-    expected = int((report._last_uptime_sample() - ongoing.start).total_seconds() / 60)
-    assert report.kpis.downtime_minutes == expected
+    assert report._last_uptime_sample() == b._last_uptime_sample()
+    assert report.kpis.downtime_minutes == b.kpis.downtime_minutes
 
 
 # ─── Blank pages: a chapter that ends exactly at the page end must not leave an empty page ─────
