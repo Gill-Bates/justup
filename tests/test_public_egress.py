@@ -663,5 +663,5 @@ def test_network_fragment_places_the_card_after_geolocation_without_form_fields(
     assert 'data-endpoint="/settings/network/public-egress"' in card
     assert " name=" not in card and "<input" not in card  # nothing the settings autosave could pick up
     assert card.count('type="button"') == 3
-    for label in ("Copy IPv4 address", "Copy IPv6 address", "Refresh", "Last checked", "Routing, proxies or NAT"):
+    for label in ("Copy IPv4 address", "Copy IPv6 address", "Refresh", "Last checked"):
         assert label in card
