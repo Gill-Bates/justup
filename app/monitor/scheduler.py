@@ -693,6 +693,7 @@ class MonitorScheduler:
             or (now - self._last_heartbeat_at).total_seconds() >= self._heartbeat_interval_seconds
         ):
             try:
+
                 def update_heartbeat() -> None:
                     with maintenance.work_section(generation), self._db_conn() as conn:
                         sqlite_db.update_scheduler_heartbeat(conn, self._run_id)
@@ -778,7 +779,7 @@ class MonitorScheduler:
                     )
                     conn.commit()
 
-            await asyncio.to_thread(self._thread_call(self._epoch_for_thread(), store_probe))
+            await asyncio.to_thread(store_probe)
             with maintenance.work_section(generation):
                 old_state = self._quality_state
                 self._quality_state = result.state  # result.state is already a string
@@ -918,8 +919,12 @@ class MonitorScheduler:
 
     async def _process_alert_dispatch_outbox(self, generation: int | None = None) -> None:
         generation = maintenance.current_generation() if generation is None else generation
-        with maintenance.work_section(generation), self._db_conn() as conn:
-            rows = sqlite_db.list_pending_alert_dispatches(conn, limit=20)
+
+        def pending_dispatches():
+            with maintenance.work_section(generation), self._db_conn() as conn:
+                return sqlite_db.list_pending_alert_dispatches(conn, limit=20)
+
+        rows = await asyncio.to_thread(self._thread_call(self._epoch_for_thread(), pending_dispatches))
 
         failed = False
         for row in rows:
@@ -957,15 +962,28 @@ class MonitorScheduler:
                     ALERT_DISPATCH_MAX_BACKOFF_SECONDS,
                 )
                 failed = True
-            with maintenance.work_section(generation), self._db_conn() as conn:
-                sqlite_db.record_alert_dispatch_attempt(
-                    conn,
-                    alert_id=payload.alert_id,
-                    event_type=row["event_type"],
-                    succeeded=succeeded,
-                    retry_delay_seconds=retry_delay,
-                    error=error_type,
-                )
+
+            def record_attempt(
+                alert_id: str, event_type: str, succeeded: bool, retry_delay: int, error_type: str | None
+            ) -> None:
+                with maintenance.work_section(generation), self._db_conn() as conn:
+                    sqlite_db.record_alert_dispatch_attempt(
+                        conn,
+                        alert_id=alert_id,
+                        event_type=event_type,
+                        succeeded=succeeded,
+                        retry_delay_seconds=retry_delay,
+                        error=error_type,
+                    )
+
+            await asyncio.to_thread(
+                self._thread_call(self._epoch_for_thread(), record_attempt),
+                payload.alert_id,
+                row["event_type"],
+                succeeded,
+                retry_delay,
+                error_type,
+            )
 
         if failed:
             raise RuntimeError("AlertDispatchPendingError")
@@ -1003,28 +1021,32 @@ class MonitorScheduler:
 
         # Update status cache to reflect connectivity issue (NOT down!)
         try:
-            with maintenance.work_section(generation), self._db_conn() as conn:
-                existing = sqlite_db.get_target_status(conn, target_id)
-                uptime_percent = (
-                    existing["uptime_percent"] if (existing and "uptime_percent" in existing.keys()) else None  # noqa: SIM118
-                )
 
-                sqlite_db.set_target_status_snapshot(
-                    conn,
-                    target_id,
-                    ping_up=None,
-                    ping_latency_ms=None,
-                    http_up=None,
-                    http_status=None,
-                    http_latency_ms=None,
-                    tcp_up=None,
-                    tcp_latency_ms=None,
-                    cert_days_left=None,
-                    uptime_percent=uptime_percent,
-                    overall_status=TargetStatus.UNKNOWN,  # Already str constant
-                )
-                conn.commit()
-                event_bus.publish("target.status", {"target_id": target_id, "status": "unknown"})
+            def store_unknown_status() -> None:
+                with maintenance.work_section(generation), self._db_conn() as conn:
+                    existing = sqlite_db.get_target_status(conn, target_id)
+                    uptime_percent = (
+                        existing["uptime_percent"] if (existing and "uptime_percent" in existing.keys()) else None  # noqa: SIM118
+                    )
+
+                    sqlite_db.set_target_status_snapshot(
+                        conn,
+                        target_id,
+                        ping_up=None,
+                        ping_latency_ms=None,
+                        http_up=None,
+                        http_status=None,
+                        http_latency_ms=None,
+                        tcp_up=None,
+                        tcp_latency_ms=None,
+                        cert_days_left=None,
+                        uptime_percent=uptime_percent,
+                        overall_status=TargetStatus.UNKNOWN,  # Already str constant
+                    )
+                    conn.commit()
+
+            await asyncio.to_thread(self._thread_call(self._epoch_for_thread(), store_unknown_status))
+            event_bus.publish("target.status", {"target_id": target_id, "status": "unknown"})
             self._persistence_failures.discard((target_id, "status"))
         except maintenance.MaintenanceActiveError:
             return
@@ -1229,11 +1251,18 @@ class MonitorScheduler:
         # Try to acquire lock (idempotency: prevent duplicate checks on restart)
         lock_acquired = False
         try:
-            with maintenance.work_section(generation), self._db_conn() as conn:
-                if not self._target_matches_snapshot(conn, target_id, cfg):
-                    self._refresh_requested = True
-                    return
-                lock_acquired = sqlite_db.try_lock_target(conn, target_id, self._run_id, ttl_seconds)
+
+            def acquire_lock() -> bool | None:
+                with maintenance.work_section(generation), self._db_conn() as conn:
+                    if not self._target_matches_snapshot(conn, target_id, cfg):
+                        return None
+                    return sqlite_db.try_lock_target(conn, target_id, self._run_id, ttl_seconds)
+
+            acquired = await asyncio.to_thread(self._thread_call(self._epoch_for_thread(), acquire_lock))
+            if acquired is None:
+                self._refresh_requested = True
+                return
+            lock_acquired = acquired
         except maintenance.MaintenanceActiveError:
             return
         except Exception as e:  # noqa: BLE001 - scheduler-loop resilience boundary: log and continue
@@ -1672,48 +1701,56 @@ class MonitorScheduler:
                 # Keep network checks and TSDB reads outside the restore guard. Revalidate the target
                 # snapshot before writing so a target changed during the network checks is not updated
                 # with a result from its old configuration.
-                with maintenance.work_section(generation), self._db_conn() as conn:
-                    if not self._target_matches_snapshot(conn, target_id, cfg):
-                        self._refresh_requested = True
-                        return
-                    if not calculate_uptime:
-                        row = sqlite_db.get_target_status(conn, target_id)
-                        uptime_percent = row["uptime_percent"] if (row and "uptime_percent" in row.keys()) else None  # noqa: SIM118
-                        uptime_percent_30d = (
-                            row["uptime_percent_30d"] if (row and "uptime_percent_30d" in row.keys()) else None  # noqa: SIM118
+                def persist_status() -> bool:
+                    nonlocal uptime_percent, uptime_percent_30d
+                    with maintenance.work_section(generation), self._db_conn() as conn:
+                        if not self._target_matches_snapshot(conn, target_id, cfg):
+                            return False
+                        if not calculate_uptime:
+                            row = sqlite_db.get_target_status(conn, target_id)
+                            uptime_percent = (
+                                row["uptime_percent"] if (row and "uptime_percent" in row.keys()) else None  # noqa: SIM118
+                            )
+                            uptime_percent_30d = (
+                                row["uptime_percent_30d"] if (row and "uptime_percent_30d" in row.keys()) else None  # noqa: SIM118
+                            )
+                        if cfg["enable_http_check"]:
+                            _update_service("http", snapshot.get("http_up"))
+                        if cfg["enable_ping"]:
+                            _update_service("ping", snapshot.get("ping_up"))
+                        if cfg["enable_tcp_connect"]:
+                            _update_service("tcp", snapshot.get("tcp_up"))
+                        if cfg.get("enable_udp_scan") and cfg.get("udp_ports"):
+                            _update_service("udp", snapshot.get("udp_up"))
+                            if snapshot.get("udp_up") is None:
+                                rt.down_since_by_service["udp"] = None  # UNKNOWN restarts the confirmation
+                        self._persist_tcp_ports(conn, target_id, tcp_checks)
+                        if cfg["enable_cert_expiration"] and snapshot.get("cert_days_left") is not None:
+                            _update_service("cert", 1)
+                        if calculate_uptime and uptime_percent is not None:
+                            rt.last_uptime_calc_at = now
+                        sqlite_db.set_target_status_snapshot(
+                            conn,
+                            target_id,
+                            ping_up=snapshot["ping_up"],
+                            ping_latency_ms=snapshot["ping_latency_ms"],
+                            http_up=snapshot["http_up"],
+                            http_status=snapshot["http_status"],
+                            http_latency_ms=snapshot["http_latency_ms"],
+                            tcp_up=snapshot["tcp_up"],
+                            tcp_latency_ms=snapshot["tcp_latency_ms"],
+                            tcp_port_status=snapshot.get("tcp_port_status"),
+                            cert_days_left=snapshot["cert_days_left"],
+                            uptime_percent=uptime_percent,
+                            uptime_percent_30d=uptime_percent_30d,
+                            overall_status=overall_status,
                         )
-                    if cfg["enable_http_check"]:
-                        _update_service("http", snapshot.get("http_up"))
-                    if cfg["enable_ping"]:
-                        _update_service("ping", snapshot.get("ping_up"))
-                    if cfg["enable_tcp_connect"]:
-                        _update_service("tcp", snapshot.get("tcp_up"))
-                    if cfg.get("enable_udp_scan") and cfg.get("udp_ports"):
-                        _update_service("udp", snapshot.get("udp_up"))
-                        if snapshot.get("udp_up") is None:
-                            rt.down_since_by_service["udp"] = None  # UNKNOWN restarts the confirmation
-                    self._persist_tcp_ports(conn, target_id, tcp_checks)
-                    if cfg["enable_cert_expiration"] and snapshot.get("cert_days_left") is not None:
-                        _update_service("cert", 1)
-                    if calculate_uptime and uptime_percent is not None:
-                        rt.last_uptime_calc_at = now
-                    sqlite_db.set_target_status_snapshot(
-                        conn,
-                        target_id,
-                        ping_up=snapshot["ping_up"],
-                        ping_latency_ms=snapshot["ping_latency_ms"],
-                        http_up=snapshot["http_up"],
-                        http_status=snapshot["http_status"],
-                        http_latency_ms=snapshot["http_latency_ms"],
-                        tcp_up=snapshot["tcp_up"],
-                        tcp_latency_ms=snapshot["tcp_latency_ms"],
-                        tcp_port_status=snapshot.get("tcp_port_status"),
-                        cert_days_left=snapshot["cert_days_left"],
-                        uptime_percent=uptime_percent,
-                        uptime_percent_30d=uptime_percent_30d,
-                        overall_status=overall_status,
-                    )
-                    conn.commit()
+                        conn.commit()
+                        return True
+
+                if not await asyncio.to_thread(self._thread_call(self._epoch_for_thread(), persist_status)):
+                    self._refresh_requested = True
+                    return
                 event_bus.publish("target.status", {"target_id": target_id, "status": str(overall_status)})
             except maintenance.MaintenanceActiveError:
                 return
@@ -2088,8 +2125,12 @@ class MonitorScheduler:
     async def _renew_target_lock(self, target_id: int, ttl_seconds: int, generation: int | None) -> bool:
         """Extend our lock; False when another run holds it or it cannot be verified (fail closed)."""
         try:
-            with maintenance.work_section(generation), self._db_conn() as conn:
-                return sqlite_db.renew_target_lock(conn, target_id, self._run_id, ttl_seconds)
+
+            def renew() -> bool:
+                with maintenance.work_section(generation), self._db_conn() as conn:
+                    return sqlite_db.renew_target_lock(conn, target_id, self._run_id, ttl_seconds)
+
+            return await asyncio.to_thread(self._thread_call(self._epoch_for_thread(), renew))
         except Exception as e:  # noqa: BLE001 - an unverifiable lock must not let the results through
             _log.warning("Failed to renew lock for target %d: %s", target_id, e)
             return False
@@ -2101,8 +2142,12 @@ class MonitorScheduler:
         while True:
             await asyncio.sleep(_lock_renew_period(ttl_seconds))
             try:
-                with maintenance.work_section(generation), self._db_conn() as conn:
-                    held = sqlite_db.renew_target_lock(conn, target_id, self._run_id, ttl_seconds)
+
+                def renew() -> bool:
+                    with maintenance.work_section(generation), self._db_conn() as conn:
+                        return sqlite_db.renew_target_lock(conn, target_id, self._run_id, ttl_seconds)
+
+                held = await asyncio.to_thread(self._thread_call(self._epoch_for_thread(), renew))
             except maintenance.MaintenanceActiveError:
                 continue
             except Exception as e:  # noqa: BLE001 - a failed beat is retried; the fence re-verifies before writing
@@ -2118,8 +2163,12 @@ class MonitorScheduler:
         deadline = loop.time() + 35.0
         while True:
             try:
-                with maintenance.work_section(), self._db_conn() as conn:
-                    sqlite_db.release_target_lock(conn, target_id, self._run_id)
+
+                def release() -> None:
+                    with maintenance.work_section(), self._db_conn() as conn:
+                        sqlite_db.release_target_lock(conn, target_id, self._run_id)
+
+                await asyncio.to_thread(self._thread_call(self._epoch_for_thread(), release))
                 return
             except maintenance.MaintenanceActiveError:
                 if loop.time() >= deadline:
@@ -2244,18 +2293,22 @@ class MonitorScheduler:
                     # Create the database record first; the id becomes active only after the commit,
                     # so a failed insert is retried in the next cycle without a phantom open alert.
                     try:
-                        with self._db_conn() as conn:
-                            sqlite_db.create_alert(
-                                conn,
-                                alert_id=alert_id,
-                                target_id=target_id,
-                                target_name=target_name,
-                                failed_service=failed_service_str,
-                                started_at=now,
-                                recipients_notified=[],
-                                dispatch_outbox=True,
-                            )
-                            conn.commit()
+
+                        def store_alert() -> None:
+                            with maintenance.work_section(generation), self._db_conn() as conn:
+                                sqlite_db.create_alert(
+                                    conn,
+                                    alert_id=alert_id,
+                                    target_id=target_id,
+                                    target_name=target_name,
+                                    failed_service=failed_service_str,
+                                    started_at=now,
+                                    recipients_notified=[],
+                                    dispatch_outbox=True,
+                                )
+                                conn.commit()
+
+                        await asyncio.to_thread(self._thread_call(self._epoch_for_thread(), store_alert))
                     except maintenance.MaintenanceActiveError:
                         raise
                     except Exception as e:  # noqa: BLE001 - scheduler-loop resilience boundary: retry next cycle
@@ -2280,19 +2333,28 @@ class MonitorScheduler:
                 if auto_close and rt.current_alert_id:
                     # Read started_at from database (single source of truth)
                     # This handles cases where down_since_by_service was reset by quality gate
-                    started_at = now
-                    with self._db_conn() as conn:
-                        alert_row = sqlite_db.get_alert(conn, rt.current_alert_id)
-                        if alert_row and alert_row["started_at"]:
-                            started_at = _stored_datetime(alert_row["started_at"]) or now
-                        duration_seconds = int((now - started_at).total_seconds())
-                        sqlite_db.resolve_alert(conn, rt.current_alert_id, now, dispatch_outbox=True)
-                        conn.commit()
-                        event_bus.publish("alert.changed", {"target_id": target_id})
+                    def resolve_alert() -> datetime:
+                        with maintenance.work_section(generation), self._db_conn() as conn:
+                            alert_row = sqlite_db.get_alert(conn, rt.current_alert_id)
+                            started = None
+                            if alert_row and alert_row["started_at"]:
+                                started = _stored_datetime(alert_row["started_at"])
+                            started = started or now
+                            sqlite_db.resolve_alert(conn, rt.current_alert_id, now, dispatch_outbox=True)
+                            conn.commit()
+                            return started
+
+                    started_at = await asyncio.to_thread(self._thread_call(self._epoch_for_thread(), resolve_alert))
+                    duration_seconds = int((now - started_at).total_seconds())
+                    event_bus.publish("alert.changed", {"target_id": target_id})
                 elif rt.current_alert_id:
-                    with self._db_conn() as conn:
-                        sqlite_db.deactivate_alert(conn, rt.current_alert_id)
-                        conn.commit()
+
+                    def deactivate_alert() -> None:
+                        with maintenance.work_section(generation), self._db_conn() as conn:
+                            sqlite_db.deactivate_alert(conn, rt.current_alert_id)
+                            conn.commit()
+
+                    await asyncio.to_thread(self._thread_call(self._epoch_for_thread(), deactivate_alert))
 
                 ended_at = now
 

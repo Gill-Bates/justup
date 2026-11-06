@@ -30,12 +30,25 @@ pytestmark = pytest.mark.skipif(
 JOB = 'touch "$1/started-$2"; echo $$ > "$1/pid-$2"; while [ ! -e "$1/release-$2" ]; do sleep 0.1; done'
 
 
-def _env(tmp_path: Path, **extra: str) -> dict[str, str]:
+def _env(tmp_path: Path, **extra: str | None) -> dict[str, str]:
     env = {k: v for k, v in os.environ.items() if not k.startswith("JUSTUP_") and k != "PYTEST_ADDOPTS"}
-    env.update({"JUSTUP_TEST_LOCK_DIR": str(tmp_path / "locks"), "JUSTUP_TEST_CGROUP": "off",
-                "JUSTUP_TEST_SLOTS": "2", "JUSTUP_TEST_CPU_SHARE": "1", "JUSTUP_TEST_CORES_PER_RUN": "4", "JUSTUP_TEST_LOAD_AWARE": "0",
-                "JUSTUP_TEST_RAM_PER_WORKER_MB": "1", "JUSTUP_TEST_LOAD_WAIT": "0"})
-    env.update(extra)
+    env.update(
+        {
+            "JUSTUP_TEST_LOCK_DIR": str(tmp_path / "locks"),
+            "JUSTUP_TEST_CGROUP": "off",
+            "JUSTUP_TEST_SLOTS": "2",
+            "JUSTUP_TEST_CPU_SHARE": "1",
+            "JUSTUP_TEST_CORES_PER_RUN": "4",
+            "JUSTUP_TEST_LOAD_AWARE": "0",
+            "JUSTUP_TEST_RAM_PER_WORKER_MB": "1",
+            "JUSTUP_TEST_LOAD_WAIT": "0",
+        }
+    )
+    for key, value in extra.items():
+        if value is None:
+            env.pop(key, None)
+        else:
+            env[key] = value
     return env
 
 
@@ -130,7 +143,7 @@ def test_two_slots_third_waits_and_starts_after_release(tmp_path: Path) -> None:
     running = _started(tmp_path)
     assert len(running) == 2, "third job must wait while both slots are busy"
     waiting = ({"a", "b", "c"} - running).pop()
-    first = sorted(running)[0]
+    first = min(running)
     _release(tmp_path, first)
     assert procs[first].wait(timeout=10) == 0
     assert _wait_for(tmp_path / f"started-{waiting}"), "third job must start once a slot is free"
@@ -152,23 +165,21 @@ def test_slot_count_is_configurable_and_single_slot_serialises(tmp_path: Path) -
     assert second.wait(timeout=10) == 0
 
 
-def test_worktrees_share_default_lock_dir(tmp_path: Path) -> None:
+def test_worktrees_and_sessions_with_or_without_xdg_share_default_lock_dir(tmp_path: Path) -> None:
+    tmpdir = tmp_path / "tmp"
+    tmpdir.mkdir()
     runtime = tmp_path / "runtime"
     runtime.mkdir(mode=0o700)
-    trees = []
-    for name in ("tree1", "tree2", "tree3"):
-        (tmp_path / name).mkdir()
-        trees.append(tmp_path / name)
-    extra = {"XDG_RUNTIME_DIR": str(runtime), "JUSTUP_TEST_LOCK_DIR": ""}
     procs = []
-    for name, cwd in zip("abc", trees, strict=True):
-        env = _env(tmp_path, **extra)
-        del env["JUSTUP_TEST_LOCK_DIR"]
+    for name, xdg in zip("abc", (None, str(runtime), None), strict=True):
+        tree = tmp_path / f"tree-{name}"
+        tree.mkdir()
+        env = _env(tmp_path, JUSTUP_TEST_LOCK_DIR=None, TMPDIR=str(tmpdir), XDG_RUNTIME_DIR=xdg)
         procs.append(
             subprocess.Popen(
                 [str(WRAPPER), "sh", "-c", JOB, "job", str(tmp_path), name],
                 env=env,
-                cwd=cwd,
+                cwd=tree,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
@@ -176,7 +187,8 @@ def test_worktrees_share_default_lock_dir(tmp_path: Path) -> None:
     assert _wait_started(tmp_path, 2)
     time.sleep(1.5)
     assert len(_started(tmp_path)) == 2
-    assert (runtime / "justup-test-slots").is_dir()
+    assert not list(runtime.iterdir())
+    assert len(list(tmpdir.glob("justup-test-slots-*/slot-*.lock"))) >= 2
     for name in "abc":
         _release(tmp_path, name)
     assert [p.wait(timeout=10) for p in procs] == [0, 0, 0]
@@ -223,6 +235,47 @@ def test_interrupt_while_waiting_keeps_holder_running(tmp_path: Path) -> None:
     assert holder.wait(timeout=10) == 0
 
 
+def test_holders_in_higher_slots_count_against_a_smaller_limit(tmp_path: Path) -> None:
+    holders = [_start(tmp_path, n, JUSTUP_TEST_SLOTS="3") for n in "ab"]
+    assert _wait_started(tmp_path, 2)
+    newcomer = _run(tmp_path, "true", JUSTUP_TEST_SLOTS="1", JUSTUP_TEST_WAIT="1")
+    assert newcomer.returncode == 124
+    same = _run(tmp_path, "true", JUSTUP_TEST_SLOTS="3", JUSTUP_TEST_WAIT="0")
+    assert same.returncode == 0, "a third slot of a 3-slot budget is still free"
+    for name in "ab":
+        _release(tmp_path, name)
+    assert [h.wait(timeout=10) for h in holders] == [0, 0]
+
+
+@pytest.mark.parametrize("how", ["sigint", "sigterm", "kill-leader"])
+def test_whole_process_tree_is_gone_before_the_slot_is_free(tmp_path: Path, how: str) -> None:
+    proc = subprocess.Popen(
+        [
+            str(WRAPPER),
+            "sh",
+            "-c",
+            'sh -c \'sleep 300 & echo $! > "$0/gc"; echo $$ > "$0/leader"; wait\' "$1"',
+            "x",
+            str(tmp_path),
+        ],
+        env=_env(tmp_path, JUSTUP_TEST_SLOTS="1"),
+        preexec_fn=_default_sigint,  # noqa: PLW1509
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    assert _wait_for(tmp_path / "gc") and _wait_for(tmp_path / "leader")
+    time.sleep(0.3)
+    grandchild, leader = int((tmp_path / "gc").read_text()), int((tmp_path / "leader").read_text())
+    if how == "kill-leader":
+        os.kill(leader, signal.SIGKILL)
+    else:
+        proc.send_signal(signal.SIGINT if how == "sigint" else signal.SIGTERM)
+    proc.wait(timeout=20)
+    assert not _pid_alive(grandchild), "descendants must be gone when the wrapper (and its slot) ends"
+    again = _run(tmp_path, "true", JUSTUP_TEST_SLOTS="1", JUSTUP_TEST_WAIT="0")
+    assert again.returncode == 0, again.stderr
+
+
 def test_wait_timeout_reports_and_exits_124(tmp_path: Path) -> None:
     holder = _start(tmp_path, "a", JUSTUP_TEST_SLOTS="1")
     assert _wait_for(tmp_path / "started-a")
@@ -236,7 +289,23 @@ def test_wait_timeout_reports_and_exits_124(tmp_path: Path) -> None:
 def test_missing_optional_programs_do_not_block(tmp_path: Path) -> None:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    for tool in ("bash", "env", "flock", "setsid", "stat", "mkdir", "chmod", "sleep", "kill", "id", "sh", "true", "node", "cat", "dirname"):
+    for tool in (
+        "bash",
+        "env",
+        "flock",
+        "setsid",
+        "stat",
+        "mkdir",
+        "chmod",
+        "sleep",
+        "kill",
+        "id",
+        "sh",
+        "true",
+        "node",
+        "cat",
+        "dirname",
+    ):
         found = shutil.which(tool)
         assert found, tool
         (bin_dir / tool).symlink_to(found)
@@ -289,27 +358,66 @@ def _adjusted(tmp_path: Path, *args: str, **extra: str) -> list[str]:
         (["pytest", "-n", "8", "tests"], ["pytest", "-n", "4", "tests"]),
         (["pytest", "-n8"], ["pytest", "-n4"]),
         (["python", "-m", "pytest", "--numprocesses=16"], ["python", "-m", "pytest", "--numprocesses=4"]),
+        (["pytest", "--numprocesses", "16"], ["pytest", "--numprocesses", "4"]),
         (["pytest", "-n", "2"], ["pytest", "-n", "2"]),
-        (["pytest", "-n", "auto"], ["pytest", "-n", "auto"]),
+        (["pytest", "-n", "0"], ["pytest", "-n", "0"]),
+        (["pytest", "-n", "auto"], ["pytest", "-n", "4"]),
+        (["pytest", "-n", "logical"], ["pytest", "-n", "4"]),
+        (["pytest", "-nauto"], ["pytest", "-n4"]),
+        (["pytest", "-nlogical"], ["pytest", "-n4"]),
         (["pytest", "-q", "tests/x.py"], ["pytest", "-q", "tests/x.py"]),
         (["npm", "test"], ["npm", "run", "test:local"]),
         (["node", "--test", "a.mjs"], ["node", "--test", "--test-concurrency=4", "a.mjs"]),
         (["node", "--test", "--test-concurrency=12"], ["node", "--test", "--test-concurrency=4"]),
+        (["node", "--test", "--test-concurrency", "20", "a.mjs"], ["node", "--test", "--test-concurrency=4", "a.mjs"]),
+        (["node", "--test-concurrency", "2", "--test"], ["node", "--test-concurrency=2", "--test"]),
         (["npx", "playwright", "test", "--workers=8"], ["npx", "playwright", "test", "--workers=4"]),
         (["npx", "playwright", "test", "--workers", "50%"], ["npx", "playwright", "test", "--workers", "4"]),
+        (["npx", "playwright", "test", "-j", "9"], ["npx", "playwright", "test", "-j", "4"]),
+        (["npx", "playwright", "test", "-j9"], ["npx", "playwright", "test", "-j4"]),
         (["echo", "-n", "99"], ["echo", "-n", "99"]),
     ],
 )
-def test_worker_caps_are_clamped_without_touching_other_commands(tmp_path: Path, args: list[str], expected: list[str]) -> None:
+def test_worker_caps_are_clamped_without_touching_other_commands(
+    tmp_path: Path, args: list[str], expected: list[str]
+) -> None:
     assert _adjusted(tmp_path, *args) == expected
 
 
 def test_wrapper_exports_worker_limits_to_the_command(tmp_path: Path) -> None:
     out = _run(tmp_path, "sh", "-c", 'echo "$PYTEST_XDIST_AUTO_NUM_WORKERS $JUSTUP_LAYOUT_WORKERS"').stdout
     assert out == "4 4\n"
-    # An explicit override is the user's decision and is passed through.
-    out = _run(tmp_path, "sh", "-c", 'echo "$JUSTUP_LAYOUT_WORKERS"', JUSTUP_LAYOUT_WORKERS="2").stdout
-    assert out == "2\n"
+    echo = 'echo "$JUSTUP_LAYOUT_WORKERS"'
+    assert _run(tmp_path, "sh", "-c", echo, JUSTUP_LAYOUT_WORKERS="2").stdout == "2\n"
+    assert _run(tmp_path, "sh", "-c", echo, JUSTUP_LAYOUT_WORKERS="20").stdout == "4\n", "an override may only lower"
+
+
+def test_playwright_config_without_workers_flag_respects_the_budget(tmp_path: Path) -> None:
+    config = Path(__file__).resolve().parent / "layout" / "playwright.config.mjs"
+    probe = f"import({str(config)!r}).then((m) => console.log(m.default.workers))"
+    out = _run(tmp_path, "node", "-e", probe, JUSTUP_TEST_CORES_PER_RUN="2", CI=None).stdout.strip()
+    assert out == "2"
+
+
+def test_npm_test_is_started_as_the_budgeted_local_script(tmp_path: Path) -> None:
+    fake = tmp_path / "fakebin"
+    fake.mkdir()
+    (fake / "npm").write_text('#!/bin/sh\necho "npm $*"\n')
+    (fake / "npm").chmod(0o755)
+    result = _run(tmp_path, "npm", "test", PATH=f"{fake}:{os.environ['PATH']}")
+    assert result.returncode == 0 and result.stdout == "npm run test:local\n"
+    package = (Path(__file__).resolve().parents[1] / "package.json").read_text()
+    assert '"test:local": "node tools/run-node-tests.mjs"' in package
+
+
+def test_without_verified_cpu_quota_only_one_run_is_allowed(tmp_path: Path) -> None:
+    holder = _start(tmp_path, "a", JUSTUP_TEST_SLOTS=None)
+    assert _wait_for(tmp_path / "started-a")
+    result = _run(tmp_path, "true", JUSTUP_TEST_SLOTS=None, JUSTUP_TEST_WAIT="0")
+    assert result.returncode == 124
+    assert "allowing one heavy run at a time" in result.stderr
+    _release(tmp_path, "a")
+    assert holder.wait(timeout=10) == 0
 
 
 def test_smaller_slot_count_of_a_holder_wins(tmp_path: Path) -> None:
@@ -324,14 +432,22 @@ def test_smaller_slot_count_of_a_holder_wins(tmp_path: Path) -> None:
 
 def test_busy_machine_is_waited_for_then_run_continues(tmp_path: Path) -> None:
     started = time.monotonic()
-    result = _run(tmp_path, "true", JUSTUP_TEST_LOAD_AWARE="1", JUSTUP_TEST_LOAD_THRESHOLD="0.1", JUSTUP_TEST_LOAD_WAIT="2")
+    result = _run(
+        tmp_path, "true", JUSTUP_TEST_LOAD_AWARE="1", JUSTUP_TEST_LOAD_THRESHOLD="0.1", JUSTUP_TEST_LOAD_WAIT="2"
+    )
     assert result.returncode == 0, result.stderr
     if "machine is busy" in result.stderr:
         assert time.monotonic() - started >= 2
 
 
-def test_nested_wrapper_call_does_not_wait_for_a_second_slot(tmp_path: Path) -> None:
-    result = _run(
-        tmp_path, str(WRAPPER), "sh", "-c", "echo inner", JUSTUP_RUN_LIMITED="1", JUSTUP_TEST_SLOTS="1", JUSTUP_TEST_WAIT="0"
-    )
-    assert result.returncode == 0 and result.stdout == "inner\n"
+def test_nested_wrapper_call_skips_locking_but_keeps_caps(tmp_path: Path) -> None:
+    echo = 'echo "$JUSTUP_LAYOUT_WORKERS"'
+    nested = {"JUSTUP_RUN_LIMITED": "1", "JUSTUP_LIMIT_PW": "2", "JUSTUP_TEST_SLOTS": "1", "JUSTUP_TEST_WAIT": "0"}
+    holder = _start(tmp_path, "a", JUSTUP_TEST_SLOTS="1")
+    assert _wait_for(tmp_path / "started-a")
+    result = _run(tmp_path, str(WRAPPER), "sh", "-c", echo, JUSTUP_LAYOUT_WORKERS="9", **nested)
+    assert result.returncode == 0 and result.stdout == "2\n", "no deadlock on a busy slot, cap still applied"
+    args = _run(tmp_path, str(WRAPPER), "pytest", "--version", "-n", "50", **nested)
+    assert "-n" not in args.stdout
+    _release(tmp_path, "a")
+    assert holder.wait(timeout=10) == 0

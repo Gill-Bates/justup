@@ -59,6 +59,19 @@ The same checks as in CI:
 | JS tests | `npm test` |
 | Container check | `docker build --check -f docker/Dockerfile .` |
 
+### Heavy local runs
+
+Several sessions can share one machine, so run heavy suites through the wrapper. It takes a free slot from a lock directory outside the repository (`${TMPDIR:-/tmp}/justup-test-slots-<uid>`) and sizes slots, cores and workers from this machine (affinity, cgroup limit, free RAM, load):
+
+```bash
+node tools/test-budget.mjs                      # show the computed budget
+tools/run-limited.sh pytest -n auto             # -n is capped to the budget
+tools/run-limited.sh npm test                   # runs npm run test:local
+tools/run-limited.sh node tests/layout/run.mjs --profile quick --browsers chromium
+```
+
+`npm run test:local` runs the Node tests with the budgeted concurrency. Overrides (environment only): `JUSTUP_TEST_SLOTS`, `JUSTUP_TEST_CPU_SHARE`, `JUSTUP_TEST_CORES_PER_RUN`, `JUSTUP_TEST_RAM_PER_WORKER_MB`, `JUSTUP_LAYOUT_WORKERS`; formula and full list in `AGENTS.md`. A CPU quota is applied only if `systemd-run --scope` works for your user; otherwise only worker caps are active and only one heavy run at a time is allowed (unless `JUSTUP_TEST_SLOTS` is set). CI does not use the wrapper.
+
 ## Build the documentation locally
 
 ```bash

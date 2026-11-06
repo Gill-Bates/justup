@@ -214,6 +214,27 @@ def test_restart_restores_only_relevant_enabled_services(db_path, tmp_path, flag
     assert [r["status"] for r in _alert_rows(db_path)] == ["resolved"]
 
 
+def test_disabling_a_failed_check_clears_its_down_timer(db_path, tmp_path):
+    target_id = _target(db_path, enable_http_check=True, enable_ping=True)
+    sched = _sched(db_path, tmp_path)
+    sched._refresh_targets(utcnow())
+    rt = sched._rt[target_id]
+    rt.down_since_by_service["http"] = utcnow() - timedelta(minutes=10)
+
+    conn = sqlite_db.connect(db_path)
+    try:
+        sqlite_db.update_target(conn, target_id=target_id, patch={"enable_http_check": False})
+    finally:
+        sqlite_db.close_connection(conn)
+    sched._refresh_targets(utcnow())
+
+    assert rt.down_since_by_service["http"] is None
+    with mock.patch.object(sched, "_dispatch_alert", mock.AsyncMock()) as dispatch:
+        asyncio.run(_alert(sched, target_id, TargetStatus.UP))
+    assert _alert_rows(db_path) == []
+    dispatch.assert_not_awaited()
+
+
 # ── A3: alert id becomes active only after a successful insert ───────────────
 
 
@@ -728,6 +749,34 @@ def test_uptime_uses_the_same_availability_rule_as_the_overall_status(db_path, t
     assert status["uptime_percent"] == 0.0
 
 
+def test_status_refresh_preserves_both_saved_uptime_windows(db_path, tmp_path):
+    target_id = _target(db_path, enable_http_check=True)
+    sched = _sched(db_path, tmp_path)
+    sched._refresh_targets(utcnow())
+    http_ok = scheduler.checks.CheckResult(ok=True, latency_ms=1.0, value={"status": 200})
+    with mock.patch.object(scheduler.checks, "http_head", mock.AsyncMock(return_value=http_ok)):
+        asyncio.run(sched._run_target(target_id, utcnow()))
+        conn = sqlite_db.connect(db_path)
+        try:
+            conn.execute(
+                "UPDATE target_status SET uptime_percent = ?, uptime_percent_30d = ? WHERE target_id = ?",
+                (91.5, 88.25, target_id),
+            )
+            conn.commit()
+        finally:
+            sqlite_db.close_connection(conn)
+        sched._rt[target_id].last_uptime_calc_at = utcnow()
+        asyncio.run(sched._run_target(target_id, utcnow()))
+
+    conn = sqlite_db.connect(db_path)
+    try:
+        status = sqlite_db.get_target_status(conn, target_id)
+    finally:
+        sqlite_db.close_connection(conn)
+    assert status["uptime_percent"] == 91.5
+    assert status["uptime_percent_30d"] == 88.25
+
+
 def test_delayed_metric_storage_keeps_one_check_cycle_one_availability_sample(db_path, tmp_path):
     target_id = _target(db_path, enable_http_check=True, enable_ping=True)
     sched = _sched(db_path, tmp_path)
@@ -791,6 +840,43 @@ def test_slow_tsdb_writes_run_off_the_event_loop_and_share_one_cycle_stamp(db_pa
     assert [m for m, _ in written] == ["ping_up", "ping_ms", "http_up", "http_ms", "http_status"]
     assert len({at for _, at in written}) == 1
     assert write_threads and loop_thread not in write_threads  # blocking writes never run on the loop thread
+
+
+def test_scheduler_lock_status_and_alert_writes_run_off_event_loop(db_path, tmp_path):
+    target_id = _target(db_path, enable_http_check=True)
+    sched = _sched(db_path, tmp_path)
+    sched._refresh_targets(utcnow())
+    http_ok = scheduler.checks.CheckResult(ok=True, latency_ms=1.0, value={"status": 200})
+    loop_thread = None
+    observed: set[str] = set()
+
+    def off_loop(name, call):
+        def wrapped(*args, **kwargs):
+            assert threading.get_ident() != loop_thread, f"{name} ran on event loop"
+            observed.add(name)
+            return call(*args, **kwargs)
+
+        return wrapped
+
+    async def scenario():
+        nonlocal loop_thread
+        loop_thread = threading.get_ident()
+        await sched._run_target(target_id, utcnow())
+        sched._rt[target_id].down_since_by_service["http"] = utcnow() - timedelta(minutes=10)
+        await _alert(sched, target_id, TargetStatus.DOWN)
+
+    with (
+        mock.patch.object(scheduler.checks, "http_head", mock.AsyncMock(return_value=http_ok)),
+        mock.patch.object(scheduler.sqlite_db, "try_lock_target", off_loop("lock", sqlite_db.try_lock_target)),
+        mock.patch.object(
+            scheduler.sqlite_db, "set_target_status_snapshot", off_loop("status", sqlite_db.set_target_status_snapshot)
+        ),
+        mock.patch.object(scheduler.sqlite_db, "create_alert", off_loop("alert", sqlite_db.create_alert)),
+        mock.patch.object(sched, "_dispatch_alert", mock.AsyncMock()),
+    ):
+        asyncio.run(scenario())
+
+    assert observed == {"lock", "status", "alert"}
 
 
 def test_metric_points_of_a_lost_lock_are_discarded_before_any_write(db_path, tmp_path):

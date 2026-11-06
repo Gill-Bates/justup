@@ -14,25 +14,6 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
-
-
-def _exit_with_parent() -> None:
-    """Ask Linux to SIGTERM this app when the launching test worker dies (e.g. SIGKILL on timeout)."""
-    if sys.platform != "linux":
-        return
-    import ctypes
-    import os
-    import signal
-
-    parent = os.getppid()
-    libc = ctypes.CDLL(None, use_errno=True)
-    # PR_SET_PDEATHSIG = 1; the parent may already be gone before the call took effect.
-    if libc.prctl(1, int(signal.SIGTERM), 0, 0, 0) == 0 and os.getppid() != parent:
-        sys.exit(0)
-
-
-if __name__ == "__main__":
-    _exit_with_parent()
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from app.services import nmap_client, traceroute_service
@@ -104,7 +85,24 @@ traceroute_service.resolve_target_ip = lambda _host: _ROUTE[-1][0]
 traceroute_service._add_reverse_dns = lambda _hops: None  # noqa: SLF001
 tg.geolocate_with_hostname_hint = _geolocate
 
+
+def _exit_with_parent() -> None:
+    """Ask Linux to SIGTERM this app when the launching test worker dies (e.g. SIGKILL on timeout)."""
+    if sys.platform != "linux":
+        return
+    import ctypes
+    import os
+    import signal
+
+    parent = os.getppid()
+    libc = ctypes.CDLL(None, use_errno=True)
+    # PR_SET_PDEATHSIG = 1; the parent may already be gone before the call took effect.
+    if libc.prctl(1, int(signal.SIGTERM), 0, 0, 0) == 0 and os.getppid() != parent:
+        sys.exit(0)
+
+
 if __name__ == "__main__":
+    _exit_with_parent()
     from app.__main__ import main
 
     sys.exit(main() or 0)

@@ -45,4 +45,5 @@ GitHub Actions for the justUp PR gate, multi-architecture Docker Hub release, Mk
 - `verify-manifest.py` rejects more than one index entry per `os/architecture` (variants are not part of the platform contract). The release tools are tested by `pytest tests/test_dockerhub.py tests/test_release_tools.py tests/test_runtime_image_purity.py tests/test_workflow_contracts.py tests/test_libsignal_native_check.py -n 0`; structural GitHub workflow gates are also covered by `node --test tests/js/workflow-contracts.test.mjs`.
 - Image publishing, registry tag cleanup, GitHub releases, and Pages deployment run only in their protected GitHub Actions jobs.
 
+- CI and local test limits: the workflows do not use `tools/run-limited.sh` and keep `pytest -n auto` and 2 Playwright workers (`CI` set; `JUSTUP_LAYOUT_WORKERS` still overrides). The local budget from `tools/test-budget.mjs` (see root `AGENTS.md`) is deliberately conservative for shared machines: on a 2 vCPU/7 GB runner it yields 1 worker, on 4 vCPU/16 GB also 1, so adopting it in CI would be slower; CI stays unchanged.
 <!-- MANUAL: Any manually added notes below this line are preserved on regeneration -->

@@ -53,3 +53,35 @@ for (const tab of ["smtp", "signal"]) {
 		}
 	});
 }
+
+test("Signal setup buttons reveal link, QR, and registration steps @settings-tab-press", async ({ browser, app, adminState }) => {
+	const context = await browser.newContext({ storageState: adminState });
+	const page = await context.newPage();
+	let pendingQr;
+	try {
+		await page.route("**/settings/signal/status", (route) => route.fulfill({
+			status: 200, contentType: "application/json", body: JSON.stringify({ registered: false, reachable: true, accounts: [] }),
+		}));
+		await page.route("**/signal/qr", (route) => { pendingQr = route; });
+		await page.goto(app.base + "/ui/settings", { waitUntil: "load" });
+		await page.locator("#signal-tab").click();
+		await page.locator("#signal-mode-selection").waitFor({ state: "attached" });
+		await page.evaluate(() => {
+			document.getElementById("signal-panel").classList.add("show");
+			window.loadSignalStatus();
+		});
+		await page.locator("#signal-setup-collapse-toggle").click();
+		await page.locator("#signal-mode-selection").waitFor({ state: "visible" });
+		await page.locator("#signal-mode-link-btn").click();
+		await page.locator("#signal-flow-link").waitFor({ state: "visible" });
+		await page.locator("#signal-link-generate-qr-btn").click();
+		await page.locator("#signal-link-step-qr").waitFor({ state: "visible" });
+		await page.locator("#signal-flow-link [data-signal-action='back']").click();
+		await page.locator("#signal-mode-selection").waitFor({ state: "visible" });
+		await page.locator("#signal-mode-register-btn").click();
+		await page.locator("#signal-flow-register").waitFor({ state: "visible" });
+	} finally {
+		if (pendingQr) await pendingQr.fulfill({ status: 503, body: "unavailable" }).catch(() => {});
+		await context.close();
+	}
+});

@@ -13,6 +13,8 @@ npm test
 docker build --check -f docker/Dockerfile .
 ```
 
+On a shared machine run the heavy ones (`pytest -n auto`, `npm test`, `node tests/layout/run.mjs ...`) as `tools/run-limited.sh <command>`; it limits concurrent suites and sizes workers from the machine. Locally Playwright takes its worker count from the same budget (`JUSTUP_LAYOUT_WORKERS` overrides it, CI uses 2). See [Setup](setup.md).
+
 ## Conventions
 
 - Ruff for lint and format (`line-length = 120`, Python 3.13).

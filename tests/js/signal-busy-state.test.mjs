@@ -109,3 +109,26 @@ test("unregister leaves the action buttons usable after success and failure", as
     assert.ok(buttons().every(b => !b.disabled));
   }
 });
+
+test("reinitializing Signal keeps one delegated action and restores mode selection", async () => {
+  const clicks = [];
+  const addEventListener = document.addEventListener;
+  document.addEventListener = (type, listener) => {
+    if (type === 'click') clicks.push(listener);
+  };
+  try {
+    await actions.initSignal();
+    await actions.initSignal();
+    assert.equal(clicks.length, 1);
+
+    const mode = document.getElementById('signal-mode-selection');
+    mode.hidden = false;
+    clicks[0]({ target: { closest: () => ({ disabled: false, dataset: { signalAction: 'select-mode', mode: 'link' } }) } });
+    assert.equal(mode.hidden, true);
+    registration.signalBackToModeSelection();
+    assert.equal(mode.hidden, false);
+  } finally {
+    document.addEventListener = addEventListener;
+    actions.cleanupSignal();
+  }
+});
