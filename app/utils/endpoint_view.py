@@ -16,7 +16,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-from .tcp_ports import parse_port_list
+from .tcp_ports import DEFAULT_TCP_PORTS, parse_port_list
 
 STATUS_UP = "up"
 STATUS_DOWN = "down"
@@ -140,7 +140,7 @@ def build_endpoint_views(
         )
     legacy = _get(target, "tcp_port_status") or {}
     if _get(target, "enable_tcp_connect"):
-        for port in _ports(_get(target, "tcp_ports"), default=[80]):
+        for port in _ports(_get(target, "tcp_ports"), default=parse_port_list(DEFAULT_TCP_PORTS)):
             row = stored.get(("tcp", port))
             # A row never written (migration 7 seeds it empty) defers to the status cache.
             if row and row.get("checked_at"):

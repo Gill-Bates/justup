@@ -18,7 +18,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from .tcp_ports import parse_port_list
+from .tcp_ports import DEFAULT_TCP_PORTS, parse_port_list
 
 # A gap is a distance between two points of one series above this many expected check intervals.
 GAP_FACTOR = 3
@@ -179,7 +179,7 @@ def downtime_series(target: object) -> list[tuple[str, str]]:
         result.append(("ping_up", "Ping"))
     if flag("enable_tcp_connect"):
         try:
-            tcp_ports = parse_port_list(text("tcp_ports")) or [80]
+            tcp_ports = parse_port_list(text("tcp_ports")) or parse_port_list(DEFAULT_TCP_PORTS)
         except ValueError:
             tcp_ports = []
         result.extend((f"tcp_up_{port}", f"TCP:{port}") for port in tcp_ports)

@@ -17,6 +17,13 @@ const reporters = [["list"]];
 if (process.env.JUSTUP_LAYOUT_JUNIT) reporters.push(["junit", { outputFile: process.env.JUSTUP_LAYOUT_JUNIT }]);
 if (process.env.JUSTUP_LAYOUT_JSON) reporters.push(["json", { outputFile: process.env.JUSTUP_LAYOUT_JSON }]);
 
+// Local default is 3 workers; the machine is shared by several sessions. CI keeps 2.
+const workers = (() => {
+	const raw = process.env.JUSTUP_LAYOUT_WORKERS;
+	if (raw === undefined || raw === "") return process.env.CI ? 2 : 3;
+	if (!/^[1-9][0-9]{0,3}$/.test(raw)) throw new Error(`JUSTUP_LAYOUT_WORKERS must be a positive integer, got ${JSON.stringify(raw)}`);
+	return Number(raw);
+})();
 export default defineConfig({
 	forbidOnly: true,
 	testDir: path.dirname(fileURLToPath(import.meta.url)),
@@ -25,7 +32,7 @@ export default defineConfig({
 	globalTimeout: 1_500_000,
 	expect: { timeout: 10_000 },
 	fullyParallel: true,
-	workers: process.env.CI ? 2 : "50%",
+	workers,
 	retries: 0,
 	reporter: reporters,
 	outputDir: process.env.JUSTUP_LAYOUT_OUTPUT || path.join(os.tmpdir(), `justup-layout-${process.pid}`),

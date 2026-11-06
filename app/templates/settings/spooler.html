@@ -40,35 +40,33 @@
 </p>
 
 {# Channel Status #}
-<div class="card shadow-sm">
-	<div class="ju-table-viewport" role="region" tabindex="0" aria-label="Delivery channel status">
-		<table class="table table-sm mb-0 ju-data-table" id="spooler-channel-table">
-			<thead>
-				<tr>
-					<th scope="col">Channel</th>
-					<th scope="col">Waiting</th>
-					<th scope="col">Next attempt</th>
-					<th scope="col">Oldest</th>
-					<th scope="col">Cooldown until</th>
-					<th scope="col">Handoff failed</th>
-				</tr>
-			</thead>
-			<tbody>
-				{% for ch, label in (('email', 'Email'), ('signal', 'Signal')) %}
-				<tr data-channel="{{ ch }}">
-					<th scope="row" data-label="Channel">{{ label }}</th>
-					<td data-label="Waiting" class="small" data-field="pending">&ndash;</td>
-					<td data-label="Next attempt" class="small text-nowrap" data-field="next_attempt_at">&ndash;</td>
-					<td data-label="Oldest" class="small text-nowrap" data-field="oldest_at">&ndash;</td>
-					<td data-label="Cooldown until" class="small text-nowrap" data-field="cooldown_until">&ndash;</td>
-					<td data-label="Handoff failed" class="small" data-field="failed">&ndash;</td>
-				</tr>
-				{% endfor %}
-			</tbody>
-		</table>
+<section class="card shadow-sm spooler-channels" aria-labelledby="spooler-channels-heading">
+	<div class="card-body">
+		<div class="spooler-channels__heading">
+			<h2 class="h6 mb-0" id="spooler-channels-heading">Channel status</h2>
+			<span class="small text-body-secondary">Email &amp; Signal</span>
+		</div>
+		<div class="spooler-channels__list" id="spooler-channel-status">
+			{% for ch, label, icon in (('email', 'Email', 'email'), ('signal', 'Signal', 'chat_bubble_outline')) %}
+			<div class="spooler-channels__row" data-channel="{{ ch }}">
+				<div class="spooler-channels__main">
+					<span class="spooler-channels__name"><span class="material-icons" aria-hidden="true">{{ icon }}</span>{{ label }}</span>
+					<div class="spooler-channels__counts">
+						<span><strong data-field="pending">0</strong> waiting</span>
+						<span><strong data-field="failed">0</strong> <span class="visually-hidden">handoff </span>failed</span>
+					</div>
+				</div>
+				<div class="spooler-channels__times small text-body-secondary">
+					<span data-time-field="next_attempt_at" hidden>Next attempt <time data-field="next_attempt_at"></time></span>
+					<span data-time-field="oldest_at" hidden>Oldest <time data-field="oldest_at"></time></span>
+					<span data-time-field="cooldown_until" hidden>Cooldown until <time data-field="cooldown_until"></time></span>
+				</div>
+			</div>
+			{% endfor %}
+		</div>
+		<p class="small text-body-secondary mb-0 mt-2">Additional times appear only when relevant.</p>
 	</div>
-</div>
-<p class="small text-body-secondary mb-0">A successful SMTP handoff only confirms that the mail server accepted the message. justUp! cannot detect later non-delivery without a return channel.</p>
+</section>
 {# Toolbar: title row (title, Refresh), filter row, management row; layout in ui.css (.spooler-toolbar) #}
 <div class="spooler-toolbar">
 	<div class="spooler-toolbar__grid">

@@ -83,7 +83,7 @@ export function describeFamily(label, family) {
         const seen = Array.isArray(family.observed) ? family.observed.filter((a) => typeof a === 'string') : [];
         view.detail = reason + (seen.length ? ' Observed: ' + seen.join(', ') + '.' : '');
     } else if (status === 'unavailable') {
-        view.detail = reason || label + ' is not available from this server.';
+        view.detail = 'No ' + label + ' connectivity.';
     } else if (status === 'failed') {
         view.detail = reason || 'The lookup failed.';
     }

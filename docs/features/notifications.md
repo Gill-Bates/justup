@@ -110,10 +110,11 @@ when email itself is down, and they never trigger another email:
 
 On the dashboard and in Settings, failed handoffs of the last 24 hours (`failed_recent`) mark the queue
 as failed even when nothing is waiting; older failures only appear in the log. Flush removes failed
-entries. Settings also shows the note that a successful handoff confirms only the server's acceptance.
+entries.
 
-Settings > Delivery Queue shows statistics, per channel the waiting count, next attempt, oldest
-message, active cooldown and failures, and the log. You can flush the queue or clear the log.
+Settings > Delivery Queue shows statistics, each channel's waiting and failed counts, and the log.
+Next attempt, oldest message and active cooldown appear for a channel when available. You can flush
+the queue or clear the log.
 
 ### Background service alerts
 

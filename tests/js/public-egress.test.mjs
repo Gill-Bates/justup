@@ -8,11 +8,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { describeFamily, describeLoading, describeRequestFailure, formatObserved, initPublicEgress } from "../../app/static/js/settings.public-egress.js";
 
-test("an available address is copyable and names its confirmation", () => {
+test("an available address is copyable without success-detail text", () => {
 	const view = describeFamily("IPv4", { status: "available", address: "93.184.216.34", sources: ["a", "b"] });
 	assert.equal(view.address, "93.184.216.34");
 	assert.equal(view.canCopy, true);
-	assert.match(view.detail, /2 independent services/);
+	assert.equal(view.detail, "");
 });
 
 test("unavailable, failed and inconsistent never carry an address or a copy action", () => {

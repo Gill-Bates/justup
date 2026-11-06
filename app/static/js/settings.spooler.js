@@ -72,18 +72,22 @@
 	}
 
 	function _renderChannels(channels) {
-		document.querySelectorAll('#spooler-channel-table tr[data-channel]').forEach(function (row) {
+		document.querySelectorAll('#spooler-channel-status [data-channel]').forEach(function (row) {
 			const info = channels[row.getAttribute('data-channel')] || {};
-			const values = {
-				pending: info.pending || 0,
-				next_attempt_at: info.next_attempt_at ? _formatTime(info.next_attempt_at) : '–',
-				oldest_at: info.oldest_at ? _formatTime(info.oldest_at) : '–',
-				cooldown_until: info.cooldown_until ? _formatTime(info.cooldown_until) : '–',
-				failed: info.failed || 0,
-			};
-			Object.keys(values).forEach(function (field) {
-				const cell = row.querySelector('[data-field="' + field + '"]');
-				if (cell) cell.textContent = String(values[field]);
+			['pending', 'failed'].forEach(function (field) {
+				const value = row.querySelector('[data-field="' + field + '"]');
+				if (value) value.textContent = String(info[field] || 0);
+			});
+			['next_attempt_at', 'oldest_at', 'cooldown_until'].forEach(function (field) {
+				const wrapper = row.querySelector('[data-time-field="' + field + '"]');
+				if (!wrapper) return;
+				const raw = info[field];
+				const value = wrapper.querySelector('[data-field="' + field + '"]');
+				wrapper.hidden = !raw;
+				if (value) {
+					value.textContent = raw ? _formatTime(raw) : '';
+					value.dateTime = raw || '';
+				}
 			});
 		});
 	}

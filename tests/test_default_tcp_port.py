@@ -10,10 +10,11 @@ from __future__ import annotations
 
 import pytest
 
+from app.api import frontend
 from app.models import targets as target_models
 from app.monitor import scheduler
 from app.services import pdf_worker
-from app.utils import tcp_ports
+from app.utils import availability_rules, endpoint_view, tcp_ports
 from tests import _support  # noqa: F401 - imported for its sys.path side effect
 
 
@@ -64,3 +65,25 @@ def test_pdf_report_ports_use_the_shared_default(target, expected) -> None:
 )
 def test_protocol_scan_hosts(target, expected) -> None:
     assert tcp_ports.protocol_scan_hosts(target) == expected
+
+
+def test_display_paths_take_the_default_from_the_shared_constant(monkeypatch) -> None:
+    # A distinct sentinel proves each path reads DEFAULT_TCP_PORTS instead of a literal 80.
+    for module in (availability_rules, endpoint_view, frontend):
+        monkeypatch.setattr(module, "DEFAULT_TCP_PORTS", "8081")
+
+    series = availability_rules.downtime_series({"enable_tcp_connect": True, "tcp_ports": ""})
+    assert series == [("tcp_up_8081", "TCP:8081")]
+
+    views = endpoint_view.build_endpoint_views({"enable_tcp_connect": True, "tcp_ports": ""}, [])
+    assert [view["port"] for view in views] == [8081]
+
+    seen: list[str] = []
+
+    def fake_latest(_dir, *, metric, **_kwargs):
+        seen.append(metric)
+        return []
+
+    monkeypatch.setattr(frontend.tsdb_db, "query_latest", fake_latest)
+    frontend._fill_tcp_status_from_series({"id": 1, "network_ports": [], "tcp_ports": ""}, None)  # noqa: SLF001
+    assert seen == ["tcp_up_8081"]
