@@ -40,6 +40,7 @@ async function stubScan(page, overrides = {}) {
 		worker: { available: true, state: "ready", message: "", detail: "" },
 		start: async () => ({ status: 202, json: job("queued", { result: null }) }),
 		poll: async () => ({ status: 200, json: completed() }),
+		answered: null, // optional hook, called after a stub answer was delivered or dropped
 		...overrides,
 	};
 	const answer = async (route, result) => {
@@ -47,6 +48,8 @@ async function stubScan(page, overrides = {}) {
 			await route.fulfill({ status: result.status, contentType: "application/json", body: JSON.stringify(result.json ?? {}) });
 		} catch {
 			// The page aborted the request (cancel, host change); a stale answer is simply dropped.
+		} finally {
+			state.answered?.(result);
 		}
 	};
 	await page.route(/\/network-scans(\/[^/?]+)?$/, async (route) => {
@@ -355,7 +358,10 @@ test("a stale answer never replaces a newer scan or a changed host @portpicker",
 	let releaseFirst;
 	const first = new Promise((resolve) => { releaseFirst = resolve; });
 	let starts = 0;
+	let firstAnswered;
+	const firstDone = new Promise((resolve) => { firstAnswered = resolve; });
 	const { log } = await stubScan(page, {
+		answered: (result) => { if (result.json?.id === SCAN_ID && result.json.status === "completed") firstAnswered(); },
 		start: async () => ({ status: 202, json: job("queued", { id: ++starts === 1 ? SCAN_ID : OTHER_ID, result: null }) }),
 		poll: async (id) => {
 			if (id === SCAN_ID) { await first; return { status: 200, json: completed([{ protocol: "tcp", port: 1111, state: "open" }], SCAN_ID) }; }
@@ -372,7 +378,9 @@ test("a stale answer never replaces a newer scan or a changed host @portpicker",
 	await scan(picker).click();
 	await picker.locator("[data-scan-results]").waitFor({ state: "visible" });
 	releaseFirst();
-	await page.waitForTimeout(400);
+	// The late first answer was delivered (or dropped as aborted); give the page one task to act on it.
+	await firstDone;
+	await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 0)));
 	assert.deepEqual(await picker.locator("[data-scan-results] input").evaluateAll((nodes) => nodes.map((node) => node.dataset.port)), ["2222"]);
 	assert.ok(log.deletes.includes(SCAN_ID), "the cancelled job was deleted");
 	// Changing the host invalidates the result and the job id that would be sent with the form.

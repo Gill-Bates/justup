@@ -155,6 +155,15 @@ def render_cards(t: dict) -> str:
     return render(INFO_CARDS, target=t, user={"is_admin": True})
 
 
+def badge_markup(html: str, label: str) -> str:
+    """Markup of the one badge that contains ``label``."""
+    match = re.search(
+        rf'<span class="badge[^>]*>(?:(?!<span class="badge).)*?{label}.*?</span></span>', html, re.DOTALL
+    )
+    assert match, f"no badge with {label!r}"
+    return match.group(0)
+
+
 def check_badges(html: str) -> dict[str, str]:
     """Label -> markup of every badge in the Checks hero (CERT included), in document order."""
     hero = re.search(r'<div class="ju-badges target-kpi-badges">(.*?)</div>\s*</div>\s*</div>', html, re.DOTALL).group(
@@ -189,12 +198,7 @@ def test_detail_checks_show_up_down_and_unknown_apart_without_an_endpoint_table(
     ]
     html = render_cards(t)
     assert_no_endpoint_table(html)
-    up, down, unknown = (
-        re.search(
-            rf'<span class="badge[^>]*>(?:(?!<span class="badge).)*?{label}.*?</span></span>', html, re.DOTALL
-        ).group(0)
-        for label in ("TCP:25", "TCP:587", "UDP:161")
-    )
+    up, down, unknown = (badge_markup(html, label) for label in ("TCP:25", "TCP:587", "UDP:161"))
     assert "ju-status-badge--success" in up and "check_circle" in up and ": Up<" in up
     assert "ju-status-badge--danger" in down and "cancel" in down and ": Down<" in down
     assert "ju-status-badge--neutral" in unknown and "help" in unknown and ": Unknown<" in unknown
@@ -222,9 +226,7 @@ def test_tcp_and_udp_with_the_same_port_number_are_two_badges() -> None:
 def test_unmeasured_ports_are_unknown_badges_not_missing() -> None:
     html = render_cards(target(enable_ping=False))
     for label in ("TCP:25", "TCP:587", "UDP:53", "UDP:161"):
-        badge = re.search(
-            rf'<span class="badge[^>]*>(?:(?!<span class="badge).)*?{label}.*?</span></span>', html, re.DOTALL
-        ).group(0)
+        badge = badge_markup(html, label)
         assert ": Unknown<" in badge and "ju-state-badge--unknown" in badge
     assert "Waiting for first measurement" not in html
 
@@ -249,9 +251,7 @@ def test_http_and_cert_badges_are_unchanged() -> None:
         cert_status="warning",
     )
     html = render_cards(t)
-    http = re.search(
-        r'<span class="badge[^>]*>(?:(?!<span class="badge).)*?HTTP.*?</span></span>', html, re.DOTALL
-    ).group(0)
+    http = badge_markup(html, "HTTP")
     assert "ju-status-badge--danger" in http and ": Down<" in http
     cert = re.search(r'<span class="badge\s+ju-status-badge--warning\s*">\s*CERT.*?</span>\s*</span>', html, re.DOTALL)
     assert cert and 'CERT<span class="visually-hidden">: warning</span>' in cert.group(0)
@@ -298,9 +298,7 @@ def test_dashboard_table_shows_endpoint_status_with_text_not_only_colour() -> No
     )
 
     def badge(label: str) -> str:
-        return re.search(
-            rf'<span class="badge[^>]*>(?:(?!<span class="badge).)*?{label}.*?</span></span>', html, re.DOTALL
-        ).group(0)
+        return badge_markup(html, label)
 
     down, unknown = badge("TCP:25"), badge("UDP:161")
     assert "Down" in down and "Unknown" in unknown

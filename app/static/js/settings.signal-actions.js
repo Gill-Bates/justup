@@ -497,7 +497,7 @@ function getPlaceholderValue(ctx, dottedKey) {
         if (value && typeof value === 'object' && part in value) value = value[part];
         else return '';
     }
-    return value == null ? '' : String(value);
+    return value == null || typeof value === 'object' ? '' : String(value);
 }
 
 export function renderTemplatePreview(template, ctx) {
@@ -506,6 +506,8 @@ export function renderTemplatePreview(template, ctx) {
     const kept = String(template).replace(CONDITIONAL_RE, (_, name, body) => (flags[name] ? body : ''));
     return kept.replace(PLACEHOLDER_RE, (_, key) => {
         const p = String(key || '').trim();
+        // Conditional flags are not placeholders on the server either.
+        if (p === 'flags' || p.startsWith('flags.')) return '';
         return getPlaceholderValue(ctx, p);
     });
 }

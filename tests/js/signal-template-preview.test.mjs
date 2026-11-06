@@ -4,6 +4,7 @@
 //
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 function makeEl() {
   return {
@@ -41,4 +42,20 @@ test("preview fills the status, badge and logo placeholders the server renders",
     sampleContext("down"),
   );
   assert.ok(out.split("|").every(part => part.length > 0), out);
+});
+
+test("preview knows exactly the placeholders the server renders", () => {
+  const source = readFileSync(new URL("../../app/services/notifications/email_template.py", import.meta.url), "utf8");
+  const block = source.match(/ALLOWED_PLACEHOLDERS = frozenset\(\s*\{(.*?)\}\s*\)/s)[1];
+  const server = [...block.replace(/#.*$/gm, "").matchAll(/"([^"]+)"/g)].map(m => m[1]).sort();
+  const leaves = (obj, prefix = "") => Object.entries(obj).flatMap(([k, v]) =>
+    v && typeof v === "object" ? leaves(v, `${prefix}${k}.`) : [`${prefix}${k}`]);
+  const { flags, ...placeholders } = sampleContext("down");
+  assert.ok(flags);
+  assert.deepEqual(leaves(placeholders).sort(), server);
+});
+
+test("preview renders flags and objects empty like the server", () => {
+  const ctx = sampleContext("down");
+  assert.equal(renderTemplatePreview("[{{flags.cta}}|{{flags}}|{{status}}]", ctx), "[||]");
 });

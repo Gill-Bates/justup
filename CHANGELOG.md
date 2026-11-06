@@ -23,6 +23,8 @@
 - `Fix` The Delivery Queue Log shows one card per entry on narrow screens, and the status `sent` reads "Sent".
 - `Fix` The PoP data refresh waits with a normal backoff on HTTP 429 and skips locations with invalid coordinates.
 - `Fix` IXP hops are located by their exchange shortly after an update; the first import no longer waits for the 30-day refresh interval, and cached traceroute results are rendered again with the new data without a new scan.
+- `Fix` The Signal template preview resolves the optional `{{#if cta}}` blocks of the default templates and fills the status, badge and logo placeholders instead of showing the raw markers.
+- `Fix` Signal registration recognizes "captcha required" and "number already registered" by a stable error code, so the matching hint appears whatever the wording of the message.
 - `Security` Nmap scans run in a separate worker with only the `NET_RAW` capability; the web process gets no raw-socket rights and scans are admin-only.
 - `Security` The bundled Nmap is built from PGP-verified source and uses the Debian PCRE2 and zlib packages, so the image scan covers them; the release build fails otherwise.
 

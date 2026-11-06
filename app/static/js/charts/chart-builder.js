@@ -207,9 +207,7 @@ function buildAvailabilitySeriesChart(canvasId, data) {
     CERT: "#6f42c1", // Purple
   };
 
-  // Golden-angle hue per TCP/UDP port; null for other services. TCP and UDP of one port share the
-  // hue and differ by the line style (UDP is dashed), so the protocol is not told by colour alone.
-
+  // TCP and UDP of one port share the hue and differ by line style (UDP is dashed), not colour alone.
   const datasets = [];
   for (const [serviceName, points] of Object.entries(seriesData)) {
     if (!points || points.length === 0) continue;

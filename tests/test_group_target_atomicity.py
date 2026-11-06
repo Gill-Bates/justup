@@ -26,15 +26,6 @@ from tests import _support  # noqa: F401 - imported for its sys.path side effect
 
 
 @pytest.fixture
-def db_path(tmp_path: Path) -> Path:
-    path = tmp_path / "db" / "justup.db"
-    conn = sqlite_db.connect(path)
-    sqlite_db.init_schema(conn)
-    sqlite_db.close_connection(conn)
-    return path
-
-
-@pytest.fixture
 def conn(db_path: Path):
     connection = sqlite_db.connect(db_path)
     yield connection

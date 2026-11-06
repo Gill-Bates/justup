@@ -21,15 +21,6 @@ from app.utils.time import utcnow
 from tests import _support  # noqa: F401 - imported for its sys.path side effect
 
 
-@pytest.fixture
-def db_path(tmp_path: Path) -> Path:
-    path = tmp_path / "db" / "justup.db"
-    conn = sqlite_db.connect(path)
-    sqlite_db.init_schema(conn)
-    sqlite_db.close_connection(conn)
-    return path
-
-
 def _fresh(path: Path) -> sqlite3.Connection:
     conn = sqlite_db.connect(path)
     conn.execute("PRAGMA foreign_keys=OFF")  # lock rows are exercised without target fixtures

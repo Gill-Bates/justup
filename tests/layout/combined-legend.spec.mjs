@@ -9,6 +9,7 @@
 import assert from "node:assert/strict";
 import { test } from "./fixtures.mjs";
 import { waitForVisualStability } from "./harness.mjs";
+import { waitForChartReady } from "./test-support.mjs";
 
 // Target 4 has HTTP, Ping and several TCP ports; ports 443 and 8443 carry measurements.
 const TARGET_PATH = "/ui/targets/4";
@@ -22,12 +23,8 @@ async function openTarget(browser, app, adminState, viewport) {
 	page.on("pageerror", (error) => problems.push(String(error)));
 	page.on("console", (message) => { if (message.type() === "error") problems.push(message.text()); });
 	await page.goto(app.base + TARGET_PATH, { waitUntil: "load" });
-	await page.waitForFunction(() => {
-		const canvas = document.getElementById("chart-combined");
-		const chart = canvas && window.Chart?.getChart(canvas);
-		return chart && !/Loading data/i.test(canvas.getAttribute("aria-label") || "") &&
-			document.querySelectorAll("#combined-legend .combined-legend-btn").length > 1;
-	}, null, { timeout: 30000 });
+	await waitForChartReady(page);
+	await page.waitForFunction(() => document.querySelectorAll("#combined-legend .combined-legend-btn").length > 1, null, { timeout: 30000 });
 	await page.locator("#combined-legend").scrollIntoViewIfNeeded();
 	await waitForVisualStability(page);
 	return { context, page, problems };
@@ -169,7 +166,7 @@ test("combined chart draws every API point of a series after a reload @combined-
 		await page.reload();
 		await ready();
 		await page.waitForFunction(() => document.querySelectorAll("#combined-legend .combined-legend-btn").length > 1);
-		await page.waitForTimeout(500);
+		await waitForVisualStability(page);
 		const drawn = await page.evaluate(() => {
 			const chart = window.Chart.getChart(document.getElementById("chart-combined"));
 			const ms = chart.data.datasets.find((d) => d._kind === "ms" && d._srcKey === "http");

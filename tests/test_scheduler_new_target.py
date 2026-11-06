@@ -39,15 +39,6 @@ def _create(path: Path, name: str) -> int:
 
 
 @pytest.fixture
-def db_path(tmp_path: Path) -> Path:
-    path = tmp_path / "db" / "justup.db"
-    conn = sqlite_db.connect(path)
-    sqlite_db.init_schema(conn)
-    sqlite_db.close_connection(conn)
-    return path
-
-
-@pytest.fixture
 def sched(db_path: Path, tmp_path: Path) -> MonitorScheduler:
     return MonitorScheduler(get_conn=lambda: sqlite_db.connect(db_path), tsdb_dir=tmp_path / "tsdb")
 

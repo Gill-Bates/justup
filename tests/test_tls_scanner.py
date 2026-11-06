@@ -137,13 +137,20 @@ class _WithHash:
         return getattr(self._cert, name)
 
 
-def _cert_attempt(cert, *, verified=True, order_ok=True):
-    deployment = SimpleNamespace(
+def _deployment(cert, *, verified=True, order_ok=True):
+    return SimpleNamespace(
         received_certificate_chain=[cert],
         verified_certificate_chain=[cert] if verified else None,
         received_chain_has_valid_order=order_ok,
     )
-    return _attempt(Status.COMPLETED, SimpleNamespace(certificate_deployments=[deployment]))
+
+
+def _multi(*deployments):
+    return _attempt(Status.COMPLETED, SimpleNamespace(certificate_deployments=list(deployments)))
+
+
+def _cert_attempt(cert, *, verified=True, order_ok=True):
+    return _multi(_deployment(cert, verified=verified, order_ok=order_ok))
 
 
 def _server_result(**overrides):
@@ -221,37 +228,13 @@ def test_clean_scan_is_secure_everywhere():
 def test_all_certificate_deployments_are_normalized():
     first, _ = _make_cert(cn="example.org", san=("example.org",))
     second, _ = _make_cert(cn="alt.example.org", san=("alt.example.org",))
-    attempt = _attempt(
-        Status.COMPLETED,
-        SimpleNamespace(
-            certificate_deployments=[
-                SimpleNamespace(
-                    received_certificate_chain=[cert],
-                    verified_certificate_chain=[cert],
-                    received_chain_has_valid_order=True,
-                )
-                for cert in (first, second)
-            ]
-        ),
-    )
+    attempt = _multi(_deployment(first), _deployment(second))
     result = _normalize(_server_result(certificate_info=attempt))
     assert [cert.subject for cert in result.certificate_deployments] == [
         "CN=example.org",
         "CN=alt.example.org",
     ]
     assert result.certificate is result.certificate_deployments[0]
-
-
-def _deployment(cert, *, verified=True, order_ok=True):
-    return SimpleNamespace(
-        received_certificate_chain=[cert],
-        verified_certificate_chain=[cert] if verified else None,
-        received_chain_has_valid_order=order_ok,
-    )
-
-
-def _multi(*deployments):
-    return _attempt(Status.COMPLETED, SimpleNamespace(certificate_deployments=list(deployments)))
 
 
 def _broken_deployment():

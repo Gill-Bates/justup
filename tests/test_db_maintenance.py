@@ -216,11 +216,7 @@ def test_pop_candidate_retention_preserves_reviews_and_deletes_unreviewed_atomic
 
 
 def test_retention_keeps_open_and_recent_alerts_and_drops_old_resolved(conn):
-    conn.execute(
-        "INSERT INTO targets (name, interval_seconds, retention_days, enable_ping, enable_http_check,"
-        " enable_cert_expiration, host, created_at, updated_at) VALUES ('t',60,30,1,0,0,'h',?,?)",
-        (utcnow(), utcnow()),
-    )
+    _insert_target(conn)
     old = utcnow() - timedelta(days=retention.ALERT_RETENTION_DAYS + 5)
     for aid, status, started in [("a", "resolved", old), ("b", "open", old), ("c", "resolved", utcnow())]:
         conn.execute(
@@ -343,6 +339,15 @@ def test_inbox_retention_cascades_to_reads_and_dismissals(conn):
     assert conn.execute("SELECT COUNT(*) FROM notification_dismissals").fetchone()[0] == 1
 
 
+def _insert_target(conn, now=None) -> None:
+    now = now or utcnow()
+    conn.execute(
+        "INSERT INTO targets (name, interval_seconds, retention_days, enable_ping, enable_http_check,"
+        " enable_cert_expiration, host, created_at, updated_at) VALUES ('t',60,30,1,0,0,'h',?,?)",
+        (now, now),
+    )
+
+
 def test_inbox_retention_runs_in_batches_across_runs(conn, monkeypatch):
     monkeypatch.setattr(retention.time, "sleep", lambda _s: None)
     _inbox(conn, 300, key="old", n=2500)  # more than two default batches
@@ -366,11 +371,7 @@ def test_inbox_retention_runs_in_batches_across_runs(conn, monkeypatch):
 
 
 def test_inbox_retention_keeps_alerts_queue_and_bumped_grouped_rows(conn):
-    conn.execute(
-        "INSERT INTO targets (name, interval_seconds, retention_days, enable_ping, enable_http_check,"
-        " enable_cert_expiration, host, created_at, updated_at) VALUES ('t',60,30,1,0,0,'h',?,?)",
-        (utcnow(), utcnow()),
-    )
+    _insert_target(conn)
     old = utcnow() - timedelta(days=400)
     conn.execute(
         "INSERT INTO alerts (id, target_id, target_name, failed_service, status, started_at, created_at, updated_at)"
@@ -477,11 +478,7 @@ def test_resolved_alert_retention_counts_from_resolution_with_legacy_fallback(co
     now = utcnow()
     limit = retention.ALERT_RETENTION_DAYS
     long_ago = now - timedelta(days=limit + 70)
-    conn.execute(
-        "INSERT INTO targets (name, interval_seconds, retention_days, enable_ping, enable_http_check,"
-        " enable_cert_expiration, host, created_at, updated_at) VALUES ('t',60,30,1,0,0,'h',?,?)",
-        (now, now),
-    )
+    _insert_target(conn, now)
     _alert(conn, "resolved-today", "resolved", long_ago, now)
     _alert(conn, "resolved-long-ago", "resolved", long_ago, now - timedelta(days=limit + 5))
     _alert(conn, "open", "open", long_ago)

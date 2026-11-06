@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import asyncio
 import threading
-import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest import mock
@@ -24,15 +23,6 @@ from app.monitor.scheduler import MonitorScheduler, TargetStatus
 from app.utils import maintenance
 from app.utils.time import utcnow
 from tests import _support  # noqa: F401 - imported for its sys.path side effect
-
-
-@pytest.fixture
-def db_path(tmp_path: Path) -> Path:
-    path = tmp_path / "db" / "justup.db"
-    conn = sqlite_db.connect(path)
-    sqlite_db.init_schema(conn)
-    sqlite_db.close_connection(conn)
-    return path
 
 
 def _sched(db_path: Path, tmp_path: Path) -> MonitorScheduler:

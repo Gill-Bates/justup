@@ -364,6 +364,8 @@ test("wizard: scan button is enabled and no reason is shown while the worker is 
 });
 test("wizard: the button follows the worker back and forth via Check again and focus @wizard", async ({ app, page }) => {
 	const worker = { current: WORKER_DOWN };
+	// A controllable clock lets the 5 s re-check throttle pass without waiting in real time.
+	await page.clock.install();
 	await stubPortScan(page);
 	await stubWorkerStatus(page, worker);
 	await openScanStep(page, app);
@@ -377,7 +379,7 @@ test("wizard: the button follows the worker back and forth via Check again and f
 	assert.match(await page.locator("[data-scan-status]").innerText(), /available again/i);
 	// Down again; regaining focus re-checks once the 5 s throttle has passed.
 	worker.current = WORKER_DOWN;
-	await page.waitForTimeout(5200);
+	await page.clock.fastForward(5200);
 	await page.evaluate(() => window.dispatchEvent(new Event("focus")));
 	await page.locator('[data-scan-action="start"]:disabled').waitFor();
 	assert.equal(await page.locator("[data-scan-unavailable]").isVisible(), true);

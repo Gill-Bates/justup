@@ -7,6 +7,7 @@
 // above their label within the existing tile (DESIGN.md, dashboard widgets).
 import assert from "node:assert/strict";
 import { test } from "./fixtures.mjs";
+import { waitForVisualStability } from "./harness.mjs";
 
 const VIEWPORTS = [
 	{ name: "1280x720", width: 1280, height: 720 },
@@ -31,7 +32,7 @@ for (const viewport of VIEWPORTS) {
 					const tile = document.querySelector('[data-widget-id="alerts-open"] .dashboard-monitor-metrics');
 					return grid?.gridstack && !grid.classList.contains("dashboard-grid--loading") && tile;
 				}, null, { timeout: 15000 });
-				await page.waitForTimeout(800);
+				await waitForVisualStability(page);
 				const result = await page.evaluate(() => {
 					const out = {};
 					for (const id of ["alerts-open", "delivery-queue"]) {
@@ -64,6 +65,7 @@ for (const viewport of VIEWPORTS) {
 				});
 				const alerts = result["alerts-open"];
 				assert.ok(alerts, "the Alerts widget is on the dashboard");
+				assert.ok(result["delivery-queue"], "the admin-only Delivery queue widget is on the dashboard");
 				assert.equal(alerts.title, "Alerts");
 				assert.equal(alerts.hasStatus, true);
 				assert.equal(alerts.metrics, 3);

@@ -8,6 +8,7 @@
 import assert from "node:assert/strict";
 import { test } from "./fixtures.mjs";
 import { waitForVisualStability } from "./harness.mjs";
+import { waitForChartReady } from "./test-support.mjs";
 
 const VIEWPORTS = [{ name: "1280x720", width: 1280, height: 900 }, { name: "390x844", width: 390, height: 844 }];
 const TARGET_PATH = "/ui/targets/4";
@@ -49,11 +50,7 @@ async function open(browser, app, adminState, viewport, theme) {
 	const page = await context.newPage();
 	await page.goto(app.base + TARGET_PATH, { waitUntil: "load" });
 	await page.evaluate((mode) => document.documentElement.setAttribute("data-bs-theme", mode), theme);
-	await page.waitForFunction(() => {
-		const canvas = document.getElementById("chart-uptime");
-		const chart = canvas && window.Chart?.getChart(canvas);
-		return chart && chart.data.datasets.some((d) => d.data.length) && !/Loading data/i.test(canvas.getAttribute("aria-label") || "");
-	}, null, { timeout: 30000 });
+	await waitForChartReady(page, "chart-uptime", { withData: true });
 	await page.locator("#chart-uptime").scrollIntoViewIfNeeded();
 	await waitForVisualStability(page);
 	return { context, page };

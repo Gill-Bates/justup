@@ -25,7 +25,6 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from app.services.notifications.email_template import (
-    ALLOWED_PLACEHOLDERS,
     DEFAULT_HTML_TEMPLATE,
     DEFAULT_SUBJECT,
     LOGO_CID,
@@ -39,6 +38,7 @@ from app.services.notifications.email_template import (
 )
 from app.utils.status_palette import STATUS_PALETTE
 from tests import _support  # noqa: F401 - imported for its sys.path side effect
+from tests._support import wcag_contrast
 
 _FIXED_NOW = datetime(2026, 11, 1, 19, 18, tzinfo=UTC)
 
@@ -209,17 +209,6 @@ _NEUTRAL = STATUS_PALETTE["neutral"]
 _CARD_BG = "#f7f9fb"  # background of the Target Details card in the default template
 
 
-def _luminance(hex_color: str) -> float:
-    channels = [int(hex_color[i : i + 2], 16) / 255 for i in (1, 3, 5)]
-    lin = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4 for c in channels]
-    return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
-
-
-def _contrast(a: str, b: str) -> float:
-    hi, lo = sorted((_luminance(a), _luminance(b)), reverse=True)
-    return (hi + 0.05) / (lo + 0.05)
-
-
 def _target_details_html(status: str, check_type: str = "HTTP") -> str:
     ctx = _ctx(status=status)
     ctx["target"]["check_badges"] = build_alert_context(
@@ -260,9 +249,9 @@ def test_status_banner_keeps_its_state_colour(status):
 
 
 def test_neutral_badge_contrast_meets_wcag_limits():
-    assert _contrast(_NEUTRAL.foreground, _NEUTRAL.background) >= 4.5  # badge text
-    assert _contrast(_NEUTRAL.background, _CARD_BG) >= 3.0  # badge edge against the card
-    assert _contrast(_NEUTRAL.text, _CARD_BG) >= 4.5  # card icon/labels
+    assert wcag_contrast(_NEUTRAL.foreground, _NEUTRAL.background) >= 4.5  # badge text
+    assert wcag_contrast(_NEUTRAL.background, _CARD_BG) >= 3.0  # badge edge against the card
+    assert wcag_contrast(_NEUTRAL.text, _CARD_BG) >= 4.5  # card icon/labels
 
 
 def test_plain_text_part_does_not_depend_on_badge_colour():
@@ -529,15 +518,3 @@ def test_header_keeps_the_logo_left_and_the_status_line():
     assert 'alt="justUp!"' in header
     assert "<!-- STATUS ACCENT LINE -->" in header
     assert "border-left" not in header  # the divider belonged to the removed label
-
-
-def test_signal_preview_placeholders_match_server_whitelist():
-    """The Signal editor preview must know exactly the placeholders the real renderer replaces."""
-    import re
-    from pathlib import Path
-
-    source = (Path(__file__).resolve().parent.parent / "app/static/js/settings.signal-actions.js").read_text(
-        encoding="utf-8"
-    )
-    block = re.search(r"const TEMPLATE_PLACEHOLDERS = new Set\(\[(.*?)\]\)", source, re.DOTALL).group(1)
-    assert set(re.findall(r"'([^']+)'", block)) == set(ALLOWED_PLACEHOLDERS)

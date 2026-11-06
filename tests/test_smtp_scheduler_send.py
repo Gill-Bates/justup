@@ -52,15 +52,6 @@ def fakes(monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.fixture
-def db_path(tmp_path: Path) -> Path:
-    path = tmp_path / "db" / "justup.db"
-    connection = sqlite_db.connect(path)
-    sqlite_db.init_schema(connection)
-    sqlite_db.close_connection(connection)
-    return path
-
-
-@pytest.fixture
 def scheduler(db_path: Path, tmp_path: Path) -> MonitorScheduler:
     return MonitorScheduler(get_conn=lambda: sqlite_db.connect(db_path), tsdb_dir=tmp_path / "tsdb")
 

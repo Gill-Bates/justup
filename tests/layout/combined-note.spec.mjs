@@ -7,6 +7,8 @@
 // leftover note container taking space (DESIGN.md, "Charts and data visualization").
 import assert from "node:assert/strict";
 import { test } from "./fixtures.mjs";
+import { waitForVisualStability } from "./harness.mjs";
+import { waitForChartReady } from "./test-support.mjs";
 
 for (const viewport of [{ name: "1280x720", width: 1280, height: 720 }, { name: "390x844", width: 390, height: 844 }]) {
 	test(`a TCP-only target shows no HTTP status note at ${viewport.name} @combined-note`, async ({ browser, app, adminState }) => {
@@ -25,8 +27,8 @@ for (const viewport of [{ name: "1280x720", width: 1280, height: 720 }, { name: 
 			assert.equal(typeof id, "number", `target not created: ${id}`);
 			await page.goto(`${app.base}/ui/targets/${id}`, { waitUntil: "load" });
 			await page.waitForSelector("#combined-status-note", { state: "attached", timeout: 20000 });
-			await page.waitForFunction(() => !/Loading data/i.test(document.getElementById("chart-combined")?.getAttribute("aria-label") || "Loading data"), null, { timeout: 20000 }).catch(() => {});
-			await page.waitForTimeout(1000);
+			await waitForChartReady(page, "chart-combined", { allowNoData: true, timeout: 20000 });
+			await waitForVisualStability(page);
 			const result = await page.evaluate(() => {
 				const note = document.getElementById("combined-status-note");
 				const area = document.querySelector("#combined-status-note")?.closest(".target-combined, .combined-footer, section, div") || document.body;

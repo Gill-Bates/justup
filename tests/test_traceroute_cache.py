@@ -136,7 +136,7 @@ def test_traceroute_fragment_reuses_authorized_recent_result(tmp_path: Path, mon
     assert unauthorized.headers["hx-redirect"] == "/ui/login"
     assert len(calls) == 2
 
-    key = (f"{frontend_api._TRACEROUTE_CACHE_VERSION}:{app.state.db_path}", target_id, "replacement.example.net")
+    key = _cache_key(app, target_id, "replacement.example.net")
     with frontend_api._traceroute_fragment_cache_lock:
         _expires_at, body, measured_at = frontend_api._traceroute_fragment_cache[key]
         frontend_api._traceroute_fragment_cache[key] = (time.monotonic() - 1, body, measured_at)
@@ -357,7 +357,7 @@ def test_run_again_forces_new_measurement_with_auth_and_parallel_guard(tmp_path:
     assert again.status_code == 429 and "retry-after" in again.headers and len(calls) == 2
 
     # After the cooldown another forced run is allowed.
-    key = (f"{frontend_api._TRACEROUTE_CACHE_VERSION}:{app.state.db_path}", target_id, "diag.example.com")
+    key = _cache_key(app, target_id, "diag.example.com")
     with frontend_api._traceroute_refresh_lock:
         frontend_api._traceroute_refresh_finished[key] = time.monotonic() - 60
     assert client.get(f"{url}?refresh=1", headers=_HX).status_code == 200
@@ -388,7 +388,7 @@ def test_refresh_is_rejected_while_a_cache_miss_measurement_is_in_flight(tmp_pat
     client, url, calls, app, target_id = _diagnostics_client(
         tmp_path, monkeypatch, hops, target_ip="203.0.113.9", geo_points=geo
     )
-    key = (f"{frontend_api._TRACEROUTE_CACHE_VERSION}:{app.state.db_path}", target_id, "diag.example.com")
+    key = _cache_key(app, target_id, "diag.example.com")
     frontend_api._traceroute_inflight[key] = SimpleNamespace(done=lambda: False)
     try:
         blocked = client.get(f"{url}?refresh=1", headers=_HX)
@@ -404,11 +404,13 @@ def _measured_at(response) -> int:
     return int(response.headers["x-measured-at"])
 
 
+def _cache_key(app, target_id: int, host: str = "diag.example.com") -> tuple[str, int, str]:
+    return (f"{frontend_api._TRACEROUTE_CACHE_VERSION}:{app.state.db_path}", target_id, host)
+
+
 def _allow_refresh(app, target_id: int, host: str = "diag.example.com") -> None:
     with frontend_api._traceroute_refresh_lock:
-        frontend_api._traceroute_refresh_finished[
-            (f"{frontend_api._TRACEROUTE_CACHE_VERSION}:{app.state.db_path}", target_id, host)
-        ] = time.monotonic() - 60
+        frontend_api._traceroute_refresh_finished[_cache_key(app, target_id, host)] = time.monotonic() - 60
 
 
 def test_response_carries_the_original_measurement_time(tmp_path: Path, monkeypatch) -> None:
@@ -447,9 +449,7 @@ def test_refresh_bypasses_the_server_cache_and_reports_the_new_time(tmp_path: Pa
     assert limited.status_code == 429 and "x-measured-at" not in limited.headers and len(calls) == 2
     _allow_refresh(app, target_id)
     with frontend_api._traceroute_refresh_lock:
-        frontend_api._traceroute_refresh_inflight.add(
-            (f"{frontend_api._TRACEROUTE_CACHE_VERSION}:{app.state.db_path}", target_id, "diag.example.com")
-        )
+        frontend_api._traceroute_refresh_inflight.add(_cache_key(app, target_id, "diag.example.com"))
     assert client.get(f"{url}?refresh=1", headers=_HX).status_code == 429
     assert len(calls) == 2
     client.close()
@@ -741,7 +741,7 @@ def test_rerender_after_an_ixp_update_works_when_the_fragment_cache_entry_expire
         tmp_path, monkeypatch, _ixp_route_hops(), target_ip="203.0.113.9", geo_points=[], stub_geo=False
     )
     client.get(url, headers=_HX)
-    key = (f"{frontend_api._TRACEROUTE_CACHE_VERSION}:{app.state.db_path}", target_id, "diag.example.com")
+    key = _cache_key(app, target_id, "diag.example.com")
     with frontend_api._traceroute_fragment_cache_lock:
         _expires, body, measured = frontend_api._traceroute_fragment_cache[key]
         frontend_api._traceroute_fragment_cache[key] = (time.monotonic() - 1, body, measured)
@@ -758,7 +758,7 @@ def test_expired_fragment_without_new_ixp_data_still_measures_again(tmp_path: Pa
         tmp_path, monkeypatch, _ixp_route_hops(), target_ip="203.0.113.9", geo_points=[], stub_geo=False
     )
     client.get(url, headers=_HX)
-    key = (f"{frontend_api._TRACEROUTE_CACHE_VERSION}:{app.state.db_path}", target_id, "diag.example.com")
+    key = _cache_key(app, target_id, "diag.example.com")
     with frontend_api._traceroute_fragment_cache_lock:
         _expires, body, measured = frontend_api._traceroute_fragment_cache[key]
         frontend_api._traceroute_fragment_cache[key] = (time.monotonic() - 1, body, measured)

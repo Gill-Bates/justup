@@ -8,6 +8,7 @@
 import assert from "node:assert/strict";
 import { test } from "./fixtures.mjs";
 import { waitForVisualStability } from "./harness.mjs";
+import { waitForChartReady } from "./test-support.mjs";
 
 const TARGET_PATH = "/ui/targets/4";
 
@@ -39,11 +40,7 @@ for (const id of ["chart-combined", "chart-uptime"]) {
 		const page = await context.newPage();
 		try {
 			await page.goto(app.base + TARGET_PATH, { waitUntil: "load" });
-			await page.waitForFunction((canvasId) => {
-				const canvas = document.getElementById(canvasId);
-				const chart = canvas && window.Chart?.getChart(canvas);
-				return chart && chart.data.datasets.some((d) => d.data.length) && !/Loading data/i.test(canvas.getAttribute("aria-label") || "");
-			}, id, { timeout: 30000 });
+			await waitForChartReady(page, id, { withData: true });
 			await page.locator(`#${id}`).scrollIntoViewIfNeeded();
 			await waitForVisualStability(page);
 			// Hover near the right end of the plot, where a wide tooltip is most likely to be cut off.

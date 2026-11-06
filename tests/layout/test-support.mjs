@@ -52,3 +52,17 @@ export async function startStaticAppServer({ root, renderPage }) {
 		close: () => new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve())),
 	};
 }
+
+// Waits until a chart canvas has left the "Loading data" state and owns a Chart instance.
+// `withData` also needs a non-empty dataset; `allowNoData` accepts the "no data" label instead of a chart.
+export function waitForChartReady(page, id = "chart-combined", { withData = false, allowNoData = false, timeout = 30000 } = {}) {
+	return page.waitForFunction(({ canvasId, needData, noData }) => {
+		const canvas = document.getElementById(canvasId);
+		if (!canvas) return false;
+		const label = canvas.getAttribute("aria-label") || "Loading data";
+		if (/Loading data/i.test(label)) return false;
+		const chart = window.Chart?.getChart(canvas);
+		if (!chart) return noData && /no data/i.test(label);
+		return !needData || chart.data.datasets.some((dataset) => dataset.data.length);
+	}, { canvasId: id, needData: withData, noData: allowNoData }, { timeout });
+}
