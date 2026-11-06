@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import re
 import sqlite3
 
 from app.utils.status_helper import build_target_status

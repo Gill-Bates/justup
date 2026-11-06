@@ -291,7 +291,7 @@ def test_fragment_counts_collapsed_hops_and_renders_panels(tmp_path: Path, monke
     assert text.count("data-tr-hop") == 7  # every hop stays reachable, grouped ones inside the group
     # Visible text names each step; an aria-label would trip axe's label-content-name-mismatch.
     assert not re.search(r"<button[^>]*tr-step-btn[^>]*aria-label", text)
-    assert text.count(">No reply<") >= 4 and text.count("ju-status-badge--warning") >= 1
+    assert text.count(">No reply<") >= 4 and text.count("ju-status-dot--warning") >= 1
     assert (
         "15.7 ms" in text
         and "%" not in text.split("hop-table", 1)[1].split("</table>")[0]

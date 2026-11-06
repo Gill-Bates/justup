@@ -415,9 +415,11 @@ function buildStatusCodeChart(canvasId, data) {
       const key = code === null ? "Error" : String(code);
       statusCounts[key] = (statusCounts[key] || 0) + 1;
     });
+  const rawDays =
+    (typeof pageConfig !== "undefined" && pageConfig.rawRetentionDays) || 30;
   const unit = exact
     ? data.raw_status_only
-      ? "raw checks in the last 30 days"
+      ? "raw checks in the last " + rawDays + " days"
       : "checks"
     : "samples";
   const numericCodes = Object.keys(statusCounts)

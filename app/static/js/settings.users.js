@@ -148,8 +148,11 @@ function initSmtpTestHandlers(root) {
 	}
 }
 
-// Load Users List
+// Load Users List; a newer call supersedes the responses of older ones
+let usersGeneration = 0;
+
 async function loadUsers() {
+	const generation = ++usersGeneration;
 	const container = document.getElementById('users-list');
 
 	// Guard: container might not exist on page
@@ -163,6 +166,7 @@ async function loadUsers() {
 		if (!response.ok) throw new Error('HTTP ' + response.status);
 
 		const users = await response.json();
+		if (generation !== usersGeneration) return;
 		_usersCache = Array.isArray(users) ? users : [];
 
 		if (_usersCache.length === 0) {
@@ -277,6 +281,7 @@ async function loadUsers() {
 		window.JuLocalTime?.init(container);
 
 	} catch (error) {
+		if (generation !== usersGeneration) return;
 		console.error('Load users error:', error);
 		container.innerHTML = '<div class="text-center text-danger py-4">' + ERROR_MESSAGES.LOAD_USERS_FAILED + '</div>';
 	}
@@ -501,10 +506,7 @@ async function createUser() {
 			// Map backend errors to user-friendly messages
 			let errorMsg = ERROR_MESSAGES.CREATE_USER_FAILED;
 			try {
-				const error = await response.json();
-				if (window.JuApiError.message(error.detail, '').includes('already exists')) {
-					errorMsg = 'Username already exists';
-				}
+				errorMsg = window.JuApiError.fromBody(await response.json(), ERROR_MESSAGES.CREATE_USER_FAILED);
 			} catch (parseError) {
 				console.warn('Failed to parse error response');
 			}

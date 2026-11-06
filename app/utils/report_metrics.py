@@ -152,7 +152,7 @@ def collect_report_inputs(
 
     # Separate lists: a chained assignment would alias one object across all series.
     http_data: list[dict[str, Any]] = []
-    uptime_data: list[dict[str, Any]] = []
+    uptime_data = AvailabilitySeries()
     ping_data: list[dict[str, Any]] = []
     tcp_data: list[dict[str, Any]] = []
     cert_data: list[dict[str, Any]] = []
@@ -184,8 +184,13 @@ def collect_report_inputs(
     availability_metrics = enabled_availability_metrics(target)
     if availability_metrics:
         try:
-            uptime_data = tsdb_db.query_availability_samples(
-                tsdb_dir, target_id=target_id, metrics=availability_metrics, since=since, until=until
+            uptime_data = tsdb_db.query_availability_series(
+                tsdb_dir,
+                target_id=target_id,
+                metrics=availability_metrics,
+                interval_seconds=target.get("interval_seconds") or 60,
+                since=since,
+                until=until,
             )
         except Exception:  # noqa: BLE001 - a partial report can omit availability history
             _log.exception("Availability query failed for target %d", target_id)

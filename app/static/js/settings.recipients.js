@@ -649,8 +649,13 @@ async function sendRecipientTest(recipientId, channel, ui = {}) {
 			report(lines);
 			lines = await Promise.all(results.map(async (r, i) => {
 				if (r.state !== 'queued') return lines[i];
-				const final = await _pollTestStatus(recipientId, r.queue_id);
-				return { channel: r.channel, state: final.state, message: final.message };
+				try {
+					const final = await _pollTestStatus(recipientId, r.queue_id);
+					return { channel: r.channel, state: final.state, message: final.message };
+				} catch (pollError) {
+					console.warn('Test delivery status failed:', pollError);
+					return { channel: r.channel, state: 'pending', message: 'Delivery status unavailable. Check the Spooler log for the result.' };
+				}
 			}));
 		}
 	} catch (error) {
@@ -815,7 +820,8 @@ async function saveRecipient() {
 			errorDiv.classList.remove('d-none');
 		}
 	} catch (error) {
-		errorDiv.textContent = 'Network error: ' + error.message;
+		console.error('Save recipient error:', error);
+		errorDiv.textContent = 'Network error. Please check your connection.';
 		errorDiv.classList.remove('d-none');
 	} finally {
 		_saveInFlight = false;

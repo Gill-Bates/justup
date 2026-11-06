@@ -433,7 +433,7 @@
 				body: JSON.stringify(data)
 			});
 			if (!resp.ok) {
-				const err = await resp.json();
+				const err = await resp.json().catch(() => ({}));
 				let msg = 'Error saving target';
 				if (typeof err.detail === 'string' && err.detail.trim()) {
 					msg = err.detail;
@@ -471,8 +471,8 @@
 
 			// If notifications are being sent, save task info for polling after redirect
 			if (alertResp?.ok) {
-				const alertResult = await alertResp.json();
-				if (alertResult.notification_task_id && alertResult.new_recipient_count > 0) {
+				const alertResult = await alertResp.json().catch(() => null);
+				if (alertResult?.notification_task_id && alertResult.new_recipient_count > 0) {
 					const taskInfo = {
 						targetId: result.id,
 						taskId: alertResult.notification_task_id,

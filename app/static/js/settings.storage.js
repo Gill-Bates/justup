@@ -260,6 +260,27 @@ function updateLastBackupDisplay(isoTimestamp) {
     if (infoEl) infoEl.classList.remove('d-none');
 }
 
+/** Refresh tick, visible value (#<name>_value) and aria-valuetext of a range input. */
+function renderRangeValue(input) {
+    updateRangeActiveTick(input);
+    const text = formatRangeValue(input);
+    const display = document.getElementById(input.name + '_value');
+    if (display) display.textContent = text;
+    input.setAttribute('aria-valuetext', text);
+}
+
+/** Update only the last-backup time; loadSettings() would overwrite running saves and edits. */
+async function refreshLastBackup() {
+    try {
+        const resp = await apiFetch(SETTINGS_API.settings);
+        if (!resp.ok) return;
+        const data = await resp.json();
+        updateLastBackupDisplay(data.last_backup_at);
+    } catch (e) {
+        console.warn('Failed to refresh last backup time:', e);
+    }
+}
+
 /**
  * Create and download a backup
  */
@@ -285,8 +306,8 @@ export async function createBackup() {
                 const blob = await resp.blob();
                 downloadBlob(blob, filename);
 
-                // Reload settings to get updated last_backup_at
-                loadSettings();
+                // Only the backup time changed; do not reload the whole form
+                await refreshLastBackup();
             } else {
                 const error = await getErrorMessage(resp);
                 notify('error', error);
@@ -506,9 +527,10 @@ function initPurgeAlerts() {
         modal,
         url: SETTINGS_API.alertsPurge,
         onSuccess: async (resp) => {
-            const data = await resp.json();
+            const data = await resp.json().catch(() => null);
             hideModal(modal);
-            notify('success', `${data.deleted} alerts deleted successfully.`);
+            const n = Number.isFinite(data?.deleted) ? data.deleted : null;
+            notify('success', n === null ? 'Alerts deleted successfully.' : `${n} alerts deleted successfully.`);
         },
     });
 }
@@ -650,22 +672,14 @@ export async function loadSettings() {
         const metricsEl = DOM.metricsTimeoutMinutes();
         if (metricsEl) {
             setValue(metricsEl, data.metrics_timeout_minutes || 5);
-            updateRangeActiveTick(metricsEl);
-            const text = formatRangeValue(metricsEl);
-            const metricsTimeoutDisplay = document.getElementById('metrics_timeout_value');
-            if (metricsTimeoutDisplay) metricsTimeoutDisplay.textContent = text;
-            metricsEl.setAttribute('aria-valuetext', text);
+            renderRangeValue(metricsEl);
         }
 
         // Session lifetime slider
         const sessionEl = document.getElementById('session_max_days');
         if (sessionEl) {
             setValue(sessionEl, data.session_max_days || 1);
-            updateRangeActiveTick(sessionEl);
-            const text = formatRangeValue(sessionEl);
-            const sessionDisplay = document.getElementById('session_max_days_value');
-            if (sessionDisplay) sessionDisplay.textContent = text;
-            sessionEl.setAttribute('aria-valuetext', text);
+            renderRangeValue(sessionEl);
         }
 
         // Toggle Signal panel based on enabled state
@@ -1001,13 +1015,7 @@ function initSettingsAutoSave() {
         const target = e.target;
         if (target.name === 'smtp_port') syncSmtpTlsControl();
         if (target.type === 'range' && target.name) {
-            updateRangeActiveTick(target);
-            const valueDisplay = document.getElementById(target.name + '_value');
-            const text = formatRangeValue(target);
-            if (valueDisplay) {
-                valueDisplay.textContent = text;
-            }
-            target.setAttribute('aria-valuetext', text);
+            renderRangeValue(target);
         }
     });
 

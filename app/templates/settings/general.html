@@ -27,7 +27,7 @@
 				<div class="card-body settings-compact">
 					<div>
 						<label for="metrics_timeout_minutes" class="form-label">
-							Down Alert Delay: <span class="badge badge-interval" id="metrics_timeout_value">{{ settings.metrics_timeout_minutes }} min</span>
+							Down Alert Delay: <span class="badge badge-interval" id="metrics_timeout_minutes_value">{{ settings.metrics_timeout_minutes }} min</span>
 						</label>
 						{% set timeout_min = settings_limits.metrics_timeout_minutes.min %}
 						{% set timeout_max = settings_limits.metrics_timeout_minutes.max %}

@@ -51,6 +51,7 @@ from ..utils.availability_rules import (
     merge_outages,
     series_interval_seconds,
 )
+from ..utils.availability_series import AvailabilityBuilder, AvailabilitySeries
 from ..utils.time import ensure_utc, parse_utc, utcnow
 from ..utils.uptime_metric import combine_availability
 from . import tsdb_segments as seg
@@ -632,6 +633,31 @@ def _open_snapshot(
     return snap
 
 
+def _iter_snapshot_lines(snap: _Snapshot, *, bounded: bool = False) -> Iterator[str]:
+    """Yield raw lines of an open snapshot, oldest segment first, then the active file.
+
+    A damaged segment is logged and skipped from the point of damage on. With ``bounded`` the active file
+    (opened in binary mode) is read only up to the size recorded when the snapshot was taken, so lines
+    appended afterwards stay out and several series keep one consistent state.
+    """
+    for segment, handle in snap.segments:
+        try:
+            yield from seg.iter_lines_from(handle, segment.path.name)
+        except seg.SegmentCorruptError as e:
+            _log.warning("Skipping damaged TSDB segment %s: %s", segment.path.name, e)
+    if snap.active is None:
+        return
+    if not bounded:
+        yield from snap.active
+        return
+    remaining = snap.active_size
+    for raw in snap.active:
+        remaining -= len(raw)
+        if remaining < 0:
+            return
+        yield raw.decode("utf-8", errors="replace")
+
+
 def _iter_series_lines(
     series_path: Path, since: datetime | None = None, until: datetime | None = None
 ) -> Iterator[str]:
@@ -643,13 +669,7 @@ def _iter_series_lines(
     """
     snap = _open_snapshot(series_path, since, until)
     try:
-        for segment, handle in snap.segments:
-            try:
-                yield from seg.iter_lines_from(handle, segment.path.name)
-            except seg.SegmentCorruptError as e:
-                _log.warning("Skipping damaged TSDB segment %s: %s", segment.path.name, e)
-        if snap.active is not None:
-            yield from snap.active
+        yield from _iter_snapshot_lines(snap)
     finally:
         snap.close()
 
@@ -924,24 +944,46 @@ def _availability_cycles(
         yield from combine_availability(heapq.merge(*streams, key=lambda e: e[0]))
 
 
-@_consistent_target_read
-def query_availability_samples(
+def query_availability_series(
     tsdb_dir: Path,
     *,
     target_id: int,
     metrics: Sequence[str],
+    interval_seconds: float,
     since: datetime | None = None,
     until: datetime | None = None,
-) -> list[dict[str, Any]]:
-    """Return every overall-availability sample as ``{"ts", "value"}``, never thinned.
+) -> AvailabilitySeries:
+    """Return the overall-availability samples as runs with exact counts and real time bounds.
 
-    Same streams and combination rule as ``count_availability``; deliberately not routed through
-    ``query_auto_resolution``, which downsamples and would drop outages from the report.
+    Same streams and combination rule as ``count_availability``; never thinned, so no outage is lost.
+    The shared target lock is held only while the series are opened: the handles keep the state of that
+    moment (active files are read up to their size then), so the long read neither delays the monitoring
+    appends nor sees half of a later check cycle. Memory depends on the number of state changes.
     """
-    return [
-        {"ts": ts.isoformat(), "value": value}
-        for ts, value in _availability_cycles(tsdb_dir, target_id, metrics, since, until)
-    ]
+    since_u = ensure_utc(since) if since else None
+    until_u = ensure_utc(until) if until else None
+    snapshots: dict[str, _Snapshot] = {}
+    try:
+        with _target_read_lock(tsdb_dir, target_id):
+            for metric in metrics:
+                path = _series_path(tsdb_dir, target_id, metric)
+                if _series_exists(path):
+                    snapshots[metric] = _open_snapshot(path, since_u, until_u, binary=True)
+
+        def events(metric: str) -> Iterator[tuple[datetime, str, int]]:
+            for raw_line in _iter_snapshot_lines(snapshots[metric], bounded=True):
+                pt = _parse_point(raw_line, since_u, until_u)
+                if pt is not None and pt.value in (0, 1):
+                    yield pt.ts, metric, int(pt.value)
+
+        builder = AvailabilityBuilder(interval_seconds)
+        merged = heapq.merge(*(events(metric) for metric in snapshots), key=lambda e: e[0])
+        for ts, value in combine_availability(merged):
+            builder.add(ts, value)
+        return builder.build()
+    finally:
+        for snapshot in snapshots.values():
+            snapshot.close()
 
 
 def query_latest(

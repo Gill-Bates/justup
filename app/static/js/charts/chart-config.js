@@ -183,7 +183,7 @@ function createSlaAnnotation(slaConfig, value, label) {
  */
 function createLineConfig(theme, zoomOpts, getVisibleRangeMs) {
   // Locale-aware axis formatters
-  const userLocale = navigator.language || "de-DE";
+  const userLocale = navigator.language || "en";
 
   // Read lazily: pageConfig is filled after this module loads (UTC display setting).
   function tzOptions() {
