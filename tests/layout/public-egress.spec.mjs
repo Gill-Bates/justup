@@ -19,6 +19,7 @@ const dummy = (title) => `<details class="card shadow-sm settings-card settings-
 const PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="/static/css/bootstrap.min.css"><link rel="stylesheet" href="/static/css/material-icons.css"><link rel="stylesheet" href="/static/css/gentelella-layout.css"><link rel="stylesheet" href="/static/css/ui.css">
+<script src="/static/js/utils/status-badge.js"></script>
 </head><body><main class="ui-page" id="host"><form class="ju-settings-grid" id="advanced-settings-form" data-settings-autosave>${dummy("Connection Quality")}${dummy("Provider Lookup")}${dummy("Geolocation")}${CARD}</form></main></body></html>`;
 const VIEWPORTS = [
 	{ name: "1280x720", width: 1280, height: 720, scale: 1 },
@@ -137,6 +138,29 @@ for (const viewport of VIEWPORTS) {
 					const [, , geo, egress] = geometry.cards;
 					assert.ok(egress.top >= geo.bottom - 1, "single column expected on narrow viewports");
 				}
+				// Both families share one structure: same columns, status and copy aligned, copy never under the address on a wide card.
+				const rows = await page.evaluate(() => ["ipv4", "ipv6"].map((family) => {
+					const row = document.querySelector(`[data-egress-family="${family}"]`);
+					const rect = (selector) => row.querySelector(selector).getBoundingClientRect();
+					const [label, address, status, copy] = [".egress-label", "[data-egress-address]", ".ju-status-item", "[data-egress-copy]"].map(rect);
+					return { label, address, status, copy, statusWrapped: row.querySelector("[data-egress-badge]").getClientRects().length > 1 };
+				}));
+				const [r4, r6] = rows;
+				for (const key of ["label", "status", "copy"]) {
+					assert.ok(Math.abs(r4[key].left - r6[key].left) < 1.5, `${key} column differs between IPv4 and IPv6`);
+					assert.ok(Math.abs(r4[key].width - r6[key].width) < 1.5, `${key} width differs between IPv4 and IPv6`);
+				}
+				assert.ok(Math.abs(r4.address.left - r6.address.left) < 1.5, "address column differs");
+				for (const r of rows) {
+					assert.equal(r.statusWrapped, false, "status wraps");
+					assert.ok(r.copy.left >= r.address.left, "copy left of the address");
+					assert.ok(r.label.top <= Math.min(r.address.top, r.status.top) + 1, "label not on the first line");
+				}
+				if (viewport.width >= 1280) {
+					for (const r of rows) assert.ok(r.copy.top < r.address.bottom && r.status.top < r.address.bottom, "copy or status below the address on a wide card");
+				}
+				// Same pattern on both families, narrow or wide: the copy button sits below the status or level with it for both.
+				assert.equal(r4.copy.top > r4.status.bottom - 1, r6.copy.top > r6.status.bottom - 1, "families use different patterns");
 				// Nothing in the card can trigger the settings autosave.
 				assert.equal(await page.locator("[data-public-egress] input, [data-public-egress] [name]").count(), 0);
 				assert.deepEqual(errors, []);

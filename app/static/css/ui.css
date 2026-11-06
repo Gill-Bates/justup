@@ -250,44 +250,57 @@ textarea.smtp-editor-frame {
 }
 
 .egress-list {
+	--egress-control: max(36px, var(--ui-target-min));
 	display: grid;
-	gap: 0.375rem;
+	gap: 0.5rem;
+	container-type: inline-size;
 }
-
+/* Narrow: label left, status on top, address and copy button below. Wide: four fixed columns. */
 .egress-row {
 	display: grid;
 	grid-template-columns: 2.75rem minmax(0, 1fr);
-	align-items: center;
+	align-items: start;
 	gap: 0.5rem;
 	min-width: 0;
 }
-
 .egress-label {
 	font-weight: 600;
+	line-height: var(--egress-control);
 }
-
 .egress-value {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	grid-template-areas: "status status" "address copy" "detail detail";
+	align-items: center;
+	gap: 0 0.5rem;
 	margin: 0;
 	min-width: 0;
 }
-
-.egress-line {
-	display: flex;
-	flex-wrap: wrap;
-	align-items: center;
-	gap: 0.25rem 0.5rem;
-	min-width: 0;
+.egress-value .ju-status-item {
+	grid-area: status;
+	min-height: var(--egress-control);
 }
-
 .egress-address {
+	grid-area: address;
 	min-width: 0;
-	max-width: 100%;
 	overflow-wrap: anywhere;
 	font-size: 0.875rem;
 	color: var(--bs-body-color);
 }
-
+.egress-value [data-egress-copy] {
+	grid-area: copy;
+}
+@container (min-width: 28rem) {
+	.egress-value {
+		grid-template-columns: minmax(0, 1fr) 8rem auto;
+		grid-template-areas: "address status copy" "detail detail detail";
+	}
+	.egress-value .ju-status-item {
+		min-height: 0;
+	}
+}
 .egress-value [data-egress-detail] {
+	grid-area: detail;
 	display: block;
 	overflow-wrap: anywhere;
 }
@@ -315,7 +328,13 @@ textarea.smtp-editor-frame {
 	font-size: 1rem;
 }
 
-.egress-line .btn-icon .material-icons {
+.egress-value .btn-icon {
+	width: var(--egress-control);
+	height: var(--egress-control);
+	min-width: var(--egress-control);
+	min-height: var(--egress-control);
+}
+.egress-value .btn-icon .material-icons {
 	font-size: 1.125rem;
 }
 
