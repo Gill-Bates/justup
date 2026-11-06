@@ -93,15 +93,15 @@ for (const viewport of VIEWPORTS) {
 				assert.match(unknownText, /Unknown/);
 				assert.doesNotMatch(unknownText, /\bDown\b/);
 				assert.doesNotMatch(await badge("TCP:587").innerText(), /Unknown/);
-				// UNKNOWN differs from DOWN by icon, colour and edge shape, not by colour alone.
+				// UNKNOWN differs from DOWN by colour, word and edge shape; no badge holds an icon.
 				const look = (label) => badge(label).evaluate((node) => ({
-					icon: node.querySelector(".material-icons").textContent,
+					icons: node.querySelectorAll(".material-icons, svg, img").length,
 					background: getComputedStyle(node).backgroundColor,
 					border: getComputedStyle(node).borderTopStyle,
 				}));
 				const down = await look("TCP:587");
 				const unk = await look("UDP:161");
-				assert.notEqual(down.icon, unk.icon);
+				assert.equal(down.icons + unk.icons, 0, "no icon inside a status badge");
 				assert.notEqual(down.background, unk.background);
 				assert.equal(unk.border, "dashed");
 				assert.notEqual(down.border, "dashed");
@@ -128,7 +128,7 @@ for (const viewport of VIEWPORTS) {
 		});
 	}
 }
-test("targets table: endpoint badges carry the state as text and icon @endpoint-state", async ({ browser, app, adminState }) => {
+test("targets table: endpoint badges carry the state as text, colour and edge, without an icon @endpoint-state", async ({ browser, app, adminState }) => {
 	const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, storageState: adminState });
 	const page = await context.newPage();
 	try {
@@ -139,8 +139,9 @@ test("targets table: endpoint badges carry the state as text and icon @endpoint-
 		assert.match(await badge("TCP:587").innerText(), /Down/);
 		assert.match(await badge("UDP:161").innerText(), /Unknown/);
 		assert.match(await badge("UDP:53").innerText(), /Up/);
-		const icon = (label) => badge(label).locator(".material-icons").textContent();
-		assert.notEqual(await icon("TCP:587"), await icon("UDP:161"));
+		assert.equal(await row.locator(".ju-state-badge .material-icons, .ju-state-badge svg").count(), 0, "no icon inside a status badge");
+		const size = (label) => badge(label).evaluate((node) => { const box = node.getBoundingClientRect(); return [box.height]; });
+		assert.deepEqual(await size("TCP:587"), await size("UDP:161"), "UNKNOWN and DOWN badges are equally high");
 		assert.equal(await badge("UDP:161").evaluate((node) => getComputedStyle(node).borderTopStyle), "dashed");
 		assert.equal(await row.locator(".ju-state-badge", { hasText: "TCP:587" }).count(), 1, "TCP and UDP of one port number never share a badge");
 	} finally {

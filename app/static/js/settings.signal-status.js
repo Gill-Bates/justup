@@ -119,38 +119,15 @@ export async function loadSignalStatus() {
                 }
             }
 
-            // Health badge - build as DocumentFragment to avoid flash
-            var badgeFragment = document.createDocumentFragment();
+            // Health badge - one markup assignment avoids a flash
+            var badgeHtml;
             
             if (errorMsg) {
-                const badge = document.createElement('span');
-                badge.className = 'badge ju-status-badge--danger';
-                badge.title = errorMsg;
-                const badgeIcon = document.createElement('span');
-                badgeIcon.className = 'material-icons me-1';
-                badgeIcon.textContent = 'cancel';
-                badge.appendChild(badgeIcon);
-                badge.appendChild(document.createTextNode('Offline'));
-                badgeFragment.appendChild(badge);
+                badgeHtml = JuStatusBadge.html('danger', 'Offline', { title: errorMsg });
             } else if (registered) {
-                const badge = document.createElement('span');
-                badge.className = 'badge ju-status-badge--success';
-                const badgeIcon = document.createElement('span');
-                badgeIcon.className = 'material-icons me-1';
-                badgeIcon.textContent = 'check_circle';
-                badge.appendChild(badgeIcon);
-                badge.appendChild(document.createTextNode('Linked'));
-                badgeFragment.appendChild(badge);
+                badgeHtml = JuStatusBadge.html('success', 'Linked');
             } else if (reachable) {
-                const badge = document.createElement('span');
-                badge.className = 'badge ju-status-badge--warning';
-                badge.title = 'signal-cli ready but no account linked';
-                const badgeIcon = document.createElement('span');
-                badgeIcon.className = 'material-icons me-1';
-                badgeIcon.textContent = 'link_off';
-                badge.appendChild(badgeIcon);
-                badge.appendChild(document.createTextNode('Not linked'));
-                badgeFragment.appendChild(badge);
+                badgeHtml = JuStatusBadge.html('warning', 'Not linked', { title: 'signal-cli ready but no account linked' });
                 
                 // Reset UI to show setup options - only if not busy and no flow active
                 if (!isSignalBusy()) {
@@ -165,17 +142,10 @@ export async function loadSignalStatus() {
                     }
                 }
             } else {
-                const badge = document.createElement('span');
-                badge.className = 'badge ju-status-badge--neutral';
-                const badgeIcon = document.createElement('span');
-                badgeIcon.className = 'material-icons me-1';
-                badgeIcon.textContent = 'help_outline';
-                badge.appendChild(badgeIcon);
-                badge.appendChild(document.createTextNode('Unavailable'));
-                badgeFragment.appendChild(badge);
+                badgeHtml = JuStatusBadge.html('neutral', 'Unavailable');
             }
 
-            container.replaceChildren(badgeFragment);
+            container.innerHTML = badgeHtml;
             
             // Show/hide test section based on registration status
             const testSection = document.getElementById('signal-test-section');

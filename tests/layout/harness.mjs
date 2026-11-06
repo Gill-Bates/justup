@@ -1237,7 +1237,7 @@ async function auditDashboardGrid(browser, app, adminState, browserName, phase) 
 					const structure = await page.locator(`[data-widget-id="${id}"]`).evaluate((tile) => {
 						return { title: tile.querySelector(".dashboard-monitor-title").textContent.trim(),
 							status: tile.querySelector(".dashboard-monitor-status").textContent.trim(),
-							icon: Boolean(tile.querySelector(".dashboard-monitor-status .material-icons")),
+							icons: tile.querySelectorAll(".dashboard-monitor-status .material-icons").length,
 							mainCount: tile.querySelectorAll(".dashboard-monitor-number").length,
 							statusCount: tile.querySelectorAll(".dashboard-monitor-status").length,
 							metricsTag: tile.querySelector(".dashboard-monitor-metrics").tagName,
@@ -1247,7 +1247,7 @@ async function auditDashboardGrid(browser, app, adminState, browserName, phase) 
 								semanticPair: cell.firstElementChild.tagName === "DT" && cell.lastElementChild.tagName === "DD",
 								valueAboveLabel: cell.querySelector("dd").getBoundingClientRect().bottom <= cell.querySelector("dt").getBoundingClientRect().top + 1 })) };
 					});
-					assert.ok(structure.status && structure.icon, `${id} has no header status with icon and text`);
+					assert.ok(structure.status && structure.icons === 0, `${id} needs a header status with text and without an icon`);
 					assert.equal(structure.statusCount, 1, `${id} status must appear only in the header`);
 					assert.equal(structure.metricsTag, "DL", `${id} metrics are not a definition list`);
 					assert.equal(structure.cells.length, 3, `${id} statistics`);

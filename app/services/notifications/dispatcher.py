@@ -175,9 +175,18 @@ class NotificationDispatcher:
         """
         self.conn = conn
         self._db_conn_factory = db_conn_factory
+        # Only set while dispatch_alert runs, so direct render calls never see stale data.
+        self._inputs_memo: tuple[AlertPayload, _AlertInputs] | tuple[()] | None = None
 
-    def _alert_inputs(self, alert: AlertPayload) -> tuple[dict[str, Any], dict[str, Any], sqlite3.Row | None]:
-        """Build the alert and target template data shared by the Signal and e-mail channels."""
+    def _alert_inputs(self, alert: AlertPayload) -> _AlertInputs:
+        """Template data shared by the Signal and e-mail channels; computed once per dispatch."""
+        if self._inputs_memo is None:
+            return self._build_alert_inputs(alert)
+        if not self._inputs_memo or self._inputs_memo[0] is not alert:
+            self._inputs_memo = (alert, self._build_alert_inputs(alert))
+        return self._inputs_memo[1]
+
+    def _build_alert_inputs(self, alert: AlertPayload) -> _AlertInputs:
         old_factory = self.conn.row_factory
         self.conn.row_factory = sqlite3.Row
         try:
@@ -229,7 +238,7 @@ class NotificationDispatcher:
         }
         return target_data, alert_data, target_row
 
-    def _render_signal_message(self, alert: AlertPayload, inputs: _AlertInputs | None = None) -> str:
+    def _render_signal_message(self, alert: AlertPayload) -> str:
         """Render Signal message from alert using configured template.
 
         Returns:
@@ -240,12 +249,12 @@ class NotificationDispatcher:
 
         template = load_signal_templates(self.conn)["up" if alert.is_resolved else "down"]
 
-        target_data, alert_data, _ = inputs or self._alert_inputs(alert)
+        target_data, alert_data, _ = self._alert_inputs(alert)
 
         context = build_alert_context(alert_data, target_data)
         return render_template(template, context, mode="plain_text")
 
-    def _render_email_content(self, alert: AlertPayload, inputs: _AlertInputs | None = None) -> tuple[str, str]:
+    def _render_email_content(self, alert: AlertPayload) -> tuple[str, str]:
         """Render email subject and HTML body from alert using configured template.
 
         Returns:
@@ -262,7 +271,7 @@ class NotificationDispatcher:
         stored = load_email_templates(self.conn)
         subject_template, html_template = stored["subject"], stored["html"]
 
-        target_data, alert_data, target_row = inputs or self._alert_inputs(alert)
+        target_data, alert_data, target_row = self._alert_inputs(alert)
 
         # SLA data (per-target availability goal)
         sla_threshold_float, sla_actual = resolve_sla_values(
@@ -279,6 +288,14 @@ class NotificationDispatcher:
         return subject, html_body
 
     def dispatch_alert(self, alert: AlertPayload) -> DispatchResult:
+        """Dispatch an alert; the shared template inputs are looked up at most once."""
+        self._inputs_memo = ()
+        try:
+            return self._dispatch_alert(alert)
+        finally:
+            self._inputs_memo = None
+
+    def _dispatch_alert(self, alert: AlertPayload) -> DispatchResult:
         """
         Dispatch an alert by enqueuing notifications for all recipients.
 
@@ -291,13 +308,6 @@ class NotificationDispatcher:
             4. Return dispatch result
         """
         from .spooler import ChannelType, NotificationType, get_spooler
-
-        cached_inputs: list[_AlertInputs] = []
-
-        def alert_inputs() -> _AlertInputs:  # lazy: one lookup shared by the Signal and e-mail renderers
-            if not cached_inputs:
-                cached_inputs.append(self._alert_inputs(alert))
-            return cached_inputs[0]
 
         _log.info(
             "Dispatching alert %s (target=%d, status=%s)",
@@ -342,7 +352,7 @@ class NotificationDispatcher:
 
         if signal_enabled and has_signal_recipients:
             try:
-                signal_message = self._render_signal_message(alert, alert_inputs())
+                signal_message = self._render_signal_message(alert)
                 signal_sender_number = sqlite_db.get_setting(self.conn, SettingKeys.SIGNAL_API_SENDER_NUMBER, None)
                 if signal_sender_number:
                     signal_sender = signal_sender_number
@@ -358,7 +368,7 @@ class NotificationDispatcher:
 
         if smtp_enabled and has_email_recipients:
             try:
-                email_subject, email_html = self._render_email_content(alert, alert_inputs())
+                email_subject, email_html = self._render_email_content(alert)
             except Exception as e:  # noqa: BLE001 - dispatch boundary: one recipient/render failure must not abort the whole alert
                 _log.error("Failed to render email content: %s", e)
                 email_render_error = type(e).__name__

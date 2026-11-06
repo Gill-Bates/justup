@@ -9,6 +9,7 @@ import test from "node:test";
 import vm from "node:vm";
 
 const src = readFileSync(new URL("../../app/static/js/settings.spooler.js", import.meta.url), "utf8");
+const statusBadgeSrc = readFileSync(new URL("../../app/static/js/utils/status-badge.js", import.meta.url), "utf8");
 
 const parseUtcTimestamp = (() => { const w = {}; vm.runInNewContext(readFileSync(new URL("../../app/static/js/utils/utc-time.js", import.meta.url), "utf8"), { window: w }); return w.parseUtcTimestamp; })();
 function makeEl(extra = {}) {
@@ -152,8 +153,10 @@ test("old failures outside the 24 h window do not turn the state red", () => {
 test("status labels say accepted/handoff and never claim delivery", () => {
   const h = build();
   h.fragment();
+  vm.runInContext(statusBadgeSrc, h.ctx);
   vm.runInContext(src, h.ctx);
   const { statusBadge } = h.ctx._spoolerInternals;
+  for (const status of ["sent", "pending", "failed", "processing", "other"]) assert.doesNotMatch(statusBadge(status, 1), /material-icons|<i\b|<svg/, "a status badge holds no icon");
   assert.match(statusBadge("sent", 0), />\s*Sent<\/span>$/);
   assert.doesNotMatch(statusBadge("sent", 0), /title=/);
   assert.match(statusBadge("pending", 0), /Waiting for handoff/);

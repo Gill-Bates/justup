@@ -199,9 +199,10 @@ def test_detail_checks_show_up_down_and_unknown_apart_without_an_endpoint_table(
     html = render_cards(t)
     assert_no_endpoint_table(html)
     up, down, unknown = (badge_markup(html, label) for label in ("TCP:25", "TCP:587", "UDP:161"))
-    assert "ju-status-badge--success" in up and "check_circle" in up and ": Up<" in up
-    assert "ju-status-badge--danger" in down and "cancel" in down and ": Down<" in down
-    assert "ju-status-badge--neutral" in unknown and "help" in unknown and ": Unknown<" in unknown
+    assert "ju-status-badge--success" in up and ": Up<" in up
+    assert "ju-status-badge--danger" in down and ": Down<" in down
+    assert "ju-status-badge--neutral" in unknown and ": Unknown<" in unknown
+    assert not any("material-icons" in badge for badge in (up, down, unknown)), "a status badge holds no icon"
     assert "ju-state-badge--unknown" in unknown and "ju-state-badge--unknown" not in down
     assert "ju-status-badge--danger" not in unknown and "Down" not in unknown
     assert "uncertain" in unknown, "the Nmap note stays reachable as tooltip"
@@ -302,7 +303,7 @@ def test_dashboard_table_shows_endpoint_status_with_text_not_only_colour() -> No
 
     down, unknown = badge("TCP:25"), badge("UDP:161")
     assert "Down" in down and "Unknown" in unknown
-    assert "cancel" in down and "help" in unknown
+    assert "material-icons" not in down and "material-icons" not in unknown
 
 
 def _detail_view(tmp_path, config: dict, *, series: bool = False) -> dict:

@@ -64,14 +64,14 @@
 
 	// Nmap states. Only "open" is a confirmed result; "closed" is confirmed closed, every other state is unclear.
 	const STATES = {
-		open: { label: 'Open', confirmed: true, tone: 'open', icon: 'check_circle', note: 'confirmed open' },
-		closed: { label: 'Closed', confirmed: false, tone: 'closed', icon: 'cancel', note: 'confirmed closed' },
-		filtered: { label: 'Filtered', confirmed: false, tone: 'uncertain', icon: 'help', note: 'uncertain, not confirmed' },
-		'open|filtered': { label: 'Open or filtered', confirmed: false, tone: 'uncertain', icon: 'help', note: 'uncertain, not confirmed open' },
-		'closed|filtered': { label: 'Closed or filtered', confirmed: false, tone: 'uncertain', icon: 'help', note: 'uncertain' },
-		unfiltered: { label: 'Unfiltered', confirmed: false, tone: 'uncertain', icon: 'help', note: 'uncertain' }
+		open: { label: 'Open', confirmed: true, tone: 'open', note: 'confirmed open' },
+		closed: { label: 'Closed', confirmed: false, tone: 'closed', note: 'confirmed closed' },
+		filtered: { label: 'Filtered', confirmed: false, tone: 'uncertain', note: 'uncertain, not confirmed' },
+		'open|filtered': { label: 'Open or filtered', confirmed: false, tone: 'uncertain', note: 'uncertain, not confirmed open' },
+		'closed|filtered': { label: 'Closed or filtered', confirmed: false, tone: 'uncertain', note: 'uncertain' },
+		unfiltered: { label: 'Unfiltered', confirmed: false, tone: 'uncertain', note: 'uncertain' }
 	};
-	const UNKNOWN_STATE = { label: 'Unknown', confirmed: false, tone: 'uncertain', icon: 'help', note: 'no usable result' };
+	const UNKNOWN_STATE = { label: 'Unknown', confirmed: false, tone: 'uncertain', note: 'no usable result' };
 
 	function describeState(state) {
 		return STATES[String(state ?? '').toLowerCase()] || UNKNOWN_STATE;

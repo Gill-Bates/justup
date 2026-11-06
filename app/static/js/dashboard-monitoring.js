@@ -71,8 +71,7 @@
 		if (!response.ok) throw new Error('Request failed');
 		return response.json();
 	}
-	// Header status badge shared by every status widget: icon plus text, never colour alone.
-	const STATUS_ICONS = { success: 'check_circle', secondary: 'help_outline', info: 'sync' };
+	// Header status badge shared by every status widget: variant colour plus its word, no icon.
 	function setStatus(tile, label, tone) {
 		const badge = tile.querySelector('.dashboard-monitor-status');
 		if (!badge) throw new Error('Widget status badge is missing');
@@ -80,11 +79,8 @@
 		if (badge.dataset.label === label && badge.dataset.tone === tone) return;
 		badge.dataset.label = label;
 		badge.dataset.tone = tone;
-		const iconName = STATUS_ICONS[tone] || 'warning';
-		const icon = node('span', iconName, 'material-icons');
-		icon.setAttribute('aria-hidden', 'true');
-		badge.className = `dashboard-monitor-status badge ju-status-badge--${tone === 'secondary' ? 'neutral' : tone} ms-auto d-inline-flex align-items-center gap-1`;
-		badge.replaceChildren(icon, node('span', label));
+		badge.className = window.JuStatusBadge.classes(tone === 'secondary' ? 'neutral' : tone, { className: 'dashboard-monitor-status ms-auto' });
+		badge.textContent = label;
 	}
 	// Small values: the number comes first in the DOM and on screen, its label below it.
 	function metrics(body, entries) {

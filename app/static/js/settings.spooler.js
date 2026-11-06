@@ -288,20 +288,17 @@
 	function _statusBadge(status, retries, channelType) {
 		const handoff = channelType === 'signal' ? 'Signal handoff' : 'SMTP handoff';
 		const map = {
-			pending: ['ju-status-badge--warning', 'schedule', 'Waiting for handoff', 'Waiting for ' + handoff],
-			processing: ['ju-status-badge--info', 'sync', 'Handing over', 'Being handed to the server'],
-			sent: ['ju-status-badge--success', 'check', 'Sent', ''],
-			failed: ['ju-status-badge--danger', 'error_outline', 'Handoff failed', 'Handoff to the server failed'],
+			pending: ['warning', 'Waiting for handoff', 'Waiting for ' + handoff],
+			processing: ['info', 'Handing over', 'Being handed to the server'],
+			sent: ['success', 'Sent', ''],
+			failed: ['danger', 'Handoff failed', 'Handoff to the server failed'],
 		};
 		const entry = map[status];
-		if (!entry) return '<span class="badge ju-status-badge--neutral">' + escapeHtml(status) + '</span>';
+		if (!entry) return JuStatusBadge.html('neutral', status);
 		const retrying = status === 'pending' && retries > 0;
-		const label = retrying ? 'Retrying handoff' : entry[2];
-		const title = retrying ? handoff + ' is being retried' : entry[3];
-		const titleAttr = title ? ' title="' + title + '"' : '';
-		return '<span class="badge ' + entry[0] + '"' + titleAttr + '>'
-			+ '<span class="material-icons me-1" style="font-size:12px;vertical-align:middle;" aria-hidden="true">' + entry[1] + '</span>'
-			+ label + '</span>';
+		const label = retrying ? 'Retrying handoff' : entry[1];
+		const title = retrying ? handoff + ' is being retried' : entry[2];
+		return JuStatusBadge.html(entry[0], label, { title });
 	}
 
 	function _typeBadge(type) {

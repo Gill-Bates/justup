@@ -30,9 +30,9 @@ async function open(browser, app, adminState, viewport) {
 		if (mode === "changed") {
 			// Switch the first HTTP badge that is not yet "down" to down: one cell changes.
 			// Markup of the state_badge macro (fragments/_state_badge.html), with an optional title attribute.
-			const httpBadge = /ju-status-badge--(?:success|neutral) ju-state-badge ju-state-badge--(?:up|unknown)"( title="[^"]*")?><span class="material-icons" aria-hidden="true">(?:check_circle|help)<\/span>HTTP<span class="visually-hidden">: (?:Up|Unknown)<\/span>/;
+			const httpBadge = /ju-status-badge--(?:success|neutral) ju-state-badge ju-state-badge--(?:up|unknown)"( title="[^"]*")?>HTTP<span class="visually-hidden">: (?:Up|Unknown)<\/span>/;
 			assert.match(body, httpBadge, "the fixture needs an HTTP badge that is not down yet");
-			body = body.replace(httpBadge, 'ju-status-badge--danger ju-state-badge ju-state-badge--down"$1><span class="material-icons" aria-hidden="true">cancel</span>HTTP<span class="visually-hidden">: Down</span>');
+			body = body.replace(httpBadge, 'ju-status-badge--danger ju-state-badge ju-state-badge--down"$1>HTTP<span class="visually-hidden">: Down</span>');
 		}
 		await route.fulfill({ response, body });
 	});
@@ -97,6 +97,45 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 390, height: 844 
 			assert.equal(after.focus, focusedHref, "focus left the row link");
 			assert.equal(after.unknownIcons, 0, "status icons fell back to the unknown placeholder");
 			if (test.info().project.name === "chromium") assert.ok(after.shifts <= CLS_BUDGET, `layout shift ${after.shifts}`);
+			assert.deepEqual(problems, []);
+		} finally {
+			await context.close();
+		}
+	});
+}
+
+for (const width of [320, 390]) {
+	test(`many checks stay compact and expand across a refresh at ${width}px @targets-live-update`, async ({ browser, app, adminState }) => {
+		const { context, page, problems } = await open(browser, app, adminState, { width, height: 844 });
+		try {
+			const row = page.locator('#targets-table tr[data-target-id]', { hasText: 'a-very-long-hostname-without-break-opportunity' });
+			await row.waitFor();
+			const badges = row.locator('.check-badges .badge');
+			const total = await badges.count();
+			assert.ok(total > 14, 'the fixture must contain many checks');
+			const summary = await row.locator('.targets-check-summary').innerText();
+			assert.match(summary, new RegExp(`\\b${total} Checks\\b`));
+			const toggle = row.locator('.targets-check-toggle');
+			assert.equal(await toggle.innerText(), `+${total - 3} more`);
+			const visibleBadges = () => badges.evaluateAll((nodes) => nodes.filter((node) => getComputedStyle(node).display !== 'none').length);
+			assert.equal(await visibleBadges(), 3);
+			const collapsedHeight = (await row.boundingBox()).height;
+			assert.ok(collapsedHeight < 300, `collapsed card is ${collapsedHeight}px high`);
+			await toggle.click();
+			assert.equal(await toggle.getAttribute('aria-expanded'), 'true');
+			assert.equal(await visibleBadges(), total);
+			await toggle.focus();
+			await page.evaluate(() => new Promise((resolve) => {
+				const table = document.getElementById('targets-table');
+				table.addEventListener('targets:patched', () => resolve(), { once: true });
+				window.htmx.trigger(table, 'refresh');
+			}));
+			assert.equal(await toggle.getAttribute('aria-expanded'), 'true');
+			assert.equal(await visibleBadges(), total);
+			assert.equal(await toggle.evaluate((node) => document.activeElement === node), true, 'refresh moved focus');
+			await toggle.click();
+			assert.equal(await toggle.getAttribute('aria-expanded'), 'false');
+			assert.equal(await visibleBadges(), 3);
 			assert.deepEqual(problems, []);
 		} finally {
 			await context.close();

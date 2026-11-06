@@ -1,10 +1,10 @@
-{# One badge for a check or endpoint state. UP, DOWN and UNKNOWN differ by text and icon shape, not only by colour (DESIGN.md, "Endpoint state"). #}
-{# Shared state -> (word, icon, tone) mapping; any other status renders as unknown. #}
-{%- set state_look = {'up': ('Up', 'check_circle', 'success'), 'down': ('Down', 'cancel', 'danger'), 'unknown': ('Unknown', 'help', 'neutral')} -%}
+{# One badge for a check or endpoint state. UP, DOWN and UNKNOWN differ by colour and word, UNKNOWN also by its dashed edge; a status badge never holds an icon (DESIGN.md, "Badges"). #}
+{# Shared state -> (word, tone) mapping; any other status renders as unknown. #}
+{%- set state_look = {'up': ('Up', 'success'), 'down': ('Down', 'danger'), 'unknown': ('Unknown', 'neutral')} -%}
 {% macro state_badge(label, status, title='') -%}
 {%- set known = status if status in ('up', 'down') else 'unknown' -%}
 {%- set look = state_look[known] -%}
-<span class="badge ju-status-badge--{{ look[2] }} ju-state-badge ju-state-badge--{{ known }}"{% if title %} title="{{ title }}"{% endif %}><span class="material-icons" aria-hidden="true">{{ look[1] }}</span>{{ label }}<span class="visually-hidden">: {{ look[0] }}</span></span>
+<span class="badge ju-status-badge--{{ look[1] }} ju-state-badge ju-state-badge--{{ known }}"{% if title %} title="{{ title }}"{% endif %}>{{ label }}<span class="visually-hidden">: {{ look[0] }}</span></span>
 {%- endmacro %}
 {# Certificate status -> tone; shared by the badge and the expiry text colour. #}
 {% macro cert_level(status) -%}

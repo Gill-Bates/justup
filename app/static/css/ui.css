@@ -1736,11 +1736,6 @@ textarea.smtp-editor-frame {
 	line-height: 1.1;
 }
 
-.badge .material-icons {
-	font-size: 16px;
-	line-height: 1;
-}
-
 .ju-status-badge--success {
 	background-color: var(--bs-success);
 	color: var(--bs-white);
@@ -1766,9 +1761,10 @@ textarea.smtp-editor-frame {
 	color: var(--bs-white);
 }
 
-/* Check/endpoint state badge (DESIGN.md, "Endpoint state"): the icon shape and a dashed edge mark UNKNOWN besides its text. */
+/* Check/endpoint state badge (DESIGN.md, "Endpoint state"): no icon; colour and word carry UP and DOWN, a dashed edge marks UNKNOWN.
+   Every state keeps the same 1px edge so the badges in one column stay equally sized. */
 .ju-state-badge {
-	gap: 0.2rem;
+	border: 1px solid transparent;
 }
 
 .ju-state-badge--unknown {
@@ -2115,6 +2111,11 @@ textarea.smtp-editor-frame {
 .check-badges .badge {
 	font-weight: 500;
 	box-shadow: var(--ui-shadow-subtle);
+}
+
+.targets-check-summary,
+.targets-check-toggle {
+	display: none;
 }
 
 /* Secondary badges: slightly darker grey (global) */
@@ -2936,10 +2937,10 @@ textarea.smtp-editor-frame {
 	@container ju-table (width <40rem) {
 		.ui-page .targets-table>tbody>tr {
 			display: grid;
-			grid-template-columns: 1.375rem minmax(0, 1fr) minmax(0, 1fr);
+			grid-template-columns: 1.375rem minmax(0, 1fr) auto;
 			grid-template-areas:
-				"status name name"
-				"checks checks uptime"
+				"status name uptime"
+				"checks checks checks"
 				"actions actions actions";
 			gap: 0.375rem 0.5rem;
 			padding: 0.625rem;
@@ -2977,7 +2978,52 @@ textarea.smtp-editor-frame {
 
 		.ui-page .targets-table td[data-label="Checks"] {
 			grid-area: checks;
-			justify-content: flex-start;
+			display: block;
+			min-width: 0;
+			border-top: 1px solid var(--bs-border-color);
+			margin-top: 0.375rem;
+			padding-top: 0.625rem;
+		}
+
+		.ui-page .targets-table td[data-label="Checks"]::before,
+		.ui-page .targets-table td[data-label="Uptime"]::before {
+			display: none;
+		}
+
+		.ui-page .targets-table .targets-check-summary {
+			display: flex;
+			flex-wrap: wrap;
+			gap: 0.25rem 0.75rem;
+			margin-bottom: 0.5rem;
+			font-size: 0.75rem;
+		}
+
+		.ui-page .targets-table .targets-check-summary span:first-child {
+			margin-right: auto;
+		}
+
+		.ui-page .targets-table .targets-check-summary span:not(:first-child) {
+			color: var(--bs-secondary-color);
+		}
+
+		.ui-page .targets-table .check-badges .badge:nth-child(n+4) {
+			display: none;
+		}
+
+		.ui-page .targets-table .targets-checks-expanded .check-badges .badge:nth-child(n+4) {
+			display: inline-flex;
+		}
+
+		.ui-page .targets-table .targets-check-toggle {
+			display: inline-flex;
+			align-items: center;
+			min-height: 44px;
+			margin-top: 0.25rem;
+			padding: 0.25rem 0.5rem;
+			border: 0;
+			border-radius: var(--bs-border-radius);
+			background: var(--bs-tertiary-bg);
+			color: var(--bs-body-color);
 		}
 
 		.ui-page .targets-table td[data-label="Uptime"] {

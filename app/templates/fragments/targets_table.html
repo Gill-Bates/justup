@@ -55,16 +55,44 @@
 									</a>
 								</td>
 								<td data-label="Checks">
-									<div class="ju-badges check-badges">
-									{% if t.enable_ping %}{{ state_badge('Ping', t.ping_status) }}{% endif %}
-									{% if t.enable_http_check %}{{ state_badge('HTTP', t.http_status) }}{% endif %}
+									{% set checks = namespace(down=[], unknown=[], attention=[], up=[]) %}
+									{% if t.enable_ping %}
+										{% if t.ping_status == 'down' %}{% set checks.down = checks.down + [('Ping', t.ping_status, '', false)] %}
+										{% elif t.ping_status == 'up' %}{% set checks.up = checks.up + [('Ping', t.ping_status, '', false)] %}
+										{% else %}{% set checks.unknown = checks.unknown + [('Ping', t.ping_status, '', false)] %}{% endif %}
+									{% endif %}
+									{% if t.enable_http_check %}
+										{% if t.http_status == 'down' %}{% set checks.down = checks.down + [('HTTP', t.http_status, '', false)] %}
+										{% elif t.http_status == 'up' %}{% set checks.up = checks.up + [('HTTP', t.http_status, '', false)] %}
+										{% else %}{% set checks.unknown = checks.unknown + [('HTTP', t.http_status, '', false)] %}{% endif %}
+									{% endif %}
 									{% if t.enable_cert_expiration %}
-									{{ cert_badge('Cert', t.cert_status) }}
+										{% if t.cert_status == 'ok' %}{% set checks.up = checks.up + [('Cert', t.cert_status, '', true)] %}
+										{% elif t.cert_status in ('warning', 'critical', 'expired') %}{% set checks.attention = checks.attention + [('Cert', t.cert_status, '', true)] %}
+										{% else %}{% set checks.unknown = checks.unknown + [('Cert', t.cert_status, '', true)] %}{% endif %}
 									{% endif %}
 									{% for endpoint in t.endpoints|default([]) if endpoint.kind == 'port' %}
-									{{ state_badge(endpoint.protocol|upper ~ ':' ~ endpoint.port, endpoint.status, endpoint.state_note or endpoint.name) }}
+										{% set check = (endpoint.protocol|upper ~ ':' ~ endpoint.port, endpoint.status, endpoint.state_note or endpoint.name, false) %}
+										{% if endpoint.status == 'down' %}{% set checks.down = checks.down + [check] %}
+										{% elif endpoint.status == 'up' %}{% set checks.up = checks.up + [check] %}
+										{% else %}{% set checks.unknown = checks.unknown + [check] %}{% endif %}
+									{% endfor %}
+									{% set all_checks = checks.down + checks.unknown + checks.attention + checks.up %}
+									<div class="targets-check-summary">
+										<span>{{ all_checks|length }} Checks</span>
+										{% if checks.down %}<span>{{ checks.down|length }} Down</span>{% endif %}
+										{% if checks.unknown %}<span>{{ checks.unknown|length }} Unknown</span>{% endif %}
+										{% if checks.attention %}<span>{{ checks.attention|length }} Cert alert</span>{% endif %}
+										{% if checks.up %}<span>{{ checks.up|length }} Up</span>{% endif %}
+									</div>
+									<div class="ju-badges check-badges" id="target-checks-{{ t.id }}">
+									{% for label, status, title, is_cert in all_checks %}
+										{% if is_cert %}{{ cert_badge(label, status) }}{% else %}{{ state_badge(label, status, title) }}{% endif %}
 									{% endfor %}
 									</div>
+									{% if all_checks|length > 3 %}
+									<button type="button" class="targets-check-toggle" aria-expanded="false" aria-controls="target-checks-{{ t.id }}" data-more="{{ all_checks|length - 3 }}">+{{ all_checks|length - 3 }} more</button>
+									{% endif %}
 								</td>
 								<td data-label="Uptime">
 									{% if t.uptime_percent is not none %}

@@ -42,7 +42,7 @@
 			<div class="card-header dashboard-widget-header">
 				<span class="material-icons" aria-hidden="true">{{ icon }}</span>
 				<span class="dashboard-monitor-title">{{ title }}</span>
-				{% if status_id %}<span id="{{ status_id }}" class="dashboard-monitor-status badge ju-status-badge--neutral ms-auto d-inline-flex align-items-center gap-1" role="status" aria-live="polite"><span class="material-icons" aria-hidden="true">hourglass_empty</span><span>Loading</span></span>{% endif %}
+				{% if status_id %}<span id="{{ status_id }}" class="dashboard-monitor-status badge ju-status-badge--neutral ms-auto" role="status" aria-live="polite">Loading</span>{% endif %}
 			</div>
 			<div class="card-body dashboard-widget-body dashboard-monitor-body{% if status_id %} dashboard-monitor-body--compact{% endif %}" aria-live="polite"><span aria-label="Loading">–</span></div>
 		</section>

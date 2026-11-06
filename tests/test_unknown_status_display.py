@@ -118,7 +118,7 @@ def test_unknown_overall_status_keeps_the_measured_ping_and_shows_the_udp_port_a
     udp = re.search(
         r'<span class="badge[^>]*>(?:(?!<span class="badge).)*?UDP:161.*?</span></span>', html, re.DOTALL
     ).group(0)
-    assert "ju-state-badge--unknown" in udp and ": Unknown<" in udp and "help" in udp
+    assert "ju-state-badge--unknown" in udp and ": Unknown<" in udp and "material-icons" not in udp
     assert "open|filtered" in udp and "Down" not in udp
     assert "ju-status-badge--danger" not in udp
     assert "<table" not in html and "data-endpoint" not in html and "Network endpoints" not in html

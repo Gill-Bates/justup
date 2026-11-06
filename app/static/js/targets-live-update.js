@@ -14,6 +14,43 @@
 
 	// The status icon refreshes itself through its own request; the server answer never carries its state.
 	const SELF_UPDATING_CELL = 'Status';
+	const expandedChecks = new Set();
+
+	function applyCheckState(row) {
+		const cell = row.querySelector('td[data-label="Checks"]');
+		const button = cell && cell.querySelector('.targets-check-toggle');
+		if (!cell) return;
+		if (!button) expandedChecks.delete(row.dataset.targetId);
+		const expanded = !!button && expandedChecks.has(row.dataset.targetId);
+		cell.classList.toggle('targets-checks-expanded', expanded);
+		if (button) {
+			button.setAttribute('aria-expanded', String(expanded));
+			button.textContent = expanded ? 'Show fewer' : '+' + button.dataset.more + ' more';
+		}
+	}
+
+	function restoreCheckStates() {
+		const visibleIds = new Set();
+		container.querySelectorAll('tr[data-target-id]').forEach(function (row) {
+			visibleIds.add(row.dataset.targetId);
+			applyCheckState(row);
+		});
+		for (const id of expandedChecks) if (!visibleIds.has(id)) expandedChecks.delete(id);
+	}
+
+	container.addEventListener('click', function (event) {
+		const button = event.target.closest('.targets-check-toggle');
+		if (!button || !container.contains(button)) return;
+		const row = button.closest('tr[data-target-id]');
+		if (!row) return;
+		if (expandedChecks.has(row.dataset.targetId)) expandedChecks.delete(row.dataset.targetId);
+		else expandedChecks.add(row.dataset.targetId);
+		applyCheckState(row);
+	});
+
+	container.addEventListener('htmx:afterSwap', function (event) {
+		if (event.target === container) restoreCheckStates();
+	});
 
 	function parse(html) {
 		const template = document.createElement('template');
@@ -52,7 +89,15 @@
 	// screen-reader cue); only the shown value and its level count as a change.
 	function signature(cell) {
 		const uptime = cell.querySelector('.uptime-value');
-		if (!uptime) return cell.innerHTML.trim();
+		if (!uptime) {
+			const toggle = cell.querySelector('.targets-check-toggle');
+			if (!toggle) return cell.innerHTML.trim();
+			const copy = cell.cloneNode(true);
+			const normalToggle = copy.querySelector('.targets-check-toggle');
+			normalToggle.setAttribute('aria-expanded', 'false');
+			normalToggle.textContent = '+' + normalToggle.dataset.more + ' more';
+			return copy.innerHTML.trim();
+		}
 		return uptime.firstChild ? uptime.firstChild.textContent.trim() + '|' + Array.from(uptime.classList).join(' ') : '';
 	}
 
@@ -60,7 +105,12 @@
 		if (signature(cell) === signature(nextCell)) return;
 		// A cell that still waits for its own data (uptime placeholder) must not replace a loaded value.
 		if (nextCell.querySelector('[hx-get]')) return;
+		const focusedToggle = cell.querySelector('.targets-check-toggle') === document.activeElement;
 		cell.replaceChildren(...Array.from(nextCell.childNodes).map(function (node) { return document.importNode(node, true); }));
+		if (cell.dataset.label === 'Checks') {
+			applyCheckState(cell.parentElement);
+			if (focusedToggle) (cell.querySelector('.targets-check-toggle') || cell.parentElement.querySelector('td[data-label="Name"] a'))?.focus();
+		}
 		window.htmx.process(cell);
 	}
 

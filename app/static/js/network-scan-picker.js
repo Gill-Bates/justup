@@ -39,13 +39,10 @@
     if (text !== undefined) node.textContent = text;
     return node;
   }
-  // Status badge of a scan result: icon and words, so an unclear state is not told apart by colour alone.
+  // Status badge of a scan result: its Nmap word, plus the dashed edge for an unclear state.
   function stateBadge(info) {
-    const variant = info.confirmed ? 'success' : 'neutral';
-    const badge = el('span', `badge ju-status-badge--${variant} ju-state-badge${info.tone === 'uncertain' ? ' ju-state-badge--unknown' : ''}`);
-    const icon = el('span', 'material-icons', info.icon);
-    icon.setAttribute('aria-hidden', 'true');
-    badge.append(icon, info.confirmed ? 'Open' : info.label);
+    const badge = el('span', window.JuStatusBadge.classes(info.confirmed ? 'success' : 'neutral', { state: true, unknown: info.tone === 'uncertain' }));
+    badge.textContent = info.confirmed ? 'Open' : info.label;
     return badge;
   }
   // One compact, selectable result. Scanner text is data: every part is set through textContent.
