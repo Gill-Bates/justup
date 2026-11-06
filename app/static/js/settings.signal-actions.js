@@ -676,4 +676,23 @@ export async function initSignal() {
     window.sendSignalTestMessage = sendTestMessage;  // Alias for onclick
     window.unregisterPhone = unregisterPhone;
     window.signalUnlink = signalUnlink;
+
+    // Delegated handler for the data-signal-action buttons (replaces inline onclick attributes)
+    const actions = {
+        'select-mode': (el) => registration.signalSelectMode(el.dataset.mode),
+        'back': registration.signalBackToModeSelection,
+        'generate-qr': registration.signalGenerateQrCode,
+        'confirm-link': registration.signalConfirmLink,
+        'set-profile-link': registration.signalSetProfileNameLink,
+        'register': registration.signalRegister,
+        'set-profile': registration.signalSetProfileName,
+        'skip-profile': registration.signalSkipProfile,
+        'send-test': sendTestMessage,
+    };
+    document.addEventListener('click', (event) => {
+        const el = event.target.closest('[data-signal-action]');
+        if (!el || el.disabled) return;
+        const run = actions[el.dataset.signalAction];
+        if (run) run(el);
+    });
 }

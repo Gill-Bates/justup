@@ -217,7 +217,7 @@ def main(argv: list[str]) -> int:
             check_status("ready")
         else:
             asyncio.run(check_scan())
-    except CheckError as error:
+    except (CheckError, OSError, ValueError, KeyError, subprocess.TimeoutExpired, RuntimeError) as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 1
     return 0

@@ -49,5 +49,17 @@
 		if (typeof body.message === 'string' && body.message.trim()) return body.message;
 		return otherwise;
 	}
-	root.JuApiError = { message: message, code: code, fromBody: fromBody };
+	/**
+	 * Message for a failed fetch Response: its JSON body when parseable, else "Error <status>: <text>".
+	 * @param {Response} response
+	 * @param {string} [fallback]
+	 * @returns {Promise<string>}
+	 */
+	function fromResponse(response, fallback) {
+		return response.json().then(
+			function (body) { return fromBody(body, fallback); },
+			function () { return 'Error ' + response.status + ': ' + response.statusText; }
+		);
+	}
+	root.JuApiError = { message: message, code: code, fromBody: fromBody, fromResponse: fromResponse };
 })(typeof window !== 'undefined' ? window : globalThis);

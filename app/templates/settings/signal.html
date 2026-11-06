@@ -20,7 +20,7 @@
 				<div class="alert alert-light border mb-3" id="signal-device-status">
 					<div class="d-flex align-items-center">
 						<div class="signal-app-icon me-3">
-							<img src="/static/signal_logo.svg" alt="" style="width: 44px; height: 44px;">
+							<img src="/static/signal_logo.svg" alt="" class="ju-signal-logo">
 						</div>
 						<div>
 							<strong>Local Signal Client</strong>
@@ -44,10 +44,10 @@
 						<div class="border rounded p-3">
 
 							{# Setup Mode Selection (hidden until status loaded) #}
-							<div class="mb-3" id="signal-mode-selection" style="display: none;">
+							<div class="mb-3" id="signal-mode-selection" hidden>
 								<div class="d-flex flex-column gap-2">
 									<button type="button" class="btn btn-primary text-start" id="signal-mode-link-btn"
-										onclick="signalSelectMode('link')">
+										data-signal-action="select-mode" data-mode="link">
 										<span class="d-flex align-items-center">
 											<span class="material-icons me-2" aria-hidden="true">qr_code_2</span>
 											<span>
@@ -70,7 +70,7 @@
 							<div class="d-none" id="signal-flow-link">
 								<div class="d-flex align-items-center mb-3">
 									<button type="button" class="btn btn-link btn-sm px-0 me-2" aria-label="Back"
-										onclick="signalBackToModeSelection()">
+										data-signal-action="back">
 										<span class="material-icons" aria-hidden="true">arrow_back</span>
 									</button>
 									<h2 class="h6 mb-0">Link to existing Signal account</h2>
@@ -84,8 +84,8 @@
 										<input type="tel" class="form-control" id="signal-link-number"
 											placeholder="+49 123 456789">
 										<button type="button" class="btn btn-primary" id="signal-link-generate-qr-btn"
-											onclick="signalGenerateQrCode()">
-											<span class="material-icons me-1" style="font-size: 18px;" aria-hidden="true">qr_code_2</span>
+											data-signal-action="generate-qr">
+											<span class="material-icons me-1 ju-icon-18" aria-hidden="true">qr_code_2</span>
 											Generate QR
 										</button>
 									</div>
@@ -95,10 +95,9 @@
 								</div>
 
 								{# Step 2: QR Code (hidden until number is entered) #}
-								<div id="signal-link-step-qr" style="display: none;">
+								<div id="signal-link-step-qr" hidden>
 									<div class="alert alert-info small py-2 mb-3">
-										<span class="material-icons align-middle me-1"
-											style="font-size: 16px;" aria-hidden="true">info</span>
+										<span class="material-icons align-middle me-1 ju-icon-16" aria-hidden="true">info</span>
 										Open Signal on your phone → Settings → Linked Devices → Scan QR code
 									</div>
 
@@ -112,8 +111,8 @@
 									{# Confirm button after scanning #}
 									<div class="mb-3 text-center">
 										<button type="button" class="btn btn-success" id="signal-link-confirm-btn"
-											onclick="signalConfirmLink()">
-											<span class="material-icons me-1" style="font-size: 18px;" aria-hidden="true">check</span> I've
+											data-signal-action="confirm-link">
+											<span class="material-icons me-1 ju-icon-18" aria-hidden="true">check</span> I've
 											scanned the QR code
 										</button>
 									</div>
@@ -121,16 +120,15 @@
 								</div>
 
 								{# Profile Name (optional) #}
-								<div class="mt-3 pt-3 border-top" id="signal-link-profile-section"
-									style="display: none;">
+								<div class="mt-3 pt-3 border-top" id="signal-link-profile-section" hidden>
 									<label class="form-label small" for="signal-link-profile-name">Display name <span
 											class="text-body-secondary">(optional)</span></label>
 									<div class="input-group input-group-sm">
 										<input type="text" class="form-control" id="signal-link-profile-name"
 											placeholder="justUp Monitor">
 										<button type="button" class="btn btn-outline-secondary" aria-label="Apply display name"
-											onclick="signalSetProfileNameLink()">
-											<span class="material-icons" style="font-size: 18px;" aria-hidden="true">check</span>
+											data-signal-action="set-profile-link">
+											<span class="material-icons ju-icon-18" aria-hidden="true">check</span>
 										</button>
 									</div>
 									<div id="signal-link-profile-status" class="small mt-1"></div>
@@ -143,7 +141,7 @@
 							<div class="d-none" id="signal-flow-register">
 								<div class="d-flex align-items-center mb-3">
 									<button type="button" class="btn btn-link btn-sm px-0 me-2" aria-label="Back"
-										onclick="signalBackToModeSelection()">
+										data-signal-action="back">
 										<span class="material-icons" aria-hidden="true">arrow_back</span>
 									</button>
 									<h2 class="h6 mb-0">Register new number</h2>
@@ -155,13 +153,13 @@
 										<input type="tel" class="form-control" id="signal-register-number"
 											placeholder="+49 123 456789" aria-label="Phone number">
 										<button type="button" class="btn btn-primary" id="signal-register-btn"
-											onclick="signalRegister()">
+											data-signal-action="register">
 											Send verification code
 										</button>
 									</div>
 									{# Voice option hidden by default #}
 									<details class="small text-body-secondary mb-2">
-										<summary style="cursor: pointer;">More options</summary>
+										<summary class="ju-cursor-pointer">More options</summary>
 										<div class="form-check mt-2">
 											<input class="form-check-input" type="checkbox" id="signal-use-voice">
 											<label class="form-check-label" for="signal-use-voice">
@@ -183,7 +181,7 @@
 											<input type="text" class="form-control" id="signal-captcha-token"
 												placeholder="Paste captcha link here" aria-label="Captcha token">
 											<button type="button" class="btn btn-primary" id="signal-captcha-submit-btn"
-												onclick="signalRegister()">
+												data-signal-action="register">
 												Continue
 											</button>
 										</div>
@@ -229,11 +227,11 @@
 										<input type="text" class="form-control" id="signal-profile-name"
 											placeholder="justUp Monitor" aria-label="Display name" disabled>
 										<button type="button" class="btn btn-outline-secondary" id="signal-set-name-btn"
-											onclick="signalSetProfileName()" disabled>
+											data-signal-action="set-profile" disabled>
 											Set
 										</button>
 										<button type="button" class="btn btn-outline-secondary"
-											id="signal-skip-profile-btn" onclick="signalSkipProfile()" disabled>
+											id="signal-skip-profile-btn" data-signal-action="skip-profile" disabled>
 											Skip
 										</button>
 									</div>
@@ -245,9 +243,9 @@
 				</div>
 
 				{# Signal Test (only visible when registered) #}
-				<div class="d-flex d-none align-items-center gap-2 mb-3" id="signal-test-section">
+				<div class="d-none align-items-center gap-2 mb-3" id="signal-test-section">
 					<button type="button" class="btn btn-outline-secondary btn-sm" id="send-signal-test-btn"
-						onclick="sendSignalTestMessage()">
+						data-signal-action="send-test">
 						<span class="material-icons me-1" aria-hidden="true">send</span> Send Test Message
 					</button>
 				</div>
@@ -261,7 +259,7 @@
 			<button class="accordion-button collapsed" type="button" data-bs-toggle="collapse"
 				data-bs-target="#signalTemplatesCollapse" aria-expanded="false" aria-controls="signalTemplatesCollapse">
 				<span class="d-flex align-items-center gap-2">
-					<span class="material-icons" style="font-size: 20px;" aria-hidden="true">edit_note</span>
+					<span class="material-icons ju-icon-20" aria-hidden="true">edit_note</span>
 					Signal Message Templates
 				</span>
 			</button>
@@ -271,22 +269,21 @@
 			<div class="accordion-body">
 				<div class="d-grid gap-2 d-sm-flex justify-content-sm-end mb-3">
 					<button type="button" class="btn btn-primary btn-sm" id="save-signal-templates-btn">
-						<span class="material-icons me-1" style="font-size: 16px;" aria-hidden="true">save</span>Save Templates
+						<span class="material-icons me-1 ju-icon-16" aria-hidden="true">save</span>Save Templates
 					</button>
 					<button type="button" class="btn btn-outline-secondary btn-sm" id="reset-signal-templates-btn">
-						<span class="material-icons me-1" style="font-size: 16px;" aria-hidden="true">refresh</span>Reset to Default
+						<span class="material-icons me-1 ju-icon-16" aria-hidden="true">refresh</span>Reset to Default
 					</button>
 				</div>
 				<div class="signal-templates-grid">
 					<div class="signal-templates-down">
 						<div class="border rounded p-3 h-100">
 							<div class="d-flex align-items-center gap-2 mb-2">
-								<span class="material-icons text-danger" style="font-size: 20px;" aria-hidden="true">south</span>
+								<span class="material-icons text-danger ju-icon-20" aria-hidden="true">south</span>
 								<span class="fw-semibold">DOWN</span>
 								<small class="text-body-secondary">(Service down / alert open)</small>
 							</div>
-							<textarea id="signal-template-down" aria-label="Down message template" class="form-control font-monospace" rows="10"
-								style="font-size: 13px;">{{ signal_template.down | e }}</textarea>
+							<textarea id="signal-template-down" aria-label="Down message template" class="form-control font-monospace ju-font-13" rows="10">{{ signal_template.down | e }}</textarea>
 
 							<div class="mt-3">
 								<div class="d-flex justify-content-between align-items-center mb-2">
@@ -317,12 +314,11 @@
 					<div class="signal-templates-up">
 						<div class="border rounded p-3 h-100">
 							<div class="d-flex align-items-center gap-2 mb-2">
-								<span class="material-icons text-success" style="font-size: 20px;" aria-hidden="true">north</span>
+								<span class="material-icons text-success ju-icon-20" aria-hidden="true">north</span>
 								<span class="fw-semibold">UP</span>
 								<small class="text-body-secondary">(Service up / resolved)</small>
 							</div>
-							<textarea id="signal-template-up" aria-label="Up message template" class="form-control font-monospace" rows="10"
-								style="font-size: 13px;">{{ signal_template.up | e }}</textarea>
+							<textarea id="signal-template-up" aria-label="Up message template" class="form-control font-monospace ju-font-13" rows="10">{{ signal_template.up | e }}</textarea>
 
 							<div class="mt-3">
 								<div class="d-flex justify-content-between align-items-center mb-2">
@@ -357,7 +353,7 @@
 								<small class="text-body-secondary">Reference</small>
 							</div>
 							<div class="border rounded p-2 bg-body-tertiary">
-								<div class="table-responsive" style="max-height: 520px; overflow-y: auto;">
+								<div class="table-responsive ju-scroll-520">
 									<table class="table table-sm table-bordered mb-0 bg-body placeholders-table">
 										<thead class="sticky-top placeholders-thead">
 											<tr>

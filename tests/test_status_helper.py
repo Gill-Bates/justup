@@ -72,13 +72,23 @@ def test_cert_status_thresholds():
 def test_templates_color_every_cert_status_the_helper_can_emit():
     from pathlib import Path
 
-    root = Path(__file__).resolve().parents[1] / "app" / "templates" / "fragments"
+    from jinja2 import Environment, FileSystemLoader, select_autoescape
+
+    templates = Path(__file__).resolve().parents[1] / "app" / "templates"
+    env = Environment(loader=FileSystemLoader(templates), autoescape=select_autoescape(["html"]))
+    cert_level = env.get_template("fragments/_state_badge.html").module.cert_level
+
     emitted = {_cert_status_for(d) for d in (-1, 0, 3, 7, 8)}
-    for rel in ("targets_table.html", "target_detail/info_cards.html"):
-        expr = " ".join(line for line in (root / rel).read_text().splitlines() if "cert_status" in line)
-        for status in emitted:
-            assert f"'{status}'" in expr, f"{rel} does not handle cert_status {status!r}"
-        assert "'expired'" in expr and "'critical'" in expr
+    assert emitted == {"expired", "critical", "warning", "ok"}
+    tones = {status: str(cert_level(status)) for status in emitted}
+    assert tones == {"expired": "danger", "critical": "danger", "warning": "warning", "ok": "success"}
+    assert str(cert_level(None)) == "neutral"
+
+    # Both views must colour the status through the shared macro, not through a private copy of the mapping.
+    for rel in ("fragments/targets_table.html", "fragments/target_detail/info_cards.html"):
+        source = (templates / rel).read_text()
+        assert "cert_badge(" in source, f"{rel} does not use the shared cert badge"
+        assert "'critical'" not in source, f"{rel} carries its own cert status mapping"
 
 
 def test_uptime_level_uses_sla_goal_without_warn_band_and_falls_back_to_fixed_limits():

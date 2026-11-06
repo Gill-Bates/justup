@@ -499,16 +499,7 @@ code.tr-ip {
 
     /* Only the endpoints carry a label beneath the line; the rest stays reachable via
        tooltip, ARIA label and the detail line below the track */
-    .tr-step:not(.tr-step--first, .tr-step--destination, .tr-step--single) .tr-step-body {
-        position: absolute;
-        width: 1px;
-        height: 1px;
-        padding: 0;
-        overflow: hidden;
-        clip-path: inset(50%);
-        white-space: nowrap;
-    }
-
+    .tr-step:not(.tr-step--first, .tr-step--destination, .tr-step--single) .tr-step-body,
     .tr-step-sub,
     .tr-step-state {
         position: absolute;
@@ -517,6 +508,10 @@ code.tr-ip {
         overflow: hidden;
         clip-path: inset(50%);
         white-space: nowrap;
+    }
+
+    .tr-step:not(.tr-step--first, .tr-step--destination, .tr-step--single) .tr-step-body {
+        padding: 0;
     }
 
     .tr-step-title {

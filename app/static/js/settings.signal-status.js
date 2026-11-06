@@ -181,6 +181,7 @@ export async function loadSignalStatus() {
             const testSection = document.getElementById('signal-test-section');
             if (testSection) {
                 testSection.classList.toggle('d-none', !registered);
+                testSection.classList.toggle('d-flex', registered);
             }
             
             // Show/hide mode selection based on registration status
@@ -217,7 +218,10 @@ export async function loadSignalStatus() {
             if (modeSelection) modeSelection.style.display = 'block';
             
             const testSection = document.getElementById('signal-test-section');
-            if (testSection) testSection.classList.add('d-none');
+            if (testSection) {
+                testSection.classList.add('d-none');
+                testSection.classList.remove('d-flex');
+            }
             
             const advancedActions = document.getElementById('signal-advanced-actions');
             if (advancedActions) advancedActions.style.display = 'none';

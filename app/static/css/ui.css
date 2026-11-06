@@ -3543,3 +3543,15 @@ main:focus {
 		border-color: CanvasText;
 	}
 }
+
+/* Fixed icon sizes and small helpers that replace inline style attributes in templates. */
+.material-icons.ju-icon-14 { font-size: 14px; }
+.material-icons.ju-icon-16 { font-size: 16px; }
+.material-icons.ju-icon-18 { font-size: 18px; }
+.material-icons.ju-icon-20 { font-size: 20px; }
+.material-icons.ju-icon-middle { vertical-align: middle; }
+.ju-font-13 { font-size: 13px; }
+.ju-cursor-pointer { cursor: pointer; }
+.ju-scroll-520 { max-height: 520px; overflow-y: auto; }
+.ju-select-auto { width: auto; min-width: 110px; }
+.ju-signal-logo { width: 44px; height: 44px; }

@@ -6,7 +6,7 @@
 			<div class="card-header d-flex justify-content-between align-items-center">
 				<div class="d-flex align-items-center gap-3">
 					<h2 class="h6 mb-0">
-						<span class="material-icons align-middle me-1" style="font-size: 20px;" aria-hidden="true">mail</span>
+						<span class="material-icons align-middle me-1 ju-icon-20" aria-hidden="true">mail</span>
 						SMTP Email
 					</h2>
 					<div id="smtp-status-badge">
@@ -95,7 +95,7 @@
 		<div class="card shadow-sm">
 			<div class="card-header d-flex justify-content-between align-items-center">
 				<h2 class="h6 mb-0">
-					<span class="material-icons align-middle me-1" style="font-size: 20px;" aria-hidden="true">description</span>
+					<span class="material-icons align-middle me-1 ju-icon-20" aria-hidden="true">description</span>
 					Email Template
 				</h2>
 				<div class="btn-group btn-group-sm" role="group" aria-label="Editor mode">
@@ -112,7 +112,7 @@
 						autocomplete="off">
 				</div>
 
-				<div id="wysiwyg-container" class="mb-3" style="display:none;">
+				<div id="wysiwyg-container" class="mb-3" hidden>
 					<span class="form-label d-inline-block">Edit Template</span>
 					<div class="border rounded">
 						<div class="wysiwyg-toolbar border-bottom bg-body-tertiary p-1 d-flex flex-wrap gap-1">
@@ -124,18 +124,14 @@
 								title="Underline" aria-label="Underline"><u>U</u></button>
 							<span class="border-start mx-1"></span>
 							<button type="button" class="btn btn-sm btn-outline-secondary"
-								data-cmd="insertUnorderedList" title="Bullet List" aria-label="Bullet list"><span class="material-icons"
-									style="font-size:16px;" aria-hidden="true">format_list_bulleted</span></button>
+								data-cmd="insertUnorderedList" title="Bullet List" aria-label="Bullet list"><span class="material-icons ju-icon-16" aria-hidden="true">format_list_bulleted</span></button>
 							<button type="button" class="btn btn-sm btn-outline-secondary" data-cmd="insertOrderedList"
-								title="Numbered List" aria-label="Numbered list"><span class="material-icons"
-									style="font-size:16px;" aria-hidden="true">format_list_numbered</span></button>
+								title="Numbered List" aria-label="Numbered list"><span class="material-icons ju-icon-16" aria-hidden="true">format_list_numbered</span></button>
 							<span class="border-start mx-1"></span>
 							<button type="button" class="btn btn-sm btn-outline-secondary" data-cmd="createLink"
-								title="Insert Link" aria-label="Insert link"><span class="material-icons"
-									style="font-size:16px;" aria-hidden="true">link</span></button>
+								title="Insert Link" aria-label="Insert link"><span class="material-icons ju-icon-16" aria-hidden="true">link</span></button>
 							<button type="button" class="btn btn-sm btn-outline-secondary" data-cmd="unlink"
-								title="Remove link" aria-label="Remove link"><span class="material-icons"
-									style="font-size:16px;" aria-hidden="true">link_off</span></button>
+								title="Remove link" aria-label="Remove link"><span class="material-icons ju-icon-16" aria-hidden="true">link_off</span></button>
 							<span class="border-start mx-1"></span>
 							<select class="form-select form-select-sm w-auto" data-cmd="formatBlock"
 								title="Heading" aria-label="Block format">
@@ -163,7 +159,7 @@
 					</div>
 				</div>
 
-				<div id="html-source-container" class="mb-3" style="display:none;">
+				<div id="html-source-container" class="mb-3" hidden>
 					<label class="form-label" for="email_html_source">HTML Source</label>
 					<textarea class="form-control font-monospace smtp-editor-frame" id="email_html_source">{{ template.html }}</textarea>
 				</div>

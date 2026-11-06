@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import base64
 import io
 import json
 import os
@@ -185,7 +186,13 @@ class TestFilenameAndHmac:
         finally:
             sqlite_db.close_connection(conn)
         for key in backup_mod.backup_hmac_keys():
-            assert key.decode("utf-8", "replace") not in stored
+            encodings = {
+                key.hex(),
+                key.decode("latin-1"),
+                base64.b64encode(key).decode(),
+                base64.urlsafe_b64encode(key).decode(),
+            }
+            assert not any(form in stored for form in encodings)
 
     def test_legacy_format_is_rejected_with_clear_message(self):
         with pytest.raises(BackupError, match="legacy backup format"):

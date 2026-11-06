@@ -41,8 +41,7 @@
          <div class="col-12">
             <div class="ui-form-actions sticky-actions d-flex justify-content-center justify-content-md-end gap-2 align-items-center">
                {% if can_close_alerts %}
-               <button type="button" class="btn btn-outline-primary" {% if has_open_alerts %}
-                  onclick="closeAllAlerts(); return false;" {% else %} disabled title="No open alerts" {% endif %}>
+               <button type="button" class="btn btn-outline-primary" id="close-all-alerts-btn" {% if not has_open_alerts %}disabled title="No open alerts"{% endif %}>
                   <span class="material-icons" aria-hidden="true">notifications</span>Close all Alerts
                </button>
                {% endif %}
@@ -211,69 +210,3 @@
    </nav>
    {% endif %}
 
-   <script>
-      document.getElementById('alert-filters')?.addEventListener('change', function (event) {
-         if (event.target.matches('select[name="target_id"], select[name="status"], input[type="date"]')) {
-            this.requestSubmit();
-         }
-      });
-
-      document.getElementById('alerts-table')?.addEventListener('click', function (event) {
-         const button = event.target.closest('button[data-alert-id]');
-         if (button) acknowledgeAlert(button.dataset.alertId);
-      });
-      async function acknowledgeAlert(alertId) {
-         try {
-            const resp = await apiFetch('/alerts/' + alertId + '/acknowledge', {
-               method: 'POST'
-            });
-            if (resp.ok) {
-               window.location.reload();
-            } else {
-               // Try to extract error detail from response
-               let errorMsg = 'Failed to acknowledge alert';
-               try {
-                  const data = await resp.json();
-                  if (data.detail) {
-                     errorMsg = data.detail;
-                  }
-               } catch (e) {
-                  // Response wasn't JSON, use status text
-                  errorMsg = `Error ${resp.status}: ${resp.statusText}`;
-               }
-               console.error('Acknowledge failed:', resp.status, errorMsg);
-               window.justUpToast?.error?.(errorMsg);
-            }
-         } catch (e) {
-            console.error('Acknowledge error:', e);
-            window.justUpToast?.error?.('Network error: ' + e.message);
-         }
-      }
-
-      async function closeAllAlerts() {
-         if (!(await window.confirmAction({ title: 'Close all alerts', message: 'All open alerts are closed.', confirmLabel: 'Close all' }))) {
-            return;
-         }
-         try {
-            const resp = await apiFetch('/alerts/acknowledge-all', {
-               method: 'POST'
-            });
-            if (resp.ok) {
-               window.location.reload();
-            } else {
-               let errorMsg = 'Failed to close alerts';
-               try {
-                  const data = await resp.json();
-                  if (data.detail) {
-                     errorMsg = data.detail;
-                  }
-               } catch (e) {
-                  errorMsg = `Error ${resp.status}: ${resp.statusText}`;
-               }
-               window.justUpToast?.error?.(errorMsg);
-            }
-         } catch (e) {
-            window.justUpToast?.error?.('Network error: ' + e.message);
-         }
-      }
-   </script>

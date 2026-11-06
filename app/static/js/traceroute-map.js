@@ -10,6 +10,14 @@
 (function () {
 	'use strict';
 
+	// Flag image failed to load: show the country code instead (error does not bubble, so capture).
+	document.addEventListener('error', function (event) {
+		var img = event.target;
+		if (!img || !img.classList || !img.classList.contains('country-flag-svg')) return;
+		img.hidden = true;
+		if (img.nextElementSibling) img.nextElementSibling.hidden = false;
+	}, true);
+
 	// Global Leaflet loading promise (singleton pattern to prevent race conditions)
 	window._leafletLoadingPromise = window._leafletLoadingPromise || null;
 

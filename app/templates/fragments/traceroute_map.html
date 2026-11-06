@@ -4,9 +4,8 @@
 {% if country_code and country_code|length == 2 %}
 <span class="country-flag-wrap" title="{{ title_text or country_code|upper }}">
     <img class="country-flag-svg" src="https://cdn.jsdelivr.net/npm/flag-icons@7.3.2/flags/4x3/{{ country_code|lower }}.svg"
-        alt="" loading="lazy" decoding="async"
-        onerror="this.style.display='none'; this.nextElementSibling.style.display='inline';">
-    <span class="country-flag-fallback" style="display:none;">{{ country_code|upper }}</span>
+        alt="" loading="lazy" decoding="async">
+    <span class="country-flag-fallback" hidden>{{ country_code|upper }}</span>
 </span>
 {% endif %}
 {% endmacro %}

@@ -1,3 +1,7 @@
+## [Unreleased]
+
+- `Changed` The Docker Compose example stores data in the named volume `justup-data` instead of the repository's `docker/` directory, which the entrypoint used to `chown` recursively. Existing installs must set `JUSTUP_DATA=./` (or copy `sqlite`, `tsdb`, `signal` and `geoip` into the volume) before the next start, otherwise the app starts with an empty database.
+
 ## [1.0.3] - 2026-11-05
 
 - `New` UDP monitoring: UDP ports are checked next to TCP and shown per endpoint (for example `TCP:53`, `UDP:53`). `closed` counts as down only after two confirming scans; uncertain results stay unknown.

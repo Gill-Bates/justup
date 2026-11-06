@@ -577,6 +577,10 @@ def test_quiesce_refuses_notification_writes_and_the_triggering_operation(client
     try:
         # The refused login must not have been recorded as an attempt either.
         assert conn.execute("SELECT COUNT(*) FROM login_attempts").fetchone()[0] == attempts_before
+        assert (
+            conn.execute("SELECT COUNT(*) FROM notifications WHERE event_type='security.login.success'").fetchone()[0]
+            == 0
+        )
     finally:
         sqlite_db.close_connection(conn)
 

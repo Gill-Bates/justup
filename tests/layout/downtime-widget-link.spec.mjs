@@ -57,7 +57,7 @@ async function openDashboardRow(page, app) {
 	}));
 	await page.goto(`${app.base}/`, { waitUntil: "load" });
 	const row = page.locator("#downtime-table-body tr").filter({
-		has: page.locator(`#downtime-table-body a[href^="/ui/targets/${targetId}?"]`),
+		has: page.locator(`a[href^="/ui/targets/${targetId}?"]`),
 	});
 	await row.waitFor({ timeout: 30_000 });
 	return row;

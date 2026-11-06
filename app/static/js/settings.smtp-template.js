@@ -378,9 +378,9 @@
       syncWysiwygToSource();
     }
 
-    if (wysiwygContainer) wysiwygContainer.style.display = 'none';
-    if (htmlContainer) htmlContainer.style.display = 'none';
-    if (previewContainer) previewContainer.style.display = 'none';
+    if (wysiwygContainer) wysiwygContainer.hidden = true;
+    if (htmlContainer) htmlContainer.hidden = true;
+    if (previewContainer) previewContainer.hidden = true;
 
     btnEdit?.classList.remove('active');
     btnHtml?.classList.remove('active');
@@ -390,7 +390,7 @@
 
     if (mode === 'edit') {
       // WYSIWYG editor
-      if (wysiwygContainer) wysiwygContainer.style.display = '';
+      if (wysiwygContainer) wysiwygContainer.hidden = false;
       btnEdit?.classList.add('active');
       
       // Initialize WYSIWYG on first use
@@ -402,12 +402,12 @@
       }
     } else if (mode === 'html') {
       // Source mode
-      if (htmlContainer) htmlContainer.style.display = '';
+      if (htmlContainer) htmlContainer.hidden = false;
       btnHtml?.classList.add('active');
       document.getElementById('email_html_source')?.focus();
     } else {
       // Preview mode (default)
-      if (previewContainer) previewContainer.style.display = '';
+      if (previewContainer) previewContainer.hidden = false;
       btnPreview?.classList.add('active');
       updatePreview();
     }

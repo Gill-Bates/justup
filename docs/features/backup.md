@@ -38,14 +38,7 @@ database rows. The fingerprint verifies the archived structure. The normal
 SQLite compatibility check, not a comparison with a fresh-install fingerprint,
 decides whether the target release supports that structure.
 
-Application and schema versions are compared independently:
-
-| Application version | Database schema | Result |
-| --- | --- | --- |
-| Same or older | Same | Restore without migration |
-| Same or older | Exact former current version 10 | Restamp the staged database to version 1, then restore |
-| Newer | Any | Reject before extraction |
-| Any | Versions 2–9 or above 10 | Reject: no supported layout or version path |
+Application and schema versions are compared independently; the outcomes are listed under [Compatibility](#compatibility).
 
 Versions must be numeric and comparable. Development builds are accepted only
 when both sides report `dev` and their non-empty build IDs match exactly.
