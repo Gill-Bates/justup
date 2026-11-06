@@ -2,6 +2,7 @@
 // tests/js/settings-purge.test.mjs
 // Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 //
+
 // Password-confirmed purge dialogs in Settings > Storage (TSDB metrics and alerts).
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";

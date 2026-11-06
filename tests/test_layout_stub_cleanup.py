@@ -1,7 +1,9 @@
+#!/usr/bin/env python3
 #
 # tests/test_layout_stub_cleanup.py
 # Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 #
+
 """The layout app stub must not outlive a test worker that was killed without cleanup."""
 
 from __future__ import annotations

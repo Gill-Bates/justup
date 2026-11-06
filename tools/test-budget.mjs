@@ -2,6 +2,7 @@
 // tools/test-budget.mjs
 // Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 //
+
 // Single place that derives the local test resource budget (slots, cores per run, worker counts)
 // from the machine: CPU affinity, cgroup limits, available RAM and the current load.
 // Used by tools/run-limited.sh (CLI), tests/layout/playwright.config.mjs (import) and the unit tests.

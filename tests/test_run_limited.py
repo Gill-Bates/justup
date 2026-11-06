@@ -1,7 +1,9 @@
+#!/usr/bin/env python3
 #
 # tests/test_run_limited.py
 # Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 #
+
 """Contract of tools/run-limited.sh: shared slots, exit codes, signals and worker caps.
 
 Only harmless sleep/sh jobs run here; no browser and no heavy suite is started.

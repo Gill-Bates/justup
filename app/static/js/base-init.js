@@ -2,6 +2,7 @@
 // app/static/js/base-init.js
 // Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 //
+
 // Page-wide behaviour that used to be inline in base.html: the onboarding pulse on the
 // Targets nav item and the HTMX 5xx retry guard.
 
