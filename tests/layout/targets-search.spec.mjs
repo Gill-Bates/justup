@@ -9,6 +9,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import { expect } from "@playwright/test";
 import { contrastRatio, test } from "./fixtures.mjs";
 import { waitForVisualStability } from "./harness.mjs";
 
@@ -122,6 +123,8 @@ for (const viewport of VIEWPORTS) {
 				// Typing filters at once, folds diacritics and matches a substring of the name.
 				await search.focus();
 				await page.keyboard.type("LUETT", { delay: 10 });
+				// The filter settles after the last keystroke; the live region is its completion signal.
+				await expect.poll(() => status.textContent(), { message: `${theme}: filter applied` }).toBe("1 target found");
 				assert.deepEqual(await visibleGroups(page).then((list) => list.map((group) => group.name)), ["Websites"], `${theme}: groups without a hit disappear`);
 				const hit = (await visibleGroups(page))[0];
 				assert.equal(hit.expanded && hit.shown, true, `${theme}: the group with a hit opens for the search`);

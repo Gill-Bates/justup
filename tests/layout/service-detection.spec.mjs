@@ -119,7 +119,7 @@ for (const viewport of VIEWPORTS) {
 				// A double click on the dialog's Apply must still confirm once.
 				await page.dblclick("#ju-confirm-ok");
 				await page.waitForLoadState("load");
-				await page.waitForTimeout(800);
+				await page.waitForTimeout(800); // deliberate window: proves no second confirmation follows the double click
 				assert.deepEqual(state.confirms, [{ token: TOKEN }]);
 				assert.equal(state.nativeDialogs, 0);
 			} finally {

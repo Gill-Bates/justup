@@ -96,7 +96,7 @@ from app.utils.ssrf import redact_url
 from app.utils.status_palette import STATUS_PALETTE
 from app.utils.tls_model import Check, ScanStatus, TlsScanResult, Verdict
 from app.utils.tls_scanner import scan_tls
-from app.utils.uptime_metric import uptime_level
+from app.utils.uptime_metric import availability_check_enabled, uptime_level
 from app.utils.version import BUILD_INFO, VERSION
 from app.utils.whatweb_parser import run_whatweb
 
@@ -3052,7 +3052,7 @@ class PDFReportBuilder:
             ("PING", target.get("enable_ping"), COLORS["neutral"]),
             ("Cert", target.get("enable_cert_expiration"), COLORS["neutral"]),
             ("TCP", target.get("enable_tcp_connect"), COLORS["neutral"]),
-            ("UDP", target.get("enable_udp_scan") and target.get("udp_ports"), COLORS["neutral"]),
+            ("UDP", availability_check_enabled(target, "udp", "enable_udp_scan"), COLORS["neutral"]),
         ]
         enabled = [
             Badge(text=name, font=self.font, bg_color=color, padding_y=1 * mm, shadow=False)

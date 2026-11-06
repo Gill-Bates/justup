@@ -45,8 +45,8 @@
 		<div class="card target-kpi-card" id="cert-days-card">
 			<div class="card-body">
 				<p class="target-kpi-label">Cert expiry</p>
-				<p id="cert-days-value" class="target-kpi-value
-text-{{ 'body-secondary' if cert_level(target.cert_status) == 'neutral' else cert_level(target.cert_status) }}">--</p>
+				{% set cl = cert_level(target.cert_status)|trim %}
+				<p id="cert-days-value" class="target-kpi-value text-{{ 'body-secondary' if cl == 'neutral' else cl ~ '-emphasis' }}">--</p>
 				<p id="cert-days-hint" class="target-kpi-hint">No certificate data yet</p>
 			</div>
 		</div>

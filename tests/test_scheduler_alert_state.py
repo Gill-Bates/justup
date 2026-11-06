@@ -69,6 +69,29 @@ async def _alert(sched: MonitorScheduler, tid: int, status: str) -> None:
 # ── A1: a still-down target must not be reported as recovered ────────────────
 
 
+def test_failed_open_alert_load_is_retried_instead_of_forgetting_the_alert(db_path, tmp_path):
+    tid = _target(db_path, enable_http_check=True)
+    sched = _sched(db_path, tmp_path)
+    sched._refresh_targets(utcnow())
+    rt = sched._rt[tid]
+    with mock.patch.object(sched, "_dispatch_alert", mock.AsyncMock()):
+        rt.down_since_by_service["http"] = utcnow() - timedelta(minutes=10)
+        asyncio.run(_alert(sched, tid, TargetStatus.DOWN))
+    alert_id = rt.current_alert_id
+    assert alert_id
+
+    restarted = _sched(db_path, tmp_path)
+    real = sqlite_db.list_active_alerts
+    with mock.patch.object(sqlite_db, "list_active_alerts", side_effect=[sqlite_db.sqlite3.OperationalError("busy")]):
+        with pytest.raises(sqlite_db.sqlite3.OperationalError):
+            restarted._refresh_targets(utcnow())
+    assert not restarted._rt.get(tid)
+
+    with mock.patch.object(sqlite_db, "list_active_alerts", real):
+        restarted._refresh_targets(utcnow())
+    assert restarted._rt[tid].current_alert_id == alert_id
+
+
 def test_open_alert_survives_new_failure_below_timeout(db_path, tmp_path):
     tid = _target(db_path, enable_http_check=True, enable_tcp_connect=True)
     sched = _sched(db_path, tmp_path)

@@ -12,8 +12,8 @@ const src = readFileSync(new URL("../../app/static/js/charts/combined-chart-data
 const sandbox = { window: {} };
 vm.runInNewContext(src, sandbox);
 const D = sandbox.window.CombinedChartData;
-// Arrays from the vm realm have another prototype; compare them as JSON.
 const resetSrc = readFileSync(new URL("../../app/static/js/charts/chart-reset.js", import.meta.url), "utf8");
+// Arrays from the vm realm have another prototype; compare them as JSON.
 const plain = (v) => JSON.parse(JSON.stringify(v));
 const T0 = Date.parse("2026-01-01T00:00:00Z");
 const pt = (min, value) => ({ ts: new Date(T0 + min * 60000).toISOString(), value });

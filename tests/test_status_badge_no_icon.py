@@ -22,7 +22,7 @@ from tests import _support  # noqa: F401 - imported for its sys.path side effect
 APP = Path(__file__).resolve().parent.parent / "app"
 ICON = re.compile(r"material-icons|<i\b|<svg\b", re.IGNORECASE)
 # A source line that builds a status badge and an icon at once.
-STATUS_BADGE = re.compile(r"ju-status-badge|ju-state-badge|StatusBadge")
+STATUS_BADGE = re.compile(r"ju-status-badge|ju-state-badge|ju-status-item|ju-status-dot|StatusBadge")
 
 
 def test_jinja_state_and_cert_dots_have_no_icon_for_every_status() -> None:

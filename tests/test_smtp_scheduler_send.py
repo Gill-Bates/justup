@@ -25,7 +25,7 @@ from app.monitor import scheduler as scheduler_module
 from app.monitor.scheduler import MonitorScheduler
 from app.services.notifications import smtp_transport
 from app.services.notifications.spooler import ChannelType, NotificationSpooler, NotificationType
-from app.utils import crypto
+from app.utils import crypto, maintenance
 from app.utils.constants import SettingKeys
 from app.utils.crypto import encrypt_secret
 from tests import _support  # noqa: F401 - imported for its sys.path side effect
@@ -170,6 +170,22 @@ async def test_queue_row_goes_through_the_scheduler_closure_to_the_transport(
     assert len(inst.sent) == 1
     assert inst.sent[0]["To"] == "to@example.com"
     assert spooler.get_queue_stats_detailed()["by_status"].get("sent") == 1
+
+
+@pytest.mark.asyncio
+async def test_spooler_initialisation_runs_inside_a_maintenance_work_section(scheduler, db_path, monkeypatch):
+    inflight_during_init = []
+    spooler = NotificationSpooler(lambda: sqlite_db.connect(db_path))
+
+    def fake_get_spooler(_factory):
+        inflight_during_init.append(maintenance._INFLIGHT)
+        return spooler
+
+    monkeypatch.setattr(scheduler_module, "get_spooler", fake_get_spooler)
+
+    await scheduler._process_notification_spooler(datetime.now(UTC), raise_errors=True)
+
+    assert inflight_during_init and inflight_during_init[0] >= 1
 
 
 @pytest.mark.asyncio

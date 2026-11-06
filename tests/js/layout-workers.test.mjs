@@ -23,7 +23,8 @@ function workers(env) {
 
 test("CI keeps two Playwright workers, local runs use the machine budget", () => {
 	assert.equal(workers({ CI: "true" }).stdout.trim(), "2");
-	const env = { JUSTUP_TEST_LOAD_AWARE: "0" };
+	// A 1 MB per-worker estimate neutralises the RAM cap so the CPU budget alone decides.
+	const env = { JUSTUP_TEST_LOAD_AWARE: "0", JUSTUP_TEST_RAM_PER_WORKER_MB: "1" };
 	assert.equal(workers(env).stdout.trim(), String(currentBudget(env).playwrightWorkers));
 	assert.equal(workers({ ...env, JUSTUP_TEST_CORES_PER_RUN: "1" }).stdout.trim(), "1");
 });
@@ -34,7 +35,7 @@ test("JUSTUP_LAYOUT_WORKERS overrides the default with a positive integer", () =
 });
 
 test("local unwrapped Playwright warns about its missing shared slot", () => {
-	const local = workers({ JUSTUP_TEST_LOAD_AWARE: "0" });
+	const local = workers({ JUSTUP_TEST_LOAD_AWARE: "0", JUSTUP_TEST_RAM_PER_WORKER_MB: "1" });
 	assert.equal(local.status, 0);
 	assert.match(local.stderr, /tools\/run-limited\.sh.*shared test slot/);
 	assert.equal(workers({ JUSTUP_RUN_LIMITED: "1" }).stderr, "");

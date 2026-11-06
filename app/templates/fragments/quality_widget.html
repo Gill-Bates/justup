@@ -1,10 +1,11 @@
 {# Quality Gate Status Widget #}
+{% from "fragments/_state_dot.html" import status_dot %}
     <div class="card dashboard-widget-card">
     <div class="card-header dashboard-widget-header d-flex align-items-center justify-content-between">
         <span class="fw-semibold">
             <span class="quality-widget-icon" aria-hidden="true"></span> Monitor Quality
         </span>
-        <span class="badge" id="quality-state-badge">--</span>
+        <span id="quality-state-badge">{{ status_dot('neutral', 'Loading') }}</span>
     </div>
     <div class="card-body dashboard-widget-body quality-body d-flex flex-column align-items-center">
         <div class="dashboard-widget-value fw-bold" id="quality-score">--</div>

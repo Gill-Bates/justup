@@ -5,6 +5,7 @@
 
 // Shared app, seed and audit helpers used by the Playwright Test layout specifications.
 import { spawn, spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import assert from "node:assert/strict";
 import AxeBuilder from "@axe-core/playwright";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -20,6 +21,7 @@ const repo = path.resolve(here, "../..");
 // Absolute per-edge tolerance (CSS px, also at 200 % zoom) for the dashboard edit-mode geometry
 // contract in DESIGN.md ("Edit Mode Geometry Contract"). Do not widen it.
 const GEOMETRY_TOL_PX = 1;
+const QUEUE_SCROLL_TOL_PX = 1;
 
 const profile = process.env.JUSTUP_LAYOUT_PROFILE || "quick";
 
@@ -198,14 +200,13 @@ const PAGES = [
 			// (dashboard-grid.js scheduleFit), so the contract is checked on the settled tile: the
 			// body must stop overflowing within the timeout, a permanent ghost scroll still fails.
 			const queueBody = page.locator('[data-widget-id="delivery-queue"] .dashboard-monitor-body');
-			const measureQueue = () => queueBody.evaluate((body) => ({ scrollHeight: body.scrollHeight, clientHeight: body.clientHeight }));
-			const deadline = Date.now() + 5000;
-			let queueScroll = await measureQueue();
-			while (queueScroll.scrollHeight > queueScroll.clientHeight + 2 && Date.now() < deadline) {
-				await page.waitForTimeout(100);
-				queueScroll = await measureQueue();
-			}
-			assert.ok(queueScroll.scrollHeight <= queueScroll.clientHeight + 2, `delivery queue body has ghost scroll: ${queueScroll.scrollHeight}px > ${queueScroll.clientHeight}px`);
+			await queueBody.evaluate((body) => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+			await page.waitForFunction((tol) => {
+				const body = document.querySelector('[data-widget-id="delivery-queue"] .dashboard-monitor-body');
+				return body && body.scrollHeight <= body.clientHeight + tol;
+			}, QUEUE_SCROLL_TOL_PX, { timeout: 5000 }).catch(() => { /* the assertion below reports the final measurement */ });
+			const queueScroll = await queueBody.evaluate((body) => ({ scrollHeight: body.scrollHeight, clientHeight: body.clientHeight }));
+			assert.ok(queueScroll.scrollHeight <= queueScroll.clientHeight + QUEUE_SCROLL_TOL_PX, `delivery queue body has ghost scroll: ${queueScroll.scrollHeight}px > ${queueScroll.clientHeight}px`);
 		},
 	},
 	{
@@ -272,7 +273,7 @@ async function startApp() {
 	const python = resolvePythonExecutable(repo);
 	const env = {
 		...process.env,
-		SECRET_KEY: Buffer.from(Array.from({ length: 32 }, () => Math.floor(Math.random() * 256))).toString("base64"),
+		SECRET_KEY: randomBytes(32).toString("base64"),
 		JUSTUP_DATA_DIR: data, JUSTUP_HOST: "127.0.0.1", JUSTUP_PORT: String(port), LOG_LEVEL: "WARNING",
 		// The first-boot GeoIP download is not needed here; a dead proxy makes it fail instantly.
 		HTTPS_PROXY: "http://127.0.0.1:9", HTTP_PROXY: "http://127.0.0.1:9", NO_PROXY: "127.0.0.1,localhost",
@@ -303,7 +304,7 @@ async function startApp() {
 			if (spawnError) throw new Error(`could not start app with ${python}: ${spawnError.message}`);
 			if (proc.exitCode !== null) throw new Error(`app exited early:\n${log.slice(-1500)}`);
 			try {
-				if ((await fetch(`${base}/ui/login`)).ok) { ready = true; break; }
+				if ((await fetch(`${base}/ui/login`, { signal: AbortSignal.timeout(2000) })).ok) { ready = true; break; }
 			} catch { /* not up yet */ }
 			await sleep(100);
 		}
@@ -353,6 +354,7 @@ for target_id in ${JSON.stringify(targetIds)}:
 		cwd: repo,
 		env: { ...process.env, JUSTUP_DATA_DIR: app.data },
 		encoding: "utf8",
+		timeout: 60000,
 	});
 	if (result.error || result.status !== 0) {
 		throw new Error(`measurement fixture failed: ${result.error?.message || result.stderr || result.status}`);
@@ -466,10 +468,9 @@ async function auditDashboardGrid(browser, app, adminState, browserName, phase) 
 			assert.ok(widget.width > 0 && widget.height > 0 && widget.text, `empty widget ${widget.id}`);
 			assert.ok(widget.left >= snapshot.left - 2 && widget.right <= snapshot.right + 2, `widget outside grid: ${widget.id}`);
 			if (widget.card) {
-				const expectedTop = widget.top;
 				assert.ok(Math.abs(widget.card.left - widget.left) <= 2 && Math.abs(widget.card.right - widget.right) <= 2,
 					`widget card does not fill its grid cell width: ${widget.id} ` + JSON.stringify({ cell: [widget.left, widget.right], card: widget.card }));
-				assert.ok(Math.abs(widget.card.top - expectedTop) <= 2 && Math.abs(widget.card.bottom - widget.bottom) <= 2,
+				assert.ok(Math.abs(widget.card.top - widget.top) <= 2 && Math.abs(widget.card.bottom - widget.bottom) <= 2,
 					`widget card does not fill its reserved grid cell: ${widget.id} ` + JSON.stringify({ cell: [widget.top, widget.bottom], handle: widget.handle, card: [widget.card.top, widget.card.bottom] }));
 			}
 			for (const other of snapshot.widgets) {
@@ -524,8 +525,6 @@ async function auditDashboardGrid(browser, app, adminState, browserName, phase) 
 		};
 	});
 	const expectGridGeometry = async (page, label, { editing = false, against, dragging = false } = {}) => {
-		// Slots follow the grid height through a ResizeObserver; let that frame run before measuring.
-		await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
 		await waitForVisualStability(page);
 		const snap = await gridSnapshot(page);
 		const tol = GEOMETRY_TOL_PX;
@@ -714,7 +713,7 @@ async function auditDashboardGrid(browser, app, adminState, browserName, phase) 
 		assert.equal(geometry.minRows, 3, `${label}: GridStack Queue minimum differs from its measured minimum ${JSON.stringify(geometry)}`);
 		assert.ok(geometry.requiredRows <= 3, `${label}: Queue content requires more than three rows ${JSON.stringify(geometry)}`);
 		assert.ok(geometry.headerOverflow <= 1, `${label}: Queue header overflows ${JSON.stringify(geometry)}`);
-		assert.ok(geometry.bodyOverflow <= 1, `${label}: Queue body scrolls or clips content ${JSON.stringify(geometry)}`);
+		assert.ok(geometry.bodyOverflow <= QUEUE_SCROLL_TOL_PX, `${label}: Queue body scrolls or clips content ${JSON.stringify(geometry)}`);
 		assert.ok(geometry.metricsOverflow <= 1 && !geometry.metricOutside, `${label}: Queue metrics overflow their container ${JSON.stringify(geometry)}`);
 		assert.equal(geometry.titleStatusOverlap, false, `${label}: Queue title overlaps its status badge ${JSON.stringify(geometry)}`);
 		return geometry;
@@ -838,17 +837,14 @@ async function auditDashboardGrid(browser, app, adminState, browserName, phase) 
 				await page.locator('#delivery-queue-status').getByText('Queue clear').waitFor();
 				assert.equal(await queueCells().count(), 3, 'Queue metrics did not recover after an API failure');
 				for (const theme of ['light', 'dark']) {
-					const colors = await page.evaluate((value) => {
-					document.documentElement.setAttribute('data-bs-theme', value);
-					return ['quality-state-badge', 'delivery-queue-status'].map((id) => {
-						const badge = document.getElementById(id);
-						const style = getComputedStyle(badge);
-						return { background: style.backgroundColor, foreground: style.color,
-							variant: [...badge.classList].find((name) => name.startsWith('ju-status-badge--')) };
+					const tones = await page.evaluate((value) => {
+						document.documentElement.setAttribute('data-bs-theme', value);
+						return ['quality-state-badge', 'delivery-queue-status'].map((id) => {
+							const dot = document.getElementById(id)?.querySelector('.ju-status-dot');
+							return dot && [...dot.classList].find((name) => name.startsWith('ju-status-dot--') && name !== 'ju-status-dot--unknown');
 						});
 					}, theme);
-					assert.deepEqual(colors[0], colors[1], `${theme}: healthy dashboard badges use different colors`);
-				assert.equal(colors[0].variant, 'ju-status-badge--success', `${theme}: healthy dashboard badges lack the shared success variant`);
+					assert.deepEqual(tones, ['ju-status-dot--success', 'ju-status-dot--success'], `${theme}: healthy dashboard status dots lack the shared success tone`);
 				}
 				await page.evaluate(() => document.documentElement.setAttribute('data-bs-theme', 'light'));
 				assert.equal(
@@ -948,16 +944,17 @@ async function auditDashboardGrid(browser, app, adminState, browserName, phase) 
 				}
 				await applyQuality({ w: v2Layout.widgets.find((widget) => widget.id === 'quality').w, h: 3, height_mode: 'auto' });
 				await quality.locator('.quality-target').first().evaluate((element) => { window.__qualityBadge = element; });
-				const refresh = page.waitForResponse((response) => response.url().endsWith('/quality/current'));
-				await page.evaluate(() => document.body.dispatchEvent(new Event('dashboard-refresh')));
-				await refresh;
+				const refreshQuality = async () => {
+					const response = page.waitForResponse((result) => result.url().endsWith('/quality/current'));
+					await page.evaluate(() => document.body.dispatchEvent(new Event('dashboard-refresh')));
+					await response;
+				};
+				await refreshQuality();
 				assert.equal(await quality.locator('.quality-target').first().evaluate((element) => element === window.__qualityBadge), true,
 					'unchanged targets were reconstructed');
 				qualityUnavailable = true;
 				for (let attempt = 0; attempt < 2; attempt++) {
-					const failed = page.waitForResponse((response) => response.url().endsWith('/quality/current'));
-					await page.evaluate(() => document.body.dispatchEvent(new Event('dashboard-refresh')));
-					await failed;
+					await refreshQuality();
 				}
 				await page.waitForFunction(() => document.getElementById('quality-label')?.textContent === 'Data unavailable');
 				assert.equal(await quality.locator('.quality-target').count(), 6, 'API failure lost known targets');
@@ -966,22 +963,16 @@ async function auditDashboardGrid(browser, app, adminState, browserName, phase) 
 					targets: ["https://[2001:4860:4860::8888]:8443/check", "very-long-quality-hostname-with-many-labels.example.org", "example.org"],
 					target_details: [],
 				};
-				const changed = page.waitForResponse((response) => response.url().endsWith('/quality/current'));
-				await page.evaluate(() => document.body.dispatchEvent(new Event('dashboard-refresh')));
-				await changed;
+				await refreshQuality();
 				await page.waitForFunction(() => document.querySelectorAll('#quality-targets .quality-target:not(.quality-target-overflow)').length === 3);
 				assert.equal(await quality.locator('.quality-target').first().textContent(), '[2001:4860:4860::8888]:8443/check');
 				assert.equal(await quality.locator('.quality-target').nth(1).textContent(), 'very-long-quality-hostname-with-many-labels.example.org');
 				qualityPayload = { ...qualityPayload, targets: [], target_details: [] };
-				const emptied = page.waitForResponse((response) => response.url().endsWith('/quality/current'));
-				await page.evaluate(() => document.body.dispatchEvent(new Event('dashboard-refresh')));
-				await emptied;
+				await refreshQuality();
 				await page.waitForFunction(() => document.getElementById('quality-targets')?.textContent === 'No quality targets configured');
 				assert.equal(await quality.locator('.quality-target').count(), 0);
 				qualityPayload = initialQualityPayload;
-				const restored = page.waitForResponse((response) => response.url().endsWith('/quality/current'));
-				await page.evaluate(() => document.body.dispatchEvent(new Event('dashboard-refresh')));
-				await restored;
+				await refreshQuality();
 				await page.waitForFunction(() => document.querySelectorAll('#quality-targets .quality-target:not(.quality-target-overflow)').length === 5);
 			}
 			assert.equal(await page.locator('[data-widget-id="delivery-queue"]').count(), role === "admin" ? 1 : 0);
@@ -1174,7 +1165,11 @@ async function auditDashboardGrid(browser, app, adminState, browserName, phase) 
 			await page.mouse.down();
 			await page.mouse.move(dragBox.x + 30, viewportHeight - 4, { steps: 20 });
 			await page.mouse.wheel(0, 600);
-			await page.waitForTimeout(400);
+			await page.waitForFunction(() => new Promise((resolve) => {
+				const read = () => [document.scrollingElement.scrollTop, document.getElementById("main-content").scrollHeight, document.getElementById("dashboard-grid").gridstack.getRow()].join();
+				const first = read();
+				requestAnimationFrame(() => requestAnimationFrame(() => resolve(read() === first)));
+			}), null, { polling: "raf" });
 			await expectContained("while dragging to the bottom edge", settledState);
 			await page.mouse.up();
 			await waitForVisualStability(page);
@@ -1185,7 +1180,11 @@ async function auditDashboardGrid(browser, app, adminState, browserName, phase) 
 			await page.mouse.down();
 			await page.mouse.move(resizeGrip.x + 10, viewportHeight - 4, { steps: 20 });
 			await page.mouse.wheel(0, 600);
-			await page.waitForTimeout(400);
+			await page.waitForFunction(() => new Promise((resolve) => {
+				const read = () => [document.scrollingElement.scrollTop, document.getElementById("main-content").scrollHeight, document.getElementById("dashboard-grid").gridstack.getRow()].join();
+				const first = read();
+				requestAnimationFrame(() => requestAnimationFrame(() => resolve(read() === first)));
+			}), null, { polling: "raf" });
 			await expectContained("while resizing to the bottom edge", droppedState);
 			await page.mouse.up();
 			await waitForVisualStability(page);
@@ -1257,9 +1256,9 @@ async function auditDashboardGrid(browser, app, adminState, browserName, phase) 
 						assert.equal(structure.mainCount, 0, "delivery queue must not render a redundant main sum");
 						const stats = await request(page, "/settings/notification-queue/stats");
 						assert.equal(stats.status, 200, "delivery queue stats endpoint failed");
-						const failed = Number.isInteger(stats.data.failed_recent) && stats.data.failed_recent >= 0 ? stats.data.failed_recent : stats.data.failed;
+						assert.ok(Number.isInteger(stats.data.failed_recent), "stats API lacks failed_recent");
 						assert.deepEqual(structure.cells.map((cell) => cell.label), ["Pending", "Processing", "Failed (24 h)"]);
-						assert.deepEqual(structure.cells.map((cell) => cell.value), [String(stats.data.pending), String(stats.data.processing), String(failed)],
+						assert.deepEqual(structure.cells.map((cell) => cell.value), [String(stats.data.pending), String(stats.data.processing), String(stats.data.failed_recent)],
 							"delivery queue metric values do not match the stats API");
 					} else {
 						assert.equal(structure.mainCount, 0, "alerts must not render a main number that repeats the header count");
@@ -1283,7 +1282,8 @@ async function auditDashboardGrid(browser, app, adminState, browserName, phase) 
 		} catch (error) {
 			const animations = await page.evaluate(() => document.getAnimations().filter((animation) => animation.playState === "running")
 				.map((animation) => ({ name: animation.animationName || animation.transitionProperty,
-					target: animation.effect?.target?.className, time: animation.currentTime })));
+					target: animation.effect?.target?.className, time: animation.currentTime })))
+				.catch((reason) => `unavailable (${reason.message})`);
 			error.message += `; running animations: ${JSON.stringify(animations)}`;
 			throw error;
 		} finally {
@@ -1318,7 +1318,8 @@ uid = db.execute("SELECT id FROM users WHERE username = ?", (sys.argv[2],)).fetc
 for pos, (wid, x, y, w, h, visible) in enumerate(json.loads(sys.argv[3])):
 	db.execute("INSERT INTO dashboard_layouts (user_id, widget_id, position, x, y, w, h, visible, layout_version, height_mode) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 2, 'auto')", (uid, wid, pos, x, y, w, h, visible))
 db.commit()
-`, app.data, legacyUser, JSON.stringify(rows)], { cwd: repo, encoding: "utf8" });
+`, app.data, legacyUser, JSON.stringify(rows)], { cwd: repo, encoding: "utf8", timeout: 30000 });
+		assert.ifError(stored.error);
 		assert.equal(stored.status, 0, `could not store the legacy layout: ${stored.stderr}`);
 		const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
 		const page = await context.newPage();
@@ -1413,7 +1414,7 @@ db.commit()
 						await page.evaluate((value) => document.documentElement.setAttribute("data-bs-theme", value), theme);
 						await waitForVisualStability(page);
 						// A manual height below the content may scroll inside the declared body area, never a KPI tile.
-						const allowed = (issue) => sizing === "minimum" && issue.node.includes("dashboard-widget-body") && !issue.node.includes("hero");
+						const allowed = (issue) => sizing === "minimum" && issue.declaredBody && !issue.hero;
 						const scrolling = (await runAudit(page, "top")).issues.filter((issue) => issue.type === "widget-scrollbar" && !allowed(issue));
 						assert.deepEqual(scrolling, [], `${browserName} ${sizing} sizes, ${theme}, ${editing ? "edit" : "view"} mode: widget scrollbar`);
 					}
@@ -1619,7 +1620,11 @@ const focusAudit = (page) => page.evaluate(() => {
 async function modalAudit(page) {
 	return page.evaluate(async () => {
 		const bad = [];
-		const once = (el, evt, act) => new Promise((resolve) => { el.addEventListener(evt, resolve, { once: true }); act(); });
+		const once = (el, evt, act, ms = 5000) => new Promise((resolve, reject) => {
+			const timer = setTimeout(() => reject(new Error(`modal ${el.id || "(no id)"}: no ${evt} within ${ms} ms`)), ms);
+			el.addEventListener(evt, () => { clearTimeout(timer); resolve(); }, { once: true });
+			act();
+		});
 		for (const modal of document.querySelectorAll(".modal")) {
 			const inst = window.bootstrap.Modal.getOrCreateInstance(modal);
 			await once(modal, "shown.bs.modal", () => inst.show());
@@ -1774,7 +1779,8 @@ async function auditCombinedChartInteractions(page) {
 		window.__justUpChartBeforeResync = window.Chart.getChart(document.getElementById("chart-combined"));
 	});
 	await page.evaluate(() => window.__justUpEventSource.emit("system.resync"));
-	await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 0)));
+	// Assumes the system.resync handler has no debounce: two frames plus a macrotask cover its synchronous path.
+	await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 0)))));
 	assert.equal(await requestCount(), countBeforeResync, "live resync reloaded chart metrics while zoomed");
 	assert.equal(await pendingRequests(), 0);
 	const afterResync = await snapshot();

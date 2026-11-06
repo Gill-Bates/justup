@@ -373,6 +373,30 @@ def test_download_action_only_on_ready_report_notification(client):
     assert actions["report.completed"]["type"] == "download"
 
 
+def test_action_urls_are_only_internal_paths_or_https_release_pages(db):
+    from urllib.parse import urlsplit
+
+    from app.api.notifications import _action
+    from app.services import release_check
+
+    conn, _ = db
+    admin = _user(conn, "root", admin=True)
+    tid = _target(conn)
+    hostile = ["javascript:alert(1)", "//evil.example/x", "https://evil.example/v1.0.0", "v1.0.0/../x", "v1.0.0\n"]
+    items = [
+        {"resource_type": "target", "resource_id": str(tid), "event_type": "x"},
+        {"resource_type": "queue", "resource_id": "1", "event_type": "x"},
+        {"resource_type": "x", "resource_id": "v1.2.3", "event_type": release_check.EVENT_TYPE},
+        *({"resource_type": "x", "resource_id": h, "event_type": release_check.EVENT_TYPE} for h in hostile),
+    ]
+    urls = [a["url"] for i in items if (a := _action(conn, admin, i)) and "url" in a]
+    assert len(urls) == 3  # hostile tags yield no action at all
+    for url in urls:
+        parts = urlsplit(url)
+        assert (parts.scheme, parts.netloc) in {("", ""), ("https", "github.com")}, url
+        assert parts.scheme or url.startswith("/ui/")
+
+
 def test_summary_endpoint_is_private_and_scoped(client):
     c, tokens = client
     r = c.get("/ui/notifications/summary", headers=_h(tokens, "alice"))

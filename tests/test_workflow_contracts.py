@@ -104,3 +104,14 @@ def test_contents_write_is_confined_to_the_release_job():
     for job in re.split(r"\n  (?=[a-z][a-z-]*:\n)", RELEASE.split("\njobs:\n", 1)[1]):
         name = job.split(":", 1)[0]
         assert ("contents: write" in job) == (name == "create-release"), name
+
+
+def test_every_directory_the_release_job_collects_is_filled_by_an_earlier_step():
+    # A directory read by "Collect release assets" but never downloaded only fails at release time.
+    release = RELEASE.split("\n  create-release:", 1)[1]
+    before, collect = release.split("- name: Collect release assets", 1)
+    collect = collect.split("python3 tools/release-publish.py manifest", 1)[0]
+    directories = set(re.findall(r"(?<![\w/-])([a-z][a-z-]*)/(?=[\w$])", collect)) - {"release-files"}
+    assert {"nmap-nvd", "nmap-provenance", "trivy-reports", "toolchain", "nmap-release-assets"} <= directories
+    for directory in directories:
+        assert f"path: {directory}/" in before or f" {directory} " in before, directory

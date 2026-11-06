@@ -5,17 +5,17 @@
 
 /**
  * Presentation of the monitor quality state for the dashboard widget.
- * The badge carries status color; the score stays a neutral primary value in every state.
+ * The status dot carries status color; the score stays a neutral primary value in every state.
  * @module utils/quality-state
  */
 (function (root) {
 	'use strict';
 
 	var BADGES = {
-		ok: { cls: 'ju-status-badge--success', text: 'OK' },
-		degraded: { cls: 'ju-status-badge--warning', text: 'Degraded' },
-		down: { cls: 'ju-status-badge--danger', text: 'Down' },
-		unknown: { cls: 'ju-status-badge--neutral', text: 'Unknown' },
+		ok: { cls: 'ju-status-badge--success', tone: 'success', text: 'OK' },
+		degraded: { cls: 'ju-status-badge--warning', tone: 'warning', text: 'Degraded' },
+		down: { cls: 'ju-status-badge--danger', tone: 'danger', text: 'Down' },
+		unknown: { cls: 'ju-status-badge--neutral', tone: 'neutral', text: 'Unknown' },
 	};
 
 	/** Finite score or null for null, undefined, empty and non-numeric values. */
@@ -27,7 +27,7 @@
 
 	/**
 	 * @param {{state?: string, score?: number|string|null}|null|undefined} data - /quality/current payload
-	 * @returns {{state: string, badgeClass: string, badgeText: string, scoreText: string, scoreClass: string, label: string}}
+	 * @returns {{state: string, badgeClass: string, badgeTone: string, badgeText: string, scoreText: string, scoreClass: string, label: string}}
 	 */
 	function describe(data) {
 		var score = parseScore(data && data.score);
@@ -41,6 +41,7 @@
 		return {
 			state: state,
 			badgeClass: b.cls,
+			badgeTone: b.tone,
 			badgeText: b.text,
 			scoreText: score === null ? '--' : score.toFixed(1),
 			scoreClass: 'dashboard-widget-value fw-bold',

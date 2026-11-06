@@ -12,6 +12,7 @@ import { spawnSync } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "./fixtures.mjs";
+import { readStateBadges } from "./test-support.mjs";
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const VIEWPORTS = [
 	{ name: "1280x720", width: 1280, height: 720 },
@@ -20,7 +21,7 @@ const VIEWPORTS = [
 ];
 const BODY = {
 	name: "Endpoint State Mixed", host: "state.example.net", is_enabled: false, enable_ping: true,
-	enable_tcp_connect: true, tcp_host: "state.example.net", tcp_ports: "25,587",
+	enable_tcp_connect: true, tcp_host: "state.example.net", tcp_ports: "25,53,587",
 	enable_udp_scan: true, udp_ports: "53,161",
 };
 test.describe.configure({ mode: "serial" });
@@ -44,6 +45,7 @@ conn = sqlite_db.connect(config.db_path)
 tid = ${targetId}
 update = sqlite_db.update_network_port_status
 update(conn, tid, "tcp", 25, "up", latency_ms=12.0)
+update(conn, tid, "tcp", 53, "up", latency_ms=5.0)
 update(conn, tid, "tcp", 587, "down", "connection refused")
 update(conn, tid, "udp", 53, "up", raw_state="open")
 update(conn, tid, "udp", 161, "unknown", "uncertain result", raw_state="open|filtered")
@@ -60,6 +62,7 @@ for minutes_ago, value in ((110, 1), (109, 1), (108, 0), (107, 0), (106, 0), (10
 for minutes_ago in (100, 99):
 	put("udp_up_53", minutes_ago, 1)
 put("udp_up_53", 60, 1)
+put("tcp_up_53", 60, 1)
 # UNKNOWN result: UDP 161 only ever open|filtered.
 put("udp_unknown_161", 50, 1)
 `;
@@ -80,12 +83,8 @@ for (const viewport of VIEWPORTS) {
 				await hero.locator(".ju-status-item", { hasText: "UDP:161" }).waitFor({ state: "attached" });
 				await page.locator("#downtime-history-body .downtime-item").first().waitFor({ state: "attached", timeout: 20000 });
 				assert.equal(await page.locator("[data-endpoint], .target-endpoints-card").count(), 0, "no endpoint table");
-				const labels = await hero.locator(".ju-status-item").evaluateAll((nodes) => nodes.map((node) => {
-					const clone = node.cloneNode(true);
-					clone.querySelectorAll(".material-icons, .visually-hidden").forEach((part) => part.remove());
-					return clone.textContent.trim();
-				}));
-				assert.deepEqual(labels, ["PING", "TCP:25", "TCP:587", "UDP:53", "UDP:161"]);
+				const labels = (await readStateBadges(page, "#target-info-cards .target-kpi-badges .ju-status-item")).map((item) => item.label);
+				assert.deepEqual(labels, ["PING", "TCP:25", "TCP:53", "TCP:587", "UDP:53", "UDP:161"]);
 				const badge = (label) => hero.locator(".ju-status-item", { hasText: label });
 				assert.match(await badge("TCP:25").innerText(), /Up/);
 				assert.match(await badge("TCP:587").innerText(), /Down/);
@@ -107,7 +106,7 @@ for (const viewport of VIEWPORTS) {
 				const down = await look("TCP:587");
 				const unk = await look("UDP:161");
 				assert.equal(down.icons + unk.icons, 0, "no icon inside a status item");
-				assert.equal(down.ariaHidden + unk.ariaHidden, "truetrue", "the dot is decorative, the word is the text alternative");
+				assert.deepEqual([down.ariaHidden, unk.ariaHidden], ["true", "true"], "the dot is decorative, the word is the text alternative");
 				assert.notEqual(down.background, unk.background);
 				assert.equal(unk.background, "rgba(0, 0, 0, 0)", "UNKNOWN is a hollow ring");
 				assert.notEqual(down.radius, unk.radius, "DOWN and UNKNOWN differ in shape");
@@ -152,7 +151,8 @@ test("targets table: endpoint states are a coloured dot with a text alternative,
 		assert.equal(await dotColor("UDP:161"), "rgba(0, 0, 0, 0)", "UNKNOWN is a hollow ring");
 		assert.notEqual(await dotColor("TCP:587"), await dotColor("UDP:53"), "DOWN and UP dots differ in colour");
 		assert.equal(await badge("TCP:587").locator(".ju-status-dot").getAttribute("aria-hidden"), "true", "the dot is decorative; the hidden word is the text alternative");
-		assert.equal(await row.locator(".ju-status-item", { hasText: "TCP:587" }).count(), 1, "TCP and UDP of one port number never share an item");
+		assert.equal(await row.locator(".ju-status-item", { hasText: "TCP:53" }).count(), 1, "TCP and UDP of one port number never share an item");
+		assert.equal(await row.locator(".ju-status-item", { hasText: "UDP:53" }).count(), 1, "TCP and UDP of one port number never share an item");
 	} finally {
 		await context.close();
 	}
@@ -165,7 +165,7 @@ test("availability chart: a UDP port is a dashed line, a TCP port of the same nu
 		await page.waitForFunction(() => window.Chart && window.Chart.getChart("chart-uptime")?.data.datasets.length > 0, null, { timeout: 20000 });
 		const lines = await page.evaluate(() => Object.fromEntries(window.Chart.getChart("chart-uptime").data.datasets.map((set) => [set.label, set.borderDash || []])));
 		assert.deepEqual(lines["UDP:53"], [6, 4]);
-		assert.deepEqual(lines["TCP:587"], []);
+		assert.deepEqual(lines["TCP:53"], []);
 	} finally {
 		await context.close();
 	}

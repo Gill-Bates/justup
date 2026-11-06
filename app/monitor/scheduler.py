@@ -135,6 +135,7 @@ class PendingServiceDetection:
 MAX_JITTER_SECONDS = 10
 TOKEN_CLEANUP_RETRY_SECONDS = 300
 DB_MAINTENANCE_INTERVAL_SECONDS = 3600
+SERVICE_PREVIEW_TTL = timedelta(minutes=5)  # service detection preview lifetime until confirmation
 
 # Housekeeping: daily rollups with 5 minutes jitter spread
 HOUSEKEEPING_INTERVAL_SECONDS = 86400  # 24 hours
@@ -869,7 +870,11 @@ class MonitorScheduler:
 
         try:
             # First call runs a BEGIN IMMEDIATE that may wait for the SQLite busy timeout.
-            spooler = await asyncio.to_thread(get_spooler, self._get_conn)
+            def init_spooler():
+                with maintenance.work_section(generation):
+                    return get_spooler(self._get_conn)
+
+            spooler = await asyncio.to_thread(self._thread_call(self._epoch_for_thread(), init_spooler))
 
             def send_signal(phone: str, message: str, sender: str) -> bool:
                 """Send Signal message, returns True on success."""
@@ -1067,11 +1072,8 @@ class MonitorScheduler:
                 )
             except (ValueError, TypeError):
                 mt = DEFAULT_METRICS_TIMEOUT_MINUTES
-            try:
-                alert_rows = sqlite_db.list_active_alerts(conn)
-            except Exception as e:  # noqa: BLE001 - scheduler-loop resilience boundary: log and continue
-                _log.warning("Failed to load open alerts: %s", e)
-                alert_rows = []
+            # A failure here must not look like "no open alerts"; the boundary handler retries next tick.
+            alert_rows = sqlite_db.list_active_alerts(conn)
         return rows, mt, alert_rows
 
     async def _refresh_targets_async(self, now: datetime, generation: int) -> None:
@@ -1093,19 +1095,15 @@ class MonitorScheduler:
 
         # Use a regular dict to support multiple alerts per target (cert + availability).
         open_alerts: dict[int, list[dict]] = {}
-        try:
-            for row in alert_rows:
-                tid = row[0]
+        for row in alert_rows:
+            try:
                 started_at = _stored_datetime(row[2] or None)
-                open_alerts.setdefault(tid, []).append(
-                    {
-                        "alert_id": row[1],
-                        "started_at": started_at,
-                        "failed_service": row[3],
-                    }
-                )
-        except Exception as e:  # noqa: BLE001 - scheduler-loop resilience boundary: log and continue
-            _log.warning("Failed to load open alerts: %s", e)
+            except (ValueError, TypeError) as e:
+                _log.warning("Open alert %s has an unparsable started_at: %s", row[1], e)
+                started_at = None
+            open_alerts.setdefault(row[0], []).append(
+                {"alert_id": row[1], "started_at": started_at, "failed_service": row[3]}
+            )
 
         seen: set[int] = set()
         for r in rows:
@@ -1805,8 +1803,14 @@ class MonitorScheduler:
         finally:
             rt.next_due = _align_to_interval(utcnow(), interval, offset)
             heartbeat.cancel()
-            with suppress(asyncio.CancelledError):
+            try:
                 await heartbeat
+            except asyncio.CancelledError:
+                # Swallow only the heartbeat's own cancellation, never ours.
+                task = asyncio.current_task()
+                if task is not None and task.cancelling():
+                    await self._release_target_lock(target_id)
+                    raise
             await self._release_target_lock(target_id)
 
     @staticmethod
@@ -2084,7 +2088,7 @@ class MonitorScheduler:
             self._service_previews = {
                 key: value
                 for key, value in self._service_previews.items()
-                if now - value.created_at < timedelta(minutes=5)
+                if now - value.created_at < SERVICE_PREVIEW_TTL
             }
             if len(self._service_previews) >= 64:
                 oldest = min(self._service_previews, key=lambda key: self._service_previews[key].created_at)
@@ -2101,7 +2105,7 @@ class MonitorScheduler:
             if pending is None or pending.owner_id != owner_id or pending.target_id != target_id:
                 raise LookupError("Service detection preview not found")
             del self._service_previews[token]
-        if utcnow() - pending.created_at >= timedelta(minutes=5):
+        if utcnow() - pending.created_at >= SERVICE_PREVIEW_TTL:
             raise ValueError("Service detection preview expired")
         generation = maintenance.current_generation()
         with maintenance.work_section(generation), self._db_conn() as conn:
@@ -2429,10 +2433,10 @@ class MonitorScheduler:
                 self._last_alert_at[target_id] = now
 
     async def _dispatch_alert(self, alert: AlertPayload, generation: int | None = None) -> None:
-        """Dispatch alert via NotificationDispatcher.
+        """Enqueue an alert immediately via NotificationDispatcher.
 
-        This is the single point of notification dispatch.
-        All alerting goes through here → spooler.
+        The durable alert_dispatch_outbox row written with the alert record delivers the same event
+        again; the spooler deduplicates per alert, recipient and channel.
 
         Args:
                 alert: AlertPayload with complete alert context

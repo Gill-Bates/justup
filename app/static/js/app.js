@@ -442,8 +442,7 @@
 						var view = window.QualityState.describe(data);
 						scoreEl.textContent = view.scoreText;
 						scoreEl.className = view.scoreClass;
-						badgeEl.className = 'badge ' + view.badgeClass;
-						badgeEl.textContent = view.badgeText;
+						badgeEl.innerHTML = window.JuStatusDot.html(view.badgeTone, view.badgeText);
 						labelEl.textContent = view.label;
 						consecutiveFailures = 0;
 						renderTargets(data);
@@ -462,8 +461,7 @@
 					var view = window.QualityState.describe({ state: 'unknown' });
 					scoreEl.textContent = view.scoreText;
 					scoreEl.className = view.scoreClass;
-					badgeEl.className = 'badge ' + view.badgeClass;
-					badgeEl.textContent = view.badgeText;
+					badgeEl.innerHTML = window.JuStatusDot.html(view.badgeTone, view.badgeText);
 					labelEl.textContent = 'Data unavailable';
 					scheduleTargetFit();
 				}

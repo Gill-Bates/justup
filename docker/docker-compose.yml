@@ -20,8 +20,7 @@ services:
       # Optional: reverse-proxy address(es) as the container sees them; empty = trust no proxy header
       TRUSTED_PROXIES: ${UPMON_TRUSTED_PROXIES:-}
     volumes:
-      # Named volume by default; JUSTUP_DATA=/srv/justup (a host path) selects a host directory instead.
-      - ${JUSTUP_DATA:-justup-data}:/app/data
+      - ./:/app/data
     tmpfs:
       - /app/data/pdf_reports:size=256m,mode=0700,uid=1000,gid=1000
     healthcheck:
@@ -44,6 +43,3 @@ services:
       - NET_RAW # ping file capability and Nmap raw sockets; the entrypoint also hands it, and only it, to the Nmap worker (UDP scans)
     security_opt:
       - no-new-privileges:true
-
-volumes:
-  justup-data:

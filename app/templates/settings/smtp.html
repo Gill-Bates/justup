@@ -1,5 +1,6 @@
 {# Settings: SMTP Tab Content #}
 {% from "settings/_secret_field.html" import secret_field %}
+{% from "fragments/_state_dot.html" import status_dot %}
 <div class="ui-grid ui-grid--sidebar settings-editor settings-editor--fill">
 	{# Left Column: SMTP Configuration (1/3) #}
 		<div class="card shadow-sm">
@@ -9,13 +10,14 @@
 						<span class="material-icons align-middle me-1 ju-icon-20" aria-hidden="true">mail</span>
 						SMTP Email
 					</h2>
+					{# Mirrors settings.storage.js updateSmtpStatusBadge #}
 					<div id="smtp-status-badge">
 						{% if not smtp.smtp_enabled %}
-						<span class="ju-status-item"><span class="ju-status-dot ju-status-dot--neutral ju-status-dot--unknown" aria-hidden="true"></span>Disabled</span>
+						{{ status_dot('neutral', 'Disabled') }}
 						{% elif smtp.smtp_host and smtp.smtp_from %}
-						<span class="ju-status-item"><span class="ju-status-dot ju-status-dot--success" aria-hidden="true"></span>Configured</span>
+						{{ status_dot('success', 'Configured') }}
 						{% else %}
-						<span class="ju-status-item"><span class="ju-status-dot ju-status-dot--warning" aria-hidden="true"></span>Not Configured</span>
+						{{ status_dot('warning', 'Not Configured') }}
 						{% endif %}
 					</div>
 				</div>

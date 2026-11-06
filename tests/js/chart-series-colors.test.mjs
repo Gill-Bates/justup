@@ -115,7 +115,7 @@ test("palette reads the series tokens of the active theme at runtime", () => {
 test("the chart script holds no hard-coded series colors", () => {
   const chartSource = read("app/static/js/charts/combined-chart.js");
   const hexes = new Set(series(lightTokens).concat(series(darkTokens)));
-  for (const hex of hexes) assert.ok(!chartSource.includes(hex), `${hex} is hard-coded in combined-chart.js`);
+  for (const hex of hexes) assert.ok(!chartSource.toLowerCase().includes(hex.toLowerCase()), `${hex} is hard-coded in combined-chart.js`);
   assert.doesNotMatch(chartSource, /palette\[(src\.id|ds\._srcId)\]/);
 });
 

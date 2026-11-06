@@ -42,7 +42,7 @@ for (const theme of ["light", "dark"]) {
 					await page.evaluate((mode) => document.documentElement.setAttribute("data-bs-theme", mode), theme);
 					await page.waitForSelector(page_.strip);
 					// Bootstrap tabs transition colour; measure only after the theme switch has settled.
-					await page.waitForFunction(() => document.getAnimations().length === 0);
+					await page.waitForFunction((sel) => document.querySelector(sel).getAnimations({ subtree: true }).length === 0, page_.strip, { timeout: 10000 });
 					looks[page_.name] = await page.evaluate(LOOK, page_.strip);
 					await page.close();
 				}
@@ -56,6 +56,7 @@ for (const theme of ["light", "dark"]) {
 			for (const [name, look] of Object.entries(looks)) {
 				assert.ok(look.hasShared, `${name}: strip is not .ju-tabs`);
 				assert.ok(look.overflowMarked, `${name}: has-overflow does not match the real overflow`);
+				if (look.fadeEnd !== null) assert.equal(look.fadeEnd, true, `${name}: end fade missing although tabs overflow at the start position`);
 				const { overflowMarked, fadeEnd, ...rest } = look;
 				const { overflowMarked: _o, fadeEnd: _f, ...ref } = reference;
 				assert.deepEqual(rest, ref, `${name} differs from the Notifications tab look`);

@@ -9,6 +9,7 @@
 // never clips its content (dropdowns, tag suggestions, tooltips stay visible).
 import assert from "node:assert/strict";
 import { test } from "./fixtures.mjs";
+import { waitForVisualStability } from "./harness.mjs";
 
 // Fixed scale factor of the pixel probe: a quarter-pixel grid makes the samples independent of the host display.
 const DSF = 4;
@@ -72,7 +73,7 @@ for (const viewport of VIEWPORTS) {
 					await page.goto(app.base + entry.path, { waitUntil: "load" });
 					await page.evaluate((mode) => document.documentElement.setAttribute("data-bs-theme", mode), theme);
 					await entry.prepare?.(page);
-					await page.waitForTimeout(700);
+					await waitForVisualStability(page);
 					const { problems } = await page.evaluate(GEOMETRY, CLIPPING);
 					assert.deepEqual(problems.filter((p) => !p.includes("ju-table-viewport")), [], `${entry.id}`);
 				}
@@ -81,12 +82,12 @@ for (const viewport of VIEWPORTS) {
 				await page.goto(app.base + "/ui/targets/1/edit", { waitUntil: "load" });
 				await page.evaluate((mode) => document.documentElement.setAttribute("data-bs-theme", mode), theme);
 				await page.click("#target-http-tab").catch(() => {});
-				await page.waitForTimeout(500);
+				await waitForVisualStability(page);
 				await page.evaluate(() => {
 					const toggle = document.getElementById("enable_http_check");
 					if (toggle.checked) toggle.click();
 				});
-				await page.waitForTimeout(400);
+				await waitForVisualStability(page);
 				const card = page.locator(".check-card:has(#enable_http_check)");
 				await card.scrollIntoViewIfNeeded();
 				// A header color unlike the page and the border makes any square paint over the arc unmistakable.

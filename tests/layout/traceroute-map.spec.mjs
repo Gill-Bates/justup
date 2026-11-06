@@ -94,7 +94,9 @@ for (const viewport of VIEWPORTS) {
 					};
 					const before = visible();
 					scroll.scrollLeft = scroll.scrollWidth - scroll.clientWidth;
-					return { scrollable: scroll.scrollWidth > scroll.clientWidth, before, after: visible() };
+					const after = visible();
+					scroll.scrollLeft = 0;
+					return { scrollable: scroll.scrollWidth > scroll.clientWidth, before, after };
 				});
 				assert.ok(status.scrollable && status.before && status.after, `hop status must stay visible while scrolling: ${JSON.stringify(status)}`);
 			}
@@ -121,8 +123,8 @@ for (const viewport of VIEWPORTS) {
 			const selection = JSON.parse(await page.getAttribute("#traceroute-map", "data-map-labels"));
 			const allowed = new Set([...selection.countries.map((c) => c.name), ...selection.cities.map((c) => c.name)]);
 			assert.ok(m.labelNames.every((n) => allowed.has(n)), `unexpected names ${m.labelNames}`);
-			// The cap is the server's own selection; the page must not add names beyond it.
-			assert.ok(m.labelNames.length <= selection.countries.length + selection.cities.length, `too many names ${m.labelNames.length}`);
+			// Each selected name appears at most once.
+			assert.equal(new Set(m.labelNames).size, m.labelNames.length, `duplicate names ${m.labelNames}`);
 			assert.equal(m.labelOverMarker, false, "a name lies under a marker");
 			assert.equal(m.labelOverLabel, false, "names overlap");
 

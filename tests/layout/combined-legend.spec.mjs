@@ -78,7 +78,7 @@ for (const viewport of VIEWPORTS) {
 				const state = await legendState(page);
 				assert.ok(state.msCount >= 4, `${theme}: HTTP, Ping and two TCP ports are plotted`);
 				assert.equal(state.names.filter((name) => /peak/i.test(name)).length, 0, `${theme}: no peak legend entries (${state.names})`);
-				assert.deepEqual(state.names.filter((name) => /^(HTTP|Ping|TCP \d+)$/.test(name)).length, state.msCount, `${theme}: one entry per series`);
+				assert.equal(state.names.filter((name) => /^(HTTP|Ping|TCP \d+)$/.test(name)).length, state.msCount, `${theme}: one entry per series`);
 				assert.equal(state.swatches.length, state.msCount, `${theme}: one color swatch per series`);
 				assert.equal(new Set(state.swatches).size, state.swatches.length, `${theme}: swatch colors are pairwise different (${state.swatches})`);
 				assert.deepEqual(state.swatches.slice().sort(), state.msColors.slice().sort(), `${theme}: swatches match the plotted line colors`);
@@ -174,6 +174,7 @@ test("combined chart draws every API point of a series after a reload @combined-
 			const count = (d) => d.data.filter((p) => p.y !== null).length;
 			return { ms: count(ms), peak: count(peak) };
 		});
+		assert.ok(apiUrl, "no /metrics/http_ms request was observed");
 		const apiPoints = await page.evaluate(async (url) => (await (await fetch(url)).json()).points.length, apiUrl);
 		assert.ok(apiPoints > 1, `the API returns more than one point (${apiPoints})`);
 		assert.equal(drawn.ms, apiPoints, "all API points reach the response-time line");

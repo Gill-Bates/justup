@@ -1,5 +1,6 @@
 {# Network path (traceroute) fragment: route overview, KPI row, hop table and Leaflet route map. #}
 {# All values are rendered through Jinja autoescape; nothing here is marked |safe. #}
+{% from "fragments/_state_dot.html" import status_dot %}
 {% macro country_flag(country_code, title_text='') %}
 {% if country_code and country_code|length == 2 %}
 <span class="country-flag-wrap" title="{{ title_text or country_code|upper }}">
@@ -11,9 +12,6 @@
 {% endmacro %}
 
 {# Hop result as the shared status dot plus its word (DESIGN.md, "Status display"); tones are the former badge tones. #}
-{% macro status_dot(tone, label, title='') -%}
-<span class="ju-status-item"{% if title %} title="{{ title }}"{% endif %}><span class="ju-status-dot ju-status-dot--{{ tone }}" aria-hidden="true"></span>{{ label }}</span>
-{%- endmacro %}
 {% macro status_badge(h) %}
 {% set status = h.status_display or h.status %}
 {% if status == 'ok' %}

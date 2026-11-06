@@ -117,6 +117,27 @@ def test_fragment_geo_points_are_built_off_the_event_loop(monkeypatch: pytest.Mo
     assert calls and web["geo_points"]
 
 
+@pytest.mark.parametrize("marker", sorted(traceroute_service.NO_IP_MARKERS))
+def test_pdf_hops_with_a_no_ip_marker_are_never_geolocated(monkeypatch: pytest.MonkeyPatch, marker: str) -> None:
+    hops = [_hop(1, "192.0.2.1"), {**_hop(2, "192.0.2.2"), "ip": marker}, _hop(3, TARGET_IP)]
+    outcome = SimpleNamespace(ok=True, target_ip=TARGET_IP, hops=hops)
+    monkeypatch.setattr(pdf_report, "trace_sync", lambda _host: outcome)
+    # Keep the marker hop "ok": the interpolation would otherwise rewrite it before the filter is reached.
+    monkeypatch.setattr(pdf_report, "interpolate_route", lambda route, **_kw: route)
+    looked_up: list[str | None] = []
+
+    def recording_geo(ip: str | None, hostname=None):
+        looked_up.append(ip)
+        return _geo(ip, hostname) if ip and "." in ip else None
+
+    monkeypatch.setattr(pdf_report, "geolocate_with_hostname_hint", recording_geo)
+    pdf_hops, pdf_points, _interp = pdf_report._run_traceroute_with_interpolation(HOST)
+    row = next(h for h in pdf_hops if h.get("hop") == 2)
+    assert marker not in looked_up
+    assert not row.get("city") and not row.get("loc_precision")
+    assert marker not in [p.get("ip") for p in pdf_points]
+
+
 def test_the_fragment_route_passes_the_map_rules_to_the_template(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_sources(monkeypatch, ROUTES[min(ROUTES)])
     web = _web_context(monkeypatch)

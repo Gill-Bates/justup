@@ -65,6 +65,19 @@ export async function loadSignalStatus() {
         return;
     }
     
+    // Without a known registered account there is nothing to test, unlink or show as linked.
+    const hideRegisteredUi = () => {
+        const testSection = document.getElementById('signal-test-section');
+        if (testSection) {
+            testSection.classList.add('d-none');
+            testSection.classList.remove('d-flex');
+        }
+        const advancedActions = document.getElementById('signal-advanced-actions');
+        if (advancedActions) advancedActions.style.display = 'none';
+        const linkedAccount = document.getElementById('signal-linked-account-section');
+        if (linkedAccount) linkedAccount.style.display = 'none';
+    };
+
     return signalStatusGuard.guard(async () => {
         const container = DOM.signalStatusBadges();
         const deviceInfo = DOM.signalDeviceInfo();
@@ -73,15 +86,16 @@ export async function loadSignalStatus() {
         if (!container) return;
         
         // Show loading state and hide mode selection until we know the status
-        container.innerHTML = '<span class="badge ju-status-badge--neutral"><span class="spinner-border spinner-border-sm me-1" style="width: 12px; height: 12px;"></span>Checking...</span>';
+        container.innerHTML = '<span class="ju-status-item"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span>Checking...</span>';
         if (modeSelection) modeSelection.hidden = true;
 
         try {
             const resp = await apiFetch(SIGNAL_API.status);
             if (!resp.ok) {
-                container.innerHTML = '<span class="badge ju-status-badge--neutral">Status unavailable</span>';
+                container.innerHTML = window.JuStatusDot.html('neutral', 'Status unavailable');
                 if (deviceInfo) deviceInfo.textContent = 'Could not connect to signal-cli';
                 if (modeSelection) modeSelection.hidden = false;
+                hideRegisteredUi();
                 return;
             }
             
@@ -183,18 +197,10 @@ export async function loadSignalStatus() {
             }
         } catch (e) {
             console.warn('Failed to load Signal status:', e);
-            container.innerHTML = '<span class="badge ju-status-badge--neutral">Status unavailable</span>';
+            container.innerHTML = window.JuStatusDot.html('neutral', 'Status unavailable');
             if (deviceInfo) deviceInfo.textContent = 'Connection error';
             if (modeSelection) modeSelection.hidden = false;
-            
-            const testSection = document.getElementById('signal-test-section');
-            if (testSection) {
-                testSection.classList.add('d-none');
-                testSection.classList.remove('d-flex');
-            }
-            
-            const advancedActions = document.getElementById('signal-advanced-actions');
-            if (advancedActions) advancedActions.style.display = 'none';
+            hideRegisteredUi();
         }
     });
 }

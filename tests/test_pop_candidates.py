@@ -392,39 +392,3 @@ def test_canonical_location_must_lie_within_the_curated_anchor_distance(conn, of
     else:
         with pytest.raises(ValueError, match="Reviewed canonical location lacks a nearby curated anchor"):
             pop_candidates.review(conn, "xyz", **kwargs)
-
-
-# --- Backend: the configured sender decides the profile account ----------------------------------
-
-
-def _profile_backend(accounts: list[str]):
-    import threading
-    from types import SimpleNamespace
-
-    from app.services.notifications.signal_cli_backend import SignalCliBackend
-
-    backend = object.__new__(SignalCliBackend)
-    backend._state_lock = threading.RLock()
-    backend._sender = None  # production default
-    backend.list_accounts = lambda: accounts  # type: ignore[method-assign]
-    backend.rpc_calls = []
-    backend._run_signal_rpc = lambda method, params, *_a, **_k: (
-        backend.rpc_calls.append((method, params)) or SimpleNamespace()
-    )
-    backend._require_rpc_success = lambda *_a, **_k: None
-    return backend
-
-
-def test_update_profile_uses_the_passed_configured_sender() -> None:
-    backend = _profile_backend(["+491", "+492"])
-    backend.update_profile("justUp", avatar_path="", sender="+492")
-    assert backend.rpc_calls[0][1]["account"] == "+492"
-
-
-def test_update_profile_rejects_an_unregistered_configured_sender() -> None:
-    from app.services.notifications.signal_errors import SignalNotRegistered
-
-    backend = _profile_backend(["+491"])
-    with pytest.raises(SignalNotRegistered):
-        backend.update_profile("justUp", avatar_path="", sender="+499")
-    assert backend.rpc_calls == []

@@ -1,4 +1,4 @@
-{% from "fragments/_state_dot.html" import state_dot, cert_dot %}
+{% from "fragments/_state_dot.html" import state_dot, cert_dot, check_bucket %}
 {# Targets Table Fragment (HTMX) - Grouped by Group Name #}
 {# Out-of-band update of the page carrier in targets.html (hx-include of polling/refresh); rendered in every state #}
 <input type="hidden" id="targets-page-state" name="page" value="{{ page }}" hx-swap-oob="true">
@@ -46,7 +46,7 @@
 								<td data-label="Status" class="text-center ju-cell-icon">
 									<span hx-get="/ui/fragments/target-status/{{ t.id }}" hx-trigger="load, justup-target-{{ t.id }} from:body throttle:1s"
 										hx-swap="innerHTML">
-										<span class="material-icons fs-5 status-unknown" aria-hidden="true">circle</span>
+										<span class="material-icons fs-5 status-unknown" aria-hidden="true">circle</span><span class="visually-hidden">Loading status</span>
 									</span>
 								</td>
 								<td data-label="Name" class="ju-cell-text">
@@ -56,28 +56,22 @@
 								</td>
 								<td data-label="Checks">
 									{% set checks = namespace(down=[], unknown=[], attention=[], up=[]) %}
-									{% if t.enable_ping %}
-										{% if t.ping_status == 'down' %}{% set checks.down = checks.down + [('Ping', t.ping_status, '', false)] %}
-										{% elif t.ping_status == 'up' %}{% set checks.up = checks.up + [('Ping', t.ping_status, '', false)] %}
-										{% else %}{% set checks.unknown = checks.unknown + [('Ping', t.ping_status, '', false)] %}{% endif %}
-									{% endif %}
-									{% if t.enable_http_check %}
-										{% if t.http_status == 'down' %}{% set checks.down = checks.down + [('HTTP', t.http_status, '', false)] %}
-										{% elif t.http_status == 'up' %}{% set checks.up = checks.up + [('HTTP', t.http_status, '', false)] %}
-										{% else %}{% set checks.unknown = checks.unknown + [('HTTP', t.http_status, '', false)] %}{% endif %}
-									{% endif %}
-									{% if t.enable_cert_expiration %}
-										{% if t.cert_status == 'ok' %}{% set checks.up = checks.up + [('Cert', t.cert_status, '', true)] %}
-										{% elif t.cert_status in ('warning', 'critical', 'expired') %}{% set checks.attention = checks.attention + [('Cert', t.cert_status, '', true)] %}
-										{% else %}{% set checks.unknown = checks.unknown + [('Cert', t.cert_status, '', true)] %}{% endif %}
-									{% endif %}
-									{% for endpoint in t.endpoints|default([]) if endpoint.kind == 'port' %}
-										{% set check = (endpoint.protocol|upper ~ ':' ~ endpoint.port, endpoint.status, endpoint.state_note or endpoint.name, false) %}
-										{% if endpoint.status == 'down' %}{% set checks.down = checks.down + [check] %}
-										{% elif endpoint.status == 'up' %}{% set checks.up = checks.up + [check] %}
-										{% else %}{% set checks.unknown = checks.unknown + [check] %}{% endif %}
-									{% endfor %}
-									{% set all_checks = checks.down + checks.unknown + checks.attention + checks.up %}
+					{# Collect (label, status, title, is_cert) per enabled check, then sort each into its bucket #}
+					{% set pending = [] %}
+					{% if t.enable_ping %}{% set _ = pending.append(('Ping', t.ping_status, '', false)) %}{% endif %}
+					{% if t.enable_http_check %}{% set _ = pending.append(('HTTP', t.http_status, '', false)) %}{% endif %}
+					{% if t.enable_cert_expiration %}{% set _ = pending.append(('Cert', t.cert_status, '', true)) %}{% endif %}
+					{% for endpoint in t.endpoints|default([]) if endpoint.kind == 'port' %}
+						{% set _ = pending.append((endpoint.protocol|upper ~ ':' ~ endpoint.port, endpoint.status, endpoint.state_note or endpoint.name, false)) %}
+					{% endfor %}
+					{% for check in pending %}
+						{% set b = check_bucket(check[1], check[3])|trim %}
+						{% if b == 'down' %}{% set checks.down = checks.down + [check] %}
+						{% elif b == 'up' %}{% set checks.up = checks.up + [check] %}
+						{% elif b == 'attention' %}{% set checks.attention = checks.attention + [check] %}
+						{% else %}{% set checks.unknown = checks.unknown + [check] %}{% endif %}
+					{% endfor %}
+					{% set all_checks = checks.down + checks.unknown + checks.attention + checks.up %}
 									<div class="targets-check-summary">
 										<span>{{ all_checks|length }} Checks</span>
 										{% if checks.down %}<span>{{ checks.down|length }} Down</span>{% endif %}

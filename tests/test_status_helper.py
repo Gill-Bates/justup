@@ -87,8 +87,10 @@ def test_templates_color_every_cert_status_the_helper_can_emit():
     # Both views must colour the status through the shared macro, not through a private copy of the mapping.
     for rel in ("fragments/targets_table.html", "fragments/target_detail/info_cards.html"):
         source = (templates / rel).read_text()
-        assert "cert_dot(" in source, f"{rel} does not use the shared cert badge"
-        assert "ju-status-badge--" not in source, f"{rel} maps cert statuses to badge colours itself"
+        assert "cert_dot(" in source, f"{rel} does not use the shared cert dot"
+        assert not re.search(r"ju-status-(?:badge|dot)--(?:success|warning|danger)", source), (
+            f"{rel} maps cert statuses to colours itself"
+        )
 
 
 def test_uptime_level_uses_sla_goal_without_warn_band_and_falls_back_to_fixed_limits():

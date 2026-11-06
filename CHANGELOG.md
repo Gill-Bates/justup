@@ -3,8 +3,7 @@
 
 - `Changed` Dashboard widget status and notification severity show a coloured dot with the state word instead of a badge.
 
-- `Changed` Status badges no longer show a check, cross or other icon; the state is carried by the badge colour and its word, and UNKNOWN by its dashed edge. Web badges come from one Jinja macro and one JS helper (`JuStatusBadge`); PDF and e-mail badges never had icons.
-- `Changed` The Docker Compose example stores data in the named volume `justup-data` instead of the repository's `docker/` directory, which the entrypoint used to `chown` recursively. Existing installs must copy `sqlite`, `tsdb`, `signal` and `geoip` into the volume before the next start, otherwise the app starts with an empty database; `JUSTUP_DATA=./` keeps the old directory only as a stopgap.
+- `Changed` Status badges no longer show a check, cross or other icon; the state is carried by the badge colour and its word. Remaining web badges come from the JS helper `JuStatusBadge`; check and endpoint states are dots (see below).
 - `Fix` On the Targets page, a refresh requested by an action (delete, enable/disable) or by the search could be dropped for two seconds after a live update; the list now always refreshes. Closing a group by hand during a search no longer reopens it on the next live update.
 - `Fix` Mail subjects show `&`, `<` and quotes from the target name as typed instead of HTML entities such as `&amp;`; this covers alert mails, the test mail and the template preview.
 - `Fix` The 24 h and 30 d uptime of a target is no longer erased by status refreshes within five minutes or by a connectivity-gate cycle.
@@ -20,7 +19,7 @@
 
 - `Changed` Check and endpoint states (HTTP, Ping, TCP, UDP, certificate) on the Targets list and the target page are now a coloured dot in front of the label instead of a status badge. The state word stays available to screen readers and as tooltip; UNKNOWN is a hollow ring.
 - `Changed` Traceroute hop results (OK, Partial, No reply) are shown as a coloured dot with the word instead of a badge; PDF unchanged.
-- `Changed` The HTTP status donut lists each code with its count and share (for example `1,380 (97.2 %)`); the separate class legend under the response-time chart is gone.
+- `Changed` The HTTP status donut lists each code with its count and share (for example `1,380 (97.2%)`); the separate class legend under the response-time chart is gone.
 - `Fix` The response-time axis shows its unit (`ms`) also on narrow charts, and chart tooltips use the same unit format.
 ## [1.0.3] - 2026-11-05
 

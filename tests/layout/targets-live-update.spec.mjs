@@ -24,6 +24,7 @@ async function open(browser, app, adminState, viewport) {
 		try { new PerformanceObserver((list) => { for (const entry of list.getEntries()) if (!entry.hadRecentInput) window.__shifts += entry.value; }).observe({ type: "layout-shift", buffered: true }); } catch { /* no layout-shift entries */ }
 	});
 	let mode = "pass";
+	let routeError = null;
 	await page.route("**/ui/fragments/targets-table**", async (route) => {
 		const response = await route.fetch();
 		let body = await response.text();
@@ -31,7 +32,11 @@ async function open(browser, app, adminState, viewport) {
 			// Switch the first HTTP status item that is not yet "down" to down: one cell changes.
 			// Markup of the state_dot macro (fragments/_state_dot.html), with an optional title attribute.
 			const httpBadge = /<span class="ju-status-item"( title="[^"]*")?><span class="ju-status-dot ju-status-dot--(?:success|neutral) ju-status-dot--(?:up|unknown)" aria-hidden="true"><\/span>HTTP<span class="visually-hidden">: (?:Up|Unknown)<\/span>/;
-			assert.match(body, httpBadge, "the fixture needs an HTTP status item that is not down yet");
+			if (!httpBadge.test(body)) {
+				// An assertion thrown here would vanish in the route handler; surface it from the test instead.
+				routeError = new Error("the fixture needs an HTTP status item that is not down yet");
+				return route.abort();
+			}
 			body = body.replace(httpBadge, '<span class="ju-status-item"$1><span class="ju-status-dot ju-status-dot--danger ju-status-dot--down" aria-hidden="true"></span>HTTP<span class="visually-hidden">: Down</span>');
 		}
 		await route.fulfill({ response, body });
@@ -40,12 +45,12 @@ async function open(browser, app, adminState, viewport) {
 	await page.waitForFunction(() => document.querySelectorAll("#targets-table tbody tr[data-search]").length >= 4, null, { timeout: 20000 });
 	await page.waitForFunction(() => !document.querySelector("#targets-table .status-unknown"), null, { timeout: 20000 });
 	await waitForVisualStability(page);
-	return { context, page, problems, setMode: (value) => { mode = value; } };
+	return { context, page, problems, setMode: (value) => { mode = value; }, getRouteError: () => routeError };
 }
 
 for (const viewport of [{ width: 1280, height: 720 }, { width: 390, height: 844 }]) {
 	test(`a changed poll rewrites only the changed cell at ${viewport.width}x${viewport.height} @targets-live-update`, async ({ browser, app, adminState }) => {
-		const { context, page, problems, setMode } = await open(browser, app, adminState, viewport);
+		const { context, page, problems, setMode, getRouteError } = await open(browser, app, adminState, viewport);
 		try {
 			// Tag the live nodes, then watch the container.
 			await page.evaluate(() => {
@@ -69,7 +74,7 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 390, height: 844 
 			const downBefore = await countStateBadges(page, "#targets-table .ju-status-item", httpDown);
 			setMode("changed");
 			await page.evaluate(() => window.htmx.trigger("#targets-table", "refresh"));
-			await waitForStateBadgeCount(page, "#targets-table .ju-status-item", { ...httpDown, above: downBefore });
+			await waitForStateBadgeCount(page, "#targets-table .ju-status-item", { ...httpDown, above: downBefore }).catch((error) => { throw getRouteError() ?? error; });
 			await waitForVisualStability(page);
 
 			const after = await page.evaluate(() => {
@@ -128,9 +133,10 @@ for (const width of [320, 390]) {
 			assert.equal(await toggle.getAttribute('aria-expanded'), 'true');
 			assert.equal(await visibleBadges(), total);
 			await toggle.focus();
-			await page.evaluate(() => new Promise((resolve) => {
+			await page.evaluate(() => new Promise((resolve, reject) => {
 				const table = document.getElementById('targets-table');
-				table.addEventListener('targets:patched', () => resolve(), { once: true });
+				const timer = setTimeout(() => reject(new Error("targets:patched not fired")), 15000);
+				table.addEventListener('targets:patched', () => { clearTimeout(timer); resolve(); }, { once: true });
 				window.htmx.trigger(table, 'refresh');
 			}));
 			assert.equal(await toggle.getAttribute('aria-expanded'), 'true');

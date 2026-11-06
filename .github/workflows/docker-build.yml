@@ -651,12 +651,6 @@ jobs:
 
       # The verified Nmap source archive that becomes a release asset must be prepared and equal the
       # archive this image was built from before any registry write; otherwise nothing is pushed.
-      - name: Download Nmap SBOM and NVD reports
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
-        with:
-          pattern: nmap-nvd-*
-          path: nmap-nvd/
-          merge-multiple: true
       - name: Download verified Nmap source archive
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
@@ -1101,6 +1095,13 @@ jobs:
           path: nmap-provenance/
           merge-multiple: true
 
+      - name: Download Nmap SBOM and NVD reports
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          pattern: nmap-nvd-*
+          path: nmap-nvd/
+          merge-multiple: true
+
       - name: Download verified Nmap source archive
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
@@ -1227,7 +1228,7 @@ jobs:
                 'The bundled libraries are compiled into the binary and are not covered by the Trivy scan. ' +
                 'Nmap and libpcap are checked against NVD by CPE (CRITICAL blocks the release; SBOM and report are attached); ' +
                 'libdnet and liblinear have no NVD CPE and are not scanned: review their CVEs against these versions.',
-             
+              '',
               'The exact Nmap source archive (' + `nmap-${nmapVersion}.tar.bz2` + ', licence: NPSL, https://nmap.org/npsl/), its signature and ' +
                 '`nmap-source-manifest.txt` (URL, SHA-256, image digest) are attached to this release; the image does not contain the archive.',
               '',
@@ -1272,7 +1273,7 @@ jobs:
       - name: Plan the release
         id: plan
         env:
-          TAG: v${{ needs.meta.outputs.version }}
+          TAG: ${{ needs.meta.outputs.tag }}
         run: |
           set -euo pipefail
           gh api --paginate --slurp "repos/${GH_REPO}/releases?per_page=100" > releases.json
@@ -1287,7 +1288,7 @@ jobs:
         id: draft
         if: steps.plan.outputs.state == 'create'
         env:
-          TAG: v${{ needs.meta.outputs.version }}
+          TAG: ${{ needs.meta.outputs.tag }}
         run: |
           set -euo pipefail
           # The tag is pushed by the maintainer; never let a release create it implicitly.

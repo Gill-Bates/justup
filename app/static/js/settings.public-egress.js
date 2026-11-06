@@ -123,10 +123,10 @@ function renderFamily(row, view) {
     const copy = row.querySelector('[data-egress-copy]');
     address.textContent = view.address || '\u2014';
     address.classList.toggle('text-body-secondary', !view.address);
-    // Dot classes mirror JuStatusDot (utils/status-badge.js); the word stays the visible label.
+    // Dot classes come from JuStatusDot (utils/status-badge.js); the word stays the visible label.
     badge.textContent = view.badgeText;
     const dot = row.querySelector('[data-egress-dot]');
-    if (dot) dot.className = 'ju-status-dot ju-status-dot--' + view.badgeTone + (view.badgeTone === 'neutral' ? ' ju-status-dot--unknown' : '');
+    if (dot) dot.className = window.JuStatusDot.classes(view.badgeTone);
     detail.textContent = view.detail;
     copy.disabled = !view.canCopy;
     copy.dataset.egressValue = view.canCopy ? view.address : '';
@@ -199,6 +199,7 @@ export function initPublicEgress(root = document) {
                 const when = formatObserved(data && data.checked_at);
                 checked.textContent = when || 'unknown';
                 if (data && data.checked_at) checked.setAttribute('datetime', data.checked_at);
+                else checked.removeAttribute('datetime');
                 if (cachedNote) cachedNote.hidden = !(data && data.cached === true);
                 if (proxyNote) proxyNote.hidden = !(data && data.proxy_env);
             }

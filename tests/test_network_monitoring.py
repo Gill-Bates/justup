@@ -722,6 +722,23 @@ def test_expired_service_detection_preview_cannot_be_confirmed(db_path, tmp_path
     assert _ports(db_path, tid)[("tcp", 25)]["service_name"] == "smtp"
 
 
+def test_service_detection_preview_is_valid_just_before_its_expiry(db_path, tmp_path, monkeypatch):
+    tid, sched, preview, _calls = _redetect(db_path, tmp_path, monkeypatch, _svc(name="http", product="nginx"))
+    monkeypatch.setattr(
+        scheduler, "utcnow", lambda: utcnow() + scheduler.SERVICE_PREVIEW_TTL - timedelta(seconds=5)
+    )
+    sched.confirm_service_detection(tid, 1, preview["token"])
+    assert _ports(db_path, tid)[("tcp", 25)]["service_name"] == "http"
+
+
+def test_expired_service_detection_preview_is_dropped_by_the_next_preview(db_path, tmp_path, monkeypatch):
+    tid, sched, first, _calls = _redetect(db_path, tmp_path, monkeypatch, _svc(name="http", product="nginx"))
+    monkeypatch.setattr(scheduler, "utcnow", lambda: utcnow() + scheduler.SERVICE_PREVIEW_TTL + timedelta(seconds=1))
+    second = asyncio.run(sched.preview_service_detection(tid, owner_id=1))
+    assert first["token"] not in sched._service_previews
+    assert second["token"] in sched._service_previews
+
+
 def test_the_65th_service_detection_preview_evicts_the_oldest(db_path, tmp_path, monkeypatch):
     tid, sched, first, _calls = _redetect(db_path, tmp_path, monkeypatch, _svc(name="http", product="nginx"))
     tokens = [first["token"]]

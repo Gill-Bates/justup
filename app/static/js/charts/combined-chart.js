@@ -695,34 +695,36 @@ function _createCombinedZoomLoader(
         var ann = chart.options.plugins.annotation.annotations;
         var statusIndex = input.sources.length;
         if (input.statusEnabled) {
-          var status = results[statusIndex];
-          var buckets = CombinedChartData.bucketStatus(
-            status.points,
-            start,
-            end,
-            1,
-          );
-          view.statusBuckets = buckets;
-          var statusDataset = chart.data.datasets.find(function (d) {
-            return d._kind === "status";
-          });
-          if (statusDataset)
-            statusDataset.data = buckets.map(function (b) {
-              return {
-                x: b.x,
-                y: 0.5,
-                end: b.end,
-                code: b.code,
-                cls: b.cls,
-                count: b.count,
-                codeCounts: b.codeCounts,
-                rollup: false,
-              };
+          if (chart.options.scales.yStatus) {
+            var status = results[statusIndex];
+            var buckets = CombinedChartData.bucketStatus(
+              status.points,
+              start,
+              end,
+              1,
+            );
+            view.statusBuckets = buckets;
+            var statusDataset = chart.data.datasets.find(function (d) {
+              return d._kind === "status";
             });
-          Object.keys(ann).forEach(function (key) {
-            if (key.indexOf("status") === 0) delete ann[key];
-          });
-          Object.assign(ann, _statusStripAnnotations(buckets, chart._palette));
+            if (statusDataset)
+              statusDataset.data = buckets.map(function (b) {
+                return {
+                  x: b.x,
+                  y: 0.5,
+                  end: b.end,
+                  code: b.code,
+                  cls: b.cls,
+                  count: b.count,
+                  codeCounts: b.codeCounts,
+                  rollup: false,
+                };
+              });
+            Object.keys(ann).forEach(function (key) {
+              if (key.indexOf("status") === 0) delete ann[key];
+            });
+            Object.assign(ann, _statusStripAnnotations(buckets, chart._palette));
+          }
           statusIndex += 1;
         }
         var upResult = results[statusIndex];
@@ -1039,7 +1041,12 @@ function buildCombinedChart(canvasId, input) {
   chart._bandsVisible = true;
   chart._bandSourceLabel = input.upSourceLabel || "primary check";
   chart._renderLegend = function () {
-    _renderCombinedLegend(chart, legendEl);
+    var active =
+      legendEl && legendEl.contains(document.activeElement)
+        ? document.activeElement
+        : null;
+    if (active) _rerenderCombinedLegend(chart, legendEl, active);
+    else _renderCombinedLegend(chart, legendEl);
   };
   chart._themeHook = function (t) {
     _themeCombined(chart, t);

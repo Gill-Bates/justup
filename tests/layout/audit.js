@@ -86,7 +86,7 @@
 		if (tr.top < -TOL || tr.bottom > vh + TOL) issue("topbar-outside-viewport", topbar, { rect: r2(tr), vh });
 		if (fr.top < -TOL || fr.bottom > vh + TOL) issue("footer-outside-viewport", footer, { rect: r2(fr), vh });
 		else if (fr.bottom < vh - safeBottom - TOL) issue("footer-above-viewport-bottom", footer, { rect: r2(fr), vh, safeBottom });
-		if (mainExcess > TOL && (!(mainOverflow === "auto" || mainOverflow === "scroll") || cfg.scrollPos === "bottom" && main.scrollTop < mainExcess - TOL)) {
+		if (mainExcess > TOL && (!(mainOverflow === "auto" || mainOverflow === "scroll") || (cfg.scrollPos === "bottom" && main.scrollTop < mainExcess - TOL))) {
 			issue("main-not-scrollable", main, { scrollTop: main.scrollTop, scrollHeight: main.scrollHeight, clientHeight: main.clientHeight, overflowY: mainOverflow });
 		}
 		// Form actions (shared `.ui-form-actions` bars with Save and Cancel; any other visible submit
@@ -152,7 +152,7 @@
 		const overflowY = (cs.overflowY === "auto" || cs.overflowY === "scroll") && el.scrollHeight - el.clientHeight > 1;
 		const overflowX = (cs.overflowX === "auto" || cs.overflowX === "scroll") && el.scrollWidth - el.clientWidth > 1;
 		if (overflowY || overflowX) {
-			issue("widget-scrollbar", el, { scrollHeight: el.scrollHeight, clientHeight: el.clientHeight, scrollWidth: el.scrollWidth, clientWidth: el.clientWidth });
+			issue("widget-scrollbar", el, { declaredBody: el.matches(".dashboard-widget-body"), hero: Boolean(el.closest(".dashboard-hero")), scrollHeight: el.scrollHeight, clientHeight: el.clientHeight, scrollWidth: el.scrollWidth, clientWidth: el.clientWidth });
 		}
 	}
 
@@ -250,7 +250,7 @@
 			const range = document.createRange();
 			range.selectNodeContents(walker.currentNode);
 			for (const rect of range.getClientRects()) {
-				let visible = {
+				let clipped = {
 					left: rect.left,
 					top: rect.top,
 					right: rect.right,
@@ -263,10 +263,10 @@
 					if (cs.position === "fixed") break;
 					if (!clipsX(cs) && !clipsY(cs)) continue;
 					const pr = p.getBoundingClientRect();
-					if (clipsX(cs)) { visible.left = Math.max(visible.left, pr.left); visible.right = Math.min(visible.right, pr.right); }
-					if (clipsY(cs)) { visible.top = Math.max(visible.top, pr.top); visible.bottom = Math.min(visible.bottom, pr.bottom); }
+					if (clipsX(cs)) { clipped.left = Math.max(clipped.left, pr.left); clipped.right = Math.min(clipped.right, pr.right); }
+					if (clipsY(cs)) { clipped.top = Math.max(clipped.top, pr.top); clipped.bottom = Math.min(clipped.bottom, pr.bottom); }
 				}
-				if (visible.right - visible.left > 1 && visible.bottom - visible.top > 1) rects.push(visible);
+				if (clipped.right - clipped.left > 1 && clipped.bottom - clipped.top > 1) rects.push(clipped);
 			}
 		}
 		return rects;
@@ -369,11 +369,13 @@
 	}
 
 	for (const selector of [".target-combined-plot", ".target-availability-plot"]) {
+		const minPlot = [cfg.minPlotWidth || 120, cfg.minPlotHeight || 96];
+		const minArea = [cfg.minChartAreaWidth || 120, cfg.minChartAreaHeight || 40];
 		for (const plot of content.querySelectorAll(selector)) {
 			if (!visible(plot)) continue;
 			const r = plot.getBoundingClientRect();
-			if (r.width < (cfg.minPlotWidth || 120) || r.height < (cfg.minPlotHeight || 96)) {
-				issue("chart-plot-too-small", plot, { rect: r2(r), min: [cfg.minPlotWidth || 120, cfg.minPlotHeight || 96] });
+			if (r.width < minPlot[0] || r.height < minPlot[1]) {
+				issue("chart-plot-too-small", plot, { rect: r2(r), min: minPlot });
 			}
 			const body = plot.closest(".card")?.querySelector(":scope > .card-body");
 			if (body) {
@@ -398,8 +400,8 @@
 			}
 			const areaWidth = area.width || area.right - area.left;
 			const areaHeight = area.height || area.bottom - area.top;
-			if (areaWidth < (cfg.minChartAreaWidth || 120) || areaHeight < (cfg.minChartAreaHeight || 40)) {
-				issue("chart-area-too-small", canvas, { chartArea: [areaWidth, areaHeight], min: [cfg.minChartAreaWidth || 120, cfg.minChartAreaHeight || 40] });
+			if (areaWidth < minArea[0] || areaHeight < minArea[1]) {
+				issue("chart-area-too-small", canvas, { chartArea: [areaWidth, areaHeight], min: minArea });
 			}
 			const fitDashboard = innerWidth >= 1200 && innerHeight >= 800;
 			const expectedPosition = fitDashboard || width >= 768 ? "right" : "bottom";
@@ -467,7 +469,7 @@
 	const px = (value) => parseFloat(value) || 0;
 	for (const group of content.querySelectorAll(".ju-badges, [data-ju-badges]")) {
 		if (!visible(group)) continue;
-		const badges = [...group.children].filter((el) => el.matches(".badge, [data-ju-badge]") && visible(el));
+		const badges = [...group.children].filter((el) => el.matches(".badge, [data-ju-badge], .ju-status-item") && visible(el));
 		if (!badges.length) continue;
 		const gcs = getComputedStyle(group);
 		const box = group.getBoundingClientRect();
