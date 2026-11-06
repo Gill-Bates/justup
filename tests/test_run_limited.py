@@ -32,7 +32,9 @@ JOB = 'touch "$1/started-$2"; echo $$ > "$1/pid-$2"; while [ ! -e "$1/release-$2
 
 def _env(tmp_path: Path, **extra: str) -> dict[str, str]:
     env = {k: v for k, v in os.environ.items() if not k.startswith("JUSTUP_") and k != "PYTEST_ADDOPTS"}
-    env.update({"JUSTUP_TEST_LOCK_DIR": str(tmp_path / "locks"), "JUSTUP_TEST_CGROUP": "off"})
+    env.update({"JUSTUP_TEST_LOCK_DIR": str(tmp_path / "locks"), "JUSTUP_TEST_CGROUP": "off",
+                "JUSTUP_TEST_SLOTS": "2", "JUSTUP_TEST_CORES_PER_RUN": "4", "JUSTUP_TEST_LOAD_AWARE": "0",
+                "JUSTUP_TEST_RAM_PER_WORKER_MB": "1", "JUSTUP_TEST_LOAD_WAIT": "0"})
     env.update(extra)
     return env
 
@@ -108,17 +110,33 @@ def _reap(tmp_path: Path):
                     stream.close()
 
 
+def _started(tmp_path: Path) -> set[str]:
+    return {p.name.removeprefix("started-") for p in tmp_path.glob("started-*")}
+
+
+def _wait_started(tmp_path: Path, count: int, timeout: float = 10.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if len(_started(tmp_path)) >= count:
+            return True
+        time.sleep(0.05)
+    return False
+
+
 def test_two_slots_third_waits_and_starts_after_release(tmp_path: Path) -> None:
-    first, second, third = (_start(tmp_path, n) for n in "abc")
-    assert _wait_for(tmp_path / "started-a") and _wait_for(tmp_path / "started-b")
+    procs = {n: _start(tmp_path, n) for n in "abc"}
+    assert _wait_started(tmp_path, 2)
     time.sleep(1.5)
-    assert not (tmp_path / "started-c").exists(), "third job must wait while both slots are busy"
-    _release(tmp_path, "a")
-    assert first.wait(timeout=10) == 0
-    assert _wait_for(tmp_path / "started-c"), "third job must start once a slot is free"
-    _release(tmp_path, "b")
-    _release(tmp_path, "c")
-    assert second.wait(timeout=10) == 0 and third.wait(timeout=10) == 0
+    running = _started(tmp_path)
+    assert len(running) == 2, "third job must wait while both slots are busy"
+    waiting = ({"a", "b", "c"} - running).pop()
+    first = sorted(running)[0]
+    _release(tmp_path, first)
+    assert procs[first].wait(timeout=10) == 0
+    assert _wait_for(tmp_path / f"started-{waiting}"), "third job must start once a slot is free"
+    for name in "abc":
+        _release(tmp_path, name)
+    assert [p.wait(timeout=10) for p in procs.values()] == [0, 0, 0]
 
 
 def test_slot_count_is_configurable_and_single_slot_serialises(tmp_path: Path) -> None:
@@ -155,9 +173,9 @@ def test_worktrees_share_default_lock_dir(tmp_path: Path) -> None:
                 stderr=subprocess.DEVNULL,
             )
         )
-    assert _wait_for(tmp_path / "started-a") and _wait_for(tmp_path / "started-b")
+    assert _wait_started(tmp_path, 2)
     time.sleep(1.5)
-    assert not (tmp_path / "started-c").exists()
+    assert len(_started(tmp_path)) == 2
     assert (runtime / "justup-test-slots").is_dir()
     for name in "abc":
         _release(tmp_path, name)
@@ -218,7 +236,7 @@ def test_wait_timeout_reports_and_exits_124(tmp_path: Path) -> None:
 def test_missing_optional_programs_do_not_block(tmp_path: Path) -> None:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    for tool in ("bash", "env", "flock", "setsid", "stat", "mkdir", "chmod", "sleep", "kill", "nproc", "id", "sh", "true"):
+    for tool in ("bash", "env", "flock", "setsid", "stat", "mkdir", "chmod", "sleep", "kill", "id", "sh", "true", "node", "cat", "dirname"):
         found = shutil.which(tool)
         assert found, tool
         (bin_dir / tool).symlink_to(found)
@@ -239,7 +257,8 @@ def test_arguments_are_not_interpreted_by_a_shell(tmp_path: Path) -> None:
 
 
 def test_invalid_settings_are_rejected(tmp_path: Path) -> None:
-    assert _run(tmp_path, "true", JUSTUP_TEST_SLOTS="0").returncode == 125
+    bad = _run(tmp_path, "true", JUSTUP_TEST_SLOTS="0")
+    assert bad.returncode == 125 and "JUSTUP_TEST_SLOTS must be" in bad.stderr
     assert _run(tmp_path, "true", JUSTUP_TEST_WAIT="soon").returncode == 125
     assert _run(tmp_path).returncode == 1
 
@@ -276,8 +295,8 @@ def _adjusted(tmp_path: Path, *args: str, **extra: str) -> list[str]:
         (["npm", "test"], ["npm", "run", "test:local"]),
         (["node", "--test", "a.mjs"], ["node", "--test", "--test-concurrency=4", "a.mjs"]),
         (["node", "--test", "--test-concurrency=12"], ["node", "--test", "--test-concurrency=4"]),
-        (["npx", "playwright", "test", "--workers=8"], ["npx", "playwright", "test", "--workers=3"]),
-        (["npx", "playwright", "test", "--workers", "50%"], ["npx", "playwright", "test", "--workers", "3"]),
+        (["npx", "playwright", "test", "--workers=8"], ["npx", "playwright", "test", "--workers=4"]),
+        (["npx", "playwright", "test", "--workers", "50%"], ["npx", "playwright", "test", "--workers", "4"]),
         (["echo", "-n", "99"], ["echo", "-n", "99"]),
     ],
 )
@@ -287,11 +306,28 @@ def test_worker_caps_are_clamped_without_touching_other_commands(tmp_path: Path,
 
 def test_wrapper_exports_worker_limits_to_the_command(tmp_path: Path) -> None:
     out = _run(tmp_path, "sh", "-c", 'echo "$PYTEST_XDIST_AUTO_NUM_WORKERS $JUSTUP_LAYOUT_WORKERS"').stdout
-    assert out == "4 3\n"
-    out = _run(tmp_path, "sh", "-c", 'echo "$JUSTUP_LAYOUT_WORKERS"', JUSTUP_LAYOUT_WORKERS="9").stdout
-    assert out == "3\n"
+    assert out == "4 4\n"
+    # An explicit override is the user's decision and is passed through.
     out = _run(tmp_path, "sh", "-c", 'echo "$JUSTUP_LAYOUT_WORKERS"', JUSTUP_LAYOUT_WORKERS="2").stdout
     assert out == "2\n"
+
+
+def test_smaller_slot_count_of_a_holder_wins(tmp_path: Path) -> None:
+    holder = _start(tmp_path, "a", JUSTUP_TEST_SLOTS="1")
+    assert _wait_for(tmp_path / "started-a")
+    result = _run(tmp_path, "true", JUSTUP_TEST_SLOTS="2", JUSTUP_TEST_WAIT="1")
+    assert result.returncode == 124, "a session computing more slots must not exceed the holder's limit"
+    _release(tmp_path, "a")
+    assert holder.wait(timeout=10) == 0
+    assert _run(tmp_path, "true", JUSTUP_TEST_SLOTS="2", JUSTUP_TEST_WAIT="0").returncode == 0
+
+
+def test_busy_machine_is_waited_for_then_run_continues(tmp_path: Path) -> None:
+    started = time.monotonic()
+    result = _run(tmp_path, "true", JUSTUP_TEST_LOAD_AWARE="1", JUSTUP_TEST_LOAD_THRESHOLD="0.1", JUSTUP_TEST_LOAD_WAIT="2")
+    assert result.returncode == 0, result.stderr
+    if "machine is busy" in result.stderr:
+        assert time.monotonic() - started >= 2
 
 
 def test_nested_wrapper_call_does_not_wait_for_a_second_slot(tmp_path: Path) -> None:

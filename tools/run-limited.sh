@@ -7,28 +7,30 @@
 #          worker caps, so parallel agent sessions cannot overload the machine.
 # Scope:   Local use only. GitHub Actions does not use this wrapper and keeps its own settings.
 #
-# Environment (all optional):
-#   JUSTUP_TEST_SLOTS     concurrent heavy suites per lock directory (default 2; 1 = conservative)
-#   JUSTUP_TEST_WAIT      seconds to wait for a free slot (default 3600; 0 = fail at once)
-#   JUSTUP_TEST_CPUS      CPU budget per suite in cores (default 4, capped at nproc)
-#   JUSTUP_TEST_MAX_WORKERS  cap for pytest-xdist, node --test and Playwright workers (default 4;
-#                         Playwright is additionally capped at JUSTUP_TEST_MAX_PW_WORKERS, default 3)
-#   JUSTUP_TEST_CGROUP    auto (default) or off; auto uses systemd-run --scope CPUQuota when it works
-#   JUSTUP_TEST_LOCK_DIR  lock directory (default $XDG_RUNTIME_DIR/justup-test-slots or
-#                         /tmp/justup-test-slots-$UID), mode 0700, owned by the current user
+# All sizes come from tools/test-budget.mjs (CPU affinity, cgroup limits, free RAM, load); nothing is
+# hard-coded here. Overrides (all optional, validated there): JUSTUP_TEST_SLOTS,
+# JUSTUP_TEST_CPU_SHARE, JUSTUP_TEST_RUN_SHARE, JUSTUP_TEST_CORES_PER_RUN, JUSTUP_TEST_RAM_SHARE,
+# JUSTUP_TEST_RAM_PER_WORKER_MB, JUSTUP_TEST_LOAD_THRESHOLD, JUSTUP_TEST_LOAD_AWARE.
+#
+# Environment owned by this wrapper:
+#   JUSTUP_TEST_WAIT        seconds to wait for a free slot (default 3600; 0 = fail at once)
+#   JUSTUP_TEST_LOAD_WAIT   seconds to wait for a busy machine to calm down after a slot was
+#                           acquired (default 60; the run then starts with the reduced budget)
+#   JUSTUP_TEST_CGROUP      auto (default) or off; auto uses systemd-run --scope CPUQuota when it works
+#   JUSTUP_TEST_LOCK_DIR    lock directory (default $XDG_RUNTIME_DIR/justup-test-slots or
+#                           /tmp/justup-test-slots-$UID), mode 0700, owned by the current user
 #
 # Exit codes: the command's own exit code; 124 = no slot within JUSTUP_TEST_WAIT;
 #             125 = wrapper setup error; 130/143 = interrupted by SIGINT/SIGTERM.
 
-DEPENDENCIES=(flock setsid stat mkdir chmod sleep kill nproc id)
+DEPENDENCIES=(flock setsid stat mkdir chmod sleep kill id node)
 
-SLOTS="${JUSTUP_TEST_SLOTS:-2}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 WAIT_SECONDS="${JUSTUP_TEST_WAIT:-3600}"
-CPUS="${JUSTUP_TEST_CPUS:-4}"
-MAX_WORKERS="${JUSTUP_TEST_MAX_WORKERS:-4}"
-MAX_PW_WORKERS="${JUSTUP_TEST_MAX_PW_WORKERS:-3}"
+LOAD_WAIT_SECONDS="${JUSTUP_TEST_LOAD_WAIT:-60}"
 CGROUP_MODE="${JUSTUP_TEST_CGROUP:-auto}"
 STOP_GRACE_SECONDS=10
+SLOTS=1 CPUS=1 PY_WORKERS=1 NODE_WORKERS=1 PW_WORKERS=1 BUSY=false
 
 CMD=()
 PREFIX=()
@@ -40,12 +42,13 @@ function usage() {
     cat <<'EOF'
 Usage: tools/run-limited.sh [--] COMMAND [ARGS...]
 
-Runs COMMAND once a shared test slot is free (default 2 slots per host user), at nice 10 and,
-where systemd-run --scope works, inside a cgroup with CPUQuota=400%. Arguments are passed on
-unchanged, except that local worker counts are capped (pytest -n, node --test-concurrency,
-Playwright workers) and `npm test` becomes `npm run test:local`.
+Runs COMMAND once a shared test slot is free, at nice 10 and, where systemd-run --scope works,
+inside a cgroup with a CPUQuota. Slot count, cores per run and worker counts are derived from
+this machine by tools/test-budget.mjs (run `node tools/test-budget.mjs` to see them). Arguments
+are passed on unchanged, except that worker counts are capped to the budget (pytest -n,
+node --test-concurrency, Playwright workers) and `npm test` becomes `npm run test:local`.
 
-Dependencies: flock, setsid, stat, nproc (optional: nice, ionice, systemd-run)
+Dependencies: flock, setsid, stat, node (optional: nice, ionice, systemd-run)
 
 Examples:
   tools/run-limited.sh pytest -n auto
@@ -67,18 +70,20 @@ function main() {
 
     exit_on_missing_tools "${DEPENDENCIES[@]}"
     validate_settings
+    load_budget
 
     # A wrapped command that calls the wrapper again must not wait for its own slot.
     if [[ -n "${JUSTUP_RUN_LIMITED:-}" ]]; then
         exec "$@"
     fi
 
-    adjust_command "$@"
     prepare_lock_dir || exit 125
     acquire_slot
+    wait_for_calm_machine
+    adjust_command "$@"
     export JUSTUP_RUN_LIMITED=1
-    export PYTEST_XDIST_AUTO_NUM_WORKERS="$MAX_WORKERS"
-    export JUSTUP_LAYOUT_WORKERS="${LAYOUT_WORKERS}"
+    export PYTEST_XDIST_AUTO_NUM_WORKERS="$PY_WORKERS"
+    export JUSTUP_LAYOUT_WORKERS="${JUSTUP_LAYOUT_WORKERS:-$PW_WORKERS}"
     build_prefix
     run_command
 }
@@ -95,37 +100,61 @@ function exit_on_missing_tools() {
 }
 
 function validate_settings() {
-    local pair name value
-    for pair in "JUSTUP_TEST_SLOTS=$SLOTS" "JUSTUP_TEST_CPUS=$CPUS" "JUSTUP_TEST_MAX_WORKERS=$MAX_WORKERS" \
-        "JUSTUP_TEST_MAX_PW_WORKERS=$MAX_PW_WORKERS"; do
-        name="${pair%%=*}"
-        value="${pair#*=}"
-        if [[ ! "$value" =~ ^[1-9][0-9]{0,3}$ ]]; then
-            printf "Error: %s must be a positive integer, got '%s'\n" "$name" "$value" >&2
+    local name value
+    for name in JUSTUP_TEST_WAIT JUSTUP_TEST_LOAD_WAIT; do
+        value="${!name:-0}"
+        if [[ ! "$value" =~ ^[0-9]{1,7}$ ]]; then
+            printf "Error: %s must be a non-negative integer, got '%s'\n" "$name" "$value" >&2
             exit 125
         fi
     done
-    if [[ ! "$WAIT_SECONDS" =~ ^[0-9]{1,7}$ ]]; then
-        printf "Error: JUSTUP_TEST_WAIT must be a non-negative integer, got '%s'\n" "$WAIT_SECONDS" >&2
-        exit 125
-    fi
     if [[ "$CGROUP_MODE" != "auto" && "$CGROUP_MODE" != "off" ]]; then
         printf "Error: JUSTUP_TEST_CGROUP must be 'auto' or 'off', got '%s'\n" "$CGROUP_MODE" >&2
         exit 125
     fi
-    local available
-    available="$(nproc 2>/dev/null)" || available=1
-    if (( CPUS > available )); then
-        CPUS="$available"
+}
+
+# Reads the computed budget; the key=value lines are parsed, never evaluated.
+function load_budget() {
+    local output key value
+    if ! output="$(node "$SCRIPT_DIR/test-budget.mjs")"; then
+        exit 125
     fi
-    LAYOUT_WORKERS="${JUSTUP_LAYOUT_WORKERS:-}"
-    if [[ -z "$LAYOUT_WORKERS" ]]; then
-        LAYOUT_WORKERS="$(( MAX_PW_WORKERS < MAX_WORKERS ? MAX_PW_WORKERS : MAX_WORKERS ))"
+    while IFS='=' read -r key value; do
+        if [[ ! "$value" =~ ^[0-9]+$ && "$key" != "busy" && "$key" != "ramMb" ]]; then
+            continue
+        fi
+        case "$key" in
+        slots) SLOTS="$value" ;;
+        runCores) CPUS="$value" ;;
+        pytestWorkers) PY_WORKERS="$value" ;;
+        nodeConcurrency) NODE_WORKERS="$value" ;;
+        playwrightWorkers) PW_WORKERS="$value" ;;
+        busy) BUSY="$value" ;;
+        esac
+    done <<<"$output"
+}
+
+# Holding a slot while the machine is still busy keeps further suites away; the run then starts
+# with the load-reduced budget instead of waiting forever.
+function wait_for_calm_machine() {
+    local waited=0
+    while [[ "$BUSY" == "true" ]] && (( waited < LOAD_WAIT_SECONDS )) && [[ -z "$RECEIVED_SIGNAL" ]]; do
+        if (( waited % 30 == 0 )); then
+            printf "run-limited: machine is busy, waiting up to %s s before starting with %s core(s)\n" \
+                "$LOAD_WAIT_SECONDS" "$CPUS" >&2
+        fi
+        sleep 1
+        waited=$((waited + 1))
+        if (( waited % 5 == 0 )); then
+            load_budget
+        fi
+    done
+    if [[ -n "$RECEIVED_SIGNAL" ]]; then
+        exit "$([[ "$RECEIVED_SIGNAL" == INT ]] && echo 130 || echo 143)"
     fi
-    if [[ "$LAYOUT_WORKERS" =~ ^[0-9]+$ ]] && (( LAYOUT_WORKERS > MAX_PW_WORKERS )); then
-        printf "Note: JUSTUP_LAYOUT_WORKERS=%s lowered to %s\n" "$LAYOUT_WORKERS" "$MAX_PW_WORKERS" >&2
-        LAYOUT_WORKERS="$MAX_PW_WORKERS"
-    fi
+    printf "run-limited: budget: %s core(s), pytest/node workers %s/%s, Playwright workers %s\n" \
+        "$CPUS" "$PY_WORKERS" "$NODE_WORKERS" "$PW_WORKERS" >&2
 }
 
 # Caps worker counts that would bypass the budget; everything else is copied unchanged.
@@ -160,16 +189,16 @@ function adjust_command() {
         if [[ "$is_pytest" == true ]]; then
             case "$arg" in
             -n | --numprocesses)
-                CMD+=("$arg" "$(cap_workers "$next" "$MAX_WORKERS")")
+                CMD+=("$arg" "$(cap_workers "$next" "$PY_WORKERS")")
                 ((i++))
                 continue
                 ;;
             -n[0-9]*)
-                CMD+=("-n$(cap_workers "${arg#-n}" "$MAX_WORKERS")")
+                CMD+=("-n$(cap_workers "${arg#-n}" "$PY_WORKERS")")
                 continue
                 ;;
             --numprocesses=*)
-                CMD+=("--numprocesses=$(cap_workers "${arg#*=}" "$MAX_WORKERS")")
+                CMD+=("--numprocesses=$(cap_workers "${arg#*=}" "$PY_WORKERS")")
                 continue
                 ;;
             esac
@@ -177,12 +206,12 @@ function adjust_command() {
         if [[ "$is_playwright" == true ]]; then
             case "$arg" in
             --workers | -j)
-                CMD+=("$arg" "$(cap_workers "$next" "$MAX_PW_WORKERS")")
+                CMD+=("$arg" "$(cap_workers "$next" "$PW_WORKERS")")
                 ((i++))
                 continue
                 ;;
             --workers=*)
-                CMD+=("--workers=$(cap_workers "${arg#*=}" "$MAX_PW_WORKERS")")
+                CMD+=("--workers=$(cap_workers "${arg#*=}" "$PW_WORKERS")")
                 continue
                 ;;
             esac
@@ -192,12 +221,12 @@ function adjust_command() {
             --test)
                 CMD+=("$arg")
                 if [[ "${in[*]}" != *--test-concurrency* ]]; then
-                    CMD+=("--test-concurrency=$MAX_WORKERS")
+                    CMD+=("--test-concurrency=$NODE_WORKERS")
                 fi
                 continue
                 ;;
             --test-concurrency=*)
-                CMD+=("--test-concurrency=$(cap_workers "${arg#*=}" "$MAX_WORKERS")")
+                CMD+=("--test-concurrency=$(cap_workers "${arg#*=}" "$NODE_WORKERS")")
                 continue
                 ;;
             esac
@@ -270,6 +299,11 @@ function acquire_slot() {
                 exit 125
             }
             if flock -n 9; then
+                if ! slot_allowed "$index"; then
+                    exec 9>&-
+                    continue
+                fi
+                printf '%s\n' "$SLOTS" >"$LOCK_DIR/slot-$index.n"
                 trap - INT TERM
                 if [[ -n "$RECEIVED_SIGNAL" ]]; then
                     exit "$([[ "$RECEIVED_SIGNAL" == INT ]] && echo 130 || echo 143)"
@@ -296,6 +330,25 @@ function acquire_slot() {
         sleep 1
         waited=$((waited + 1))
     done
+}
+
+# Sessions may compute different slot counts (cgroup, load, overrides). The smallest count of any
+# current holder wins: a slot index is only usable if it is below every holder's count.
+function slot_allowed() {
+    local index="$1" other recorded
+    (( index < SLOTS )) || return 1
+    for ((other = 0; other < SLOTS || other < index; other++)); do
+        [[ "$other" -eq "$index" ]] && continue
+        [[ -f "$LOCK_DIR/slot-$other.lock" ]] || continue
+        if ( flock -n 8 ) 8<"$LOCK_DIR/slot-$other.lock" 2>/dev/null; then
+            continue
+        fi
+        recorded="$(cat -- "$LOCK_DIR/slot-$other.n" 2>/dev/null)"
+        if [[ "$recorded" =~ ^[0-9]+$ ]] && (( index >= recorded )); then
+            return 1
+        fi
+    done
+    return 0
 }
 
 function build_prefix() {

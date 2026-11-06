@@ -52,11 +52,11 @@
 				<div class="spooler-channels__main">
 					<span class="spooler-channels__name"><span class="material-icons" aria-hidden="true">{{ icon }}</span>{{ label }}</span>
 					<div class="spooler-channels__counts">
-						<span><strong data-field="pending">0</strong> waiting</span>
-						<span><strong data-field="failed">0</strong> <span class="visually-hidden">handoff </span>failed</span>
+						<span><strong data-field="pending">&ndash;</strong> waiting</span>
+						<span><strong data-field="failed">&ndash;</strong> <span class="visually-hidden">handoff </span>failed</span>
 					</div>
 				</div>
-				<div class="spooler-channels__times small text-body-secondary">
+				<div class="spooler-channels__times small text-body-secondary" hidden>
 					<span data-time-field="next_attempt_at" hidden>Next attempt <time data-field="next_attempt_at"></time></span>
 					<span data-time-field="oldest_at" hidden>Oldest <time data-field="oldest_at"></time></span>
 					<span data-time-field="cooldown_until" hidden>Cooldown until <time data-field="cooldown_until"></time></span>

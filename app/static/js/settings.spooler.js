@@ -78,17 +78,21 @@
 				const value = row.querySelector('[data-field="' + field + '"]');
 				if (value) value.textContent = String(info[field] || 0);
 			});
+			let hasTimes = false;
 			['next_attempt_at', 'oldest_at', 'cooldown_until'].forEach(function (field) {
 				const wrapper = row.querySelector('[data-time-field="' + field + '"]');
 				if (!wrapper) return;
 				const raw = info[field];
 				const value = wrapper.querySelector('[data-field="' + field + '"]');
 				wrapper.hidden = !raw;
+				hasTimes = hasTimes || !!raw;
 				if (value) {
 					value.textContent = raw ? _formatTime(raw) : '';
 					value.dateTime = raw || '';
 				}
 			});
+			const times = row.querySelector('.spooler-channels__times');
+			if (times) times.hidden = !hasTimes;
 		});
 	}
 

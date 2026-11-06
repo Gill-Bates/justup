@@ -1558,6 +1558,62 @@ textarea.smtp-editor-frame {
 	}
 }
 
+/* ----- Spooler Channel Status ----- */
+
+.spooler-channels__heading,
+.spooler-channels__main {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	flex-wrap: wrap;
+	gap: 0.5rem 1rem;
+}
+
+.spooler-channels__heading {
+	margin-bottom: 0.75rem;
+}
+
+.spooler-channels__list {
+	border: 1px solid var(--bs-border-color);
+	border-radius: var(--bs-border-radius);
+}
+
+.spooler-channels__row {
+	min-width: 0;
+	padding: 0.75rem;
+}
+
+.spooler-channels__row + .spooler-channels__row {
+	border-top: 1px solid var(--bs-border-color);
+}
+
+.spooler-channels__name,
+.spooler-channels__counts,
+.spooler-channels__times {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 0.35rem 0.75rem;
+	min-width: 0;
+}
+
+.spooler-channels__name {
+	font-weight: 600;
+}
+
+.spooler-channels__name .material-icons {
+	font-size: 1rem;
+}
+
+.spooler-channels__times {
+	margin-top: 0.5rem;
+	overflow-wrap: anywhere;
+}
+
+.spooler-channels__times[hidden] {
+	display: none;
+}
+
 /* ----- Spooler Notification Log ----- */
 
 /* A dense log: a table in a wide container, one card per entry in a narrow one (table contract, .rtable). */

@@ -7,6 +7,7 @@ import { defineConfig } from "@playwright/test";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { currentBudget } from "../../tools/test-budget.mjs";
 
 const browsers = (process.env.JUSTUP_LAYOUT_BROWSERS || "chromium").split(",").map((name) => name.trim()).filter(Boolean);
 const supported = new Set(["chromium", "firefox", "webkit"]);
@@ -17,12 +18,15 @@ const reporters = [["list"]];
 if (process.env.JUSTUP_LAYOUT_JUNIT) reporters.push(["junit", { outputFile: process.env.JUSTUP_LAYOUT_JUNIT }]);
 if (process.env.JUSTUP_LAYOUT_JSON) reporters.push(["json", { outputFile: process.env.JUSTUP_LAYOUT_JSON }]);
 
-// Local default is 3 workers; the machine is shared by several sessions. CI keeps 2.
+// CI keeps 2 workers; locally the count comes from the shared budget (cores, cgroup, RAM, load).
+// JUSTUP_LAYOUT_WORKERS overrides both.
 const workers = (() => {
 	const raw = process.env.JUSTUP_LAYOUT_WORKERS;
-	if (raw === undefined || raw === "") return process.env.CI ? 2 : 3;
-	if (!/^[1-9][0-9]{0,3}$/.test(raw)) throw new Error(`JUSTUP_LAYOUT_WORKERS must be a positive integer, got ${JSON.stringify(raw)}`);
-	return Number(raw);
+	if (raw !== undefined && raw !== "") {
+		if (!/^[1-9][0-9]{0,3}$/.test(raw)) throw new Error(`JUSTUP_LAYOUT_WORKERS must be a positive integer, got ${JSON.stringify(raw)}`);
+		return Number(raw);
+	}
+	return process.env.CI ? 2 : currentBudget().playwrightWorkers;
 })();
 export default defineConfig({
 	forbidOnly: true,

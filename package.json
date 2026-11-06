@@ -8,7 +8,7 @@
     "lint:js": "eslint -c tools/eslint.config.mjs app/static/js",
     "lint:css": "stylelint --config tools/stylelint.config.mjs \"app/static/css/ui.css\" \"app/static/css/gentelella-layout.css\" \"app/static/css/dashboard.css\" \"app/static/css/traceroute-map.css\" \"app/static/css/target-detail.css\" \"app/static/css/notifications.css\" \"app/static/css/target-wizard.css\"",
     "test": "node --test tests/js/*.test.mjs",
-    "test:local": "node --test --test-concurrency=4 tests/js/*.test.mjs",
+    "test:local": "node tools/run-node-tests.mjs",
     "test:layout": "node tests/layout/run.mjs"
   },
   "devDependencies": {
