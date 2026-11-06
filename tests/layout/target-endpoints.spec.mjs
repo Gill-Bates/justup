@@ -15,6 +15,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "./fixtures.mjs";
 import { waitForVisualStability } from "./harness.mjs";
+import { readStateBadges } from "./test-support.mjs";
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const VIEWPORTS = [
 	{ name: "1920x1080", width: 1920, height: 1080 },
@@ -68,10 +69,7 @@ test.beforeAll(async ({ browser, app, adminState }) => {
 	setPort(app, ids.live, 25, "up");
 	setPort(app, ids.live, 587, "down");
 });
-const badgeStates = (page) => page.evaluate(() => Object.fromEntries([...document.querySelectorAll("#target-info-cards .target-kpi-badges .badge")].map((badge) => [
-	[...badge.childNodes].filter((node) => node.nodeType === 3).map((node) => node.textContent).join("").trim(),
-	badge.querySelector(".visually-hidden").textContent.replace(/^:\s*/, ""),
-])));
+const badgeStates = async (page) => Object.fromEntries((await readStateBadges(page, "#target-info-cards .target-kpi-badges .badge")).map((badge) => [badge.label, badge.state]));
 for (const viewport of VIEWPORTS) {
 	for (const theme of ["light", "dark"]) {
 		for (const key of ["tcp25", "multi", "none", "many"]) {

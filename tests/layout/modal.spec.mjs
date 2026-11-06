@@ -9,7 +9,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test as base } from "@playwright/test";
-import { startStaticAppServer } from "./test-support.mjs";
+import { recipientScripts, startStaticAppServer } from "./test-support.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const MODALS = path.join(ROOT, "app", "templates", "settings", "modals.html");
@@ -19,7 +19,7 @@ const PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <link rel="stylesheet" href="/static/css/bootstrap.min.css"><link rel="stylesheet" href="/static/css/ui.css">
 </head><body><button type="button" id="opener">Open</button>
 ${readFileSync(MODALS, "utf8")}
-<script src="/static/js/utils/csrf.js"></script><script src="/static/js/utils/escape.js"></script><script src="/static/js/bootstrap.bundle.min.js"></script><script src="/static/js/utils/modal-focus.js"></script><script src="/static/js/utils/field-errors.js"></script><script src="/static/js/utils/optional-groups.js"></script><script src="/static/js/utils/confirm-dialog.js"></script><script src="/static/js/app.js"></script><script src="/static/js/settings.recipients.js"></script></body></html>`;
+${recipientScripts().map((src) => `<script src="/static/js/${src}"></script>`).join("")}</body></html>`;
 
 const test = base.extend({
 	modalBase: [async ({}, use) => {
@@ -222,7 +222,7 @@ test("confirmAction keyboard behavior and concurrency @modal", async ({ page, br
 		if (!(await focusIsOpener())) fail("focus not returned to the opener after Confirm");
 		await ask(); await shown();
 		await page.dblclick("#ju-confirm-ok");
-		if (!(await gone()) || !(await result(true))) fail("double click on Confirm did not resolve exactly one true");
+		if (!(await gone()) || !(await result(true))) fail("double click on Confirm did not resolve true");
 	}
 	// Concurrent confirmAction calls: the second is rejected with false and leaves the active dialog fully usable.
 	{

@@ -12,6 +12,7 @@ import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test as base } from "@playwright/test";
+import { waitForVisualStability } from "./harness.mjs";
 import { resolvePythonExecutable, startStaticAppServer } from "./test-support.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -79,7 +80,9 @@ for (const viewport of VIEWPORTS) {
 			await page.waitForSelector(".leaflet-basemap-pane path", { state: "attached", timeout: 20000 }).catch(async () => { throw new Error("no basemap; panes: " + await page.evaluate(() => [...document.querySelectorAll(".leaflet-pane")].map((p) => p.className + ":" + p.querySelectorAll("path").length).join(" ; "))); });
 			// The map listens for the application's theme event.
 			await page.evaluate((mode) => { document.documentElement.setAttribute("data-bs-theme", mode); window.dispatchEvent(new Event("theme-changed")); }, theme);
-			await page.waitForTimeout(800);
+			const border = JSON.parse(await page.getAttribute("#traceroute-map", "data-map-style")).palette[theme].border.toLowerCase();
+			await page.waitForFunction((expected) => document.querySelector("#traceroute-map .leaflet-basemap-pane path")?.getAttribute("stroke")?.toLowerCase() === expected, border, { timeout: 10000 });
+			await waitForVisualStability(page);
 			if (SHOTS) await page.locator(".tr-map-frame").screenshot({ path: path.join(SHOTS, `map-${theme}-${viewport.name}.png`) });
 			const m = await measure(page);
 			const rules = m.style;
@@ -100,9 +103,11 @@ for (const viewport of VIEWPORTS) {
 			assert.ok(m.baseBorder && m.baseBorder.weight <= 0.5 && m.baseBorder.color === palette.border.toLowerCase(), JSON.stringify(m.baseBorder));
 
 			// Names: only from the shared selection, at most the cap, never over a marker or each other.
-			const allowed = new Set([...JSON.parse(await page.getAttribute("#traceroute-map", "data-map-labels")).countries.map((c) => c.name), ...JSON.parse(await page.getAttribute("#traceroute-map", "data-map-labels")).cities.map((c) => c.name)]);
+			const selection = JSON.parse(await page.getAttribute("#traceroute-map", "data-map-labels"));
+			const allowed = new Set([...selection.countries.map((c) => c.name), ...selection.cities.map((c) => c.name)]);
 			assert.ok(m.labelNames.every((n) => allowed.has(n)), `unexpected names ${m.labelNames}`);
-			assert.ok(m.labelNames.length <= rules.labels.maxCities + 4, `too many names ${m.labelNames.length}`);
+			// The cap is the server's own selection; the page must not add names beyond it.
+			assert.ok(m.labelNames.length <= selection.countries.length + selection.cities.length, `too many names ${m.labelNames.length}`);
 			assert.equal(m.labelOverMarker, false, "a name lies under a marker");
 			assert.equal(m.labelOverLabel, false, "names overlap");
 

@@ -109,7 +109,6 @@ for (const viewport of VIEWPORTS) {
 						problems, scrollers: scrollers.map((el) => el.className || el.id),
 						summaryVisible: rects(card.querySelector(".downtime-head")).bottom <= rects(scroll).top + 1,
 						pageOverflow: document.documentElement.scrollWidth > window.innerWidth + 1,
-						markers: [...new Set([...card.querySelectorAll(".downtime-marker")].map((m) => getComputedStyle(m).borderTopStyle + getComputedStyle(m).transform))].length,
 					};
 				});
 				assert.deepEqual(report.problems, []);

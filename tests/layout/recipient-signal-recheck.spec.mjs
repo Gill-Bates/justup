@@ -10,11 +10,11 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test as base } from "@playwright/test";
-import { startStaticAppServer } from "./test-support.mjs";
+import { recipientScripts, startStaticAppServer } from "./test-support.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const TEMPLATES = path.join(ROOT, "app", "templates", "settings");
-const SCRIPTS = ["utils/csrf.js", "utils/escape.js", "bootstrap.bundle.min.js", "utils/modal-focus.js", "utils/field-errors.js", "utils/optional-groups.js", "utils/confirm-dialog.js", "utils/list-filter.js", "app.js", "settings.recipients.js"];
+const SCRIPTS = recipientScripts({ listFilter: true });
 const strip = (file) => readFileSync(path.join(TEMPLATES, file), "utf8").replace(/\{#[\s\S]*?#\}/g, "");
 const PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">

@@ -11,12 +11,10 @@ from __future__ import annotations
 import html
 import json
 import re
-from pathlib import Path
 
 from app.api.frontend import templates
 from app.services import route_map_rules as rules
 from tests.test_route_map_rules import CHAIN
-
 
 
 def _render(**extra) -> str:

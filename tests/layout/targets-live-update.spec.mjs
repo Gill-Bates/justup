@@ -10,6 +10,7 @@
 import assert from "node:assert/strict";
 import { test } from "./fixtures.mjs";
 import { waitForVisualStability } from "./harness.mjs";
+import { countStateBadges, waitForStateBadgeCount } from "./test-support.mjs";
 
 const CLS_BUDGET = 0.01;
 
@@ -28,13 +29,16 @@ async function open(browser, app, adminState, viewport) {
 		let body = await response.text();
 		if (mode === "changed") {
 			// Switch the first HTTP badge that is not yet "down" to down: one cell changes.
-			body = body.replace(/(<span class="badge )ju-status-badge--(?:success|neutral)(">HTTP<\/span>)/, "$1ju-status-badge--danger$2");
+			// Markup of the state_badge macro (fragments/_state_badge.html), with an optional title attribute.
+			const httpBadge = /ju-status-badge--(?:success|neutral) ju-state-badge ju-state-badge--(?:up|unknown)"( title="[^"]*")?><span class="material-icons" aria-hidden="true">(?:check_circle|help)<\/span>HTTP<span class="visually-hidden">: (?:Up|Unknown)<\/span>/;
+			assert.match(body, httpBadge, "the fixture needs an HTTP badge that is not down yet");
+			body = body.replace(httpBadge, 'ju-status-badge--danger ju-state-badge ju-state-badge--down"$1><span class="material-icons" aria-hidden="true">cancel</span>HTTP<span class="visually-hidden">: Down</span>');
 		}
 		await route.fulfill({ response, body });
 	});
 	await page.goto(app.base + "/ui/targets", { waitUntil: "load" });
 	await page.waitForFunction(() => document.querySelectorAll("#targets-table tbody tr[data-search]").length >= 4, null, { timeout: 20000 });
-	await page.waitForFunction(() => !document.querySelector("#targets-table .status-unknown"), null, { timeout: 20000 }).catch(() => {});
+	await page.waitForFunction(() => !document.querySelector("#targets-table .status-unknown"), null, { timeout: 20000 });
 	await waitForVisualStability(page);
 	return { context, page, problems, setMode: (value) => { mode = value; } };
 }
@@ -53,18 +57,20 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 390, height: 844 
 			});
 			// Interaction state that must survive: collapse one group, filter, focus a row link.
 			await page.click("#targets-table .accordion-button >> nth=0");
-			await page.waitForTimeout(500);
+			await page.waitForSelector("#targets-table .accordion-button[aria-expanded=false]");
 			await page.fill("#targets-search", "luettring");
-			await page.waitForTimeout(300);
+			await page.waitForSelector("#targets-table tbody tr[hidden]", { state: "attached" });
 			const collapsedBefore = await page.evaluate(() => [...document.querySelectorAll("#targets-table .accordion-button")].map((b) => b.getAttribute("aria-expanded")));
 			await page.focus("#targets-table tbody tr:not([hidden]) td[data-label=Name] a");
 			const focusedHref = await page.evaluate(() => document.activeElement.getAttribute("href"));
 			await page.evaluate(() => { window.__shifts = 0; window.__removed = 0; });
 
+			const httpDown = { label: "HTTP", state: "Down" };
+			const downBefore = await countStateBadges(page, "#targets-table .badge", httpDown);
 			setMode("changed");
 			await page.evaluate(() => window.htmx.trigger("#targets-table", "refresh"));
-			await page.waitForFunction(() => [...document.querySelectorAll("#targets-table .badge.ju-status-badge--danger")].some((b) => b.textContent === "HTTP"), null, { timeout: 10000 });
-			await page.waitForTimeout(600);
+			await waitForStateBadgeCount(page, "#targets-table .badge", { ...httpDown, above: downBefore });
+			await waitForVisualStability(page);
 
 			const after = await page.evaluate(() => {
 				const rows = [...document.querySelectorAll("#targets-table tbody tr[data-search]")];

@@ -77,17 +77,24 @@ for (const viewport of VIEWPORTS) {
 				assert.equal(await page.evaluate(() => document.activeElement?.id), triggerId, "focus did not return after Escape");
 				assert.equal(state.posts.length, 0, "a cancelled dialog sent a request");
 
-				// A live update replaces the table; the new button works the same way.
+				// A live update replaces the table; the new button works the same way. The old node is marked
+				// so a no-op refresh cannot pass for a replaced row.
+				const oldHref = await trigger.getAttribute("hx-post");
+				await trigger.evaluate((el) => { el.dataset.stale = "1"; });
 				await page.evaluate(() => window.htmx.trigger("#targets-table", "refresh"));
-				await page.waitForTimeout(800);
-				await page.locator('#targets-table tr:has-text("wiedenest.de") button[title="Reset Metrics"]').click();
+				await page.waitForFunction(() => !document.querySelector('#targets-table [data-stale]'), null, { timeout: 10000 });
+				const fresh = page.locator('#targets-table tr:has-text("wiedenest.de") button[title="Reset Metrics"]');
+				assert.equal(await fresh.getAttribute("hx-post"), oldHref, "the refreshed button targets the same endpoint");
+				await fresh.click();
 				await settled(page, true);
 
-				// Confirm: exactly one request.
+				// Confirm: exactly one request, to the clicked target's reset endpoint.
+				const request = page.waitForRequest((r) => r.url().endsWith(oldHref));
 				await page.click("#ju-confirm-ok");
+				await request;
 				await settled(page, false);
-				await page.waitForTimeout(500);
 				assert.equal(state.posts.length, 1, "confirm must send exactly one request");
+				assert.ok(state.posts[0].endsWith(oldHref), `the request went to ${state.posts[0]}`);
 				assert.equal(state.nativeDialogs, 0, "a native popup appeared");
 			} finally {
 				await context.close();
@@ -99,7 +106,7 @@ for (const viewport of VIEWPORTS) {
 			try {
 				const phone = viewport.width < 576;
 				await page.waitForSelector(".target-detail-actions", { timeout: 20000 });
-				const reset = page.locator('button[hx-post$="/reset"]:visible, button[hx-post$="/reset"]').first();
+				const reset = page.locator('button[hx-post$="/reset"]').first();
 				if (phone || !(await reset.isVisible())) await page.click("#target-more-toggle");
 				await reset.click();
 				await settled(page, true);

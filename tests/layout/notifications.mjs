@@ -236,6 +236,8 @@ function geometryFindings(snapshot, narrow, revealed) {
 		}
 		if (spec.expect === "unavailable" && !row.unavailable) add("unavailable-missing", index, "no status line");
 		if (spec.expect !== "unavailable" && row.unavailable) add("unavailable-unexpected", index, row.unavailableText);
+		if (spec.expect === "link" && row.kind !== "link") add("target-link-missing", index, row.kind);
+		if (spec.expect === "none" && (row.kind === "link" || row.kind === "download")) add("unexpected-link", index, row.kind);
 		if (spec.expect === "download" && row.kind !== "download") add("download-link-missing", index, row.kind);
 		if (spec.expect === "unavailable" && (row.kind === "download" || row.kind === "link")) add("dead-link", index, row.kind);
 		if (row.time) { timeRights.push(row.time.right); timeTops.push(row.time.top - row.item.top); }
@@ -380,7 +382,9 @@ async function auditNotificationBehaviour(page, app, browserName) {
 		const button = second.locator(".ju-notif-dismiss-button");
 		assert.ok(await button.evaluate((el) => el === document.activeElement), `${browserName}: Tab reaches the delete button`);
 		assert.ok(await second.evaluate((el) => el.classList.contains("is-dismiss-revealed")), `${browserName}: focus reveals the delete action`);
-		const title = await second.locator(".ju-notif-title").innerText();
+		// Same property before and after the reload: innerText vs textContent would never be equal.
+		const title = (await second.locator(".ju-notif-title-text").textContent()).trim();
+		assert.ok(title, `${browserName}: the dismissed row has a title`);
 		assert.match(await button.getAttribute("aria-label"), /^Delete notification: /);
 		const dismissal = page.waitForResponse((response) =>
 			response.url().includes("/ui/notifications/")
@@ -391,7 +395,7 @@ async function auditNotificationBehaviour(page, app, browserName) {
 		assert.equal((await dismissal).status(), 200, `${browserName}: keyboard dismissal response`);
 		await page.waitForSelector("#np-list > .ju-notif-item");
 		await reload;
-		const titles = await rows.locator(".ju-notif-title").allTextContents();
+		const titles = (await rows.locator(".ju-notif-title-text").allTextContents()).map((text) => text.trim());
 		assert.ok(!titles.includes(title), `${browserName}: keyboard dismissal must persist after reload`);
 }
 

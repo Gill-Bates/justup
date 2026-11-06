@@ -587,14 +587,13 @@ test.describe("target form", () => {
 		assert.equal(await page.locator("#tcp_ports").inputValue(), "22,443");
 		assert.equal(await page.locator("#udp_ports").inputValue(), "53,161");
 		assert.deepEqual(await page.locator("#tcp-ports-tags .tcp-port-tag").evaluateAll((tags) => tags.map((tag) => tag.firstChild.textContent)), ["22", "443"], "the TCP tag input follows the adoption");
-		let body = null;
 		await page.route(`**/targets/${editId}`, async (route) => {
 			if (route.request().method() === "GET") return route.fallback();
-			body = route.request().postDataJSON();
 			return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ detail: "stop" }) });
 		});
+		const patch = page.waitForRequest((request) => request.url().endsWith(`/targets/${editId}`) && request.method() !== "GET");
 		await page.locator('#target-form button[type="submit"]').click();
-		await page.waitForFunction(() => document.querySelector('#target-form button[type="submit"]') && !document.querySelector('#target-form button[type="submit"]').disabled);
+		const body = (await patch).postDataJSON();
 		assert.equal(body.tcp_ports, "22,443");
 		assert.equal(body.udp_ports, "53,161");
 		assert.equal(body.network_scan_id, SCAN_ID);

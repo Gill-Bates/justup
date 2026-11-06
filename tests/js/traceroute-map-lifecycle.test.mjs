@@ -83,11 +83,12 @@ function setup({ geoPoints = 'not-json', leaflet = {} } = {}) {
   return { api: sandbox.window.TracerouteMap, container, root, errors, bodyListeners, removed, routeLines };
 }
 const tick = () => new Promise((resolve) => setImmediate(resolve));
+const VALID_POINTS = JSON.stringify([
+  { lat: 50, lon: 7, hop: 1, city: 'Cologne', country: 'DE' },
+  { lat: 52, lon: 13, hop: 2, city: 'Berlin', country: 'DE' },
+]);
 test('valid geo points initialise a route and cleanup releases the Leaflet map', async () => {
-  const points = JSON.stringify([
-    { lat: 50, lon: 7, hop: 1, city: 'Cologne', country: 'DE' },
-    { lat: 52, lon: 13, hop: 2, city: 'Berlin', country: 'DE' },
-  ]);
+  const points = VALID_POINTS;
   const { api, root, container, errors, removed, routeLines } = setup({ geoPoints: points });
   api.initAllMaps(root);
   await tick();
@@ -105,18 +106,22 @@ test('valid geo points initialise a route and cleanup releases the Leaflet map',
   assert.deepEqual({ stop: removed.stop, off: removed.off, remove: removed.remove }, { stop: 1, off: 1, remove: 1 });
 });
 test('a fragment cleaned up during async Leaflet init is not initialised', async () => {
-  const { api, root, errors } = setup();
+  const { api, root, container, errors, removed } = setup({ geoPoints: VALID_POINTS });
   api.initAllMaps(root);
   api.cleanupAll(root);
   await tick();
   assert.equal(errors.length, 0);
+  assert.ok(!container._leaflet_map, 'no map was created');
+  assert.equal(removed.fitBounds, 0);
 });
 test('a container detached during async Leaflet init is not initialised', async () => {
-  const { api, root, container, errors } = setup();
+  const { api, root, container, errors, removed } = setup({ geoPoints: VALID_POINTS });
   api.initAllMaps(root);
   container.isConnected = false;
   await tick();
   assert.equal(errors.length, 0);
+  assert.ok(!container._leaflet_map, 'no map was created');
+  assert.equal(removed.fitBounds, 0);
 });
 test('initialising a map keeps its HTMX and pagehide cleanup handlers registered', async () => {
   const { api, root, container, bodyListeners } = setup();

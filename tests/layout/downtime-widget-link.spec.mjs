@@ -20,7 +20,7 @@ test.beforeAll(async ({ browser, app, adminState }) => {
 	await page.goto(`${app.base}/`, { waitUntil: "load" });
 	// Disabled, so the scheduler cannot overwrite the measurements written below.
 	targetId = await page.evaluate(async () => {
-		const body = { name: "Widget Link", host: "link.dt.example.net", is_enabled: true, interval_seconds: 3600, enable_tcp_connect: true, tcp_host: "link.dt.example.net", tcp_ports: "25" };
+		const body = { name: "Widget Link", host: "link.dt.example.net", is_enabled: false, enable_tcp_connect: true, tcp_host: "link.dt.example.net", tcp_ports: "25" };
 		const response = await window.apiFetch("/targets", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 		if (response.status !== 201) throw new Error(`HTTP ${response.status}`);
 		return (await response.json()).id;
@@ -50,6 +50,11 @@ async function open(browser, app, adminState) {
 	return { context, page, spans };
 }
 async function openDashboardRow(page, app) {
+	await page.route("**/dashboard/downtime**", (route) => route.fulfill({
+		status: 200,
+		contentType: "application/json",
+		body: JSON.stringify({ targets: [{ target_id: targetId, name: "Widget Link", services: { tcp_up: { downtime_seconds: 120 } } }] }),
+	}));
 	await page.goto(`${app.base}/`, { waitUntil: "load" });
 	const row = page.locator("#downtime-table-body tr").filter({
 		has: page.locator(`#downtime-table-body a[href^="/ui/targets/${targetId}?"]`),

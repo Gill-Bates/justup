@@ -68,7 +68,7 @@ async function drag(page, from, to) {
 	await page.mouse.down();
 	await page.mouse.move(area.left + area.width * to, area.y, { steps: 8 });
 	await page.mouse.up();
-	await page.waitForTimeout(900);
+	await waitForVisualStability(page);
 }
 
 for (const viewport of VIEWPORTS) {
@@ -87,7 +87,7 @@ for (const viewport of VIEWPORTS) {
 				assert.equal(zoomed.outside, 0, `series pixels outside the plot after zoom: ${zoomed.outside}`);
 
 				await page.dblclick("#chart-uptime");
-				await page.waitForTimeout(900);
+				await waitForVisualStability(page);
 				const reset = await scan(page);
 				assert.equal(reset.outside, 0, `series pixels outside the plot after reset: ${reset.outside}`);
 				assert.equal(reset.xMin, loaded.xMin);

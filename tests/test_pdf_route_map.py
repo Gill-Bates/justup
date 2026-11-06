@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import hashlib
 import io
-import time
 
 import pytest
 from reportlab.pdfgen import canvas as rl_canvas

@@ -138,7 +138,7 @@ test("a stale response is dropped after a refresh", async () => {
 
 test("reduced motion is honoured in the stylesheet", () => {
   const css = readFileSync(new URL("../../app/static/css/notifications.css", import.meta.url), "utf8");
-  assert.match(css, /prefers-reduced-motion: reduce\)[\s\S]*animation: none/);
+  assert.match(css, /prefers-reduced-motion: reduce\)\s*\{[^@]*?animation: none/);
 });
 
 test("refreshes during a running request never overlap and cause exactly one follow-up", async () => {
@@ -501,8 +501,11 @@ test("relTime never shows a missing, invalid or future timestamp as Now", () => 
 
 test("absTime formats the full timestamp and honours UTC mode, blank when unparseable", () => {
   assert.equal(N.absTime("not-a-date", false), "");
-  const utc = N.absTime("2026-06-15T09:05:00Z", true);
+  // 23:05 UTC is already the next day in Europe/Berlin, so a missing UTC conversion would show 16 or 01:05.
+  const utc = N.absTime("2026-06-15T23:05:00Z", true);
   assert.match(utc, /2026/);
+  assert.match(utc, /15/);
+  assert.match(utc, /23:05|11:05/);
   assert.match(utc, /\bUTC$/);
   assert.doesNotMatch(N.absTime("2026-06-15T09:05:00Z", false), /UTC$/);
 });
@@ -577,11 +580,4 @@ test("refreshRelativeTimes ignores a time element without a datetime and never w
   // No datetime attribute: it must be left untouched (not blanked).
   N.refreshRelativeTimes(list, doc, Date.now());
   assert.equal(bare.textContent, "7d ago");
-});
-
-test("the public API exposes the relative formatter so the time logic is not duplicated", () => {
-  // DRY: one formatter, shared and testable, rather than a second copy of the rules.
-  assert.equal(typeof N.relTime, "function");
-  assert.equal(typeof N.absTime, "function");
-  assert.equal(typeof N.refreshRelativeTimes, "function");
 });

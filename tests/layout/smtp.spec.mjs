@@ -247,6 +247,8 @@ test.describe("SMTP settings browser regressions @smtp-ui", () => {
 		await respond(page, previews[1].index, true, { html: "<html><body>resolved-preview</body></html>" });
 		await expect.poll(() => page.locator("#email_preview_frame").evaluate((frame) => frame.srcdoc.includes("resolved-preview"))).toBe(true);
 		await respond(page, previews[0].index, true, { html: "<html><body>down-preview</body></html>" });
+		// Let the page process the stale answer first; polling alone would pass before it arrived.
+		await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 0)));
 		await expect.poll(() => page.locator("#email_preview_frame").evaluate((frame) => frame.srcdoc)).toContain("resolved-preview");
 	});
 

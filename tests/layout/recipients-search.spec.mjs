@@ -11,11 +11,11 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test as base } from "@playwright/test";
-import { startStaticAppServer } from "./test-support.mjs";
+import { recipientScripts, startStaticAppServer } from "./test-support.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const TEMPLATES = path.join(ROOT, "app", "templates", "settings");
-const SCRIPTS = ["utils/csrf.js", "utils/escape.js", "bootstrap.bundle.min.js", "utils/modal-focus.js", "utils/field-errors.js", "utils/optional-groups.js", "utils/confirm-dialog.js", "utils/list-filter.js", "app.js", "settings.recipients.js"];
+const SCRIPTS = recipientScripts({ listFilter: true });
 const strip = (file) => readFileSync(path.join(TEMPLATES, file), "utf8").replace(/\{#[\s\S]*?#\}/g, "");
 const PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -82,10 +82,10 @@ for (const viewport of VIEWPORTS) {
 			await page.fill("#recipients-search", "example");
 			assert.equal(await status(), "2 recipients found");
 
-			// A hit keeps its actions: Edit opens the dialog for the filtered row.
+			// A hit keeps its actions: Send test works for the filtered row.
 			await page.fill("#recipients-search", "tobias");
 			await page.click('#recipients-list tr:not([hidden]) .test-recipient-btn');
-			assert.ok((await page.evaluate(() => window.__calls)).some((c) => c.startsWith("POST /recipients/2/test")), "Send test works in a filtered row");
+			await page.waitForFunction(() => window.__calls.some((c) => c.startsWith("POST /recipients/2/test")), null, { timeout: 5000 });
 
 			// No hit: empty state with the term and a reset, no table frame left, live region says so.
 			await page.fill("#recipients-search", "zzz");

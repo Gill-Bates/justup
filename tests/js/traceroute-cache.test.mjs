@@ -155,6 +155,9 @@ test('HTTP 429 blocks further manual requests until Retry-After has passed', asy
   await p.loader.refresh();
   await p.loader.refresh();
   assert.equal(p.rec.calls.length, 2, 'the blocked click sends nothing');
+  clock.t = T0 + 17_000;
+  await p.loader.refresh();
+  assert.equal(p.rec.calls.length, 2, 'Retry-After (20 s) outlasts the 15 s fallback');
   clock.t = T0 + 21_000;
   await p.loader.refresh();
   assert.equal(p.rec.calls.length, 3);

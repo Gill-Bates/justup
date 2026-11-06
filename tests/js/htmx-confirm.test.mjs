@@ -51,12 +51,14 @@ test("a flagged button asks the shared dialog with the texts of its data attribu
 
 test("cancelling sends nothing", async () => {
   const { fire } = setup({ confirmAnswer: false });
-  await fire(RESET, () => assert.fail("a cancelled dialog must not send the request"));
+  const event = await fire(RESET, () => assert.fail("a cancelled dialog must not send the request"));
+  assert.equal(event.defaultPrevented, true, "htmx must not continue on its own after Cancel");
 });
 
 test("a flagged button without a message never sends (fail closed)", async () => {
   const { calls, fire } = setup();
-  await fire({ juConfirm: "" }, () => assert.fail("no message, no request"));
+  const event = await fire({ juConfirm: "" }, () => assert.fail("no message, no request"));
+  assert.equal(event.defaultPrevented, true, "htmx must not continue on its own without a message");
   assert.equal(calls.length, 0);
 });
 

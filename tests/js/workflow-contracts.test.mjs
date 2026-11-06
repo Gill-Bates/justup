@@ -4,7 +4,7 @@
 //
 
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -90,8 +90,8 @@ test("source scan bypasses setup-trivy only after checksum-verifying the pinned 
   assert.match(install.run, /sha256sum --check --strict/);
   assert.match(install.run, /releases\/download\/v\$\{TRIVY_VERSION\}\/trivy_\$\{TRIVY_VERSION\}_Linux-64bit\.tar\.gz/);
   assert.match(job.env.TRIVY_SHA256, /^[a-f0-9]{64}$/);
-  assert.equal(job.env.TRIVY_VERSION, "0.70.0");
-  assert.equal(scan.with.version, "v0.70.0");
+  assert.match(job.env.TRIVY_VERSION, /^\d+\.\d+\.\d+$/);
+  assert.equal(scan.with.version, `v${job.env.TRIVY_VERSION}`, "action version equals the checksum-verified binary version");
   assert.equal(scan.with["skip-setup-trivy"], "true");
 });
 
@@ -164,4 +164,16 @@ test("runtime image purity step fails closed when the layer verifier rejects the
   } finally {
     rmSync(temp, { recursive: true, force: true });
   }
+});
+test("every layout spec tag is selected by a CI grep or tests/layout/run.mjs", () => {
+  const layoutDir = new URL("../layout/", import.meta.url);
+  const selectors = readFileSync(new URL("../../.github/workflows/ci.yml", import.meta.url), "utf8")
+    + readFileSync(new URL("run.mjs", layoutDir), "utf8");
+  const tags = new Set();
+  for (const file of readdirSync(layoutDir).filter((name) => name.endsWith(".spec.mjs"))) {
+    for (const match of readFileSync(new URL(file, layoutDir), "utf8").matchAll(/(?:test|describe)\(\s*[`"'][^\n]*?(@[a-z][a-z0-9-]+)[`"']/g)) tags.add(`${file} ${match[1]}`);
+  }
+  assert.ok(tags.size > 20, "the tag scan found the specs");
+  const unselected = [...tags].filter((entry) => !selectors.includes(entry.split(" ")[1]));
+  assert.deepEqual(unselected, [], "a spec whose tag no CI step selects never runs in CI");
 });

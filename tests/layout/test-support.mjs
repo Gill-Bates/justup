@@ -66,3 +66,35 @@ export function waitForChartReady(page, id = "chart-combined", { withData = fals
 		return !needData || chart.data.datasets.some((dataset) => dataset.data.length);
 	}, { canvasId: id, needData: withData, noData: allowNoData }, { timeout });
 }
+
+
+// Scripts settings.recipients.js needs, in load order; `listFilter` adds the search helper some pages use.
+export function recipientScripts({ listFilter = false } = {}) {
+	return [
+		"utils/csrf.js", "utils/escape.js", "bootstrap.bundle.min.js", "utils/modal-focus.js", "utils/field-errors.js",
+		"utils/optional-groups.js", "utils/confirm-dialog.js", ...(listFilter ? ["utils/list-filter.js"] : []),
+		"app.js", "settings.recipients.js",
+	];
+}
+
+
+// In-page reader for the state_badge macro (app/templates/fragments/_state_badge.html): the label is
+// the text node next to the icon, the state is the visually hidden ": Up|Down|Unknown" suffix.
+function readStateBadgesInPage(selector) {
+	return [...document.querySelectorAll(selector)].map((badge) => ({
+		label: [...badge.childNodes].filter((node) => node.nodeType === 3).map((node) => node.textContent).join("").trim(),
+		state: badge.querySelector(".visually-hidden")?.textContent.replace(/^:\s*/, "") ?? "",
+	}));
+}
+
+export const readStateBadges = (page, selector) => page.evaluate(`(${readStateBadgesInPage})(${JSON.stringify(selector)})`);
+
+// Waits until more than `above` badges with the given label and state exist.
+export function waitForStateBadgeCount(page, selector, { label, state, above = 0 }, timeout = 10000) {
+	const test = `.filter((badge) => badge.label === ${JSON.stringify(label)} && badge.state === ${JSON.stringify(state)}).length > ${above}`;
+	return page.waitForFunction(`(${readStateBadgesInPage})(${JSON.stringify(selector)})${test}`, null, { timeout });
+}
+
+export async function countStateBadges(page, selector, { label, state }) {
+	return (await readStateBadges(page, selector)).filter((badge) => badge.label === label && badge.state === state).length;
+}

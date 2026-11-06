@@ -13,7 +13,6 @@ import asyncio
 import errno
 import ipaddress
 import json
-from pathlib import Path
 from unittest import mock
 
 import pytest
@@ -21,7 +20,7 @@ import pytest
 from app.api import signal as signal_api
 from app.monitor import checks
 from app.services.notifications.signal_errors import SignalUnavailable
-from tests import _support  # noqa: F401 - imported for its sys.path side effect
+from tests import _support
 
 
 def _resolve(host: str, **kwargs):

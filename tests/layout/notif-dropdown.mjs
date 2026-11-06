@@ -5,7 +5,6 @@
 
 // Shared fixtures and geometry audit for the notification dropdown browser tests.
 
-import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -25,7 +24,7 @@ const materialCss = css("material-icons.css").replace(
 );
 
 // Fixtures cover the reported shapes: long title, long description, no description, a wide age
-// range from "Now" to "120 days ago", unread/read and several categories.
+// range from "Now" to "120 days ago" (the popover renders at most 5 rows, so every fixture must fit in them), unread/read and several categories.
 const now = Date.now();
 const ago = (ms) => new Date(now - ms).toISOString();
 const MIN = 60000, HOUR = 60 * MIN, DAY = 24 * HOUR;
@@ -33,9 +32,8 @@ const FIXTURES = [
 	{ id: 1, title: "PDF report ready: efg-luettringhausen-a-very-long-site-name-that-keeps-going.example.com", body: "Ready to download", actor: "root", severity: "success", category: "reports", is_read: false, created_at: ago(15 * MIN) },
 	{ id: 2, title: "Administrator password changed", body: "Administrator credentials updated and a rather long description that would push the time out of view", actor: "root", severity: "security", category: "security", is_read: true, created_at: ago(7 * DAY) },
 	{ id: 3, title: "Just happened", body: "", actor: "", severity: "info", category: "activity", is_read: false, created_at: ago(10000) },
-	{ id: 4, title: "One minute old", body: "short", actor: "root", severity: "info", category: "monitoring", is_read: true, created_at: ago(1 * MIN) },
+	{ id: 4, title: "Ancient", body: "A very very long description without break opportunities aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", actor: "root", severity: "error", category: "monitoring", is_read: false, created_at: ago(120 * DAY) },
 	{ id: 5, title: "One hour old notification with a moderately long title to stress the layout", body: "A moderately long description text here", actor: "root", severity: "warning", category: "delivery", is_read: false, created_at: ago(1 * HOUR) },
-	{ id: 6, title: "Ancient", body: "A very very long description without break opportunities aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", actor: "root", severity: "error", category: "monitoring", is_read: false, created_at: ago(120 * DAY) },
 ];
 
 // Minimal real topbar + popover markup (copied from base.html). The popover is shown (not hidden)
@@ -90,6 +88,10 @@ const AUDIT = (items) => {
 		return { left, top, right, bottom };
 	};
 	const rows = Array.from(document.querySelectorAll("#notif-pop-list .ju-notif-pop-item"));
+	// An empty or truncated list would audit nothing and pass. The function runs in the page, so the
+	// popover limit (5, see renderPreview in notifications.js) is spelled out here.
+	const expectedRows = Math.min(items.length, 5);
+	if (rows.length !== expectedRows) out.issues.push({ type: "row-count", rendered: rows.length, expected: expectedRows });
 	rows.forEach((li, i) => {
 		const timeEl = li.querySelector(".ju-notif-pop-time");
 		const row = { i, hasTime: !!timeEl };

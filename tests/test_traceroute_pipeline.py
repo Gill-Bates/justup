@@ -100,7 +100,7 @@ def test_web_and_pdf_build_the_same_route(monkeypatch: pytest.MonkeyPatch, route
 
 
 def test_the_fragment_route_passes_the_map_rules_to_the_template(monkeypatch: pytest.MonkeyPatch) -> None:
-    _patch_sources(monkeypatch, ROUTES[sorted(ROUTES)[0]])
+    _patch_sources(monkeypatch, ROUTES[min(ROUTES)])
     web = _web_context(monkeypatch)
     assert web["map_style"] == route_map_rules.map_style()
     assert web["map_labels"] == route_map_rules.select_labels(web["geo_points"])
