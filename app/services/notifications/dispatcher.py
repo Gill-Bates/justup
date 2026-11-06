@@ -233,7 +233,12 @@ class NotificationDispatcher:
             "resolved_at": alert.ended_at.isoformat() if alert.ended_at else None,
             "reason": alert.failed_service or "Unknown failure",
             "downtime_minutes": (alert.duration_seconds // 60) if alert.duration_seconds else 0,
-            "system_url": target_url(get_public_base_url(self.conn), alert.target_id),
+            "system_url": target_url(
+                get_public_base_url(self.conn),
+                alert.target_id,
+                start=alert.started_at,
+                end=alert.ended_at,
+            ),
         }
         return target_data, alert_data, target_row
 

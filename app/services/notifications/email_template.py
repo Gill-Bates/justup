@@ -1166,11 +1166,14 @@ def build_email_message(
 TEST_SAMPLE_DOWNTIME_MINUTES = 15
 
 
-def build_test_alert_sample(now: datetime | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
+def build_test_alert_sample(
+    now: datetime | None = None, *, system_url: str | None = None
+) -> tuple[dict[str, Any], dict[str, Any]]:
     """Return ``(alert_data, target_data)`` for a deterministic test notification.
 
     The outage started ``TEST_SAMPLE_DOWNTIME_MINUTES`` before ``now`` (default: current
-    UTC time) and is still open, so Started/Duration/Downtime stay consistent.
+    UTC time) and is still open, so Started/Duration/Downtime stay consistent. ``system_url``
+    is the link of the CTA button; without it the placeholder example URL is used (editor preview).
     """
     reference = now or datetime.now(UTC)
     started_at = reference - timedelta(minutes=TEST_SAMPLE_DOWNTIME_MINUTES)
@@ -1185,7 +1188,7 @@ def build_test_alert_sample(now: datetime | None = None) -> tuple[dict[str, Any]
         "sla_actual": 99.7,
         # Example instance URL so the sample shows the complete template incl. the CTA button
         # (matches the mock). Real alerts only get a button when a real instance URL is stored.
-        "system_url": "https://justup.example.com",
+        "system_url": system_url if system_url is not None else "https://justup.example.com",
     }
     target_data = {
         "name": "Test Target",

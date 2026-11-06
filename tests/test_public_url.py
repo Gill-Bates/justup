@@ -9,7 +9,9 @@
 from __future__ import annotations
 
 import html as html_lib
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 from fastapi import FastAPI
@@ -23,6 +25,7 @@ from app.services.notifications.email_template import (
     DEFAULT_HTML_TEMPLATE,
     build_alert_context,
     build_email_message,
+    build_test_alert_sample,
     html_to_text,
     render_template,
 )
@@ -92,6 +95,35 @@ def test_target_url_links_to_target_detail_and_falls_back_to_dashboard():
     assert target_url("https://j.example.com", 42) == "https://j.example.com/ui/targets/42"
     assert target_url("https://j.example.com", None) == "https://j.example.com/"
     assert target_url("", 42) == "#"
+
+
+def test_target_url_opens_the_event_range_with_margin():
+    start = datetime(2026, 11, 6, 10, 0, tzinfo=UTC)
+    end = datetime(2026, 11, 6, 11, 0, tzinfo=UTC)
+    url = target_url("https://j.example.com", 42, start=start, end=end)
+    assert url == "https://j.example.com/ui/targets/42?from=2026-11-06T09%3A30%3A00Z&to=2026-11-06T11%3A30%3A00Z"
+
+
+def test_target_url_range_for_naive_start_and_open_event_ends_now():
+    start = datetime.now(UTC).replace(tzinfo=None) - timedelta(hours=2)
+    query = parse_qs(urlparse(target_url("https://j.example.com", 1, start=start)).query)
+    begin = datetime.fromisoformat(query["from"][0])
+    finish = datetime.fromisoformat(query["to"][0])
+    assert timedelta(hours=2, minutes=29) < finish - begin < timedelta(hours=3, minutes=1)
+
+
+def test_test_mail_sample_uses_the_given_instance_url_not_the_placeholder_host():
+    alert, _ = build_test_alert_sample(system_url="https://up2.example.org/")
+    assert alert["system_url"] == "https://up2.example.org/"
+    assert build_test_alert_sample()[0]["system_url"] == "https://justup.example.com"
+
+
+def test_target_url_range_is_capped_to_the_page_limit():
+    start = datetime.now(UTC) - timedelta(days=900)
+    query = parse_qs(urlparse(target_url("https://j.example.com", 1, start=start)).query)
+    begin = datetime.fromisoformat(query["from"][0])
+    finish = datetime.fromisoformat(query["to"][0])
+    assert finish - begin <= timedelta(days=730)
 
 
 # ── Settings API ─────────────────────────────────────────────────────────────
@@ -183,10 +215,12 @@ def test_mail_has_button_and_plaintext_link_only_with_public_hostname(conn, clie
     assert "https://" not in _plain_part(html_without).replace("https://github.com", "")
 
     client.patch("/settings", json={"public_hostname": "justup.example.com"})
-    link = f"https://justup.example.com/ui/targets/{tid}"
+    link = f"https://justup.example.com/ui/targets/{tid}?from="
     _, html_with = dispatcher._render_email_content(_alert(tid, status))  # noqa: SLF001
     assert "Open in justUp!" in html_with
-    assert f'href="{link}"' in html_with
+    # The link opens the target on the event's time range.
+    assert f'href="{link}' in html_with
+    assert "&amp;to=" in html_with
     assert link in _plain_part(html_with)
 
 
@@ -239,7 +273,7 @@ def test_signal_text_contains_target_link_only_with_public_hostname(conn, client
 
     client.patch("/settings", json={"public_hostname": "justup.example.com"})
     with_url = dispatcher._render_signal_message(_alert(tid, status))  # noqa: SLF001
-    assert f"https://justup.example.com/ui/targets/{tid}" in with_url
+    assert f"https://justup.example.com/ui/targets/{tid}?from=" in with_url
 
 
 @pytest.mark.parametrize("failed_service", ["", "TCP", "CERT WARNING (10d) - h"])

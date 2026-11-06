@@ -62,7 +62,9 @@
 					throw new Error(detail);
 				}
 				// The server revoked all sessions; sign in again with the new password.
-				window.location.href = '/ui/login';
+				// The login page validates `next` before it follows it.
+				const next = new URLSearchParams(window.location.search).get('next');
+				window.location.href = '/ui/login' + (next ? '?next=' + encodeURIComponent(next) : '');
 			} catch (err) {
 				showError(errBox, err.message);
 				submitBtn.disabled = false;

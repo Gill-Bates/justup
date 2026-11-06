@@ -16,6 +16,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Barrier
 from types import SimpleNamespace
+from urllib.parse import urlencode
 
 import pytest
 from cryptography.fernet import Fernet
@@ -796,6 +797,16 @@ class TestFailClosedBearerAuth:
             ui = anon.get("/ui/targets/new")
             assert ui.status_code == 302
             assert ui.headers["location"].startswith("/ui/login")
+        finally:
+            anon.close()
+
+    def test_login_redirect_keeps_the_requested_page(self, env):
+        anon = TestClient(env["app"], follow_redirects=False)
+        anon.get("/ui/login")
+        try:
+            page = "/ui/targets/7?from=2026-11-06T10:00:00Z&to=2026-11-06T11:00:00Z"
+            location = anon.get(page).headers["location"]
+            assert location == "/ui/login?" + urlencode({"next": page})
         finally:
             anon.close()
 

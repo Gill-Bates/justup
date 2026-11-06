@@ -57,6 +57,20 @@
 		lockoutTimer = setInterval(update, 1000);
 	}
 
+	/**
+	 * The page the user asked for before the sign-in (`?next=`), or '' when absent or unsafe.
+	 * Only same-origin relative paths pass; the server redirect never emits anything else.
+	 * @returns {string}
+	 */
+	function requestedPage() {
+		const next = new URLSearchParams(window.location.search).get('next') || '';
+		if (next.length > 2048 || !/^\/(?![/\\])/.test(next)) return '';
+		// Control characters and backslashes are treated like '/' by some browsers.
+		if (next.includes('\\') || Array.from(next).some((ch) => ch.charCodeAt(0) < 0x20 || ch.charCodeAt(0) === 0x7f)) return '';
+		if (next.startsWith('/ui/login')) return '';
+		return next;
+	}
+
 	function init() {
 		const form = document.getElementById('login-form');
 		if (!form) return;
@@ -138,7 +152,13 @@
 					throw new Error('Login failed — unexpected server response');
 				}
 
-				window.location.href = data.must_change_password ? '/ui/change-password' : '/';
+				const next = requestedPage();
+				if (data.must_change_password) {
+					// The password change signs the user out again; carry the target through it.
+					window.location.href = '/ui/change-password' + (next ? '?next=' + encodeURIComponent(next) : '');
+				} else {
+					window.location.href = next || '/';
+				}
 			} catch (err) {
 				errBox.textContent = err.message;
 				errBox.classList.remove('d-none');

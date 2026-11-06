@@ -16,10 +16,16 @@ from __future__ import annotations
 import ipaddress
 import re
 import sqlite3
+from datetime import UTC, datetime, timedelta
+from urllib.parse import urlencode
 
 from ..db import sqlite as sqlite_db
 from .constants import SettingKeys
+from .time import assume_utc
 
+# Context shown before and after an event; the span matches the target page's 2-year limit.
+EVENT_RANGE_MARGIN = timedelta(minutes=30)
+MAX_EVENT_RANGE = timedelta(days=730)
 _MAX_HOSTNAME_LENGTH = 253  # RFC 1035; the 63-character label cap is enforced below
 # fullmatch() also rejects a trailing newline, unlike match() with "$".
 _HOSTNAME_CHARSET_RE = re.compile(r"[A-Za-z0-9.-]+")
@@ -82,10 +88,34 @@ def get_public_base_url(conn: sqlite3.Connection) -> str:
     return build_public_base_url(get_public_hostname(conn))
 
 
-def target_url(base_url: str, target_id: int | None) -> str:
-    """Link to a target's detail page, the dashboard without a target, or ``"#"`` without a base URL."""
+def _utc_stamp(moment: datetime) -> str:
+    """Strict UTC ISO form the target page accepts for ``from``/``to``."""
+    return assume_utc(moment).astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def target_url(
+    base_url: str,
+    target_id: int | None,
+    *,
+    start: datetime | None = None,
+    end: datetime | None = None,
+) -> str:
+    """Link to a target's detail page, the dashboard without a target, or ``"#"`` without a base URL.
+
+    With ``start`` the detail page opens on the event's time range: ``start`` to ``end`` (or
+    now while the event is open), widened by a margin on both sides. The range is capped to
+    the longest span the page accepts.
+    """
     if not base_url:
         return "#"
     if target_id is None:
         return f"{base_url}/"
-    return f"{base_url}/ui/targets/{int(target_id)}"
+    url = f"{base_url}/ui/targets/{int(target_id)}"
+    if start is None:
+        return url
+    now = datetime.now(UTC)
+    begin = assume_utc(start) - EVENT_RANGE_MARGIN
+    finish = min(assume_utc(end), now) if end is not None else now
+    finish = max(finish + EVENT_RANGE_MARGIN, begin + EVENT_RANGE_MARGIN)
+    begin = max(begin, finish - MAX_EVENT_RANGE)
+    return f"{url}?{urlencode({'from': _utc_stamp(begin), 'to': _utc_stamp(finish)})}"

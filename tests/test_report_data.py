@@ -56,10 +56,20 @@ class _FakeTsdb:
     def __init__(self, series: dict[str, list[SimpleNamespace]]) -> None:
         self.series = series
         self.queried: list[str] = []
+        self.availability_metrics: tuple[str, ...] = ()
 
     def query_auto_resolution(self, _tsdb_dir, *, metric, **_kwargs):
         self.queried.append(metric)
         return self.series.get(metric, [])
+
+    def query_availability_samples(self, _tsdb_dir, *, metrics, **_kwargs):
+        """One sample per timestamp across the requested series; down if any of them is down."""
+        self.availability_metrics = tuple(metrics)
+        samples: dict[datetime, int] = {}
+        for metric in metrics:
+            for point in self.series.get(metric, []):
+                samples[point.ts] = min(samples.get(point.ts, 1), int(point.value))
+        return [{"ts": ts.isoformat(), "value": value} for ts, value in sorted(samples.items())]
 
     def query_display_series(self, _tsdb_dir, **_kwargs):
         return {"points": [], "status_counts": {}}
@@ -70,6 +80,7 @@ def fake_tsdb(monkeypatch: pytest.MonkeyPatch):
     def install(series: dict[str, list[SimpleNamespace]]) -> _FakeTsdb:
         fake = _FakeTsdb(series)
         monkeypatch.setattr(tsdb_db, "query_auto_resolution", fake.query_auto_resolution)
+        monkeypatch.setattr(tsdb_db, "query_availability_samples", fake.query_availability_samples)
         monkeypatch.setattr(tsdb_db, "query_display_series", fake.query_display_series)
         return fake
 
@@ -150,16 +161,18 @@ def collect(request):
     return request.param
 
 
-def test_uptime_comes_from_the_priority_metric_even_when_it_has_no_data(collect, fake_tsdb, tmp_path, monkeypatch):
-    fake_tsdb({"ping_up": _points(5), "ping_ms": _points(5, 12.0)})
+def test_uptime_combines_every_enabled_check_even_when_one_has_no_data(collect, fake_tsdb, tmp_path, monkeypatch):
+    fake = fake_tsdb({"ping_up": _points(5), "ping_ms": _points(5, 12.0)})
     data = collect(tmp_path, monkeypatch, enable_http_check=1, enable_ping=1)
-    assert data.uptime_data == []
+    assert fake.availability_metrics == ("http_up", "ping_up")
+    assert len(data.uptime_data) == 5  # a check without points does not count against the cycle
     assert len(data.ping_data) == 5
 
 
-def test_uptime_falls_to_the_next_enabled_check_when_http_is_off(collect, fake_tsdb, tmp_path, monkeypatch):
-    fake_tsdb({"ping_up": _points(5)})
+def test_uptime_uses_only_the_enabled_checks_when_http_is_off(collect, fake_tsdb, tmp_path, monkeypatch):
+    fake = fake_tsdb({"ping_up": _points(5)})
     data = collect(tmp_path, monkeypatch, enable_http_check=0, enable_ping=1)
+    assert fake.availability_metrics == ("ping_up",)
     assert len(data.uptime_data) == 5
 
 

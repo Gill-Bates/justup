@@ -72,6 +72,7 @@ from ..services.route_timeline import build_route_timeline as _build_route_timel
 from ..utils.auth_helpers import (
     is_password_change_exempt_path,
     is_password_change_pending,
+    login_redirect_url,
     resolve_user_optional,
     resolve_user_or_htmx_redirect,
 )
@@ -434,9 +435,9 @@ def require_ui_user(request: Request, conn) -> dict | Response:
     """Helper to resolve UI user or return redirect response."""
     user = resolve_user_optional(request, conn, allow_cookie=True)
     if not user:
-        return RedirectResponse("/ui/login", status_code=302)
+        return RedirectResponse(login_redirect_url(request), status_code=302)
     if is_password_change_pending(user) and not is_password_change_exempt_path(request.url.path):
-        return RedirectResponse("/ui/change-password", status_code=302)
+        return RedirectResponse(login_redirect_url(request, "/ui/change-password"), status_code=302)
     return dict(user)
 
 

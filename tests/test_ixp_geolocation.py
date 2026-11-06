@@ -80,7 +80,9 @@ def _index(result: ixp_import.IxpBuildResult | None = None) -> ixp_index.IxpInde
 
 
 @pytest.fixture(autouse=True)
-def _clean_index():
+def _clean_index(monkeypatch):
+    # An app started by an earlier test in the same worker leaves its POP factory wired; the lazy load would use it.
+    monkeypatch.setattr(pop_codes, "_pop_get_conn", None)
     ixp_index.reset_for_tests()
     yield
     ixp_index.reset_for_tests()

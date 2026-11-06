@@ -74,7 +74,7 @@ from ..utils.constants import (
 )
 from ..utils.deps import get_conn, get_tsdb_dir
 from ..utils.phone import mask_phone
-from ..utils.public_url import get_public_hostname, normalize_public_hostname
+from ..utils.public_url import get_public_base_url, get_public_hostname, normalize_public_hostname, target_url
 from ..utils.rate_limit import RATE_LIMIT_HEAVY, rate_limit
 from ..utils.runtime_fields import NON_NULL_RUNTIME_KEYS, load_runtime_fields, validate_quality_targets
 from ..utils.settings_cache import invalidate_settings_cache, is_purge_enabled
@@ -1132,7 +1132,10 @@ async def send_test_email(
     stored = await run_in_threadpool(load_email_templates, conn)
     subject_template, html_template = stored["subject"], stored["html"]
 
-    test_alert_data, test_target_data = build_test_alert_sample()
+    # The button must lead to this instance, never to the placeholder host of the editor preview.
+    test_alert_data, test_target_data = build_test_alert_sample(
+        system_url=target_url(await run_in_threadpool(get_public_base_url, conn), None)
+    )
 
     context = build_alert_context(test_alert_data, test_target_data)
 
