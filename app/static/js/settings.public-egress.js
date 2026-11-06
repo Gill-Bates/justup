@@ -32,12 +32,12 @@ const REASONS = {
 };
 
 const BADGES = {
-    loading: ['Checking\u2026', 'ju-status-badge--neutral'],
-    available: ['Available', 'ju-status-badge--success'],
-    unavailable: ['Unavailable', 'ju-status-badge--neutral'],
-    failed: ['Lookup failed', 'ju-status-badge--danger'],
-    stale: ['Stale', 'ju-status-badge--warning'],
-    inconsistent: ['Inconsistent', 'ju-status-badge--warning'],
+    loading: ['Checking\u2026', 'neutral'],
+    available: ['Available', 'success'],
+    unavailable: ['Unavailable', 'neutral'],
+    failed: ['Lookup failed', 'danger'],
+    stale: ['Stale', 'warning'],
+    inconsistent: ['Inconsistent', 'warning'],
 };
 
 /** Format an ISO timestamp for display; an unparsable value yields an empty string. */
@@ -52,8 +52,8 @@ function hasText(value) {
 }
 
 function stateView(status, extra) {
-    const [badgeText, badgeClass] = BADGES[status];
-    return { status, badgeText, badgeClass, address: '', detail: '', canCopy: false, observedAt: '', ...extra };
+    const [badgeText, badgeTone] = BADGES[status];
+    return { status, badgeText, badgeTone, address: '', detail: '', canCopy: false, observedAt: '', ...extra };
 }
 
 function staleDetail(observedAt, reason) {
@@ -123,8 +123,10 @@ function renderFamily(row, view) {
     const copy = row.querySelector('[data-egress-copy]');
     address.textContent = view.address || '\u2014';
     address.classList.toggle('text-body-secondary', !view.address);
+    // Dot classes mirror JuStatusDot (utils/status-badge.js); the word stays the visible label.
     badge.textContent = view.badgeText;
-    badge.className = 'badge ' + view.badgeClass;
+    const dot = row.querySelector('[data-egress-dot]');
+    if (dot) dot.className = 'ju-status-dot ju-status-dot--' + view.badgeTone + (view.badgeTone === 'neutral' ? ' ju-status-dot--unknown' : '');
     detail.textContent = view.detail;
     copy.disabled = !view.canCopy;
     copy.dataset.egressValue = view.canCopy ? view.address : '';

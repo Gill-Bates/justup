@@ -11,11 +11,11 @@
 					</h2>
 					<div id="smtp-status-badge">
 						{% if not smtp.smtp_enabled %}
-						<span class="badge ju-status-badge--neutral">Disabled</span>
+						<span class="ju-status-item"><span class="ju-status-dot ju-status-dot--neutral ju-status-dot--unknown" aria-hidden="true"></span>Disabled</span>
 						{% elif smtp.smtp_host and smtp.smtp_from %}
-						<span class="badge ju-status-badge--success">Configured</span>
+						<span class="ju-status-item"><span class="ju-status-dot ju-status-dot--success" aria-hidden="true"></span>Configured</span>
 						{% else %}
-						<span class="badge ju-status-badge--warning">Not Configured</span>
+						<span class="ju-status-item"><span class="ju-status-dot ju-status-dot--warning" aria-hidden="true"></span>Not Configured</span>
 						{% endif %}
 					</div>
 				</div>

@@ -35,5 +35,20 @@
 			+ (opts.title ? ' title="' + escape(opts.title) + '"' : '') + '>' + escape(label) + '</span>';
 	}
 
+	/**
+	 * JS counterpart of the `state_dot` macro (DESIGN.md, "Status display"): coloured dot plus the
+	 * state word as plain visible label. Neutral tones get the hollow ring, so colour is never the only cue.
+	 */
+	function dotHtml(tone, label, options) {
+		var opts = options || {};
+		var variant = TONES.indexOf(tone) === -1 ? 'neutral' : tone;
+		return '<span class="ju-status-item' + (opts.className ? ' ' + escape(opts.className) : '') + '"'
+			+ (opts.title ? ' title="' + escape(opts.title) + '"' : '') + '>'
+			+ '<span class="ju-status-dot ju-status-dot--' + variant
+			+ (variant === 'neutral' ? ' ju-status-dot--unknown' : '') + '" aria-hidden="true"></span>'
+			+ escape(label) + '</span>';
+	}
+
 	root.JuStatusBadge = { classes: classes, html: html };
+	root.JuStatusDot = { html: dotHtml };
 })(typeof window !== 'undefined' ? window : globalThis);

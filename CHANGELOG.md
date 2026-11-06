@@ -1,4 +1,7 @@
 ## [Unreleased]
+- `Changed` Settings status labels (users, recipients, SMTP, Signal, delivery queue, public outbound IPs) and the recipient list in the target form show a coloured dot with the state word instead of a badge.
+
+- `Changed` Dashboard widget status and notification severity show a coloured dot with the state word instead of a badge.
 
 - `Changed` Status badges no longer show a check, cross or other icon; the state is carried by the badge colour and its word, and UNKNOWN by its dashed edge. Web badges come from one Jinja macro and one JS helper (`JuStatusBadge`); PDF and e-mail badges never had icons.
 - `Changed` The Docker Compose example stores data in the named volume `justup-data` instead of the repository's `docker/` directory, which the entrypoint used to `chown` recursively. Existing installs must copy `sqlite`, `tsdb`, `signal` and `geoip` into the volume before the next start, otherwise the app starts with an empty database; `JUSTUP_DATA=./` keeps the old directory only as a stopgap.

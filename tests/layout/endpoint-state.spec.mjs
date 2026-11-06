@@ -68,7 +68,7 @@ put("udp_unknown_161", 50, 1)
 });
 for (const viewport of VIEWPORTS) {
 	for (const theme of ["light", "dark"]) {
-		test(`detail: check badges and the three unmeasured/down presentations at ${viewport.name} ${theme} @endpoint-state`, async ({ browser, app, adminState }) => {
+		test(`detail: check states and the three unmeasured/down presentations at ${viewport.name} ${theme} @endpoint-state`, async ({ browser, app, adminState }) => {
 			const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height }, storageState: adminState });
 			const page = await context.newPage();
 			const errors = [];
@@ -77,34 +77,40 @@ for (const viewport of VIEWPORTS) {
 				await page.goto(`${app.base}/ui/targets/${targetId}`, { waitUntil: "load" });
 				await page.evaluate((mode) => document.documentElement.setAttribute("data-bs-theme", mode), theme);
 				const hero = page.locator("#target-info-cards .target-kpi-badges");
-				await hero.locator(".badge", { hasText: "UDP:161" }).waitFor({ state: "attached" });
+				await hero.locator(".ju-status-item", { hasText: "UDP:161" }).waitFor({ state: "attached" });
 				await page.locator("#downtime-history-body .downtime-item").first().waitFor({ state: "attached", timeout: 20000 });
 				assert.equal(await page.locator("[data-endpoint], .target-endpoints-card").count(), 0, "no endpoint table");
-				const labels = await hero.locator(".badge").evaluateAll((nodes) => nodes.map((node) => {
+				const labels = await hero.locator(".ju-status-item").evaluateAll((nodes) => nodes.map((node) => {
 					const clone = node.cloneNode(true);
 					clone.querySelectorAll(".material-icons, .visually-hidden").forEach((part) => part.remove());
 					return clone.textContent.trim();
 				}));
 				assert.deepEqual(labels, ["PING", "TCP:25", "TCP:587", "UDP:53", "UDP:161"]);
-				const badge = (label) => hero.locator(".badge", { hasText: label });
+				const badge = (label) => hero.locator(".ju-status-item", { hasText: label });
 				assert.match(await badge("TCP:25").innerText(), /Up/);
 				assert.match(await badge("TCP:587").innerText(), /Down/);
 				const unknownText = await badge("UDP:161").innerText();
 				assert.match(unknownText, /Unknown/);
 				assert.doesNotMatch(unknownText, /\bDown\b/);
 				assert.doesNotMatch(await badge("TCP:587").innerText(), /Unknown/);
-				// UNKNOWN differs from DOWN by colour, word and edge shape; no badge holds an icon.
-				const look = (label) => badge(label).evaluate((node) => ({
-					icons: node.querySelectorAll(".material-icons, svg, img").length,
-					background: getComputedStyle(node).backgroundColor,
-					border: getComputedStyle(node).borderTopStyle,
-				}));
+				// UNKNOWN differs from DOWN by word and dot shape (hollow ring vs filled square); no icon inside the item.
+				const look = (label) => badge(label).evaluate((node) => {
+					const dot = node.querySelector(".ju-status-dot");
+					const style = getComputedStyle(dot);
+					return {
+						icons: node.querySelectorAll(".material-icons, svg, img").length,
+						ariaHidden: dot.getAttribute("aria-hidden"),
+						background: style.backgroundColor,
+						radius: style.borderTopLeftRadius,
+					};
+				});
 				const down = await look("TCP:587");
 				const unk = await look("UDP:161");
-				assert.equal(down.icons + unk.icons, 0, "no icon inside a status badge");
+				assert.equal(down.icons + unk.icons, 0, "no icon inside a status item");
+				assert.equal(down.ariaHidden + unk.ariaHidden, "truetrue", "the dot is decorative, the word is the text alternative");
 				assert.notEqual(down.background, unk.background);
-				assert.equal(unk.border, "dashed");
-				assert.notEqual(down.border, "dashed");
+				assert.equal(unk.background, "rgba(0, 0, 0, 0)", "UNKNOWN is a hollow ring");
+				assert.notEqual(down.radius, unk.radius, "DOWN and UNKNOWN differ in shape");
 				// The three presentations of the downtime history.
 				const kinds = await page.locator("#downtime-history-body .downtime-item").evaluateAll((items) => items.map((item) => ({
 					kind: [...item.classList].find((name) => name.startsWith("downtime-item--") && name !== "downtime-item--ongoing").slice(15),

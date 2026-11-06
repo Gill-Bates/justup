@@ -116,7 +116,9 @@ def test_unknown_overall_status_keeps_the_measured_ping_and_shows_the_udp_port_a
     ).group(0)
     assert "ju-status-dot--success" in ping and "Up" in ping and "Unknown" not in ping
     udp = re.search(
-        r'<span class="ju-status-item[^>]*>(?:(?!<span class="ju-status-item).)*?UDP:161.*?</span></span>', html, re.DOTALL
+        r'<span class="ju-status-item[^>]*>(?:(?!<span class="ju-status-item).)*?UDP:161.*?</span></span>',
+        html,
+        re.DOTALL,
     ).group(0)
     assert "ju-status-dot--unknown" in udp and ": Unknown<" in udp and "material-icons" not in udp
     assert "open|filtered" in udp and "Down" not in udp

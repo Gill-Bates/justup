@@ -294,11 +294,11 @@
 			failed: ['danger', 'Handoff failed', 'Handoff to the server failed'],
 		};
 		const entry = map[status];
-		if (!entry) return JuStatusBadge.html('neutral', status);
+		if (!entry) return JuStatusDot.html('neutral', status);
 		const retrying = status === 'pending' && retries > 0;
 		const label = retrying ? 'Retrying handoff' : entry[1];
 		const title = retrying ? handoff + ' is being retried' : entry[2];
-		return JuStatusBadge.html(entry[0], label, { title });
+		return JuStatusDot.html(entry[0], label, { title });
 	}
 
 	function _typeBadge(type) {

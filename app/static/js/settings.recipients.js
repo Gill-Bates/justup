@@ -248,8 +248,8 @@ async function loadRecipients() {
 		
 			for (const r of recipients) {
 				const statusBadge = r.is_enabled 
-					? '<span class="badge ju-status-badge--success">Enabled</span>'
-					: '<span class="badge ju-status-badge--neutral">Disabled</span>';
+					? JuStatusDot.html('success', 'Enabled')
+					: JuStatusDot.html('neutral', 'Disabled');
 				
 				// Signal column - with placeholder for verification status
 				const cachedSignal = _getCachedSignalRegistration(r.phone);

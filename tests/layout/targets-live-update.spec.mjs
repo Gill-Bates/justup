@@ -66,10 +66,10 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 390, height: 844 
 			await page.evaluate(() => { window.__shifts = 0; window.__removed = 0; });
 
 			const httpDown = { label: "HTTP", state: "Down" };
-			const downBefore = await countStateBadges(page, "#targets-table .badge", httpDown);
+			const downBefore = await countStateBadges(page, "#targets-table .ju-status-item", httpDown);
 			setMode("changed");
 			await page.evaluate(() => window.htmx.trigger("#targets-table", "refresh"));
-			await waitForStateBadgeCount(page, "#targets-table .badge", { ...httpDown, above: downBefore });
+			await waitForStateBadgeCount(page, "#targets-table .ju-status-item", { ...httpDown, above: downBefore });
 			await waitForVisualStability(page);
 
 			const after = await page.evaluate(() => {
@@ -90,7 +90,8 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 390, height: 844 
 			assert.equal(after.total, after.expected, "rows were added or lost");
 			assert.equal(after.kept, after.total, `rows replaced by the poll: ${after.total - after.kept} of ${after.total}`);
 			assert.equal(after.statusKept, after.total, "self-updating status icons were replaced");
-			assert.ok(after.removed <= 4, `poll removed ${after.removed} nodes: ${await page.evaluate(() => (window.__where || []).join(" ; "))}`);
+			// One Checks cell is replaced: its 5 child nodes (summary and badge rows with their separating text).
+			assert.ok(after.removed <= 5, `poll removed ${after.removed} nodes: ${await page.evaluate(() => (window.__where || []).join(" ; "))}`);
 			assert.deepEqual(after.expanded, collapsedBefore, "group open/closed state changed");
 			assert.equal(after.filter, "luettring", "search text lost");
 			assert.ok(after.hidden > 0, "search filter no longer applied");
@@ -110,7 +111,7 @@ for (const width of [320, 390]) {
 		try {
 			const row = page.locator('#targets-table tr[data-target-id]', { hasText: 'a-very-long-hostname-without-break-opportunity' });
 			await row.waitFor();
-			const badges = row.locator('.check-badges .badge');
+			const badges = row.locator('.check-badges .ju-status-item');
 			const total = await badges.count();
 			assert.ok(total > 14, 'the fixture must contain many checks');
 			const summary = await row.locator('.targets-check-summary').innerText();

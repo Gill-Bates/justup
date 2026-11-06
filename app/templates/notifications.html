@@ -58,7 +58,7 @@
                   <div class="ju-notif-title">
                      {% if not n.is_read %}<span class="ju-unread-dot" aria-hidden="true"></span><span class="visually-hidden">Unread: </span>{% endif %}
                      <span class="ju-notif-title-text" title="{{ n.title }}">{{ n.title }}</span>
-                     {% set tone = 'danger' if n.severity == 'error' else ('warning' if n.severity == 'warning' else ('success' if n.severity == 'success' else 'neutral')) %}<span class="badge ju-notif-status ju-status-badge--{{ tone }}">{{ n.severity }}</span>
+                     {% set tone = 'danger' if n.severity == 'error' else ('warning' if n.severity == 'warning' else ('success' if n.severity == 'success' else 'neutral')) %}<span class="ju-status-item ju-notif-status"><span class="ju-status-dot ju-status-dot--{{ tone }}{% if tone == 'neutral' %} ju-status-dot--unknown{% endif %}" aria-hidden="true"></span>{{ n.severity }}</span>
                   </div>
                   <div class="ju-notif-body text-body-secondary">
                      {% set context = n.body or n.actor or '' %}{% if context %}<span class="ju-notif-context" title="{{ context }}">{{ context }}</span>{% endif %}

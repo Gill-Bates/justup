@@ -338,7 +338,7 @@
 	font-weight: 700;
 }
 
-/* Notification severity uses the shared filled status badge palette. */
+/* Notification severity is the shared status dot plus its word; no badge. */e. */
 .ju-notif-status {
 	font-weight: 500;
 }

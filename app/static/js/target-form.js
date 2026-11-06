@@ -534,8 +534,8 @@
 			const tilesHtml = recipients.map(r => {
 				const checked = selectedIds.includes(r.id) ? 'checked' : '';
 				const statusBadge = r.is_enabled
-					? '<span class="badge ju-status-badge--success">Active</span>'
-					: '<span class="badge ju-status-badge--neutral">Disabled</span>';
+					? JuStatusDot.html('success', 'Active')
+					: JuStatusDot.html('neutral', 'Disabled');
 
 				const channels = [];
 				if (r.phone) {

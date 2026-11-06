@@ -71,16 +71,18 @@
 		if (!response.ok) throw new Error('Request failed');
 		return response.json();
 	}
-	// Header status badge shared by every status widget: variant colour plus its word, no icon.
+	// Header status shared by every status widget: coloured dot plus its word, no badge.
 	function setStatus(tile, label, tone) {
-		const badge = tile.querySelector('.dashboard-monitor-status');
-		if (!badge) throw new Error('Widget status badge is missing');
-		// The badge sits in a live region: rewriting an unchanged state would re-announce it every refresh.
-		if (badge.dataset.label === label && badge.dataset.tone === tone) return;
-		badge.dataset.label = label;
-		badge.dataset.tone = tone;
-		badge.className = window.JuStatusBadge.classes(tone === 'secondary' ? 'neutral' : tone, { className: 'dashboard-monitor-status ms-auto' });
-		badge.textContent = label;
+		const status = tile.querySelector('.dashboard-monitor-status');
+		if (!status) throw new Error('Widget status is missing');
+		// The status sits in a live region: rewriting an unchanged state would re-announce it every refresh.
+		if (status.dataset.label === label && status.dataset.tone === tone) return;
+		status.dataset.label = label;
+		status.dataset.tone = tone;
+		// JuStatusDot.html is the shared dot markup; its children replace the live region's content.
+		const template = document.createElement('template');
+		template.innerHTML = window.JuStatusDot.html(tone === 'secondary' ? 'neutral' : tone, label);
+		status.replaceChildren(...template.content.firstElementChild.childNodes);
 	}
 	// Small values: the number comes first in the DOM and on screen, its label below it.
 	function metrics(body, entries) {
@@ -166,7 +168,7 @@
 			chart = new window.Chart(canvas, {
 				type: 'line',
 				data: { labels, datasets: [{ label: 'Quality score', data: values, borderColor: color, borderWidth: 2, pointRadius: 0, spanGaps: false }] },
-				options: { responsive: true, maintainAspectRatio: false, animation: false, plugins: { legend: { display: false } }, scales: { y: { min: 0, max: 100 } } },
+				options: { responsive: true, maintainAspectRatio: false, animation: false, plugins: { legend: { display: false }, tooltip: { callbacks: { label: (item) => `${item.dataset.label}: ${window.formatChartValue('score', item.parsed.y)}` } } }, scales: { y: { min: 0, max: 100, title: { display: true, text: window.CHART_UNITS.score.axisTitle } } } },
 			});
 		}
 		chart.canvas.setAttribute('aria-label', `Quality score over the last 24 hours. Latest: ${latest.score}. Missing measurements are gaps.`);

@@ -123,11 +123,11 @@ export async function loadSignalStatus() {
             var badgeHtml;
             
             if (errorMsg) {
-                badgeHtml = JuStatusBadge.html('danger', 'Offline', { title: errorMsg });
+                badgeHtml = JuStatusDot.html('danger', 'Offline', { title: errorMsg });
             } else if (registered) {
-                badgeHtml = JuStatusBadge.html('success', 'Linked');
+                badgeHtml = JuStatusDot.html('success', 'Linked');
             } else if (reachable) {
-                badgeHtml = JuStatusBadge.html('warning', 'Not linked', { title: 'signal-cli ready but no account linked' });
+                badgeHtml = JuStatusDot.html('warning', 'Not linked', { title: 'signal-cli ready but no account linked' });
                 
                 // Reset UI to show setup options - only if not busy and no flow active
                 if (!isSignalBusy()) {
@@ -142,7 +142,7 @@ export async function loadSignalStatus() {
                     }
                 }
             } else {
-                badgeHtml = JuStatusBadge.html('neutral', 'Unavailable');
+                badgeHtml = JuStatusDot.html('neutral', 'Unavailable');
             }
 
             container.innerHTML = badgeHtml;

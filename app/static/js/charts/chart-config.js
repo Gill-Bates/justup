@@ -37,6 +37,7 @@ const CHART_UNITS = Object.freeze({
   ms: Object.freeze({ suffix: "ms", axisTitle: "Response time (ms)" }),
   percent: Object.freeze({ suffix: "%", axisTitle: "Percent (%)" }),
   checks: Object.freeze({ suffix: "checks", axisTitle: "Checks" }),
+  score: Object.freeze({ suffix: "pts", axisTitle: "Quality score (0-100)" }),
 });
 /** "123 ms": value plus the unit suffix of the metric. */
 function formatChartValue(unit, value) {

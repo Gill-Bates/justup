@@ -158,7 +158,9 @@ def render_cards(t: dict) -> str:
 def badge_markup(html: str, label: str) -> str:
     """Markup of the one status item that contains ``label``."""
     match = re.search(
-        rf'<span class="ju-status-item[^>]*>(?:(?!<span class="ju-status-item).)*?{label}.*?</span></span>', html, re.DOTALL
+        rf'<span class="ju-status-item[^>]*>(?:(?!<span class="ju-status-item).)*?{label}.*?</span></span>',
+        html,
+        re.DOTALL,
     )
     assert match, f"no badge with {label!r}"
     return match.group(0)

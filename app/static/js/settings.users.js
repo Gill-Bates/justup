@@ -204,8 +204,8 @@ async function loadUsers() {
 
 			const isActive = user.is_active !== false;
 			const statusBadge = isActive
-				? '<span class="badge ju-status-badge--success">Enabled</span>'
-				: '<span class="badge ju-status-badge--neutral">Disabled</span>';
+				? JuStatusDot.html('success', 'Enabled')
+				: JuStatusDot.html('neutral', 'Disabled');
 
 			const disableToggle = !!user.is_admin;
 			const disableDelete = !!user.is_admin;

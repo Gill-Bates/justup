@@ -124,20 +124,10 @@ function updateSmtpStatusBadge(data) {
     const enabled = data.smtp_enabled === true;
     const configured = data.smtp_host && data.smtp_from;
 
-    badge.textContent = '';
-    const pill = document.createElement('span');
-    pill.className = 'badge';
-    if (!enabled) {
-        pill.classList.add('ju-status-badge--neutral');
-        pill.textContent = 'Disabled';
-    } else if (configured) {
-        pill.classList.add('ju-status-badge--success');
-        pill.textContent = 'Configured';
-    } else {
-        pill.classList.add('ju-status-badge--warning');
-        pill.textContent = 'Not Configured';
-    }
-    badge.appendChild(pill);
+    // The helper escapes its label; the markup is static and holds no user data.
+    if (!enabled) badge.innerHTML = JuStatusDot.html('neutral', 'Disabled');
+    else if (configured) badge.innerHTML = JuStatusDot.html('success', 'Configured');
+    else badge.innerHTML = JuStatusDot.html('warning', 'Not Configured');
 }
 
 function setSmtpFieldsetEnabled(enabled) {

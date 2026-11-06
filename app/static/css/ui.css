@@ -1812,17 +1812,21 @@ textarea.smtp-editor-frame {
 .ju-state-badge {
 	border: 1px solid transparent;
 }
+
 .ju-state-badge--unknown {
 	border: 1px dashed currentcolor;
 }
+
 @media (forced-colors: active) {
 	.ju-state-badge {
 		border: 1px solid CanvasText;
 	}
+
 	.ju-state-badge--unknown {
 		border-style: dashed;
 	}
 }
+
 /* Status dot (DESIGN.md, "Status display"): the one place that colours a status marker. Tone comes from the Bootstrap
    semantic tokens; shape repeats the state (circle up, square down, diamond warning, hollow ring unknown) so colour is never the only cue. */
 .ju-status-item {
@@ -1831,8 +1835,10 @@ textarea.smtp-editor-frame {
 	gap: var(--ui-control-gap, 0.5rem);
 	white-space: nowrap;
 }
+
 .ju-status-dot {
 	--ju-dot-color: var(--bs-secondary);
+
 	flex: none;
 	box-sizing: border-box;
 	width: 0.625rem;
@@ -1842,16 +1848,29 @@ textarea.smtp-editor-frame {
 	background: var(--ju-dot-color);
 }
 .ju-status-dot--success { --ju-dot-color: var(--bs-success); }
-.ju-status-dot--warning { --ju-dot-color: var(--bs-warning); border-radius: 1px; transform: rotate(45deg); }
-.ju-status-dot--danger { --ju-dot-color: var(--bs-danger); border-radius: 1px; }
+
+.ju-status-dot--warning {
+	--ju-dot-color: var(--bs-warning);
+
+	border-radius: 1px;
+	transform: rotate(45deg);
+}
+
+.ju-status-dot--danger {
+	--ju-dot-color: var(--bs-danger);
+
+	border-radius: 1px;
+}
 .ju-status-dot--info { --ju-dot-color: var(--bs-info); }
 .ju-status-dot--unknown { background: transparent; }
+
 @media (forced-colors: active) {
 	.ju-status-dot {
 		forced-color-adjust: none;
 		border-color: CanvasText;
 		background: CanvasText;
 	}
+
 	.ju-status-dot--unknown {
 		background: transparent;
 	}
