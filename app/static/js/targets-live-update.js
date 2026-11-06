@@ -89,6 +89,19 @@
 		});
 	}
 
+	// htmx's throttle flag is per element and also swallows the unthrottled 'refresh' for the window (user
+	// actions, search), so the live events are throttled here and reach htmx only as 'refresh'.
+	const REFRESH_THROTTLE_MS = 2000;
+	let throttled = false;
+	function refreshThrottled() {
+		if (throttled) return;
+		throttled = true;
+		window.setTimeout(function () { throttled = false; }, REFRESH_THROTTLE_MS);
+		window.htmx.trigger(container, 'refresh');
+	}
+	['justup-target-list', 'justup-live-sync'].forEach(function (name) {
+		document.body.addEventListener(name, refreshThrottled);
+	});
 	document.body.addEventListener('htmx:beforeSwap', function (event) {
 		const detail = event.detail;
 		if (!detail || detail.elt !== container || event.target !== container) return;

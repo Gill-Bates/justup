@@ -19,6 +19,8 @@
 	const termLabel = document.getElementById('targets-search-term');
 	const scopeField = document.getElementById('targets-scope-state');
 	const memory = filter.createExpansionMemory();
+	// Groups the user closed by hand during the search; a live patch or the next keystroke must not reopen them.
+	const closedByHand = new Set();
 	let requestedScope = null;
 
 	// Writing identical text still replaces the text node (a mutation, and a repeated announcement).
@@ -41,6 +43,7 @@
 	}
 
 	function restoreGroups() {
+		closedByHand.clear();
 		memory.take().forEach(function (entry) {
 			const collapse = container.querySelector('#' + CSS.escape(entry[0]));
 			if (collapse) setOpen(collapse, entry[1]);
@@ -82,7 +85,8 @@
 				hits += groupHits;
 				item.hidden = groupHits === 0;
 				const collapse = collapseOf(item);
-				if (collapse && groupHits > 0) {
+				// A group that Bootstrap is closing right now is the user's choice, not a state to override.
+				if (collapse && groupHits > 0 && !collapse.classList.contains('collapsing') && !closedByHand.has(collapse.id)) {
 					memory.remember(collapse.id, collapse.classList.contains('show'));
 					setOpen(collapse, true);
 				}
@@ -116,7 +120,12 @@
 	// A manual toggle during the search is the state to return to afterwards.
 	['shown.bs.collapse', 'hidden.bs.collapse'].forEach(function (name) {
 		container.addEventListener(name, function (event) {
-			if (event.target.id) memory.override(event.target.id, name === 'shown.bs.collapse');
+			if (!event.target.id) return;
+			const shown = name === 'shown.bs.collapse';
+			memory.override(event.target.id, shown);
+			if (input.value === '') return;
+			if (shown) closedByHand.delete(event.target.id);
+			else closedByHand.add(event.target.id);
 		});
 	});
 

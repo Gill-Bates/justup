@@ -1575,6 +1575,17 @@ def test_recheck_signal_has_its_own_rate_limit(conn, monkeypatch):
 
 def test_recheck_signal_parallel_calls_share_one_lookup(conn, monkeypatch):
     client, rid, calls, release = _recheck_setup(conn, monkeypatch)
+    # Production opens one connection per request; a shared one is not safe across the parallel threads.
+    db_path = conn.execute("PRAGMA database_list").fetchone()[2]
+
+    def per_request_conn():
+        request_conn = sqlite_db.connect(Path(db_path))
+        try:
+            yield request_conn
+        finally:
+            sqlite_db.close_connection(request_conn)
+
+    client.app.dependency_overrides[get_conn] = per_request_conn
     release.clear()
     results: list[tuple[int, dict]] = []
 

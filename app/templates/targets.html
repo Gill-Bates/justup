@@ -33,7 +33,7 @@
 		<input type="hidden" id="targets-page-state" name="page" value="1">
 		{# 1 while the search needs every target on one page (more than one page of targets) #}
 		<input type="hidden" id="targets-scope-state" name="all" value="0">
-		<div id="targets-table" hx-get="/ui/fragments/targets-table" hx-trigger="load, refresh, justup-target-list from:body throttle:2s, justup-live-sync from:body throttle:2s"
+		<div id="targets-table" hx-get="/ui/fragments/targets-table" hx-trigger="load, refresh"
 			hx-include="#targets-page-state, #targets-scope-state" hx-swap="innerHTML">
 			<div class="text-center py-5">
 				<div class="spinner-border text-primary" role="status"></div>
