@@ -207,6 +207,7 @@ def test_dashboard_widget_and_pdf_table_show_the_history_duration(tmp_path):
     )
     assert summary["downtime_seconds"] == sum(p.duration_seconds for p in found) == 240
     assert summary["incidents"] == len(found) == len(events) == 2
+    assert summary["latest_start"] == at(21).isoformat()
     assert sum((e.duration_minutes or 0) for e in events) == 4
     report_data = pdf_report.ReportData(
         target={"interval_seconds": 60},

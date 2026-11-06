@@ -89,10 +89,10 @@
 									{% for label, status, title, is_cert in all_checks %}
 										{% if is_cert %}{{ cert_badge(label, status) }}{% else %}{{ state_badge(label, status, title) }}{% endif %}
 									{% endfor %}
-									</div>
 									{% if all_checks|length > 3 %}
 									<button type="button" class="targets-check-toggle" aria-expanded="false" aria-controls="target-checks-{{ t.id }}" data-more="{{ all_checks|length - 3 }}">+{{ all_checks|length - 3 }} more</button>
 									{% endif %}
+									</div>
 								</td>
 								<td data-label="Uptime">
 									{% if t.uptime_percent is not none %}

@@ -117,6 +117,8 @@ for (const width of [320, 390]) {
 			assert.match(summary, new RegExp(`\\b${total} Checks\\b`));
 			const toggle = row.locator('.targets-check-toggle');
 			assert.equal(await toggle.innerText(), `+${total - 3} more`);
+			assert.equal(await toggle.evaluate((button) => button.parentElement.classList.contains('check-badges')), true);
+			assert.ok((await toggle.boundingBox()).height <= 28, 'the continuation control should fit the badge row');
 			const visibleBadges = () => badges.evaluateAll((nodes) => nodes.filter((node) => getComputedStyle(node).display !== 'none').length);
 			assert.equal(await visibleBadges(), 3);
 			const collapsedHeight = (await row.boundingBox()).height;

@@ -3022,13 +3022,25 @@ textarea.smtp-editor-frame {
 		.ui-page .targets-table .targets-check-toggle {
 			display: inline-flex;
 			align-items: center;
-			min-height: 44px;
-			margin-top: 0.25rem;
-			padding: 0.25rem 0.5rem;
-			border: 0;
-			border-radius: var(--bs-border-radius);
+			min-height: 24px;
+			padding: 0.125rem 0.375rem;
+			border: 1px solid var(--bs-border-color);
+			border-radius: var(--bs-border-radius-pill);
 			background: var(--bs-tertiary-bg);
+			color: var(--bs-secondary-color);
+			font-size: 0.75rem;
+			font-weight: 500;
+			line-height: 1;
+		}
+
+		.ui-page .targets-table .targets-check-toggle:hover {
+			background: var(--bs-secondary-bg);
 			color: var(--bs-body-color);
+		}
+
+		.ui-page .targets-table .targets-check-toggle:focus-visible {
+			outline: 2px solid var(--ju-focus-ring);
+			outline-offset: 2px;
 		}
 
 		.ui-page .targets-table td[data-label="Uptime"] {

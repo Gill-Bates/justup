@@ -968,6 +968,7 @@ def test_downtime_finds_outage_older_than_the_newest_points(conn, extra_targets)
     assert summary["downtime_seconds"] == 120
     assert summary["incidents"] == 1
     assert summary["ongoing"] is False
+    assert summary["latest_start"] == start.isoformat()
 
 
 def test_downtime_ignores_incidents_below_threshold(conn):

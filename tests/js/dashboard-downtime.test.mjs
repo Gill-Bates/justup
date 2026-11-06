@@ -10,7 +10,7 @@ import vm from "node:vm";
 
 const src = readFileSync(new URL("../../app/static/js/dashboard.js", import.meta.url), "utf8");
 const dashboardTemplate = readFileSync(new URL("../../app/templates/dashboard.html", import.meta.url), "utf8");
-const IDS = ["table-container", "success", "empty", "error", "loading", "count-badge", "table-body"];
+const IDS = ["table-container", "success", "empty", "error", "loading", "count-badge", "table-body", "pagination", "prev", "next", "page-status"];
 
 function el(id) {
   const classes = new Set(id === "table-container" || id === "success" || id === "empty" || id === "error" ? ["d-none"] : []);
@@ -25,6 +25,7 @@ function el(id) {
       contains: name => classes.has(name),
     },
     appendChild(child) { this.children.push(child); return child; },
+    replaceChildren(...children) { this.children = children; },
     addEventListener(name, callback) { (listeners[name] ||= []).push(callback); },
     dispatch(name, event) { (listeners[name] || []).forEach(callback => callback(event)); },
     setAttribute(name, value) { this.attributes[name] = String(value); },
@@ -89,6 +90,29 @@ test("a successful response shows the table with the affected count", async () =
   assert.equal(h.visible("error"), false);
   assert.equal(h.nodes["count-badge"].textContent, "1 affected");
   assert.equal(h.requests[0].includes("limit="), false);
+  assert.equal(h.visible("pagination"), false);
+});
+
+test("newest incidents appear first and the footer pages through five targets at a time", async () => {
+  const targets = [1, 2, 3, 4, 5, 6, 7].map(id => ({
+    target_id: id, name: `target-${id}`,
+    services: { http_up: { downtime_seconds: 600 - id, latest_start: `2026-11-0${id}T12:00:00+00:00` } },
+  }));
+  targets[0].services.ping_up = { downtime_seconds: 1, latest_start: "2026-11-08T12:00:00+00:00" };
+  const h = harness([ok({ targets })]);
+  await h.load();
+  assert.equal(h.visible("pagination"), true);
+  assert.deepEqual(h.nodes["table-body"].children.map(row => row.children[0].children[0].children[1].textContent),
+    ["target-1", "target-7", "target-6", "target-5", "target-4"]);
+  assert.equal(h.nodes["page-status"].textContent, "Page 1 of 2");
+  assert.equal(h.nodes.prev.disabled, true);
+  h.nodes.next.dispatch("click");
+  assert.deepEqual(h.nodes["table-body"].children.map(row => row.children[0].children[0].children[1].textContent),
+    ["target-3", "target-2"]);
+  assert.equal(h.nodes["page-status"].textContent, "Page 2 of 2");
+  assert.equal(h.nodes.next.disabled, true);
+  h.nodes.prev.dispatch("click");
+  assert.equal(h.nodes["table-body"].children.length, 5);
 });
 
 test("each row is one stretched link to the target with the widget's 24h range", async () => {

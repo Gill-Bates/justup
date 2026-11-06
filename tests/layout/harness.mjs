@@ -868,7 +868,8 @@ async function auditDashboardGrid(browser, app, adminState, browserName, phase) 
 					'quality score should match dashboard hero numbers',
 				);
 				assert.equal(await page.locator('#quality-targets-tooltip-trigger, .quality-targets-tooltip').count(), 0);
-				assert.equal(await quality.locator('.quality-target').first().textContent(), 'DE 1.1.1.1');
+				assert.equal(await quality.locator('.quality-target').first().textContent(), '1.1.1.1');
+				assert.equal(await quality.locator('.quality-target').first().getAttribute('aria-label'), 'DE: 1.1.1.1');
 				assert.equal(await quality.locator('.quality-target').first().locator('img').getAttribute('src'),
 					'https://cdn.jsdelivr.net/npm/flag-icons@7.3.2/flags/4x3/de.svg');
 				assert.equal(await quality.locator('.quality-target').nth(1).textContent(), '8.8.8.8');

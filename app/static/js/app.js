@@ -407,7 +407,6 @@
 						badge.setAttribute('aria-label', text.label);
 						if (text.title) badge.title = text.title;
 						badge.appendChild(flag);
-						if (item.country) badge.appendChild(document.createTextNode(item.country + ' '));
 						badge.appendChild(document.createTextNode(address));
 						return badge;
 					});

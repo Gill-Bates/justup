@@ -65,6 +65,42 @@ async function openDashboardRow(page, app) {
 	await row.waitFor({ timeout: 30_000 });
 	return row;
 }
+test("mocked downtime overview pages newest incidents in visible compact rows @downtime-widget-link", async ({ browser, app, adminState }) => {
+	const { context, page } = await open(browser, app, adminState);
+	try {
+		const targets = Array.from({ length: 7 }, (_, index) => ({
+			target_id: index + 1,
+			name: `Alarm ${index + 1}`,
+			services: { http_up: { downtime_seconds: 3600 - index, incidents: 1, ongoing: false,
+				latest_start: `2026-11-0${index + 1}T12:00:00+00:00` } },
+		}));
+		await page.route("**/dashboard/downtime**", (route) => route.fulfill({
+			status: 200, contentType: "application/json", body: JSON.stringify({ targets }),
+		}));
+		await page.goto(`${app.base}/`, { waitUntil: "load" });
+		const rows = page.locator("#downtime-table-body tr");
+		await expect(rows).toHaveCount(5);
+		await expect(rows.first()).toContainText("Alarm 7");
+		const next = page.getByRole("button", { name: "Next", exact: true });
+		await expect(next).toBeVisible();
+		const geometry = await page.locator("#downtime-content").evaluate((body) => {
+			const footer = body.querySelector("#downtime-pagination").getBoundingClientRect();
+			const bounds = body.getBoundingClientRect();
+			const row = body.querySelector("#downtime-table-body tr").getBoundingClientRect();
+			return { footerBottom: footer.bottom, bodyBottom: bounds.bottom, rowHeight: row.height,
+				bodyScrollHeight: body.scrollHeight, bodyClientHeight: body.clientHeight };
+		});
+		assert.ok(geometry.footerBottom <= geometry.bodyBottom + 1, JSON.stringify(geometry));
+		assert.ok(geometry.rowHeight <= 40, JSON.stringify(geometry));
+		assert.ok(geometry.bodyScrollHeight <= geometry.bodyClientHeight + 1, JSON.stringify(geometry));
+		await next.click();
+		await expect(rows).toHaveCount(2);
+		await expect(rows.first()).toContainText("Alarm 2");
+		await expect(page.getByRole("button", { name: "Previous", exact: true })).toBeEnabled();
+	} finally {
+		await context.close();
+	}
+});
 /** Click the centre of a cell the way a user does; the row link's ::after overlays it, so Playwright's own hit-test would refuse. */
 async function clickCell(cell, options = {}) {
 	const hit = await cell.evaluate((el) => {

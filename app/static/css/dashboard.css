@@ -247,9 +247,18 @@
 	font-size: 2rem;
 }
 
-.dashboard-downtime-table {
-	max-block-size: 14rem;
-	overflow: auto;
+.dashboard-downtime-table .ju-data-table> :is(thead, tbody)>tr>* {
+	padding-block: 0.3rem;
+}
+
+.dashboard-downtime-pagination {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 0.75rem;
+	padding: 0.4rem;
+	border-block-start: 1px solid var(--ju-panel-line);
+	font-size: 0.75rem;
 }
 
 /* One link per row: its stretched ::after makes the whole row the click and tap target. */

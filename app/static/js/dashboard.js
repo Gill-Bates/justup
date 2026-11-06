@@ -56,8 +56,11 @@
 
 
 	const REQUEST_TIMEOUT_MS = 10000;
+	const DOWNTIME_PAGE_SIZE = 5;
 	let downtimeLoading = false;
 	let downtimeRefreshPending = false;
+	let downtimeTargets = [];
+	let downtimePage = 0;
 
 	function byId(id) {
 		return document.getElementById(id);
@@ -71,6 +74,8 @@
 		});
 		const badge = byId('downtime-count-badge');
 		if (badge && name !== 'table-container') badge.classList.add('d-none');
+		const pagination = byId('downtime-pagination');
+		if (pagination) pagination.classList.toggle('d-none', name !== 'table-container' || downtimeTargets.length <= DOWNTIME_PAGE_SIZE);
 	}
 
 	async function hasAnyUptimeData(since) {
@@ -92,7 +97,7 @@
 	function renderRows(targets) {
 		const tableBody = byId('downtime-table-body');
 		if (!tableBody) return;
-		tableBody.innerHTML = '';
+		tableBody.replaceChildren();
 		targets.forEach(function (target) {
 			const services = target.services || {};
 			const tr = document.createElement('tr');
@@ -123,6 +128,24 @@
 		});
 	}
 
+	function latestStart(target) {
+		return Math.max(0, ...Object.values(target.services || {}).map(function (service) {
+			return Date.parse(service.latest_start) || 0;
+		}));
+	}
+
+	function renderPage() {
+		const pages = Math.ceil(downtimeTargets.length / DOWNTIME_PAGE_SIZE);
+		downtimePage = Math.min(downtimePage, Math.max(0, pages - 1));
+		renderRows(downtimeTargets.slice(downtimePage * DOWNTIME_PAGE_SIZE, (downtimePage + 1) * DOWNTIME_PAGE_SIZE));
+		const status = byId('downtime-page-status');
+		if (status) status.textContent = 'Page ' + (downtimePage + 1) + ' of ' + pages;
+		const prev = byId('downtime-prev');
+		const next = byId('downtime-next');
+		if (prev) prev.disabled = downtimePage === 0;
+		if (next) next.disabled = downtimePage >= pages - 1;
+	}
+
 	async function loadDowntimeOverview() {
 		if (downtimeLoading) {
 			downtimeRefreshPending = true;
@@ -143,13 +166,16 @@
 			const targets = data.targets || [];
 
 			if (targets.length === 0) {
+				downtimeTargets = [];
+				downtimePage = 0;
 				showState((await hasAnyUptimeData(since)) ? 'success' : 'empty');
 				return;
 			}
 
-			renderRows(targets.slice().sort(function (a, b) {
-				return worstSeconds(b) - worstSeconds(a);
-			}));
+			downtimeTargets = targets.slice().sort(function (a, b) {
+				return latestStart(b) - latestStart(a) || Number(a.target_id) - Number(b.target_id);
+			});
+			renderPage();
 			const badge = byId('downtime-count-badge');
 			if (badge) badge.textContent = targets.length + ' affected';
 			showState('table-container');
@@ -166,13 +192,19 @@
 		}
 	}
 
-	function worstSeconds(target) {
-		return Math.max.apply(null, Object.values(target.services || {}).map(function (s) {
-			return s.downtime_seconds;
-		}).concat(0));
-	}
-
 	document.addEventListener('DOMContentLoaded', function () {
+		byId('downtime-prev')?.addEventListener('click', function () {
+			if (downtimePage > 0) {
+				downtimePage--;
+				renderPage();
+			}
+		});
+		byId('downtime-next')?.addEventListener('click', function () {
+			if ((downtimePage + 1) * DOWNTIME_PAGE_SIZE < downtimeTargets.length) {
+				downtimePage++;
+				renderPage();
+			}
+		});
 		loadDowntimeOverview();
 
 		// Push-driven while the live channel is healthy; the interval only runs as fallback.

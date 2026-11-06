@@ -251,6 +251,7 @@ def _summarize_periods(periods, *, now: datetime) -> dict:
         "downtime_seconds": round(total),
         "incidents": len(periods),
         "ongoing": any(p.end is None for p in periods),
+        "latest_start": max((p.start for p in periods), default=None).isoformat() if periods else None,
     }
 
 
