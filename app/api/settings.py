@@ -1162,7 +1162,7 @@ async def send_test_email(
     _log.info("Test email queued (queue_id=%d)", queue_id)
     return {
         "ok": True,
-        "message": f"Test email queued for {payload.recipient}; the SMTP handoff result appears in the delivery log",
+        "message": "Test email queued.",
     }
 
 

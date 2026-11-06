@@ -362,3 +362,69 @@ def test_valid_coordinates_and_has_coords_agree(lat, lon, ok):
 )
 def test_finite_number(value, ok):
     assert traceroute_geo._finite_number(value) is ok  # noqa: SLF001
+
+
+@pytest.mark.parametrize(("offset_deg", "approved"), [(0.44, True), (0.46, False)], ids=["49km", "51km"])
+def test_canonical_location_must_lie_within_the_curated_anchor_distance(conn, offset_deg, approved) -> None:
+    lat = 48.85 + offset_deg  # 1 degree of latitude is ~111.2 km: 0.44 -> ~48.9 km, 0.46 -> ~51.2 km
+    for ip, route in (("8.8.4.4", "c"), ("1.0.0.1", "d")):
+        pop_candidates.observe(
+            conn,
+            code="xyz",
+            hostname="xyz.example.net",
+            public_ip=ip,
+            provider="generic",
+            measurement_key=_key(route),
+            proposal={"city": "Paris", "country": "FR", "lat": lat, "lon": 2.35, "canonical_guess": "cur"},
+        )
+    conn.execute(
+        "INSERT INTO pop_locations (canonical_code, alias_code, city, country, lat, lon, source, confidence, priority, "
+        "created_at, updated_at) VALUES ('cur','cur','Paris','FR',48.85,2.35,'seed',100,0,'x','x')"
+    )
+    conn.commit()
+    kwargs = {
+        "action": "approve", "actor": "alice", "evidence": "review", "canonical": "cur",
+        "city": "Paris", "country": "FR", "lat": lat, "lon": 2.35,
+    }  # fmt: skip
+    if approved:
+        pop_candidates.review(conn, "xyz", **kwargs)
+        assert conn.execute("SELECT canonical_code FROM pop_locations WHERE alias_code='xyz'").fetchone()[0] == "cur"
+    else:
+        with pytest.raises(ValueError, match="Reviewed canonical location lacks a nearby curated anchor"):
+            pop_candidates.review(conn, "xyz", **kwargs)
+
+
+# --- Backend: the configured sender decides the profile account ----------------------------------
+
+
+def _profile_backend(accounts: list[str]):
+    import threading
+    from types import SimpleNamespace
+
+    from app.services.notifications.signal_cli_backend import SignalCliBackend
+
+    backend = object.__new__(SignalCliBackend)
+    backend._state_lock = threading.RLock()  # noqa: SLF001
+    backend._sender = None  # noqa: SLF001 - production default
+    backend.list_accounts = lambda: accounts  # type: ignore[method-assign]
+    backend.rpc_calls = []
+    backend._run_signal_rpc = lambda method, params, timeout: (
+        backend.rpc_calls.append((method, params)) or SimpleNamespace()
+    )  # noqa: SLF001
+    backend._require_rpc_success = lambda *a, **k: None  # noqa: SLF001
+    return backend
+
+
+def test_update_profile_uses_the_passed_configured_sender() -> None:
+    backend = _profile_backend(["+491", "+492"])
+    backend.update_profile("justUp", avatar_path="", sender="+492")
+    assert backend.rpc_calls[0][1]["account"] == "+492"
+
+
+def test_update_profile_rejects_an_unregistered_configured_sender() -> None:
+    from app.services.notifications.signal_errors import SignalNotRegistered
+
+    backend = _profile_backend(["+491"])
+    with pytest.raises(SignalNotRegistered):
+        backend.update_profile("justUp", avatar_path="", sender="+499")
+    assert backend.rpc_calls == []

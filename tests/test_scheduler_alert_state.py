@@ -397,6 +397,47 @@ def test_outbox_retries_partial_dispatch_then_completes(db_path, tmp_path):
         sqlite_db.close_connection(conn)
 
 
+def test_outbox_row_with_unparsable_started_at_backs_off_and_does_not_stop_the_batch(db_path, tmp_path):
+    target_id = _target(db_path)
+    conn = sqlite_db.connect(db_path)
+    try:
+        for alert_id in ("bad-alert", "good-alert"):
+            sqlite_db.create_alert(
+                conn,
+                alert_id=alert_id,
+                target_id=target_id,
+                target_name="t",
+                failed_service="http",
+                started_at=utcnow(),
+                recipients_notified=[],
+                dispatch_outbox=True,
+            )
+        conn.execute("UPDATE alert_dispatch_outbox SET started_at = 'not-a-date' WHERE alert_id = 'bad-alert'")
+        conn.commit()
+    finally:
+        sqlite_db.close_connection(conn)
+
+    sched = _sched(db_path, tmp_path)
+    dispatcher = mock.MagicMock()
+    dispatcher.dispatch_alert.return_value = mock.Mock(channels_attempted=1, all_succeeded=True)
+    sched._get_dispatcher = mock.Mock(return_value=dispatcher)
+    with pytest.raises(RuntimeError, match="AlertDispatchPendingError"):
+        asyncio.run(sched._process_alert_dispatch_outbox())
+
+    assert dispatcher.dispatch_alert.call_count == 1  # the valid row was still dispatched
+    conn = sqlite_db.connect(db_path)
+    try:
+        rows = {
+            r["alert_id"]: r
+            for r in conn.execute("SELECT alert_id, status, attempts, next_attempt_at FROM alert_dispatch_outbox")
+        }
+        assert rows["good-alert"]["status"] == "completed"
+        assert (rows["bad-alert"]["status"], rows["bad-alert"]["attempts"]) == ("pending", 1)
+        assert rows["bad-alert"]["next_attempt_at"] > utcnow().isoformat()  # normal backoff applies
+    finally:
+        sqlite_db.close_connection(conn)
+
+
 def test_notification_worker_progresses_while_housekeeping_is_blocked(db_path, tmp_path):
     sched = _sched(db_path, tmp_path)
     loop_thread = None
@@ -497,7 +538,6 @@ def test_tsdb_write_failure_is_retained_until_that_target_persists(db_path, tmp_
     check_result = scheduler.checks.CheckResult(ok=True, latency_ms=1.0)
     with (
         mock.patch.object(scheduler.checks, "ping", mock.AsyncMock(return_value=check_result)),
-        mock.patch.object(scheduler.tsdb_db, "query", return_value=[]),
         mock.patch.object(scheduler.tsdb_db, "append_points", side_effect=OSError("disk unavailable")),
     ):
         asyncio.run(sched._run_target(target_id, utcnow()))
@@ -505,7 +545,6 @@ def test_tsdb_write_failure_is_retained_until_that_target_persists(db_path, tmp_
 
     with (
         mock.patch.object(scheduler.checks, "ping", mock.AsyncMock(return_value=check_result)),
-        mock.patch.object(scheduler.tsdb_db, "query", return_value=[]),
         mock.patch.object(scheduler.tsdb_db, "append_points"),
     ):
         asyncio.run(sched._run_target(target_id, utcnow()))
@@ -660,7 +699,6 @@ def test_scheduler_checks_certificate_on_explicit_cert_host_and_port(db_path, tm
     cert_check = mock.AsyncMock(return_value=scheduler.checks.CheckResult(ok=False, detail="unreachable"))
     with (
         mock.patch.object(scheduler.checks, "cert_expiration", cert_check),
-        mock.patch.object(scheduler.tsdb_db, "query", return_value=[]),
         mock.patch.object(scheduler.tsdb_db, "append_points"),
     ):
         asyncio.run(sched._run_target(target_id, utcnow()))
@@ -681,7 +719,6 @@ def test_invalid_stored_tcp_ports_report_target_down_instead_of_checking_port_80
     tcp = mock.AsyncMock(return_value=scheduler.checks.CheckResult(ok=True, latency_ms=1.0))
     with (
         mock.patch.object(scheduler.checks, "tcp_connect", tcp),
-        mock.patch.object(scheduler.tsdb_db, "query", return_value=[]),
         mock.patch.object(scheduler.tsdb_db, "append_points"),
     ):
         asyncio.run(sched._run_target(target_id, utcnow()))
@@ -720,7 +757,6 @@ def _run_with_slow_tcp_check(db_path, tmp_path, *, renew_period: float, release_
         mock.patch("app.db.sqlite.scheduler_runs.utcnow", lambda: clock["now"]),
         mock.patch.object(scheduler, "_lock_renew_period", lambda _ttl: renew_period),
         mock.patch.object(scheduler.checks, "tcp_connect", slow_tcp),
-        mock.patch.object(scheduler.tsdb_db, "query", return_value=[]),
         mock.patch.object(scheduler.tsdb_db, "append_points", append),
     ):
         asyncio.run(sched._run_target(target_id, utcnow()))
@@ -893,7 +929,6 @@ def test_slow_tsdb_writes_run_off_the_event_loop_and_share_one_cycle_stamp(db_pa
     with (
         mock.patch.object(scheduler.checks, "http_head", mock.AsyncMock(return_value=http_ok)),
         mock.patch.object(scheduler.checks, "ping", mock.AsyncMock(return_value=ping_ok)),
-        mock.patch.object(scheduler.tsdb_db, "query", return_value=[]),
         mock.patch.object(scheduler.tsdb_db, "append_points", slow_append),
     ):
         loop_thread = asyncio.run(scenario())

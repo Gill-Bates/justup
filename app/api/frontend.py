@@ -1911,7 +1911,7 @@ async def _run_traceroute_fragment(
         route_map_features,
         shorten_ipv6_for_display,
     )
-    from ..services.traceroute_service import TRACE_HOP_LIMIT, analyze_route, trace
+    from ..services.traceroute_service import NO_IP_MARKERS, TRACE_HOP_LIMIT, analyze_route, trace
 
     # Read before the first geo decision: data published meanwhile only makes the next request render again.
     geo_version = await run_in_threadpool(ixp_index.geo_version)
@@ -1996,7 +1996,12 @@ async def _run_traceroute_fragment(
     for h in interpolated_hops:
         hop_data = dict(h)
         ip = h.get("ip")
-        if ip and ip != "*" and h.get("status") not in ("timeout", "interpolated") and not h.get("_interpolated"):
+        if (
+            ip
+            and ip not in NO_IP_MARKERS
+            and h.get("status") not in ("timeout", "interpolated")
+            and not h.get("_interpolated")
+        ):
             if ip not in view_by_ip:
                 loc = (
                     destination_geo

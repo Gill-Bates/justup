@@ -46,6 +46,7 @@ function build() {
     confirm: () => true,
   });
   ctx.window = ctx;
+  vm.runInContext(statusBadgeSrc, ctx);
   ctx.document = { getElementById: (id) => dom[id] ?? null, querySelectorAll: () => [] };
   const fragment = () => {
     dom = {};
@@ -153,7 +154,6 @@ test("old failures outside the 24 h window do not turn the state red", () => {
 test("status labels say accepted/handoff and never claim delivery", () => {
   const h = build();
   h.fragment();
-  vm.runInContext(statusBadgeSrc, h.ctx);
   vm.runInContext(src, h.ctx);
   const { statusBadge } = h.ctx._spoolerInternals;
   for (const status of ["sent", "pending", "failed", "processing", "other"]) assert.doesNotMatch(statusBadge(status, 1), /material-icons|<i\b|<svg/, "a status badge holds no icon");

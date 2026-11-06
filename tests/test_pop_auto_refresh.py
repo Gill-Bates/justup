@@ -479,7 +479,7 @@ def test_incomplete_import_flags_partial_and_keeps_data(conn, monkeypatch):
     monkeypatch.setattr(pop_refresh, "_fetch_with_retry", lambda url: _facs(3))
     monkeypatch.setattr(pop_refresh, "MAX_RECORDS_PER_RUN", 1)
     res = pop_refresh.refresh_from_peeringdb(lambda: conn)
-    assert res.error and "partial" in res.error
+    assert res.error == "[partial][phase=process_facilities] incomplete snapshot: max records limit (1) reached"
     assert res.retired == 0
     # The pre-existing row is not retired because the snapshot was incomplete.
     assert conn.execute("SELECT retired FROM pop_locations WHERE alias_code='zzz'").fetchone()[0] == 0
@@ -594,3 +594,33 @@ def test_status_reports_the_ixp_snapshot_and_the_ixp_reason(conn):
     status = pop_refresh.get_refresh_status(lambda: conn)
     assert status["ixp_snapshot"]["prefix_count"] == 3
     assert "IXP" not in status["auto_refresh"]["next_attempt_reason"]
+
+
+@pytest.mark.parametrize(
+    ("run", "expected"),
+    [
+        (None, None),
+        ({}, None),
+        ({"started_at": "2026-01-01T10:00:00+00:00"}, "2026-01-01T10:00:00+00:00"),
+        (
+            {"started_at": "2026-01-01T10:00:00+00:00", "finished_at": "2026-01-01T10:05:00+00:00"},
+            "2026-01-01T10:05:00+00:00",
+        ),
+    ],
+    ids=["none", "empty", "only-started", "both-prefers-finished"],
+)
+def test_attempt_time_is_finished_else_started(run, expected):
+    assert pop_refresh._run_time_raw(run) == expected  # noqa: SLF001
+    assert (pop_refresh._attempt_timestamp(run) is None) == (expected is None)  # noqa: SLF001
+
+
+def test_status_agrees_with_the_refresh_plan(conn):
+    now = utcnow()
+    started = now - timedelta(days=2)
+    _insert_run(conn, status="completed", started=started, finished=started + timedelta(minutes=3))
+    status = pop_refresh.get_refresh_status(lambda: conn)["auto_refresh"]
+    plan = pop_refresh.plan_next_refresh(conn, include_jitter=False)
+    assert status["last_attempt_at"] == (started + timedelta(minutes=3)).isoformat()
+    assert status["next_attempt_reason"] == plan.reason
+    planned_at = now + timedelta(seconds=plan.delay_seconds)
+    assert abs((pop_refresh.parse_utc(status["next_attempt_at"]) - planned_at).total_seconds()) < 5

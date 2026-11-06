@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import itertools
+import math
 import threading
 import time
 from typing import Any
@@ -658,3 +659,63 @@ def test_http_requests_follow_the_25_km_rule_and_the_switch(
     loc = traceroute_geo.geolocate_with_hostname_hint("8.8.8.8")
     assert len(http_calls) == http_expected
     assert (loc["lat"], loc["lon"]) == BERLIN  # a failed or skipped fallback keeps the local position
+
+
+# --- Radius handling: one definition of a usable radius, boundaries per call site -------------------
+
+_RADII = [
+    (True, False, False),
+    (float("nan"), False, False),
+    (float("inf"), False, False),
+    (None, False, False),
+]
+
+
+def _radius_cases(lower_inclusive: bool, upper: float | None):
+    """(value, usable) pairs: bad types never count; 0 follows the site's lower bound; the upper bound is inclusive."""
+    cases = [(value, False) for value, _a, _b in _RADII]
+    cases += [(-1.0, False), (0, lower_inclusive), (10.0, True)]
+    if upper is not None:
+        cases += [(upper, True), (upper + 1, False)]
+    return cases
+
+
+@pytest.mark.parametrize(("radius", "usable"), _radius_cases(True, traceroute_geo.MAX_CITY_RADIUS_KM), ids=repr)
+def test_geoip_record_radius_and_city_precision_boundaries(radius, usable) -> None:
+    record = {"lat": 50.0, "lon": 8.0, "country": "DE", "city": "Frankfurt", "subdivision": None}
+    loc = traceroute_geo._to_geo_location("8.8.8.8", {**record, "accuracy_radius": radius})
+    stored = loc["accuracy_radius_km"]
+    # The record keeps any finite non-negative radius; only the precision class is capped.
+    keeps = isinstance(radius, int | float) and not isinstance(radius, bool) and math.isfinite(radius) and radius >= 0
+    assert (stored is not None) == keeps
+    _source, accuracy = traceroute_geo._classify_location(
+        {"lat": 50.0, "lon": 8.0, "city": "Frankfurt", "accuracy_radius_km": radius}
+    )
+    assert (accuracy == traceroute_geo.GeoAccuracy.PRECISE) is usable
+
+
+@pytest.mark.parametrize(("radius", "usable"), _radius_cases(False, None), ids=repr)
+def test_location_note_names_only_a_positive_finite_radius(radius, usable) -> None:
+    for confidence in (None, traceroute_geo.CONFIDENCE_IXP):
+        note = traceroute_geo.location_note({"accuracy_radius_km": radius, "city": "X", "_confidence": confidence})
+        assert ("radius about" in note) is usable
+
+
+@pytest.mark.parametrize(("radius", "usable"), _radius_cases(False, traceroute_geo.MAX_MAP_RADIUS_KM), ids=repr)
+def test_map_radius_is_set_only_for_a_positive_finite_radius_within_the_map_limit(radius, usable) -> None:
+    point = {"_approximate": True, "accuracy_radius_km": radius}
+    traceroute_geo._attach_map_radii([point])
+    assert (traceroute_geo.META_MAP_RADIUS_KM in point) is usable
+
+
+@pytest.mark.parametrize(
+    ("radius", "kept"), [(0, True), (-1.0, False), (float("nan"), False), (True, False), (50.0, True)]
+)
+def test_merged_hops_keep_only_usable_radii(radius, kept) -> None:
+    def hop(n, r):
+        return {"hop": n, "lat": 50.0, "lon": 8.0, "_approximate": True, "accuracy_radius_km": r}
+
+    points = [hop(1, radius), hop(2, 5.0), {"hop": 3, "lat": 10.0, "lon": 10.0}]
+    merged = traceroute_geo._deduplicate_geo_points(points)
+    expected = max(radius, 5.0) if kept else 5.0
+    assert merged[0]["accuracy_radius_km"] == expected

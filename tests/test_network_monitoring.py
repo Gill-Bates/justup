@@ -906,9 +906,49 @@ def test_recovery_resolves_the_udp_alert_and_unknown_does_not(db_path, tmp_path,
 
 
 def test_restored_alert_with_endpoint_tokens_marks_the_service_down_again():
-    cfg = {"enable_udp_scan": True, "enable_tcp_connect": True, "enable_ping": True}
+    cfg = {"enable_udp_scan": True, "udp_ports": [123], "enable_tcp_connect": True, "enable_ping": True}
     assert scheduler._restorable_services(cfg, "udp:123, tcp:25") == ["tcp", "udp"]
     assert scheduler._restorable_services(cfg, "udp:123") == ["udp"]
+
+
+def test_restore_falls_back_to_the_enabled_checks_when_the_failed_service_is_disabled():
+    cfg = {"enable_ping": True, "enable_tcp_connect": False}
+    assert scheduler._restorable_services(cfg, "tcp:25") == ["ping"]
+
+
+_SINGLE_CHECKS = [
+    ("enable_http_check", "http_up", {}),
+    ("enable_ping", "ping_up", {}),
+    ("enable_tcp_connect", "tcp_up", {}),
+    ("enable_udp_scan", "udp_up", {"udp_ports": [53]}),
+]
+
+
+@pytest.mark.parametrize(("flag", "metric", "extra"), _SINGLE_CHECKS, ids=[c[1] for c in _SINGLE_CHECKS])
+def test_each_availability_check_alone_drives_status_metrics_and_restore(flag, metric, extra):
+    from app.utils.uptime_metric import enabled_availability_metrics, select_uptime_metric
+
+    cfg = {flag: True, **extra}
+    service = metric.removesuffix("_up")
+    assert enabled_availability_metrics(cfg) == (metric,)
+    assert select_uptime_metric(cfg) == metric
+    assert scheduler._restorable_services(cfg, "") == [service]
+    assert scheduler.MonitorScheduler._overall_status(cfg, {metric: 1}) == scheduler.TargetStatus.UP
+    assert scheduler.MonitorScheduler._overall_status(cfg, {metric: 0}) == scheduler.TargetStatus.DOWN
+    assert scheduler.MonitorScheduler._overall_status(cfg, {metric: None}) == scheduler.TargetStatus.UNKNOWN
+
+
+@pytest.mark.parametrize("ports", [None, "", []])
+def test_udp_scan_without_ports_counts_nowhere(ports):
+    from app.utils.uptime_metric import enabled_availability_metrics, select_uptime_metric
+
+    cfg = {"enable_udp_scan": True, "udp_ports": ports, "enable_ping": True}
+    assert enabled_availability_metrics(cfg) == ("ping_up",)
+    assert select_uptime_metric({"enable_udp_scan": True, "udp_ports": ports}) is None
+    assert scheduler._restorable_services(cfg, "udp:123") == ["ping"]  # udp is not a restorable service
+    assert scheduler.MonitorScheduler._overall_status(cfg, {"ping_up": 1, "udp_up": 0}) == scheduler.TargetStatus.UP
+    only_udp = {"enable_udp_scan": True, "udp_ports": ports}
+    assert scheduler.MonitorScheduler._overall_status(only_udp, {"udp_up": 0}) == scheduler.TargetStatus.DISABLED
 
 
 def test_port_status_constants_match_the_contract():

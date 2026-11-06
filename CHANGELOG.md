@@ -1,5 +1,6 @@
 ## [Unreleased]
 
+- `Changed` Status badges no longer show a check, cross or other icon; the state is carried by the badge colour and its word, and UNKNOWN by its dashed edge. Web badges come from one Jinja macro and one JS helper (`JuStatusBadge`); PDF and e-mail badges never had icons.
 - `Changed` The Docker Compose example stores data in the named volume `justup-data` instead of the repository's `docker/` directory, which the entrypoint used to `chown` recursively. Existing installs must copy `sqlite`, `tsdb`, `signal` and `geoip` into the volume before the next start, otherwise the app starts with an empty database; `JUSTUP_DATA=./` keeps the old directory only as a stopgap.
 - `Fix` On the Targets page, a refresh requested by an action (delete, enable/disable) or by the search could be dropped for two seconds after a live update; the list now always refreshes. Closing a group by hand during a search no longer reopens it on the next live update.
 - `Fix` Mail subjects show `&`, `<` and quotes from the target name as typed instead of HTML entities such as `&amp;`; this covers alert mails, the test mail and the template preview.

@@ -40,7 +40,7 @@ from app.services import ixp_index
 from app.services.geo_resolver import MAX_CITY_RADIUS_KM
 from app.services.ip_lookup import lookup_online_sources, public_ip
 from app.services.pop_codes import lookup_pop_code, observe_unknown_pop
-from app.services.traceroute_service import STATUS_OK, STATUS_PARTIAL, STATUS_TIMEOUT
+from app.services.traceroute_service import NO_IP_MARKERS, STATUS_OK, STATUS_PARTIAL, STATUS_TIMEOUT
 from app.utils.constants import (
     DEFAULT_ONLINE_GEO_FALLBACK_ENABLED,
     GEOIP_DB_RELPATH,
@@ -117,7 +117,7 @@ def is_ipv6_address(ip: str) -> bool:
     Returns:
         True if IPv6, False if IPv4 or invalid
     """
-    if not ip or ip in ("*", "-", "—"):
+    if not ip or ip in NO_IP_MARKERS:
         return False
     try:
         return isinstance(ipaddress.ip_address(ip), ipaddress.IPv6Address)
@@ -927,7 +927,7 @@ def _normalize_hop_status(ip: str | None, status: str) -> str:
     """Return a known hop status; a missing or unknown one is inferred from the IP (broken parsers)."""
     if status in (STATUS_OK, STATUS_PARTIAL, STATUS_TIMEOUT, STATUS_INTERPOLATED):
         return status
-    return STATUS_OK if ip and ip not in ("*", "-", "???") else STATUS_TIMEOUT
+    return STATUS_OK if ip and ip not in NO_IP_MARKERS else STATUS_TIMEOUT
 
 
 def _destination_disposition(hops: list[dict], destination_ip: str | None) -> tuple[int, bool]:
@@ -986,7 +986,7 @@ def build_route_model(
         if status == STATUS_INTERPOLATED or h.get(META_INTERPOLATED):
             nodes.append(_route_node(hop_num, ip, hostname, STATUS_INTERPOLATED, None))
             continue
-        if status == STATUS_TIMEOUT or ip in ("*", "-", "???"):
+        if status == STATUS_TIMEOUT or ip in NO_IP_MARKERS:
             nodes.append(_route_node(hop_num, ip, hostname, STATUS_TIMEOUT, None))
             continue
         if status not in (STATUS_OK, STATUS_PARTIAL):
@@ -1104,7 +1104,7 @@ def route_hops_to_geo_points(
         if isinstance(hop_num, int):
             prev_hop = hop_num
 
-        if h.get(META_INTERPOLATED) or ip in ("*", "-", "???") or status not in (STATUS_OK, STATUS_PARTIAL):
+        if h.get(META_INTERPOLATED) or ip in NO_IP_MARKERS or status not in (STATUS_OK, STATUS_PARTIAL):
             gap = True  # silent, interpolated or unusable hops never get a location
             if isinstance(hop_num, int):
                 skipped.append(hop_num)
@@ -1216,11 +1216,16 @@ def route_hops_to_geo_points(
     # Merge co-located consecutive hops of the chain for a cleaner map (same role only).
     if len(points) > 2:
         points = _deduplicate_geo_points(points)
+    _attach_map_radii(points)
+    return points
+
+
+def _attach_map_radii(points: list[dict]) -> None:
+    """Set the drawn uncertainty radius on approximate points whose radius is usable and fits the map."""
     for point in points:
         radius = point.get("accuracy_radius_km")
         if point.get("_approximate") and _finite_number(radius) and 0 < radius <= MAX_MAP_RADIUS_KM:
             point[META_MAP_RADIUS_KM] = float(radius)
-    return points
 
 
 def route_map_features(points: list[dict]) -> dict[str, bool]:

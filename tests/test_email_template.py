@@ -558,3 +558,10 @@ def test_placeholder_docs_cover_exactly_the_whitelist():
 
     assert set(PLACEHOLDER_DOCS) == ALLOWED_PLACEHOLDERS
     assert all(cat and desc for cat, desc in PLACEHOLDER_DOCS.values())
+
+
+def test_placeholder_docs_cover_exactly_the_whitelist():
+    from app.services.notifications.email_template import ALLOWED_PLACEHOLDERS, PLACEHOLDER_DOCS
+
+    assert set(PLACEHOLDER_DOCS) == ALLOWED_PLACEHOLDERS
+    assert all(cat and desc for cat, desc in PLACEHOLDER_DOCS.values())

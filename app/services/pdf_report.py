@@ -84,6 +84,7 @@ from app.services.traceroute_geo import (
     route_hops_to_geo_points,
 )
 from app.services.traceroute_service import (
+    NO_IP_MARKERS,
     TRACE_HOP_LIMIT,
     analyze_route,
     trace_sync,
@@ -283,7 +284,7 @@ def _run_traceroute_with_interpolation(
         ip = h.get("ip")
         if (
             ip
-            and ip not in ("*", "-", "???", "—")
+            and ip not in NO_IP_MARKERS
             and h.get("status") not in ("timeout", "interpolated")
             and not h.get("_interpolated")
         ):
@@ -3565,7 +3566,7 @@ class PDFReportBuilder:
 
             hop_num = str(hop.get("hop", "?"))
             ip_raw = hop.get("ip_display") or hop.get("ip")
-            ip = str(ip_raw) if ip_raw and ip_raw not in ("-", "*", "???") else "—"
+            ip = str(ip_raw) if ip_raw and ip_raw not in NO_IP_MARKERS else "—"
             hostname = hop.get("hostname_display") or hop.get("hostname")
             hostname = str(hostname) if hostname and hostname not in ("-", "—") and hostname != ip else ""
             if index == 0:

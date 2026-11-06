@@ -29,6 +29,9 @@ from app.services.nmap_scanner import NmapScannerError
 from app.services.route_model import Route
 from app.utils.constants import HopStatus
 
+# Placeholders a hop row carries instead of an address (no reply, or not displayable).
+NO_IP_MARKERS = frozenset({"*", "-", "???", "—"})
+
 _log = logging.getLogger(__name__)
 
 # Highest TTL the worker probes; a route that ends here without the destination may be cut off.

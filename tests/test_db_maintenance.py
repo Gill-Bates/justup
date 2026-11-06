@@ -253,9 +253,14 @@ def test_retention_prunes_old_completed_outbox_rows_only(conn):
     _open_alert(conn, "a")
     _outbox(conn, "a", "open", "completed", age_days=retention.NOTIFICATION_RETENTION_DAYS + 1)
     _outbox(conn, "a", "resolved", "pending", age_days=retention.NOTIFICATION_RETENTION_DAYS + 1)
+    _open_alert(conn, "b")
+    _outbox(conn, "b", "open", "completed", age_days=0)  # a young completed row is kept
     conn.commit()
     retention.run_retention(conn)
-    assert [r[0] for r in conn.execute("SELECT event_type FROM alert_dispatch_outbox")] == ["resolved"]
+    assert sorted(r[0] for r in conn.execute("SELECT alert_id || ':' || event_type FROM alert_dispatch_outbox")) == [
+        "a:resolved",
+        "b:open",
+    ]
 
 
 def test_deleting_alerts_or_target_removes_their_pending_outbox_rows(conn):

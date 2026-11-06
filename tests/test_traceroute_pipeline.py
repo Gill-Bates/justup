@@ -410,3 +410,43 @@ def test_approximate_city_between_reliable_hops_stays_off_the_route_line_in_the_
     table = [h["hop"] for h in ctx["hops"] if not h.get("_collapsed")]
     assert [n for n in table if n >= 7] == [7, 8, 10, 11, 13]
     assert next(h for h in ctx["hops"] if h["hop"] == 8)["city"] == "Kottenheim"
+
+
+# --- One definition of "this hop has no address" --------------------------------------------------
+
+_NO_IP = ["*", "-", "???", "—"]
+
+
+def test_no_ip_markers_are_the_four_placeholders() -> None:
+    from app.services.traceroute_service import NO_IP_MARKERS
+
+    assert NO_IP_MARKERS == frozenset(_NO_IP)
+
+
+@pytest.mark.parametrize("marker", [*_NO_IP, None, ""])
+def test_a_hop_without_address_is_normalised_to_timeout(marker) -> None:
+    assert traceroute_geo._normalize_hop_status(marker, "ok") == traceroute_geo.STATUS_TIMEOUT  # noqa: SLF001
+    assert traceroute_geo._normalize_hop_status("192.0.2.1", "ok") == traceroute_geo.STATUS_OK  # noqa: SLF001
+
+
+@pytest.mark.parametrize("marker", _NO_IP)
+def test_a_hop_without_address_never_becomes_a_map_point(monkeypatch: pytest.MonkeyPatch, marker: str) -> None:
+    monkeypatch.setattr(traceroute_geo, "geolocate_with_hostname_hint", _geo)
+    hops = [_hop(1, "192.0.2.1"), {"hop": 2, "ip": marker, "hostname": None, "status": "ok", "rtt_ms": 4.0}]
+    points = traceroute_geo.route_hops_to_geo_points(hops)
+    assert [p["ip"] for p in points] == ["192.0.2.1"]
+
+
+@pytest.mark.parametrize("marker", _NO_IP)
+def test_the_web_fragment_resolves_no_location_for_a_placeholder_ip(
+    monkeypatch: pytest.MonkeyPatch, marker: str
+) -> None:
+    hops = [
+        _hop(1, "192.0.2.1"),
+        {"hop": 2, "ip": marker, "hostname": None, "status": "ok", "rtt_ms": 4.0},
+        _hop(3, TARGET_IP),
+    ]
+    _patch_sources(monkeypatch, hops)
+    web = _web_context(monkeypatch)
+    placeholder = next(h for h in web["hops"] if h.get("hop") == 2)
+    assert not placeholder.get("city") and not placeholder.get("country")

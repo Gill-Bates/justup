@@ -71,4 +71,4 @@ def test_shared_js_status_badge_helper_renders_no_icon_and_takes_no_icon_paramet
     assert result.returncode == 0, result.stderr
     for markup in json.loads(result.stdout):
         assert not ICON.search(markup), markup
-    assert "&lt;x&gt;" in json.loads(result.stdout)[0] and 't&quot;q' in json.loads(result.stdout)[0]
+    assert "&lt;x&gt;" in json.loads(result.stdout)[0] and "t&quot;q" in json.loads(result.stdout)[0]
