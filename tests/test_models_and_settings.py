@@ -270,6 +270,26 @@ def test_about_page_hides_third_party_design_and_uses_theme_text_color():
     assert ".dependencies-table code" in html
 
 
+def test_about_static_files_are_cached_together(tmp_path, monkeypatch):
+    from app.api import frontend
+
+    api_dir = tmp_path / "app" / "api"
+    api_dir.mkdir(parents=True)
+    (tmp_path / "LICENSE").write_text("Example License\n", encoding="utf-8")
+    (tmp_path / "CHANGELOG.md").write_text("First release\n", encoding="utf-8")
+    monkeypatch.setattr(frontend, "__file__", str(api_dir / "frontend.py"))
+    frontend._about_static_text.cache_clear()
+    try:
+        initial = frontend._about_static_text()
+        (tmp_path / "LICENSE").write_text("Changed License\n", encoding="utf-8")
+        (tmp_path / "CHANGELOG.md").write_text("Second release\n", encoding="utf-8")
+        assert frontend._about_static_text() == initial
+        frontend._about_static_text.cache_clear()
+        assert frontend._about_static_text() == ("Changed License\n", "Changed License", "Second release\n")
+    finally:
+        frontend._about_static_text.cache_clear()
+
+
 def test_auth_toggle_bindings_are_idempotent_across_htmx_swaps():
     source = (Path(__file__).resolve().parent.parent / "app/static/js/settings.storage.js").read_text(encoding="utf-8")
     assert "checkbox.dataset.authToggleBound === '1'" in source

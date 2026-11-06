@@ -125,7 +125,7 @@ def test_change_password_conflicts_when_hash_changed_concurrently(conn, monkeypa
 
 def test_verify_signal_requires_admin_and_deduplicates(conn, monkeypatch):
     calls: list[str] = []
-    monkeypatch.setattr(recipients, "_is_phone_probably_registered", lambda p: calls.append(p) or True)
+    monkeypatch.setattr(recipients, "_signal_registration_status", lambda p: calls.append(p) or True)
     nonadmin = _client(conn, recipients.router, user=_mk_user(conn, "v", admin=False))
     assert nonadmin.post("/recipients/verify-signal", json=["+4915112345678"]).status_code == 403
     admin = _client(conn, recipients.router, user=_mk_user(conn, "a", admin=True))
@@ -548,7 +548,7 @@ def test_unlocode_refresh_reports_not_implemented_instead_of_success(conn):
     resp = client.post("/api/admin/pop/refresh", params={"source": "unlocode"})
     assert resp.status_code == 501
     body = resp.json()
-    assert body["results"][0]["error"] == "not_implemented" and body["summary"]["has_errors"]
+    assert body["results"][0]["error"] == "not_implemented" and not body["results"][0]["success"]
     assert conn.execute("SELECT COUNT(*) FROM pop_import_runs").fetchone()[0] == 0
 
 

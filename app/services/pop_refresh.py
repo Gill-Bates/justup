@@ -916,7 +916,7 @@ def _apply_peeringdb_snapshot(
 ERROR_NOT_IMPLEMENTED = "not_implemented"
 
 
-def refresh_from_unlocode(get_conn) -> PopRefreshResult:
+def refresh_from_unlocode(get_conn) -> PopRefreshResult:  # noqa: ARG001 - same signature as the other sources
     """
     UN/LOCODE refresh: not implemented, always returns an ``ERROR_NOT_IMPLEMENTED`` result.
 

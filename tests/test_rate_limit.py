@@ -629,6 +629,8 @@ RATE_LIMITED_ROUTES = {
     ("GET", "/ui/fragments/target-status/{target_id}"): ["60/minute"],
     ("GET", "/ui/fragments/uptime/{target_id}"): ["300/minute"],
     ("GET", "/ui/fragments/traceroute/{target_id}"): ["10/minute"],
+    ("GET", "/ui/fragments/signal-qr"): ["6/minute"],
+    ("GET", "/settings/db-health"): ["10/minute"],
     ("GET", "/reports/targets/{target_id}/pdf"): ["5/minute"],
     ("POST", "/reports/targets/{target_id}/pdf/request"): ["5/minute"],
     ("POST", "/settings/tsdb/purge"): ["10/minute"],
@@ -683,7 +685,7 @@ def _route_specs(router_or_app) -> dict[tuple[str, str], list[str]]:
     return found
 
 
-def test_all_46_rate_limited_routes_keep_their_limit_exactly_once():
+def test_all_48_rate_limited_routes_keep_their_limit_exactly_once():
     found: dict[tuple[str, str], list[str]] = {}
     for router in (
         users.router,
@@ -700,7 +702,7 @@ def test_all_46_rate_limited_routes_keep_their_limit_exactly_once():
         network_scans.router,
     ):
         found |= _route_specs(router)
-    assert len(RATE_LIMITED_ROUTES) == 46
+    assert len(RATE_LIMITED_ROUTES) == 48
     assert found == {k: sorted(v) for k, v in RATE_LIMITED_ROUTES.items()}
 
 

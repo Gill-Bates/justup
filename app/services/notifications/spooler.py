@@ -142,6 +142,10 @@ class SignalQueueLimitError(Exception):
     """The Signal test-message queue has reached an abuse limit."""
 
 
+class RecipientTestCooldownError(Exception):
+    """A recipient test for this channel was queued within its cooldown."""
+
+
 class NotificationType(StrEnum):
     """Type of notification in the queue."""
 
@@ -395,6 +399,7 @@ class NotificationSpooler:
         error: str | None = None,
         immediate: bool = False,
         target_id: int | None = None,
+        recipient_test_cooldown_seconds: int | None = None,
     ) -> int:
         """
         Add a notification to the persistent delivery queue.
@@ -412,6 +417,7 @@ class NotificationSpooler:
             error: The error that caused the initial failure
             immediate: If True, set next_retry_at to now (process immediately)
             target_id: ID of the associated target (None for test messages)
+            recipient_test_cooldown_seconds: Optional per-recipient/channel test cooldown
 
         Returns:
             ID of the queued notification
@@ -439,6 +445,19 @@ class NotificationSpooler:
             raise ValueError(f"Payload is not JSON-serializable: {e}") from e
 
         with self._db_conn(immediate=True) as conn:
+            if notification_type == NotificationType.TEST and recipient_test_cooldown_seconds is not None:
+                cutoff = (now - timedelta(seconds=recipient_test_cooldown_seconds)).isoformat()
+                recent = conn.execute(
+                    """
+                    SELECT 1 FROM notification_queue
+                    WHERE notification_type = ? AND recipient_id = ? AND channel_type = ? AND created_at >= ?
+                    LIMIT 1
+                    """,
+                    (NotificationType.TEST.value, recipient_id, channel_type.value, cutoff),
+                ).fetchone()
+                if recent:
+                    raise RecipientTestCooldownError
+
             if notification_type == NotificationType.ALERT and isinstance(payload.get("alert_id"), str):
                 duplicate = conn.execute(
                     f"""

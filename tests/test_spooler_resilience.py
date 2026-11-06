@@ -15,6 +15,7 @@ from __future__ import annotations
 import smtplib
 import ssl
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from itertools import pairwise
 from pathlib import Path
@@ -32,7 +33,7 @@ from app.services.notifications.signal_errors import (
     SignalTimeout,
 )
 from app.services.notifications.smtp_transport import SMTPConfigurationError, SMTPEncryptionError
-from app.services.notifications.spooler import MAX_RETRIES, NotificationSpooler
+from app.services.notifications.spooler import MAX_RETRIES, NotificationSpooler, RecipientTestCooldownError
 from tests import _support  # noqa: F401 - imported for its sys.path side effect
 
 SENDER_A = "+491110000001"
@@ -100,6 +101,37 @@ def _mail(sp, subject: str = "s", payload: dict | None = None, address: str = "r
 
 def _sig(sp, sender: str = SENDER_A, address: str = "+491110009999") -> int:
     return sp.enqueue("alert", "signal", 1, "R", address, {"message": "m", "sender": sender}, immediate=True)
+
+
+def test_recipient_test_cooldown_is_atomic_per_channel(db_path, clock):
+    sp = _spooler(db_path)
+
+    def queue(channel: str = "email") -> int:
+        return sp.enqueue(
+            "test",
+            channel,
+            1,
+            "R",
+            "r@example.com" if channel == "email" else "+491110009999",
+            {"message": "test"},
+            recipient_test_cooldown_seconds=30,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = [pool.submit(queue) for _ in range(2)]
+        outcomes = []
+        for result in results:
+            try:
+                outcomes.append(result.result(timeout=10))
+            except RecipientTestCooldownError:
+                outcomes.append("cooldown")
+
+    assert len([result for result in outcomes if isinstance(result, int)]) == 1
+    assert outcomes.count("cooldown") == 1
+    assert len(_query(db_path, "SELECT id FROM notification_queue WHERE notification_type = 'test'")) == 1
+    assert isinstance(queue("signal"), int)
+    clock.advance(31)
+    assert isinstance(queue(), int)
 
 
 def _tick(db_path: Path, clock: Clock, *, email=None, signal=None, step: float = 10, fresh: bool = True, sp=None):

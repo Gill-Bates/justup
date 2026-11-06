@@ -10,7 +10,10 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
+from concurrent.futures import Future
+from types import SimpleNamespace
 from unittest import mock
 
 import pytest
@@ -85,6 +88,24 @@ def test_quality_country_resolution_is_cached_and_dns_failure_is_neutral(monkeyp
     assert quality_api._target_country("example.org", 1) == "US"
     assert quality_api._target_country("bad.example", 1) is None
     assert calls == ["example.org", "bad.example"]
+
+
+def test_quality_dns_timeout_and_full_pool_return_no_country(monkeypatch):
+    pending = Future()
+    submitted = []
+    monkeypatch.setattr(
+        quality_api, "_dns_executor", SimpleNamespace(submit=lambda *args: submitted.append(args) or pending)
+    )
+    monkeypatch.setattr(quality_api, "_dns_slots", threading.BoundedSemaphore(1))
+    monkeypatch.setattr(quality_api, "_DNS_TIMEOUT_SECONDS", 0)
+    quality_api._target_country.cache_clear()
+    assert quality_api._target_country("first.example", 1) is None
+    assert quality_api._target_country("second.example", 1) is None
+    assert len(submitted) == 1
+    pending.set_result([(None, None, None, None, ("203.0.113.1", 0))])
+    assert quality_api._target_country("third.example", 1) is None
+    assert len(submitted) == 2
+    quality_api._target_country.cache_clear()
 
 
 @pytest.mark.parametrize(

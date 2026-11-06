@@ -12,7 +12,6 @@ import logging
 import sqlite3
 import time
 from collections.abc import Mapping, Sequence
-from datetime import UTC, datetime, timedelta
 from html import escape
 from threading import BoundedSemaphore, Event, Lock
 from typing import Annotated, Any, NoReturn
@@ -457,19 +456,6 @@ class _TestRefusedError(Exception):
         self.message = message
 
 
-def _test_cooldown_active(conn, recipient_id: int, channel: str) -> bool:
-    cutoff = (datetime.now(UTC) - timedelta(seconds=RECIPIENT_TEST_COOLDOWN_SECONDS)).isoformat()
-    row = conn.execute(
-        """
-        SELECT 1 FROM notification_queue
-        WHERE notification_type = 'test' AND recipient_id = ? AND channel_type = ? AND created_at >= ?
-        LIMIT 1
-        """,
-        (recipient_id, channel, cutoff),
-    ).fetchone()
-    return row is not None
-
-
 def _build_signal_test_payload(conn, name: str) -> dict[str, str]:
     """Resolve the Signal sender (signal-cli is the authority) and build the test message."""
     from ..services.notifications.signal_backend import get_signal_backend
@@ -505,6 +491,7 @@ def _queue_recipient_test(conn, request: Request, row: Mapping[str, Any], channe
     from ..services.notifications.spooler import (
         ChannelType,
         NotificationType,
+        RecipientTestCooldownError,
         SignalQueueLimitError,
         get_spooler,
     )
@@ -513,10 +500,6 @@ def _queue_recipient_test(conn, request: Request, row: Mapping[str, Any], channe
     address = row["phone"] if channel == "signal" else row["email"]
     if not address:
         raise _TestRefusedError(400, f"This recipient has no {_TEST_CHANNEL_LABELS[channel]} address saved.")
-    if _test_cooldown_active(conn, recipient_id, channel):
-        raise _TestRefusedError(
-            429, f"A {_TEST_CHANNEL_LABELS[channel]} test was just sent. Wait a moment before trying again."
-        )
     if channel == "signal":
         payload = _build_signal_test_payload(conn, row["name"])
     else:
@@ -532,7 +515,12 @@ def _queue_recipient_test(conn, request: Request, row: Mapping[str, Any], channe
             recipient_address=address,
             payload=payload,
             immediate=True,
+            recipient_test_cooldown_seconds=RECIPIENT_TEST_COOLDOWN_SECONDS,
         )
+    except RecipientTestCooldownError:
+        raise _TestRefusedError(
+            429, f"A {_TEST_CHANNEL_LABELS[channel]} test was just sent. Wait a moment before trying again."
+        ) from None
     except SignalQueueLimitError:
         raise _TestRefusedError(429, "Signal test-message limit reached. Try again later.") from None
     except Exception as exc:  # noqa: BLE001 - queue boundary: report a generic failure, never the internal text

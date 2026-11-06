@@ -85,7 +85,7 @@ Rect = tuple[float, float, float, float]
 def draw_destination_diamond(
     c, cx: float, cy: float, half: float, fill, font_bold: str, font_size: float, glyph: str = "D"
 ) -> None:
-    """Destination marker: a filled diamond with a white glyph, identical in the map legend and the path diagram; map markers use ``_draw_marker``."""
+    """Destination marker: filled diamond with a white glyph, as in the map legend and path diagram."""
     c.saveState()
     c.setDash()
     c.setLineWidth(0.8)

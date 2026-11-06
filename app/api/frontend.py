@@ -1035,20 +1035,9 @@ def _nmap_version() -> str:
         return label
 
 
-@router.get("/ui/about", response_class=HTMLResponse)
-def about_page(request: Request, conn=Depends(get_conn)):
-    """Render the about page with version, dependencies, and license."""
-    import sys
-
-    user = require_ui_user(request, conn)
-    if isinstance(user, Response):
-        return user
-
-    python_version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
-
-    dependencies = [*_installed_dependencies(), ("signal-cli", _signal_cli_version())]
-    dependencies.sort(key=lambda x: x[0].lower())
-
+@functools.lru_cache(maxsize=1)
+def _about_static_text() -> tuple[str, str, str]:
+    """Read the shipped license and changelog once per process."""
     license_text = ""
     license_paths = [
         Path(__file__).resolve().parent.parent.parent / "LICENSE",
@@ -1083,6 +1072,24 @@ def about_page(request: Request, conn=Depends(get_conn)):
 
     if not changelog_text:
         changelog_text = "Changelog not found."
+
+    return license_text, license_name, changelog_text
+
+
+@router.get("/ui/about", response_class=HTMLResponse)
+def about_page(request: Request, conn=Depends(get_conn)):
+    """Render the about page with version, dependencies, and license."""
+    import sys
+
+    user = require_ui_user(request, conn)
+    if isinstance(user, Response):
+        return user
+
+    python_version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+
+    dependencies = [*_installed_dependencies(), ("signal-cli", _signal_cli_version())]
+    dependencies.sort(key=lambda x: x[0].lower())
+    license_text, license_name, changelog_text = _about_static_text()
 
     return templates.TemplateResponse(
         request,
