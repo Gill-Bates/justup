@@ -85,3 +85,4 @@ def test_map_style_is_json_ready_and_carries_the_zoom_rule():
     style = json.loads(json.dumps(rules.map_style()))
     assert style["labels"]["countryMaxZoom"] >= style["labels"]["cityMinZoom"] - 1  # both name kinds meet at one zoom
     assert style["view"]["fitMaxZoom"] <= style["view"]["maxZoom"]
+    assert style["web"]["arrowSpacing"] == rules.WEB_ARROW_SPACING_PX

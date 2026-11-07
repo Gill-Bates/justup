@@ -16,7 +16,9 @@ const sandbox = {
   console, setTimeout, clearTimeout,
 };
 vm.runInNewContext(source, sandbox);
-const { placeLabels, trimChainSegment, chainBounds, segmentObstacles } = sandbox.window.TracerouteMap;
+const { placeLabels, trimChainSegment, chainBounds, segmentObstacles, unwrapProjectedRoute,
+	sampleQuadraticBezier, pointAndTangentAt, trimPolylineSegment, polylineObstacles,
+	directionArrowDistances } = sandbox.window.TracerouteMap;
 const plain = (value) => JSON.parse(JSON.stringify(value));
 const RULES = { countryMaxZoom: 5, cityMinZoom: 4 };
 // One pixel per 0.1 degree: easy to reason about collisions.
@@ -74,4 +76,37 @@ test('segment obstacles cover the whole link', () => {
   assert.ok(rects.length >= 5);
   assert.equal(rects[0].x1, -2);
   assert.equal(rects[rects.length - 1].x2, 62);
+});
+
+test('a route crossing the date line uses adjacent projected world copies', () => {
+	const points = [{ lon: 179 }, { lon: -179 }, { lon: -178 }];
+	const route = unwrapProjectedRoute(points, (point) => ({ x: point.lon, y: 0 }), 360);
+	assert.deepEqual(plain(route.map((point) => point.x)), [179, 181, 182]);
+	assert.deepEqual(plain(route.map((point) => point.worldCopy)), [0, 1, 1]);
+});
+
+test('quadratic route samples and tangents retain the curve direction', () => {
+	const curve = sampleQuadraticBezier({ x: 0, y: 0 }, { x: 50, y: 80 }, { x: 100, y: 0 }, 100);
+	assert.deepEqual(plain(curve[50]), { x: 50, y: 40 });
+	const first = pointAndTangentAt(curve, 0);
+	const last = pointAndTangentAt(curve, curve.reduce((sum, p, i) => i ? sum + Math.hypot(p.x - curve[i - 1].x, p.y - curve[i - 1].y) : 0, 0));
+	assert.ok(first.ty > 0 && last.ty < 0, 'the forward tangent follows the sampled arc at both ends');
+});
+
+test('trimming a curve leaves the marker gap and collision samples follow the arc', () => {
+	const curve = sampleQuadraticBezier({ x: 0, y: 0 }, { x: 50, y: 80 }, { x: 100, y: 0 }, 40);
+	const trimmed = trimPolylineSegment(curve, { w: 32, h: 32 }, { w: 32, h: 32 }, 3);
+	assert.ok(trimmed && trimmed.length > 0);
+	assert.ok(trimmed.a.x > 0 && trimmed.b.x < 100);
+	const obstacles = polylineObstacles(trimmed.points, 3, 8);
+	assert.ok(obstacles.length > 10);
+	assert.ok(Math.max(...obstacles.map((rect) => rect.y2)) > 35, 'obstacles include the high part of the arc');
+});
+
+test('long curves repeat arrows at a bounded screen-space interval', () => {
+	assert.deepEqual(plain(directionArrowDistances(0, 112)), []);
+	assert.deepEqual(plain(directionArrowDistances(50, 112)), [25]);
+	const distances = directionArrowDistances(500, 112);
+	assert.equal(distances.length, 5);
+	assert.ok(distances.every((distance, index) => distance > 0 && distance < 500 && (!index || distance - distances[index - 1] <= 112)));
 });

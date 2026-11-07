@@ -54,6 +54,9 @@ def test_shared_rules_are_handed_to_the_page_unchanged() -> None:
     labels = json.loads(_attribute(markup, "data-map-labels"))
     assert {"countries", "cities"} <= labels.keys()
     assert len(labels["cities"]) <= rules.MAX_CITY_LABELS
+    markup = _render()
+    assert 'class="tr-map-overview"' in markup
+    assert "data-tr-map-details" in markup
 
 
 def test_legend_names_every_node_and_link_kind() -> None:
@@ -62,8 +65,9 @@ def test_legend_names_every_node_and_link_kind() -> None:
         "Hop (reliable)",
         "Hop (approximate)",
         "Destination",
-        "Connection measured",
-        "Connection estimated or unknown",
+        "Hop order between reliable positions",
+        "Hop order; path estimated or unknown",
+        "Arrows show hop order; curves are schematic",
     ):
         assert text in legend
     assert "tr-legend-line--dashed" in _render()  # dashed swatch differs by pattern, not only color
@@ -73,5 +77,5 @@ def test_legend_hides_kinds_the_route_does_not_have() -> None:
     markup = _render(map_features={"has_approximate": False, "has_unknown_link": False}, destination_on_map=False)
     legend = markup.split('class="tr-map-legend"', 1)[1].split("</ul>", 1)[0]
     assert "Hop (approximate)" not in legend
-    assert "Connection estimated or unknown" not in legend
+    assert "Hop order; path estimated or unknown" not in legend
     assert "Destination" not in legend

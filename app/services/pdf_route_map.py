@@ -428,6 +428,17 @@ def route_segments(points: Sequence[dict[str, Any]]) -> list[tuple[int, int, boo
     ]
 
 
+def pdf_arrow_indices(
+    chain: Sequence[tuple[tuple[float, float], tuple[float, float], bool]],
+) -> list[int]:
+    """PDF-only arrow policy: long solid links indicate direction; dashed links remain unarrowed."""
+    return [
+        index
+        for index, (a, b, dashed) in enumerate(chain)
+        if not dashed and math.hypot(b[0] - a[0], b[1] - a[1]) > MIN_ARROW_SEGMENT_PX * _PX
+    ]
+
+
 def dash_pattern(weight_pt: float) -> tuple[float, float]:
     """The shared dash rule (stroke, gap in px at the shared weight) scaled to this line weight."""
     stroke, gap = (float(v) for v in DASH_ARRAY.split())
@@ -723,9 +734,9 @@ class RouteMap(Flowable):
                 c.line(a[0], a[1], b[0], b[1])
         c.setDash()
         c.setFillColor(_ROUTE)
-        for a, b, dashed in chain:
-            if not dashed and math.hypot(b[0] - a[0], b[1] - a[1]) > MIN_ARROW_SEGMENT_PX * _PX:
-                self._arrow((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, math.atan2(b[1] - a[1], b[0] - a[0]))
+        for index in pdf_arrow_indices(chain):
+            a, b, _dashed = chain[index]
+            self._arrow((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, math.atan2(b[1] - a[1], b[0] - a[0]))
         c.setStrokeColor(_ROUTE)
         c.setLineWidth(0.6)
         c.setDash(1, 2)

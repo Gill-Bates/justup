@@ -216,23 +216,27 @@
             </header>
             {% set map_id = map_id | default('traceroute-map') %}
             <div class="tr-map-frame">
-                <div id="{{ map_id }}" class="traceroute-map-container" role="region"
-                    aria-label="Interactive route map for {{ route_destination_host or 'the target' }}"
-                    data-geo-points="{{ geo_points | tojson | forceescape }}" data-map-id="{{ map_id }}"
-                    data-map-style="{{ map_style | tojson | forceescape if map_style else '' }}"
-                    data-map-labels="{{ map_labels | tojson | forceescape if map_labels else '' }}"
-                    data-route-start-hop="{{ route_start_hop or '' }}"
-                    data-route-start-is-mapped="{{ 'true' if route_start_is_mapped else 'false' }}"
-                    data-route-destination-host="{{ route_destination_host or '' }}"
-                    data-route-destination-ip="{{ route_destination_ip or '' }}"></div>
+                <div class="tr-map-overview" aria-label="Geographic route overview">
+                    <div id="{{ map_id }}" class="traceroute-map-container" role="region"
+                        aria-label="Interactive route map for {{ route_destination_host or 'the target' }}"
+                        data-geo-points="{{ geo_points | tojson | forceescape }}" data-map-id="{{ map_id }}"
+                        data-map-style="{{ map_style | tojson | forceescape if map_style else '' }}"
+                        data-map-labels="{{ map_labels | tojson | forceescape if map_labels else '' }}"
+                        data-route-start-hop="{{ route_start_hop or '' }}"
+                        data-route-start-is-mapped="{{ 'true' if route_start_is_mapped else 'false' }}"
+                        data-route-destination-host="{{ route_destination_host or '' }}"
+                        data-route-destination-ip="{{ route_destination_ip or '' }}"></div>
+                </div>
+                <div class="tr-map-details" data-tr-map-details aria-label="Detailed route views" hidden></div>
                 <ul class="tr-map-legend" aria-label="Map legend">
                     <li class="tr-map-legend-title">Route showing {{ mapped_hop_count }} of {{ total_hops }} hops</li>
                     {% if route_start_is_mapped %}<li><span class="tr-legend-dot tr-legend-dot--start" aria-hidden="true"></span>Start</li>{% endif %}
                     <li><span class="tr-legend-dot tr-legend-dot--hop" aria-hidden="true"></span>Hop (reliable)</li>
                     {% if destination_on_map %}<li><span class="tr-legend-dot tr-legend-dot--destination" aria-hidden="true"></span>Destination</li>{% endif %}
                     {% if map_features and map_features.has_approximate %}<li><span class="tr-legend-dot tr-legend-dot--approximate" aria-hidden="true"></span>Hop (approximate)</li>{% endif %}
-                    <li><span class="tr-legend-line" aria-hidden="true"></span>Connection measured</li>
-                    {% if map_features and map_features.has_unknown_link %}<li><span class="tr-legend-line tr-legend-line--dashed" aria-hidden="true"></span>Connection estimated or unknown</li>{% endif %}
+                    <li><span class="tr-legend-line" aria-hidden="true"></span>Hop order between reliable positions</li>
+                    {% if map_features and map_features.has_unknown_link %}<li><span class="tr-legend-line tr-legend-line--dashed" aria-hidden="true"></span>Hop order; path estimated or unknown</li>{% endif %}
+                    <li class="tr-legend-arrow-note"><span aria-hidden="true">➤</span> Arrows show hop order; curves are schematic, not cable routes</li>
                 </ul>
             </div>
         </section>

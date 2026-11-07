@@ -381,6 +381,15 @@ def test_pdf_and_web_read_the_same_segments_from_the_servers_points(monkeypatch)
     assert _draw(model)
 
 
+def test_pdf_direction_arrows_remain_a_pdf_specific_solid_link_rule():
+    chain = [
+        ((0.0, 0.0), (100.0, 0.0), False),
+        ((0.0, 10.0), (100.0, 10.0), True),
+        ((0.0, 20.0), (20.0, 20.0), False),
+    ]
+    assert prm.pdf_arrow_indices(chain) == [0]
+
+
 def test_pdf_names_only_path_countries_and_a_capped_set_of_places_from_the_shared_rule(monkeypatch):
     """The labels the PDF draws come from route_map_rules.select_labels (the web map reads the same list)."""
     from app.services import route_map_rules as rules

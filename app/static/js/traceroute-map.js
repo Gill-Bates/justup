@@ -94,7 +94,8 @@
 		},
 		line: { weight: 3, halo: 3, dash: '9 6', minArrowSegment: 64, markerGap: 3 },
 		labels: { maxCities: 8, countryMaxZoom: 5, cityMinZoom: 4 },
-		view: { minZoom: 2, maxZoom: 8, fitMaxZoom: 6, singlePointZoom: 5 }
+		view: { minZoom: 2, maxZoom: 8, fitMaxZoom: 6, singlePointZoom: 5 },
+		web: { arrowSpacing: 112 }
 	};
 
 	function readJsonAttribute(element, name, fallback) {
@@ -193,7 +194,9 @@
 		var rx = size.w / 2;
 		var ry = size.h / 2;
 		if (!(rx > 0) || !(ry > 0)) return 0;
-		return 1 / Math.sqrt((ux / rx) * (ux / rx) + (uy / ry) * (uy / ry));
+		// Use the full rectangle bounds; rounded corners may be empty, but a route line must not
+		// pass underneath a marker's hit box where visual and pointer ownership become ambiguous.
+		return Math.min(ux ? rx / Math.abs(ux) : Infinity, uy ? ry / Math.abs(uy) : Infinity);
 	}
 
 	/**
@@ -218,44 +221,225 @@
 		};
 	}
 
+	/**
+	 * Project a hop chain into a continuous copy of the wrapped map world.
+	 * @param {Array} points
+	 * @param {function(Object, number):Object} project - Hop -> projected pixel point at a fixed zoom
+	 * @param {number} worldWidth - Width of one projected world
+	 * @returns {Array} Projected hops with the nearest deterministic world copy
+	 */
+	function unwrapProjectedRoute(points, project, worldWidth) {
+		var previousX = null;
+		return points.map(function (point, index) {
+			var projected = project(point, index);
+			if (!projected || !isFinite(projected.x) || !isFinite(projected.y)) return null;
+			var x = projected.x;
+			if (previousX !== null && worldWidth > 0 && isFinite(worldWidth)) {
+				x += Math.round((previousX - x) / worldWidth) * worldWidth;
+			}
+			previousX = x;
+			return { point: point, index: index, x: x, y: projected.y,
+				worldCopy: worldWidth > 0 ? Math.round((x - projected.x) / worldWidth) : 0 };
+		});
+	}
+
+	/** Deterministic quadratic curve samples in screen pixels. */
+	function sampleQuadraticBezier(start, control, end, steps) {
+		var count = Math.max(2, Math.floor(steps || 12));
+		var points = [];
+		for (var i = 0; i <= count; i++) {
+			var t = i / count;
+			var oneMinus = 1 - t;
+			points.push({
+				x: oneMinus * oneMinus * start.x + 2 * oneMinus * t * control.x + t * t * end.x,
+				y: oneMinus * oneMinus * start.y + 2 * oneMinus * t * control.y + t * t * end.y
+			});
+		}
+		return points;
+	}
+
+	function quadraticControlPoint(start, end, offset) {
+		var dx = end.x - start.x;
+		var dy = end.y - start.y;
+		var length = Math.hypot(dx, dy) || 1;
+		return { x: (start.x + end.x) / 2 - dy / length * offset,
+			y: (start.y + end.y) / 2 + dx / length * offset };
+	}
+
+	/** Point and forward tangent at a distance along a sampled screen-space polyline. */
+	function pointAndTangentAt(points, distance) {
+		if (!points || points.length < 2) return null;
+		var remaining = Math.max(0, distance);
+		for (var i = 1; i < points.length; i++) {
+			var a = points[i - 1];
+			var b = points[i];
+			var dx = b.x - a.x;
+			var dy = b.y - a.y;
+			var length = Math.hypot(dx, dy);
+			if (!length) continue;
+			if (remaining <= length || i === points.length - 1) {
+				var ratio = Math.min(1, remaining / length);
+				return { x: a.x + dx * ratio, y: a.y + dy * ratio, tx: dx / length, ty: dy / length, segment: i - 1 };
+			}
+			remaining -= length;
+		}
+		return null;
+	}
+
+	function polylineLength(points) {
+		var length = 0;
+		for (var i = 1; i < points.length; i++) length += Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y);
+		return length;
+	}
+
+	function outsideMarkerBox(point, center, size, gap) {
+		return point.x < center.x - size.w / 2 - gap || point.x > center.x + size.w / 2 + gap
+			|| point.y < center.y - size.h / 2 - gap || point.y > center.y + size.h / 2 + gap;
+	}
+
+	/** Distances for repeated direction arrows along a long visible segment. */
+	function directionArrowDistances(length, spacing) {
+		if (!(length > 0)) return [];
+		var count = Math.max(1, Math.ceil(length / Math.max(24, spacing || 112)));
+		return Array.from({ length: count }, function (_, index) { return (index + 0.5) * length / count; });
+	}
+
+	/** Cut a sampled curve outside both marker boxes while preserving its shape and total visible length. */
+	function trimPolylineSegment(points, sizeA, sizeB, gap) {
+		var total = polylineLength(points);
+		if (!(total > 0)) return null;
+		var first = pointAndTangentAt(points, 0);
+		var last = pointAndTangentAt(points, total);
+		var startOffset = markerEdgeDistance(sizeA, first.tx, first.ty) + gap;
+		var endOffset = markerEdgeDistance(sizeB, -last.tx, -last.ty) + gap;
+		for (var startPass = 0; startPass < 256 && startOffset < total
+			&& !outsideMarkerBox(pointAndTangentAt(points, startOffset), points[0], sizeA, gap); startPass++) {
+			startOffset += 2;
+		}
+		for (var endPass = 0; endPass < 256 && endOffset < total
+			&& !outsideMarkerBox(pointAndTangentAt(points, total - endOffset), points[points.length - 1], sizeB, gap); endPass++) {
+			endOffset += 2;
+		}
+		if (!(total - startOffset - endOffset > 1)) return null;
+		var start = pointAndTangentAt(points, startOffset);
+		var endDistance = total - endOffset;
+		var end = pointAndTangentAt(points, endDistance);
+		var visible = [{ x: start.x, y: start.y }];
+		var walked = 0;
+		for (var i = 1; i < points.length; i++) {
+			var segmentLength = Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y);
+			walked += segmentLength;
+			if (walked > startOffset && walked < endDistance) visible.push(points[i]);
+		}
+		visible.push({ x: end.x, y: end.y });
+		return { points: visible, a: visible[0], b: visible[visible.length - 1], length: endDistance - startOffset };
+	}
+
+	/** Rectangles sampled along a polyline for label and marker collision checks. */
+	function polylineObstacles(points, halfWidth, spacing) {
+		if (!points || points.length < 2) return [];
+		var step = Math.max(2, spacing || LABEL_SEGMENT_STEP_PX);
+		var out = [];
+		for (var i = 1; i < points.length; i++) {
+			var a = points[i - 1];
+			var b = points[i];
+			var length = Math.hypot(b.x - a.x, b.y - a.y);
+			var count = Math.max(1, Math.ceil(length / step));
+			for (var j = 0; j <= count; j++) {
+				var t = j / count;
+				var x = a.x + (b.x - a.x) * t;
+				var y = a.y + (b.y - a.y) * t;
+				out.push({ x1: x - halfWidth, x2: x + halfWidth, y1: y - halfWidth, y2: y + halfWidth });
+			}
+		}
+		return out;
+	}
+
+	/** Choose the least-curved deterministic candidate that avoids known screen-space obstacles. */
+	function chooseQuadraticCurve(start, end, offsets, obstacles, existingPaths, padding, bounds) {
+		var chord = Math.hypot(end.x - start.x, end.y - start.y);
+		var steps = Math.max(12, Math.ceil(chord / 16));
+		var best = null;
+		(offsets && offsets.length ? offsets : [0]).forEach(function (offset) {
+			var control = quadraticControlPoint(start, end, offset);
+			var points = sampleQuadraticBezier(start, control, end, steps);
+			var trimmed = trimPolylineSegment(points, start, end, padding || 0);
+			if (!trimmed) return;
+			var rects = polylineObstacles(trimmed.points, 3, 8);
+			var markerHits = 0;
+			var pathHits = 0;
+			var outside = bounds ? rects.filter(function (rect) {
+				return rect.x1 < bounds.x1 || rect.x2 > bounds.x2 || rect.y1 < bounds.y1 || rect.y2 > bounds.y2;
+			}).length : 0;
+			(obstacles || []).forEach(function (obstacle) {
+				if (rects.some(function (rect) { return collides(rect, obstacle); })) markerHits++;
+			});
+			(existingPaths || []).forEach(function (path) {
+				if (rects.some(function (rect) { return collides(rect, path); })) pathHits++;
+			});
+			var score = markerHits * 1000000 + outside * 1000000 + pathHits * 10000 + Math.abs(offset) * 10 + (trimmed.length - chord);
+			if (!best || score < best.score) best = { points: trimmed.points, length: trimmed.length, a: trimmed.a, b: trimmed.b,
+				control: control, offset: offset, markerHits: markerHits, pathHits: pathHits, outside: outside,
+				startOffset: trimmed.startOffset, startTangent: trimmed.startTangent, markerSize: trimmed.markerSize, score: score };
+		});
+		return best;
+	}
+
 	/** Lat/lon of every chain node: the fit shows the whole chain, outliers included. */
 	function chainBounds(points) {
+		var previousLon = null;
 		return points.filter(function (p) { return isFinite(p.lat) && isFinite(p.lon); })
-			.map(function (p) { return [p.lat, p.lon]; });
+			.map(function (p) {
+				var lon = p.lon;
+				if (previousLon !== null) lon += Math.round((previousLon - lon) / 360) * 360;
+				previousLon = lon;
+				return [p.lat, lon];
+			});
+	}
+
+	function shiftGeoJSONWorld(geojson, offset) {
+		function shiftCoordinates(value) {
+			if (!Array.isArray(value)) return value;
+			if (value.length >= 2 && typeof value[0] === 'number' && typeof value[1] === 'number') {
+				var shifted = value.slice();
+				shifted[0] += offset;
+				return shifted;
+			}
+			return value.map(shiftCoordinates);
+		}
+		return {
+			type: geojson.type,
+			features: (geojson.features || []).map(function (feature) {
+				return Object.assign({}, feature, { geometry: Object.assign({}, feature.geometry, {
+					coordinates: shiftCoordinates(feature.geometry.coordinates)
+				}) });
+			})
+		};
 	}
 
 	/**
-	 * Decide which segments carry a direction arrow. Only a solid (measured) link at least minLength
-	 * px long qualifies: an arrow on a dashed or short link would claim a path or cover the markers.
-	 * One arrow per contiguous run of qualifying links keeps the direction legible; a selected
-	 * segment shows its own arrow when it qualifies.
+	 * Choose one direction arrow for every visible route segment. On a dashed segment the arrow
+	 * communicates hop order only; the dash still communicates that the geographic path is unknown.
+	 * A segment too short for a clear arrow must be routed through a detail view before this helper
+	 * is called, rather than silently losing its direction cue.
 	 * @param {number} count - Number of points (segments = count - 1)
-	 * @param {function(number):boolean} isDashedAt - True when segment i is dashed
 	 * @param {number|null} selection - Selected segment index, or null for all
-	 * @param {function(number):number} [lengthAt] - Visible pixel length of segment i (default: unlimited)
-	 * @param {number} [minLength] - Shortest segment that takes an arrow (default 0)
+	 * @param {function(number):number} [lengthAt] - Visible pixel length of segment i (default: all visible)
 	 * @returns {number[]} Segment indices that should carry an arrow
 	 */
-	function computeArrowSegments(count, isDashedAt, selection, lengthAt, minLength) {
+	function computeArrowSegments(count, selection, lengthAt) {
 		var out = [];
 		if (count < 2) return out;
-		var minimum = minLength || 0;
 		function eligible(i) {
-			return !isDashedAt(i) && (typeof lengthAt !== 'function' || lengthAt(i) >= minimum);
+			return typeof lengthAt !== 'function' || lengthAt(i) > 0;
 		}
 		if (selection !== null && selection !== undefined) {
 			if (selection >= 0 && selection < count - 1 && eligible(selection)) out.push(selection);
 			return out;
 		}
-		var run = [];
-		function flush() {
-			if (run.length) out.push(run[Math.floor((run.length - 1) / 2)]);
-			run = [];
-		}
 		for (var i = 0; i < count - 1; i++) {
-			if (eligible(i)) run.push(i); else flush();
+			if (eligible(i)) out.push(i);
 		}
-		flush();
 		return out;
 	}
 
@@ -313,10 +497,11 @@
 		var destinationMember = group.members.find(function (member) { return Boolean(member.point._destination); });
 		var isStart = Boolean(startMember);
 		var isDestination = Boolean(destinationMember);
-		var isApproximate = group.members.some(function (member) {
+		var approximateMembers = group.members.filter(function (member) {
 			var point = member.point;
 			return Boolean(point._approximate || point.accuracy_class === 'approximate' || point.loc_precision === 'approximate');
 		});
+		var isApproximate = group.isRegionAggregate ? approximateMembers.length === group.members.length : approximateMembers.length > 0;
 		var isBothEndpoints = isStart && isDestination;
 		var labels = group.members.map(function (member) { return pointLabel(member.point); });
 		labels = labels.filter(function (label, index) { return labels.indexOf(label) === index; });
@@ -326,14 +511,24 @@
 			if (isDestination && pointContainsHop(destinationMember.point, first)) return false;
 			return true;
 		});
-		var isEstimateGroup = group.members.some(function (member) { return isEstimate(member.point); });
-		var kind = isBothEndpoints ? 'both' : (isStart ? 'start' : (isDestination ? 'destination' : (isEstimateGroup ? 'estimate' : (group.members[0].index === 0 ? 'first-mapped' : 'hop'))));
+		var estimateMembers = group.members.filter(function (member) { return isEstimate(member.point); });
+		var isEstimateGroup = group.isRegionAggregate ? estimateMembers.length === group.members.length : estimateMembers.length > 0;
+		var cityNames = Array.from(new Set(group.members.map(function (member) { return member.point.city; }).filter(Boolean)));
+		var countryCodes = Array.from(new Set(group.members.map(function (member) { return member.point.country; }).filter(Boolean)));
+		var hasPlaceName = cityNames.length > 0 || countryCodes.length > 0;
+		var placeLabel = cityNames.length === 1
+			? cityNames[0] + (countryCodes.length === 1 ? ' · ' + countryCodes[0] : '')
+			: (countryCodes.length === 1 ? countryCodes[0] + ' route area' : 'Dense route area');
+		if (!cityNames.length && !countryCodes.length) placeLabel = labels.join('·');
+		var kind = isBothEndpoints ? 'both' : (isStart ? 'start' : (isDestination ? 'destination' : (group.isRegionAggregate ? 'region' : (isEstimateGroup ? 'estimate' : (group.members[0].index === 0 ? 'first-mapped' : 'hop')))));
 		var visibleLabel;
 		if (isBothEndpoints) visibleLabel = 'S/D';
-		else if (isStart) visibleLabel = ['S'].concat(otherLabels).join('·');
-		else if (isDestination) visibleLabel = otherLabels.concat(['D']).join('·');
-		else if (isEstimateGroup) visibleLabel = '~' + labels.join('·');  // "~" keeps the estimate legible without color
-		else visibleLabel = labels.join('·');
+		else if (group.isRegionAggregate) visibleLabel = (isStart ? 'S · ' : (isDestination ? 'D · ' : ''))
+			+ (isEstimateGroup ? '~' : '') + group.regionLabel;
+		else if (isStart) visibleLabel = hasPlaceName ? 'S · ' + placeLabel : ['S'].concat(otherLabels).join('·');
+		else if (isDestination) visibleLabel = hasPlaceName ? placeLabel + ' · D' : otherLabels.concat(['D']).join('·');
+		else if (isEstimateGroup) visibleLabel = '~' + placeLabel;  // "~" keeps the estimate legible without color
+		else visibleLabel = placeLabel;
 		return {
 			kind: kind, visibleLabel: visibleLabel, labels: labels, isStart: isStart, isDestination: isDestination,
 			isApproximate: isApproximate, isEstimate: isEstimateGroup,
@@ -381,9 +576,19 @@
 			var rightRoot = root(right);
 			if (leftRoot !== rightRoot) parents[rightRoot] = leftRoot;
 		}
+		function markerRectsOverlap(left, right) {
+			var leftW = left.markerWidth || Math.min(32, radius * 2);
+			var leftH = left.markerHeight || Math.min(32, radius * 2);
+			var rightW = right.markerWidth || Math.min(32, radius * 2);
+			var rightH = right.markerHeight || Math.min(32, radius * 2);
+			return left.center.x - leftW / 2 - 4 < right.center.x + rightW / 2 + 4
+				&& left.center.x + leftW / 2 + 4 > right.center.x - rightW / 2 - 4
+				&& left.center.y - leftH / 2 - 4 < right.center.y + rightH / 2 + 4
+				&& left.center.y + leftH / 2 + 4 > right.center.y - rightH / 2 - 4;
+		}
 		for (var i = 0; i < groups.length; i++) {
 			for (var j = i + 1; j < groups.length; j++) {
-				if (Math.hypot(groups[i].center.x - groups[j].center.x, groups[i].center.y - groups[j].center.y) <= radius) {
+				if (markerRectsOverlap(groups[i], groups[j])) {
 					unite(i, j);
 				}
 			}
@@ -394,22 +599,62 @@
 			if (!clusters.has(key)) clusters.set(key, []);
 			clusters.get(key).push(group);
 		});
+		var clusterIndex = 0;
 		clusters.forEach(function (cluster) {
 			if (cluster.length === 1) {
 				cluster[0].displayCenter = cluster[0].center;
+				cluster[0].overlapRegion = cluster[0].members.length > 1 ? 'route-region-' + clusterIndex++ : null;
 				return;
 			}
 			var center = cluster.reduce(function (sum, group) {
 				return { x: sum.x + group.center.x / cluster.length, y: sum.y + group.center.y / cluster.length };
 			}, { x: 0, y: 0 });
-			var offset = Math.max(22, cluster.length * 8);
 			cluster.sort(function (left, right) { return left.members[0].index - right.members[0].index; });
+			var columns = Math.ceil(Math.sqrt(cluster.length));
+			var rows = Math.ceil(cluster.length / columns);
+			var spacingX = Math.max(radius + 8, Math.max.apply(null, cluster.map(function (group) { return group.markerWidth || radius * 2; })) + 12);
+			var spacingY = Math.max(radius + 8, Math.max.apply(null, cluster.map(function (group) { return group.markerHeight || radius * 2; })) + 12);
+			var region = 'route-region-' + clusterIndex++;
 			cluster.forEach(function (group, index) {
-				var angle = (Math.PI * 2 * index) / cluster.length;
-				group.displayCenter = { x: center.x + Math.cos(angle) * offset, y: center.y + Math.sin(angle) * offset };
+				var row = Math.floor(index / columns);
+				var column = index % columns;
+				if (row % 2) column = columns - column - 1;
+				group.displayCenter = {
+					x: center.x + (column - (columns - 1) / 2) * spacingX,
+					y: center.y + (row - (rows - 1) / 2) * spacingY
+				};
+				group.overlapRegion = region;
 			});
 		});
 		return groups;
+	}
+
+	/** Replace every dense overview cluster with one location marker; its route detail owns the hops. */
+	function aggregateOverlapRegions(groups) {
+		var regions = new Map();
+		var output = [];
+		groups.forEach(function (group) {
+			if (!group.overlapRegion) { output.push(group); return; }
+			if (!regions.has(group.overlapRegion)) regions.set(group.overlapRegion, []);
+			regions.get(group.overlapRegion).push(group);
+		});
+		regions.forEach(function (regionGroups, regionId) {
+			var members = regionGroups.reduce(function (all, group) { return all.concat(group.members); }, [])
+				.sort(function (left, right) { return left.index - right.index; });
+			var center = regionGroups.reduce(function (sum, group) {
+				return { x: sum.x + group.center.x / regionGroups.length, y: sum.y + group.center.y / regionGroups.length };
+			}, { x: 0, y: 0 });
+			var displayCenter = regionGroups.reduce(function (sum, group) {
+				return { x: sum.x + group.displayCenter.x / regionGroups.length, y: sum.y + group.displayCenter.y / regionGroups.length };
+			}, { x: 0, y: 0 });
+			var cities = Array.from(new Set(members.map(function (member) { return member.point.city; }).filter(Boolean)));
+			var countries = Array.from(new Set(members.map(function (member) { return member.point.country; }).filter(Boolean)));
+			var regionLabel = cities.length === 1 ? cities[0] + (countries.length === 1 ? ' · ' + countries[0] : '')
+				: (countries.length === 1 ? countries[0] + ' route area' : 'Dense route area');
+			output.push({ members: members, center: center, displayCenter: displayCenter, overlapRegion: regionId,
+				isRegionAggregate: true, regionLabel: regionLabel, markerWidth: Math.max(84, regionLabel.length * 8 + 18), markerHeight: 32 });
+		});
+		return output.sort(function (left, right) { return left.members[0].index - right.members[0].index; });
 	}
 
 	/**
@@ -426,28 +671,65 @@
 		pane.style.pointerEvents = 'none';
 		var group = window.L.layerGroup().addTo(map);
 
-		function redraw(obstacles) {
+		function redraw(obstacles, project) {
 			group.clearLayers();
 			var z = map.getZoom();
 			if (typeof z !== 'number' || !isFinite(z) || !labels) return;
-			var placed = placeLabels(labels, z, rules, function (lat, lon) { return map.project([lat, lon], z); }, obstacles || []);
+			var placed = placeLabels(labels, z, rules, project || function (lat, lon) { return map.project([lat, lon], z); }, obstacles || []);
+			var occupied = (obstacles || []).slice();
+			var mapRect = map.getContainer().getBoundingClientRect();
+			var pixelOrigin = map.getPixelOrigin();
+			function layerRect(rect) {
+				var first = map.containerPointToLayerPoint([rect.left - mapRect.left, rect.top - mapRect.top]);
+				var last = map.containerPointToLayerPoint([rect.right - mapRect.left, rect.bottom - mapRect.top]);
+				return { x1: first.x + pixelOrigin.x, y1: first.y + pixelOrigin.y,
+					x2: last.x + pixelOrigin.x, y2: last.y + pixelOrigin.y };
+			}
 			placed.forEach(function (item) {
 				var el = document.createElement('span');
 				el.setAttribute('aria-hidden', 'true');
 				var text = document.createElement('span');
 				text.className = 'tr-label-text';
 				text.textContent = item.name;
-				// The rectangle was chosen by placeLabels(); the text is positioned relative to the anchor.
-				text.style.left = (item.rect.x1 - item.pt.x) + 'px';
-				text.style.top = (item.rect.y1 - item.pt.y) + 'px';
 				el.appendChild(text);
 				var cls = 'tr-label tr-label-' + item.kind + (item.role === 'path' ? ' tr-label-route' : '');
-				window.L.marker([item.lat, item.lon], {
+				var marker = window.L.marker([item.lat, item.lon], {
 					pane: 'labels',
 					interactive: false,
 					keyboard: false,
 					icon: window.L.divIcon({ html: el, className: cls, iconSize: [0, 0], iconAnchor: [0, 0] })
 				}).addTo(group);
+				var measured = text.getBoundingClientRect();
+				var labelWidth = measured.width || item.rect.x2 - item.rect.x1;
+				var labelHeight = measured.height || item.rect.y2 - item.rect.y1;
+				var half = labelHeight / 2;
+				var candidates = item.kind === 'country'
+					? [{ side: 'center', x1: item.pt.x - labelWidth / 2, y1: item.pt.y - half }]
+					: [
+						{ side: 'right', x1: item.pt.x + 22, y1: item.pt.y - half },
+						{ side: 'left', x1: item.pt.x - 22 - labelWidth, y1: item.pt.y - half },
+						{ side: 'below', x1: item.pt.x - labelWidth / 2, y1: item.pt.y + 20 },
+						{ side: 'above', x1: item.pt.x - labelWidth / 2, y1: item.pt.y - 20 - labelHeight }
+					];
+			candidates.sort(function (left, right) {
+				return Number(right.side === item.side) - Number(left.side === item.side);
+			});
+			var placedActual = false;
+			for (var i = 0; i < candidates.length; i++) {
+				var candidate = candidates[i];
+				var expected = { x1: candidate.x1, y1: candidate.y1, x2: candidate.x1 + labelWidth, y2: candidate.y1 + labelHeight };
+				if (collides(expected, occupied)) continue;
+				text.style.left = (candidate.x1 - item.pt.x) + 'px';
+				text.style.top = (candidate.y1 - item.pt.y) + 'px';
+				var actual = text.getBoundingClientRect();
+				var actualInLayer = layerRect(actual);
+				if (actual.left < mapRect.left || actual.right > mapRect.right || actual.top < mapRect.top || actual.bottom > mapRect.bottom
+					|| collides(actualInLayer, occupied)) continue;
+				occupied.push(actualInLayer);
+				placedActual = true;
+				break;
+			}
+			if (!placedActual) marker.remove();
 			});
 		}
 
@@ -467,7 +749,7 @@
 	 * @param {Object|null} layer - Leaflet GeoJSON layer
 	 * @param {Object} style - map_style
 	 */
-	function applyBasemapTheme(container, layer, style) {
+	function applyBasemapTheme(container, layers, style) {
 		var c = themePalette(style);
 		container.style.backgroundColor = c.water;
 		var frame = container.parentElement;
@@ -477,9 +759,9 @@
 			frame.style.setProperty('--tr-label-strong', c.label_strong);
 			frame.style.setProperty('--tr-label-halo', c.label_halo);
 		}
-		if (layer) {
+		(layers || []).forEach(function (layer) {
 			layer.setStyle({ fillColor: c.land, fillOpacity: 1, color: c.border, weight: 0.5 });
-		}
+		});
 	}
 
 	/**
@@ -512,6 +794,10 @@
 		if (container._unlinkRows) {
 			container._unlinkRows();
 			container._unlinkRows = null;
+		}
+		if (container._unlinkSelection) {
+			container._unlinkSelection();
+			container._unlinkSelection = null;
 		}
 		if (container._resetControl) {
 			container._resetControl.remove();
@@ -576,7 +862,8 @@
 			minZoom: style.view.minZoom,
 			// 1:110m outlines get coarse beyond this zoom
 			maxZoom: style.view.maxZoom,
-			maxBounds: [[-90, -180], [90, 180]],
+			// One spare world copy either side allows a shortest route across ±180°.
+			maxBounds: [[-85.05112878, -540], [85.05112878, 540]],
 			maxBoundsViscosity: 1.0
 		});
 		mapContainer._leaflet_map = map;
@@ -584,13 +871,21 @@
 		// Local vector basemap in its own pane below the route
 		map.createPane('basemap');
 		map.getPane('basemap').style.zIndex = 200;
-		var basemapLayer = null;
-		applyBasemapTheme(mapContainer, null, style);
+		var basemapLayers = [];
+		applyBasemapTheme(mapContainer, basemapLayers, style);
 		loadBasemap()
 			.then(function (geojson) {
 				if (mapContainer._leaflet_map !== map) return;  // map destroyed meanwhile
-				basemapLayer = window.L.geoJSON(geojson, { pane: 'basemap', interactive: false }).addTo(map);
-				applyBasemapTheme(mapContainer, basemapLayer, style);
+				var bounds = chainBounds(validPoints);
+				var minLon = Math.min.apply(null, bounds.map(function (point) { return point[1]; }));
+				var maxLon = Math.max.apply(null, bounds.map(function (point) { return point[1]; }));
+			var firstWorld = Math.floor((minLon + 180) / 360);
+			var lastWorld = Math.ceil((maxLon - 180) / 360);
+			for (var world = firstWorld; world <= lastWorld; world++) {
+				var worldData = world === 0 ? geojson : shiftGeoJSONWorld(geojson, world * 360);
+				basemapLayers.push(window.L.geoJSON(worldData, { pane: 'basemap', interactive: false }).addTo(map));
+			}
+				applyBasemapTheme(mapContainer, basemapLayers, style);
 			})
 			.catch(function (err) {
 				console.warn('Basemap could not be loaded:', err);
@@ -598,8 +893,10 @@
 
 		// Names come from the server selection (map_labels); the layer redraws with markers and chain.
 		var labelLayer = createLabelLayer(map, mapLabels, style.labels);
+		var frame = mapContainer.closest('.tr-map-frame');
+		var detailsContainer = frame && frame.querySelector('[data-tr-map-details]');
 
-		var latlngs = validPoints.map(function (p) { return [p.lat, p.lon]; });
+		var latlngs = chainBounds(validPoints);
 
 		// The chain: segment i joins the display positions of node i and i+1, trimmed to stop markerGap px
 		// before each marker. Every segment is a halo line under the colored line; both live in panes
@@ -609,6 +906,9 @@
 		map.getPane('chainHalo').style.zIndex = 380;
 		map.createPane('chain');
 		map.getPane('chain').style.zIndex = 390;
+		map.createPane('regionLeaders');
+		map.getPane('regionLeaders').style.zIndex = 395;
+		var regionLeaderLayer = window.L.layerGroup().addTo(map);
 		var chainLayer = window.L.layerGroup().addTo(map);
 		var chainRecords = [];  // {index, dashed, length, a, b, pl, halo} in pixels at the current zoom
 		var colors = themePalette(style);
@@ -622,12 +922,16 @@
 				var selected = routeSelection === null || rec.index === routeSelection;
 				rec.pl.setStyle({ opacity: selected ? baseOpacity() : 0.2 });
 				rec.halo.setStyle({ opacity: selected ? 0.9 : 0.15 });
+				var element = rec.pl.getElement();
+				if (element) element.classList.toggle('is-selected', routeSelection !== null && selected);
 			});
 		}
 
 		function segmentTooltip(from, dashed) {
 			var el = document.createElement('span');
-			var text = dashed ? 'Estimated or unknown path' : 'Measured connection';
+			var text = dashed
+				? 'Arrow shows hop order; geographic path is estimated or unknown'
+				: 'Arrow shows hop order between reliable positions; curve is schematic';
 			if (dashed && from.segment_note) text += ' · ' + from.segment_note;
 			el.textContent = text;
 			return el;
@@ -637,27 +941,68 @@
 		function drawChain(nodes, zoom) {
 			chainLayer.clearLayers();
 			chainRecords = [];
+			var markerRects = [];
+			var seenCenters = new Set();
+			nodes.forEach(function (node) {
+				var centerKey = Math.round(node.x) + ':' + Math.round(node.y);
+				if (seenCenters.has(centerKey)) return;
+				seenCenters.add(centerKey);
+				markerRects.push({ x1: node.x - node.w / 2 - 4, x2: node.x + node.w / 2 + 4,
+					y1: node.y - node.h / 2 - 4, y2: node.y + node.h / 2 + 4 });
+			});
+			var usedCorridors = new Map();
+			var routedPaths = [];
 			for (var i = 0; i < routePoints.length - 1; i++) {
 				var from = nodes.get(i);
 				var to = nodes.get(i + 1);
 				if (!from || !to) continue;
-				var seg = trimChainSegment(from, to, from, to, style.line.markerGap);
+				if (from.x === to.x && from.y === to.y) continue; // a regional detail owns this local edge
+				var startKey = Math.round(from.x) + ':' + Math.round(from.y);
+				var endKey = Math.round(to.x) + ':' + Math.round(to.y);
+				var corridorKey = startKey < endKey ? startKey + '|' + endKey : endKey + '|' + startKey;
+				var usage = usedCorridors.get(corridorKey) || { forward: 0, reverse: 0 };
+				var forward = startKey < endKey;
+				var rank = forward ? usage.forward++ : usage.reverse++;
+				usedCorridors.set(corridorKey, usage);
+				var baseOffset = rank === 0 ? 0 : 18 + rank * 18;
+				var offsets = [baseOffset];
+				for (var lane = 1; lane <= 12; lane++) offsets.push(baseOffset + lane * 24, baseOffset - lane * 24);
+				var origin = map.getPixelOrigin();
+				var size = map.getSize();
+				var bounds = { x1: origin.x + 8, y1: origin.y + 8, x2: origin.x + size.x - 8, y2: origin.y + size.y - 8 };
+				var seg = chooseQuadraticCurve(from, to, offsets, markerRects, routedPaths, style.line.markerGap, bounds);
 				if (!seg) continue;
 				var dashed = isDashedSegment(routePoints[i]);
-				var latlngs2 = [map.unproject([seg.a.x, seg.a.y], zoom), map.unproject([seg.b.x, seg.b.y], zoom)];
+				var latlngs2 = seg.points.map(function (point) { return map.unproject([point.x, point.y], zoom); });
+				var pathClass = 'traceroute-route-segment traceroute-route-segment--' + i;
 				var halo = window.L.polyline(latlngs2, {
 					pane: 'chainHalo', color: colors.halo, weight: style.line.weight + style.line.halo, opacity: 0.9,
-					lineCap: 'butt', lineJoin: 'round', dashArray: dashed ? style.line.dash : null, interactive: false
+					lineCap: 'butt', lineJoin: 'round', dashArray: dashed ? style.line.dash : null,
+					className: pathClass, interactive: false
 				}).addTo(chainLayer);
 				var pl = window.L.polyline(latlngs2, {
 					pane: 'chain', color: colors.route, weight: style.line.weight, opacity: baseOpacity(),
-					lineCap: 'butt', lineJoin: 'round', dashArray: dashed ? style.line.dash : null
+					lineCap: 'butt', lineJoin: 'round', dashArray: dashed ? style.line.dash : null,
+					className: pathClass
 				}).addTo(chainLayer);
+				var pathElement = pl.getElement();
+				if (pathElement) {
+					pathElement.dataset.routeOffset = String(seg.offset);
+					pathElement.dataset.markerHits = String(seg.markerHits);
+					pathElement.dataset.routeBoundsHits = String(seg.outside);
+					pathElement.dataset.routeFromBox = [from.x, from.y, from.w, from.h].join(',');
+					pathElement.dataset.routeTrimmedStart = [seg.a.x, seg.a.y].join(',');
+					pathElement.dataset.routeStartOffset = String(seg.startOffset);
+					pathElement.dataset.routeStartTangent = [seg.startTangent.x, seg.startTangent.y].join(',');
+					pathElement.dataset.routeMarkerSize = [seg.markerSize.w, seg.markerSize.h].join(',');
+				}
 				pl.bindTooltip(segmentTooltip(routePoints[i], dashed), { sticky: true, direction: 'top', className: 'traceroute-hop-tooltip' });
 				(function (segmentIndex) {
 					pl.on('click', function () { selectSegment(segmentIndex); });
 				})(i);
-				chainRecords.push({ index: i, dashed: dashed, length: seg.length, a: seg.a, b: seg.b, pl: pl, halo: halo });
+				chainRecords.push({ index: i, dashed: dashed, length: seg.length, a: seg.a, b: seg.b,
+					points: seg.points, pl: pl, halo: halo });
+				routedPaths.push(polylineObstacles(seg.points, style.line.weight + style.line.halo, 8));
 			}
 			applySegmentStyles();
 		}
@@ -691,6 +1036,7 @@
 
 		// Table row <-> map marker correspondence (hover and keyboard focus only highlight)
 		var markerRecords = [];
+		var activeMarkerGroups = [];
 
 		function overlaps(spans, first, last) {
 			return spans.some(function (span) { return rangesOverlap(first, last, span[0], span[1]); });
@@ -724,16 +1070,20 @@
 			});
 		}
 
-		// Arrow centered on a visible chain segment (pixel coordinates at the current zoom).
-		function addDirectionMarker(rec) {
+		// Arrow centered on the visible curve; its angle follows the local route tangent.
+		function addDirectionMarker(rec, distance, arrowIndex) {
 			var zoom = map.getZoom();
-			var angle = Math.atan2(rec.b.y - rec.a.y, rec.b.x - rec.a.x) * 180 / Math.PI;
-			var midpoint = map.unproject([(rec.a.x + rec.b.x) / 2, (rec.a.y + rec.b.y) / 2], zoom);
+			var tangent = pointAndTangentAt(rec.points, distance);
+			if (!tangent) return null;
+			var angle = Math.atan2(tangent.ty, tangent.tx) * 180 / Math.PI;
+			var midpoint = map.unproject([tangent.x, tangent.y], zoom);
 			var arrow = document.createElement('span');
 			arrow.className = 'traceroute-direction-arrow';
 			arrow.setAttribute('aria-hidden', 'true');
 			arrow.textContent = '➤';
 			arrow.style.transform = 'rotate(' + angle + 'deg)';
+			arrow.dataset.segmentIndex = String(rec.index);
+			arrow.dataset.arrowIndex = String(arrowIndex);
 			return window.L.marker(midpoint, {
 				icon: window.L.divIcon({
 					html: arrow,
@@ -746,8 +1096,8 @@
 			});
 		}
 
-		// Direction arrows: only on solid segments of at least minArrowSegment px, one per contiguous
-		// run. A dashed (estimated) link never carries one. A selected segment shows only its own.
+		// Each visible edge carries one arrow. On dashed paths the arrow indicates hop order only;
+		// the dash continues to identify an unknown or estimated geographic path.
 		var arrowLayer = window.L.layerGroup().addTo(map);
 
 		function drawDirectionArrows() {
@@ -756,10 +1106,13 @@
 			if (typeof zoom !== 'number' || !isFinite(zoom)) return;
 			var byIndex = {};
 			chainRecords.forEach(function (rec) { byIndex[rec.index] = rec; });
-			var dashedAt = function (index) { return !byIndex[index] || byIndex[index].dashed; };
 			var lengthAt = function (index) { return byIndex[index] ? byIndex[index].length : 0; };
-			computeArrowSegments(routePoints.length, dashedAt, routeSelection, lengthAt, style.line.minArrowSegment).forEach(function (index) {
-				arrowLayer.addLayer(addDirectionMarker(byIndex[index]));
+			computeArrowSegments(routePoints.length, routeSelection, lengthAt).forEach(function (index) {
+				var rec = byIndex[index];
+				directionArrowDistances(rec.length, style.web && style.web.arrowSpacing).forEach(function (distance, arrowIndex) {
+					var marker = addDirectionMarker(rec, distance, arrowIndex);
+					if (marker) arrowLayer.addLayer(marker);
+				});
 			});
 		}
 
@@ -768,25 +1121,45 @@
 		// animate or jump: selection is an explicit click or keyboard activation.
 		function selectSegment(index) {
 			if (!isFinite(index) || index < 0 || index >= routePoints.length - 1) return;
+			setSegmentSelection(index);
+			var first = Number(routePoints[index].hop) || 0;
+			var last = Number(routePoints[index + 1].hop) || first;
+			var root = mapContainer.closest('.traceroute-diagnostics');
+			if (root) root.dispatchEvent(new CustomEvent('traceroute:route-selection', {
+				bubbles: true,
+				detail: { source: mapContainer.dataset.mapId || 'route-map', segmentIndex: index,
+					first: Math.min(first, last), last: Math.max(first, last) }
+			}));
+		}
+
+		function setSegmentSelection(index) {
 			routeSelection = index;
 			applySegmentStyles();
 			drawDirectionArrows();
-			var span = [
-				Math.min(Number(routePoints[index].hop) || 0, Number(routePoints[index + 1].hop) || 0),
-				Math.max(Number(routePoints[index].hop) || 0, Number(routePoints[index + 1].hop) || 0)
-			];
-			setLinkedRows([span], true);
-			setLinkedMarkers(span[0], span[1], true);
-			if (resetControl) resetControl.style.display = '';
+			if (index === null) {
+				setLinkedRows([], false);
+				setLinkedMarkers(0, 0, false);
+			} else {
+				var first = Number(routePoints[index].hop) || 0;
+				var last = Number(routePoints[index + 1].hop) || first;
+				var span = [Math.min(first, last), Math.max(first, last)];
+				setLinkedRows([span], true);
+				setLinkedMarkers(span[0], span[1], true);
+			}
+			if (detailsContainer) {
+				detailsContainer.querySelectorAll('[data-segment-index]').forEach(function (element) {
+					element.classList.toggle('is-selected', Number(element.dataset.segmentIndex) === routeSelection);
+				});
+			}
+			if (resetControl) resetControl.style.display = index === null ? 'none' : '';
 		}
 
 		function clearSelection() {
-			routeSelection = null;
-			applySegmentStyles();
-			drawDirectionArrows();
-			setLinkedRows([], false);
-			setLinkedMarkers(0, 0, false);
-			if (resetControl) resetControl.style.display = 'none';
+			setSegmentSelection(null);
+			var root = mapContainer.closest('.traceroute-diagnostics');
+			if (root) root.dispatchEvent(new CustomEvent('traceroute:route-selection', {
+				bubbles: true, detail: { source: mapContainer.dataset.mapId || 'route-map', segmentIndex: null }
+			}));
 		}
 
 		// Group markers that would collide at the current zoom. The route line still
@@ -807,14 +1180,15 @@
 			});
 		}
 		// Accuracy radius of an approximate position (map_radius_km).
-		function addAccuracyCircle(point) {
+		function addAccuracyCircle(point, projected) {
 			var radiusKm = point.map_radius_km;  // the server decides whether a radius is drawable
 			if (!(radiusKm > 0)) return;
 			// Web Mercator: a circle that fills most of the frame explains nothing and hides the route.
 			var metersPerPixel = 156543.03392 * Math.cos(point.lat * Math.PI / 180) / Math.pow(2, map.getZoom());
 			var size = map.getSize();
 			if (radiusKm * 1000 / metersPerPixel > Math.min(size.x, size.y) * 0.3) return;
-			window.L.circle([point.lat, point.lon], {
+			var center = projected ? map.unproject([projected.x, projected.y], map.getZoom()) : [point.lat, point.lon];
+			window.L.circle(center, {
 				radius: radiusKm * 1000,
 				color: colors.route,
 				weight: 1,
@@ -825,31 +1199,251 @@
 				interactive: false
 			}).addTo(markerLayer);
 		}
+		function detailPointName(point) {
+			var place = [point.city, point.country].filter(Boolean).join(', ');
+			if (point._destination && destinationHost) return 'Destination · ' + (place || destinationHost);
+			if (routeStartIsMapped && pointContainsHop(point, routeStartHop)) return 'Start · ' + (place || 'source');
+			return place || point.hostname || point.host || 'Unnamed location';
+		}
+
+		function detailPortalName(points, first, last) {
+			var names = [];
+			for (var i = first; i < last; i++) {
+				var name = detailPointName(points[i]);
+				if (names.indexOf(name) === -1) names.push(name);
+			}
+			var summary = names.slice(0, 2).join(' → ') || 'another route region';
+			if (names.length > 2) summary += ' → more locations';
+			return summary;
+		}
+
+		function routeItemsForRegion(points, members) {
+			var local = new Set();
+			members.forEach(function (member) { local.add(member.index); });
+			var items = [];
+			var index = 0;
+			while (index < points.length) {
+				if (local.has(index)) {
+					items.push({ kind: 'hop', index: index, point: points[index], incomingIndex: index - 1 });
+					index++;
+					continue;
+				}
+				var first = index;
+				while (index < points.length && !local.has(index)) index++;
+				var previousIsLocal = first > 0 && local.has(first - 1);
+				var nextIsLocal = index < points.length && local.has(index);
+				if (previousIsLocal || nextIsLocal) {
+					items.push({
+						kind: 'portal',
+						label: (previousIsLocal ? (nextIsLocal ? 'Via ' : 'Toward ') : 'From ')
+							+ detailPortalName(points, first, index),
+						outgoingIndex: previousIsLocal ? first - 1 : null,
+						incomingIndex: nextIsLocal ? index - 1 : null
+					});
+				}
+			}
+			return items;
+		}
+
+		function createRouteDetail(region, members, regionIndex, width) {
+			var items = routeItemsForRegion(routePoints, members);
+			if (!items.length) return null;
+			var columns = Math.min(items.length, Math.max(1, Math.floor((width - 40) / 176)));
+			var rows = Math.ceil(items.length / columns);
+			var rowHeight = 100;
+			var height = rows * rowHeight + 44;
+			var markerWidth = Math.min(150, width - 24);
+			var xGap = columns > 1 ? (width - markerWidth - 16) / (columns - 1) : 0;
+			var positions = items.map(function (_item, index) {
+				var row = Math.floor(index / columns);
+				var column = index % columns;
+				var rowLength = Math.min(columns, items.length - row * columns);
+				if (row % 2) column = rowLength - column - 1;
+				return { x: columns > 1 ? markerWidth / 2 + 8 + column * xGap : width / 2, y: 38 + row * rowHeight };
+			});
+			var card = document.createElement('section');
+			card.className = 'tr-map-detail';
+			card.dataset.region = region;
+			var heading = document.createElement('h3');
+			heading.id = mapContainer.dataset.mapId + '-detail-' + regionIndex;
+			var localNames = [];
+			members.forEach(function (member) {
+				var name = detailPointName(member.point);
+				if (localNames.indexOf(name) === -1) localNames.push(name);
+			});
+			heading.textContent = 'Detailed route · ' + localNames.slice(0, 3).join(' · ');
+			card.appendChild(heading);
+			var caption = document.createElement('p');
+			caption.className = 'tr-map-detail-caption';
+			caption.textContent = 'Arrows show hop order. Spacing is schematic; locations are shown only where known.';
+			card.appendChild(caption);
+			var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+			svg.setAttribute('viewBox', '0 0 ' + width + ' ' + height);
+			svg.setAttribute('role', 'group');
+			svg.setAttribute('aria-labelledby', heading.id);
+
+			for (var i = 0; i < items.length - 1; i++) {
+				var from = positions[i];
+				var to = positions[i + 1];
+				var fromItem = items[i];
+				var toItem = items[i + 1];
+				var segmentIndex = toItem.kind === 'portal' ? toItem.outgoingIndex : toItem.incomingIndex;
+				if (!Number.isInteger(segmentIndex) || segmentIndex < 0 || segmentIndex >= routePoints.length - 1) continue;
+				var bend = (i % 2 ? -1 : 1) * Math.min(18, Math.abs(to.y - from.y) * 0.2 + 10);
+				var curve = sampleQuadraticBezier(from, quadraticControlPoint(from, to, bend), to, 20);
+				var pathData = curve.map(function (point, pointIndex) {
+					return (pointIndex ? 'L' : 'M') + point.x.toFixed(1) + ' ' + point.y.toFixed(1);
+				}).join(' ');
+				var dashed = isDashedSegment(routePoints[segmentIndex]);
+				var lane = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+				lane.setAttribute('d', pathData);
+				lane.setAttribute('class', 'tr-map-detail-lane' + (dashed ? ' tr-map-detail-lane--dashed' : '')
+					+ (routeSelection === segmentIndex ? ' is-selected' : ''));
+				lane.setAttribute('data-segment-index', String(segmentIndex));
+				lane.setAttribute('aria-hidden', 'true');
+				svg.appendChild(lane);
+				var hit = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+				hit.setAttribute('d', pathData);
+				hit.setAttribute('class', 'tr-map-detail-segment');
+				hit.setAttribute('data-segment-index', String(segmentIndex));
+				hit.setAttribute('role', 'button');
+				hit.setAttribute('tabindex', '0');
+				hit.setAttribute('aria-label', 'Select route from ' + (fromItem.label || detailPointName(fromItem.point))
+					+ ' to ' + (toItem.label || detailPointName(toItem.point))
+					+ (dashed ? '; geographic path estimated or unknown' : '; reliable positions'));
+				hit.addEventListener('click', function () { selectSegment(Number(this.dataset.segmentIndex)); });
+				hit.addEventListener('keydown', function (event) {
+					if (event.key !== 'Enter' && event.key !== ' ') return;
+					event.preventDefault();
+					selectSegment(Number(this.dataset.segmentIndex));
+				});
+				svg.appendChild(hit);
+				var tangent = pointAndTangentAt(curve, polylineLength(curve) / 2);
+				if (tangent) {
+					var arrow = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+					arrow.setAttribute('d', 'M 8 0 L -6 5 L -3 0 L -6 -5 Z');
+					arrow.setAttribute('class', 'tr-map-detail-arrow');
+					arrow.setAttribute('data-segment-index', String(segmentIndex));
+					arrow.setAttribute('transform', 'translate(' + tangent.x.toFixed(1) + ' ' + tangent.y.toFixed(1)
+						+ ') rotate(' + (Math.atan2(tangent.ty, tangent.tx) * 180 / Math.PI).toFixed(1) + ')');
+					arrow.setAttribute('aria-hidden', 'true');
+					svg.appendChild(arrow);
+				}
+			}
+			items.forEach(function (item, index) {
+				var position = positions[index];
+				var label = item.kind === 'portal' ? item.label : detailPointName(item.point);
+				var node = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+				node.setAttribute('x', String(position.x - markerWidth / 2));
+				node.setAttribute('y', String(position.y - 15));
+				node.setAttribute('width', String(markerWidth));
+				node.setAttribute('height', '30');
+				node.setAttribute('rx', '15');
+				node.setAttribute('class', 'tr-map-detail-stop' + (item.kind === 'portal' ? ' tr-map-detail-stop--portal' : ''));
+				if (item.kind === 'hop') node.setAttribute('data-route-point-index', String(item.index));
+				var title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+				title.textContent = label;
+				node.appendChild(title);
+				svg.appendChild(node);
+				var text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+				text.setAttribute('x', String(position.x));
+				text.setAttribute('y', String(position.y + 4));
+				text.setAttribute('class', 'tr-map-detail-label');
+				text.setAttribute('aria-hidden', 'true');
+				text.textContent = label.length > 18 ? label.slice(0, 17) + '…' : label;
+				text.setAttribute('textLength', String(Math.max(20, markerWidth - 16)));
+				text.setAttribute('lengthAdjust', 'spacingAndGlyphs');
+				svg.appendChild(text);
+			});
+			card.appendChild(svg);
+			return card;
+		}
+
+		function renderRouteDetails(groups) {
+			if (!detailsContainer) return;
+			detailsContainer.textContent = '';
+			var regions = new Map();
+			groups.forEach(function (group) {
+				if (!group.overlapRegion) return;
+				if (!regions.has(group.overlapRegion)) regions.set(group.overlapRegion, []);
+				regions.get(group.overlapRegion).push.apply(regions.get(group.overlapRegion), group.members);
+			});
+			if (!regions.size) {
+				detailsContainer.hidden = true;
+				return;
+			}
+			detailsContainer.hidden = false;
+			var availableWidth = detailsContainer.clientWidth || frame.clientWidth || 560;
+			var detailStyle = window.getComputedStyle(detailsContainer);
+			var minimumCardWidth = parseFloat(detailStyle.getPropertyValue('--tr-map-detail-min-width')) || 384;
+			var detailGap = parseFloat(detailStyle.rowGap) || 12;
+			var columns = Math.max(1, Math.floor((availableWidth + detailGap) / (minimumCardWidth + detailGap)));
+			var cardWidth = (availableWidth - detailGap * (columns - 1)) / columns;
+			Array.from(regions.entries()).forEach(function (entry, index) {
+				var members = Array.from(new Map(entry[1].map(function (member) { return [member.index, member]; })).values())
+					.sort(function (left, right) { return left.index - right.index; });
+				var card = createRouteDetail(entry[0], members, index + 1, cardWidth);
+				if (card) detailsContainer.appendChild(card);
+			});
+			detailsContainer.hidden = detailsContainer.children.length === 0;
+		}
+
+		function drawRegionLeaders(groups, zoom) {
+			regionLeaderLayer.clearLayers();
+			var regions = new Map();
+			groups.forEach(function (group) {
+				if (!group.overlapRegion) return;
+				var value = regions.get(group.overlapRegion) || { anchor: { x: 0, y: 0 }, display: { x: 0, y: 0 }, count: 0 };
+				value.anchor.x += group.center.x;
+				value.anchor.y += group.center.y;
+				value.display.x += group.displayCenter.x;
+				value.display.y += group.displayCenter.y;
+				value.count++;
+				regions.set(group.overlapRegion, value);
+			});
+			regions.forEach(function (region) {
+				region.anchor.x /= region.count; region.anchor.y /= region.count;
+				region.display.x /= region.count; region.display.y /= region.count;
+				if (Math.hypot(region.anchor.x - region.display.x, region.anchor.y - region.display.y) < 5) return;
+				window.L.polyline([
+					map.unproject([region.anchor.x, region.anchor.y], zoom),
+					map.unproject([region.display.x, region.display.y], zoom)
+				], { pane: 'regionLeaders', color: colors.label, weight: 1, opacity: 0.7, dashArray: '3 4', interactive: false })
+					.addTo(regionLeaderLayer);
+			});
+		}
+
 		function drawHopMarkers() {
 			markerLayer.clearLayers();
 			markerRecords = [];
 			var zoom = map.getZoom();
 			if (typeof zoom !== 'number' || !isFinite(zoom)) return;
-
-			var markerGroups = fanOutOverlappingHopGroups(groupNearbyHopPoints(validPoints, function (point) {
+			var worldWidth = 256 * Math.pow(2, zoom);
+			var projectedRoute = unwrapProjectedRoute(validPoints, function (point) {
 				return map.project([point.lat, point.lon], zoom);
-			}, 36), 36);
-
-			var nodes = new Map();
-			var obstacles = [];
+			}, worldWidth);
+			var markerGroups = groupNearbyHopPoints(validPoints, function (_point, index) {
+				return { x: projectedRoute[index].x, y: projectedRoute[index].y };
+			}, 36);
 			markerGroups.forEach(function (group) {
 				var groupInfo = describeMarkerGroup(group, routeStartHop, routeStartIsMapped);
-				var width = Math.max(32, groupInfo.visibleLabel.length * 8 + 16);
-				group.members.forEach(function (member) {
-					nodes.set(member.index, { x: group.displayCenter.x, y: group.displayCenter.y, w: width, h: 32 });
+				group.markerWidth = Math.max(32, groupInfo.visibleLabel.length * 8 + 16);
+				group.markerHeight = 32;
+			});
+			markerGroups = fanOutOverlappingHopGroups(markerGroups, 36);
+			markerGroups = aggregateOverlapRegions(markerGroups);
+			drawRegionLeaders(markerGroups, zoom);
+
+			function makeNodes() {
+				var nodes = new Map();
+				markerGroups.forEach(function (group) {
+					group.members.forEach(function (member) {
+						nodes.set(member.index, { x: group.displayCenter.x, y: group.displayCenter.y,
+							w: group.markerWidth || 32, h: group.markerHeight || 32 });
+					});
 				});
-				obstacles.push({ x1: group.displayCenter.x - width / 2, x2: group.displayCenter.x + width / 2, y1: group.displayCenter.y - 16, y2: group.displayCenter.y + 16 });
-			});
-			drawChain(nodes, zoom);
-			chainRecords.forEach(function (rec) {
-				obstacles.push.apply(obstacles, segmentObstacles(rec.a, rec.b, style.line.weight));
-			});
-			labelLayer.redraw(obstacles);
+				return nodes;
+			}
 
 			markerGroups.forEach(function (group) {
 			var info = describeMarkerGroup(group, routeStartHop, routeStartIsMapped);
@@ -889,18 +1483,7 @@
 			if (pointIp) popup += '<br><code>' + escapeHtml(pointIp) + '</code>';
 
 			var center = map.unproject([group.displayCenter.x, group.displayCenter.y], zoom);
-			group.members.forEach(function (member) {
-				addAccuracyCircle(member.point);
-				var distance = Math.hypot(member.projected.x - group.displayCenter.x, member.projected.y - group.displayCenter.y);
-				if (distance < 3) return;
-				window.L.polyline([[member.point.lat, member.point.lon], center], {
-					color: colors.route,
-					weight: 1,
-					opacity: 0.75,
-					dashArray: '2, 3',
-					interactive: false
-				}).addTo(markerLayer);
-			});
+			group.members.forEach(function (member) { addAccuracyCircle(member.point, projectedRoute[member.index]); });
 
 			var marker = window.L.marker(center, {
 				icon: markerIcon(visibleLabel, kind, labels.length > 1, info.isApproximate),
@@ -912,7 +1495,7 @@
 			bindSafeTooltip(marker, markerLabel, false);
 
 			var spans = group.members.map(function (member) { return hopSpan(member.point); }).filter(Boolean);
-			markerRecords.push({ marker: marker, spans: spans });
+			markerRecords.push({ marker: marker, spans: spans, group: group });
 			marker.on('mouseover', function () { setLinkedRows(spans, true); });
 			marker.on('mouseout', function () { setLinkedRows(spans, false); });
 			var markerEl = marker.getElement();
@@ -921,6 +1504,41 @@
 				markerEl.addEventListener('blur', function () { setLinkedRows(spans, false); });
 			}
 		});
+			// Pass two uses the actual browser marker boxes. This is bounded to one correction
+			// and runs in the same frame, so the approximate first placement is never painted.
+			markerRecords.forEach(function (record) {
+				var el = record.marker.getElement();
+				if (!el) return;
+				var rect = el.getBoundingClientRect();
+				if (rect.width > 0 && rect.height > 0) {
+					record.group.markerWidth = rect.width;
+					record.group.markerHeight = rect.height;
+				}
+			});
+			markerGroups = fanOutOverlappingHopGroups(markerGroups, 36);
+			drawRegionLeaders(markerGroups, zoom);
+			activeMarkerGroups = markerGroups;
+			markerRecords.forEach(function (record) {
+				record.marker.setLatLng(map.unproject([record.group.displayCenter.x, record.group.displayCenter.y], zoom));
+			});
+			var nodes = makeNodes();
+			if (!fitDisplayNodes(nodes, zoom)) return;
+			drawChain(nodes, zoom);
+			var obstacles = [];
+			nodes.forEach(function (node) {
+				obstacles.push({ x1: node.x - node.w / 2, x2: node.x + node.w / 2,
+					y1: node.y - node.h / 2, y2: node.y + node.h / 2 });
+			});
+			chainRecords.forEach(function (record) {
+				obstacles.push.apply(obstacles, polylineObstacles(record.points, style.line.weight + style.line.halo, 8));
+			});
+			var routeCenterX = projectedRoute.length ? (projectedRoute[0].x + projectedRoute[projectedRoute.length - 1].x) / 2 : 0;
+			labelLayer.redraw(obstacles, function (lat, lon) {
+				var point = map.project([lat, lon], zoom);
+				point.x += Math.round((routeCenterX - point.x) / worldWidth) * worldWidth;
+				return point;
+			});
+			renderRouteDetails(markerGroups);
 			syncVisibleMarkers();
 		}
 		map.on('zoomend', function () { drawHopMarkers(); drawDirectionArrows(); });
@@ -939,15 +1557,25 @@
 
 		var rowRoot = mapContainer.closest('.traceroute-diagnostics');
 		var tbody = rowRoot ? rowRoot.querySelector('.hop-table tbody') : null;
-		// Route timeline -> marker highlight only (no panning, no zoom, no segment selection)
+		// Timeline preview highlights markers; route selection synchronizes segment state across views.
 		var onTimelineHighlight = function (evt) {
 			var d = evt.detail || {};
 			if (d.on) setLinkedMarkers(Number(d.first), Number(d.last), true); else setLinkedMarkers(0, 0, false);
 		};
+		var onRouteSelection = function (evt) {
+			var d = evt.detail || {};
+			if (d.source === mapContainer.dataset.mapId) return;
+			var index = Number.isInteger(d.segmentIndex) ? d.segmentIndex : segmentIndexForHop(Number(d.first));
+			setSegmentSelection(index === null || index < 0 ? null : index);
+		};
 		if (rowRoot) {
 			rowRoot.addEventListener('traceroute:hop-highlight', onTimelineHighlight);
+			rowRoot.addEventListener('traceroute:route-selection', onRouteSelection);
 			mapContainer._unlinkTimeline = function () {
 				rowRoot.removeEventListener('traceroute:hop-highlight', onTimelineHighlight);
+			};
+			mapContainer._unlinkSelection = function () {
+				rowRoot.removeEventListener('traceroute:route-selection', onRouteSelection);
 			};
 		}
 		if (tbody) {
@@ -966,7 +1594,7 @@
 				var first = elementHopRange(row).first;
 				var segmentIndex = segmentIndexForHop(first);
 				if (segmentIndex === null) return;
-				if (routeSelection === segmentIndex) { clearSelection(); } else { selectSegment(segmentIndex); }
+				if (routeSelection === segmentIndex) { clearSelection(); } else { selectSegment(segmentIndex, 'table'); }
 			};
 			tbody.addEventListener('mouseover', onRowOver);
 			tbody.addEventListener('mouseleave', onRowOut);
@@ -991,6 +1619,40 @@
 
 		// Auto-zoom to bounds with ResizeObserver
 		var hasInitialZoom = false;
+		var displayFitComplete = false;
+		var displayFitAttempts = 0;
+		function fitDisplayNodes(nodes, zoom) {
+			if (displayFitComplete) return true;
+			var size = map.getSize();
+			if (!size || !size.x || !size.y) return true;
+			var pixelOrigin = map.getPixelOrigin();
+			var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+			nodes.forEach(function (node) {
+				var x = node.x - pixelOrigin.x;
+				var y = node.y - pixelOrigin.y;
+				minX = Math.min(minX, x - node.w / 2);
+				maxX = Math.max(maxX, x + node.w / 2);
+				minY = Math.min(minY, y - node.h / 2);
+				maxY = Math.max(maxY, y + node.h / 2);
+			});
+			var availableWidth = Math.max(1, size.x - 48);
+			var availableHeight = Math.max(1, size.y - 48);
+			var tooWide = maxX - minX > availableWidth;
+			var tooTall = maxY - minY > availableHeight;
+			var minZoom = style.view.minZoom;
+			if ((tooWide || tooTall) && zoom > minZoom && displayFitAttempts < 6) {
+				displayFitAttempts++;
+				map.setZoom(zoom - 1, { animate: false });
+				return false;
+			}
+			displayFitComplete = true;
+			var centerX = (minX + maxX) / 2;
+			var centerY = (minY + maxY) / 2;
+			var dx = centerX - size.x / 2;
+			var dy = centerY - size.y / 2;
+			if (Math.abs(dx) > 1 || Math.abs(dy) > 1) map.panBy([dx, dy], { animate: false });
+			return true;
+		}
 		// Only a user-driven pan/zoom freezes the view; layout resizes (sidebar, tabs) refit it.
 		var userAdjustedView = false;
 		['pointerdown', 'wheel', 'keydown'].forEach(function (name) {
@@ -1003,9 +1665,23 @@
 			var area = map.getSize();
 			if (area.x === 0 || area.y === 0) return;
 
-			if (hasInitialZoom && userAdjustedView) return; // Preserve user's manual zoom
+			if (hasInitialZoom && userAdjustedView) {
+				// Keep the manually chosen view, but recompute measured markers, lanes, curves and details.
+				drawHopMarkers();
+				drawDirectionArrows();
+				syncVisibleMarkers();
+				return;
+			}
+			displayFitComplete = false;
+			displayFitAttempts = 0;
 			if (latlngs.length >= 2) {
-				var bounds = window.L.latLngBounds(chainBounds(validPoints));
+				var routeBounds = chainBounds(validPoints);
+				var minLon = Math.min.apply(null, routeBounds.map(function (point) { return point[1]; }));
+				var maxLon = Math.max.apply(null, routeBounds.map(function (point) { return point[1]; }));
+				if (typeof map.setMaxBounds === 'function') {
+					map.setMaxBounds([[-85.05112878, minLon - 180], [85.05112878, maxLon + 180]]);
+				}
+				var bounds = window.L.latLngBounds(routeBounds);
 				map.fitBounds(bounds, {
 					paddingTopLeft: [64, 40],
 					paddingBottomRight: [64, 80],
@@ -1048,7 +1724,7 @@
 		var updateTheme = function () {
 			// Guard against destroyed map
 			if (!mapContainer._leaflet_map) return;
-			applyBasemapTheme(mapContainer, basemapLayer, style);
+			applyBasemapTheme(mapContainer, basemapLayers, style);
 			// Refresh the palette so the chain, halo and leader lines follow the theme
 			colors = themePalette(style);
 			drawHopMarkers();
@@ -1105,6 +1781,12 @@
 			var detailData = range === null ? { on: false } : { on: true, first: range.first, last: range.last };
 			section.dispatchEvent(new CustomEvent('traceroute:hop-highlight', { bubbles: true, detail: detailData }));
 		}
+		function emitRouteSelection(range) {
+			section.dispatchEvent(new CustomEvent('traceroute:route-selection', {
+				bubbles: true,
+				detail: { source: 'timeline', first: range ? range.first : null, last: range ? range.last : null }
+			}));
+		}
 		function highlight(range) { setRows(range); emit(range); }
 		function showSelectionOrIdle() {
 			highlight(selected ? elementHopRange(selected) : null);
@@ -1118,6 +1800,7 @@
 			if (selected) selected.setAttribute('aria-pressed', 'true');
 			describe(selected);
 			showSelectionOrIdle();
+			emitRouteSelection(selected ? elementHopRange(selected) : null);
 		}
 		function toggleGroup(btn) {
 			var li = btn.closest('.tr-step');
@@ -1129,7 +1812,11 @@
 			li.classList.toggle('is-open', open);
 			describe(open ? btn : null);
 			highlight(open ? elementHopRange(btn) : null);
-			if (open && selected) { selected.setAttribute('aria-pressed', 'false'); selected = null; }
+			if (open && selected) {
+				selected.setAttribute('aria-pressed', 'false');
+				selected = null;
+				emitRouteSelection(null);
+			}
 		}
 		function onClick(evt) {
 			var btn = evt.target.closest ? evt.target.closest('[data-tr-hop], [data-tr-group]') : null;
@@ -1147,6 +1834,21 @@
 			// Keep the focused node inside the scrolling track without moving the page
 			if (track && btn.scrollIntoView) btn.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 			highlight(elementHopRange(btn));
+		}
+		function onRouteSelection(evt) {
+			var data = evt.detail || {};
+			if (data.source === 'timeline') return;
+			var next = Number.isFinite(data.first)
+				? buttons.find(function (button) {
+					var range = elementHopRange(button);
+					return rangesOverlap(data.first, data.last, range.first, range.last);
+				}) || null
+				: null;
+			if (selected) selected.setAttribute('aria-pressed', 'false');
+			selected = next;
+			if (selected) selected.setAttribute('aria-pressed', 'true');
+			describe(selected);
+			showSelectionOrIdle();
 		}
 		function onKeydown(evt) {
 			// Arrow keys scroll the track while the track itself has focus
@@ -1179,6 +1881,7 @@
 		section.addEventListener('mouseleave', onPreviewEnd);
 		section.addEventListener('focusin', onFocusIn);
 		section.addEventListener('focusout', onPreviewEnd);
+		root.addEventListener('traceroute:route-selection', onRouteSelection);
 		if (track) track.addEventListener('keydown', onKeydown);
 		var observer = null;
 		if (track && typeof ResizeObserver === 'function') {
@@ -1192,6 +1895,7 @@
 			section.removeEventListener('mouseleave', onPreviewEnd);
 			section.removeEventListener('focusin', onFocusIn);
 			section.removeEventListener('focusout', onPreviewEnd);
+			root.removeEventListener('traceroute:route-selection', onRouteSelection);
 			if (track) track.removeEventListener('keydown', onKeydown);
 			if (observer) observer.disconnect();
 			section._trCleanup = null;
@@ -1302,6 +2006,7 @@
 	window.TracerouteMap.initAllMaps = initAllMaps;
 	window.TracerouteMap.groupNearbyHopPoints = groupNearbyHopPoints;
 	window.TracerouteMap.fanOutOverlappingHopGroups = fanOutOverlappingHopGroups;
+		window.TracerouteMap.aggregateOverlapRegions = aggregateOverlapRegions;
 	window.TracerouteMap.computeArrowSegments = computeArrowSegments;
 	window.TracerouteMap.describeMarkerGroup = describeMarkerGroup;
 	window.TracerouteMap.pointLabel = pointLabel;
@@ -1309,6 +2014,13 @@
 	window.TracerouteMap.isDashedSegment = isDashedSegment;
 	window.TracerouteMap.placeLabels = placeLabels;
 	window.TracerouteMap.trimChainSegment = trimChainSegment;
+	window.TracerouteMap.unwrapProjectedRoute = unwrapProjectedRoute;
+	window.TracerouteMap.sampleQuadraticBezier = sampleQuadraticBezier;
+	window.TracerouteMap.chooseQuadraticCurve = chooseQuadraticCurve;
+	window.TracerouteMap.pointAndTangentAt = pointAndTangentAt;
+	window.TracerouteMap.trimPolylineSegment = trimPolylineSegment;
+	window.TracerouteMap.polylineObstacles = polylineObstacles;
+	window.TracerouteMap.directionArrowDistances = directionArrowDistances;
 	window.TracerouteMap.chainBounds = chainBounds;
 	window.TracerouteMap.segmentObstacles = segmentObstacles;
 

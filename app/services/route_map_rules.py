@@ -32,8 +32,9 @@ LABELS_FILE = GEO_DIR / "labels.json"
 LINE_WEIGHT_PX = 3.0
 LINE_HALO_PX = 3.0  # extra width of the contrast outline under the line
 DASH_ARRAY = "9 6"  # 3:2 stroke to gap, coarse enough to read; scales with the line weight
-MIN_ARROW_SEGMENT_PX = 64.0  # no direction arrow on a shorter segment: it would cover the markers
+MIN_ARROW_SEGMENT_PX = 64.0  # PDF keeps arrows off short links; web uses routed detail views instead
 MARKER_GAP_PX = 3.0  # the line stops this far before a marker edge
+WEB_ARROW_SPACING_PX = 112.0  # repeated on long overview curves so direction remains visible
 
 # Names: the cap counts every place label of the map; countries are limited to the path.
 MAX_CITY_LABELS = 8
@@ -97,6 +98,10 @@ def map_style() -> dict[str, Any]:
             "maxZoom": MAP_MAX_ZOOM,
             "fitMaxZoom": FIT_MAX_ZOOM,
             "singlePointZoom": SINGLE_POINT_ZOOM,
+        },
+        # Browser layout rules: PDF arrow density and placement remain independent.
+        "web": {
+            "arrowSpacing": WEB_ARROW_SPACING_PX,
         },
     }
 
