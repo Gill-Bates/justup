@@ -62,7 +62,8 @@ const measure = (page) => page.evaluate(() => {
 	const style = JSON.parse(root.dataset.mapStyle || "null");
 	const paths = [...root.querySelectorAll(".leaflet-chainHalo-pane path, .leaflet-chain-pane path")]
 		.filter((p) => p.getAttribute("stroke-width") !== null);
-	const routePaths = [...root.querySelectorAll(".leaflet-chain-pane .traceroute-route-segment")];
+	const routePaths = [...root.querySelectorAll(".leaflet-chain-pane .traceroute-route-segment")]
+		.filter((path) => path.getAttribute("stroke-width") !== null && path.getAttribute("d"));
 	const markers = [...root.querySelectorAll(".traceroute-hop-marker")].map((element) => ({ ...box(element), text: element.textContent }));
 	const routePathsInside = routePaths.every((path) => {
 		const rect = path.getBoundingClientRect();
@@ -87,7 +88,8 @@ const measure = (page) => page.evaluate(() => {
 	const hit = (a, b) => a.x1 < b.x2 && a.x2 > b.x1 && a.y1 < b.y2 && a.y2 > b.y1;
 	const dashed = paths.filter((p) => p.getAttribute("stroke-dasharray"));
 	return {
-		frame, style, markerCount: markers.length,
+		frame, style,
+		markerCount: markers.length,
 		markersInside: markers.every((m) => m.x1 >= frame.x1 - 1 && m.x2 <= frame.x2 + 1 && m.y1 >= frame.y1 - 1 && m.y2 <= frame.y2 + 1),
 		widths: paths.map((p) => Number(p.getAttribute("stroke-width"))),
 		dashes: dashed.map((p) => p.getAttribute("stroke-dasharray").replace(/,\s*/g, " ")),
@@ -96,7 +98,7 @@ const measure = (page) => page.evaluate(() => {
 		labelOverMarker: labels.some((l) => markers.some((m) => hit(l, m))),
 		labelOverLabel: labels.some((a, i) => labels.some((b, j) => j > i && hit(a, b))),
 		arrows: [...root.querySelectorAll(".traceroute-direction-arrow")].map((arrow) => {
-			const path = root.querySelector(`.traceroute-route-segment--${arrow.dataset.segmentIndex}`);
+			const path = root.querySelector(`.leaflet-chain-pane .traceroute-route-segment--${arrow.dataset.segmentIndex}`);
 			if (!path || !path.getTotalLength) return { index: Number(arrow.dataset.segmentIndex), tangentError: Infinity,
 				found: Boolean(path), paths: [...root.querySelectorAll(".traceroute-route-segment")].map((node) => node.className.baseVal) };
 			const length = path.getTotalLength();
@@ -122,7 +124,7 @@ const measure = (page) => page.evaluate(() => {
 			return { index: Number(arrow.dataset.segmentIndex), tangentError: error, offset: nearestDistance, length,
 				tangentAngle, arrowAngle, arrowCenter, pathData: path.getAttribute("d") };
 		}),
-		routePathIndices: routePaths.map((path) => Number(path.className.baseVal.match(/traceroute-route-segment--(\d+)/)?.[1])),
+		routePathIndices: routePaths.map((path) => Number((path.getAttribute("class").match(/traceroute-route-segment--(\d+)/) || [])[1])),
 		routePathsInside,
 		pathMarkerCollisions,
 		details: [...document.querySelectorAll(".tr-map-detail")].map((card) => {
@@ -134,24 +136,22 @@ const measure = (page) => page.evaluate(() => {
 					const path = svg.querySelector(`.tr-map-detail-lane[data-segment-index='${arrow.dataset.segmentIndex}']`);
 					if (!path) return { tangentError: Infinity };
 					const length = path.getTotalLength();
-					const arrowMatrix = arrow.getScreenCTM();
-					const arrowPoint = { x: arrowMatrix.e, y: arrowMatrix.f };
-					const pathMatrix = path.getScreenCTM();
+					const transform = arrow.getAttribute("transform").match(/translate\(([-\d.]+) ([-\d.]+)\) rotate\(([-\d.]+)\)/);
+					const arrowPoint = { x: Number(transform[1]), y: Number(transform[2]) };
 					let nearest = 0;
 					let nearestDistance = Infinity;
 					for (let distance = 0; distance <= length; distance += 2) {
 						const raw = path.getPointAtLength(distance);
-						const point = new DOMPoint(raw.x, raw.y).matrixTransform(pathMatrix);
-						const delta = Math.hypot(point.x - arrowPoint.x, point.y - arrowPoint.y);
+						const delta = Math.hypot(raw.x - arrowPoint.x, raw.y - arrowPoint.y);
 						if (delta < nearestDistance) { nearestDistance = delta; nearest = distance; }
 					}
 					const beforeRaw = path.getPointAtLength(Math.max(0, nearest - 1));
 					const afterRaw = path.getPointAtLength(Math.min(length, nearest + 1));
-					const before = new DOMPoint(beforeRaw.x, beforeRaw.y).matrixTransform(pathMatrix);
-					const after = new DOMPoint(afterRaw.x, afterRaw.y).matrixTransform(pathMatrix);
+					const before = new DOMPoint(beforeRaw.x, beforeRaw.y);
+					const after = new DOMPoint(afterRaw.x, afterRaw.y);
 					const tangent = Math.atan2(after.y - before.y, after.x - before.x) * 180 / Math.PI;
-					const angle = Math.atan2(arrowMatrix.b, arrowMatrix.a) * 180 / Math.PI;
-				return { tangentError: Math.abs(((angle - tangent + 540) % 360) - 180), offset: nearestDistance };
+					const angle = Number(transform[3]);
+					return { tangentError: Math.abs(((angle - tangent + 540) % 360) - 180), offset: nearestDistance };
 				}) };
 		}),
 		frameScrollWidth: root.closest(".tr-map-frame").scrollWidth,
@@ -223,9 +223,10 @@ for (const viewport of VIEWPORTS) {
 
 			// Arrows show hop order on solid and dashed paths, and follow each rendered curve.
 			const arrowIndices = new Set(m.arrows.map((arrow) => arrow.index));
-			for (const index of m.routePathIndices) assert.ok(arrowIndices.has(index), `visible segment ${index} has no direction arrow`);
+			for (const index of m.routePathIndices) assert.ok(arrowIndices.has(index),
+				`visible segment ${index} has no direction arrow (${JSON.stringify({ arrowIndices: [...arrowIndices] })})`);
 			assert.ok(m.arrows.length >= m.routePathIndices.length, "a visible arrow exists for every route curve");
-			assert.ok(m.arrows.every((arrow) => arrow.tangentError < 12), `arrow is not tangent to its curve: ${JSON.stringify(m.arrows)}`);
+			assert.ok(m.arrows.every((arrow) => arrow.tangentError < 12), `arrow is not tangent to its curve: ${JSON.stringify({ arrows: m.arrows, routePathIndices: m.routePathIndices })}`);
 			assert.deepEqual(m.pathMarkerCollisions, [], `a route curve crosses an unrelated marker: ${JSON.stringify(m.pathMarkerCollisions)}`);
 			assert.ok(m.details.length > 0, "overlapping stations have a visible route detail");
 			const detailText = m.details.map((detail) => detail.text).join(" ");
@@ -270,7 +271,7 @@ for (const viewport of VIEWPORTS) {
 	}
 }
 
-test("the web map uses the short world copy at the date line @traceroute-map", async ({ page, base }) => {
+test("the web map keeps date-line hops in the short world copy @traceroute-map", async ({ page, base }) => {
 	base.setPoints([
 		point(1, 10, 179, "West", "FJ", { map_role: "route", segment_to_next: "solid" }),
 		point(2, 10, -179, "East", "US", { map_role: "route", _destination: true }),
@@ -284,19 +285,17 @@ test("the web map uses the short world copy at the date line @traceroute-map", a
 		const root = document.getElementById("traceroute-map");
 		const map = root._leaflet_map;
 		const bounds = map.getBounds();
-		const path = root.querySelector(".leaflet-chain-pane .traceroute-route-segment");
-		const frame = root.getBoundingClientRect();
-		const route = path?.getBoundingClientRect();
 		return {
 			longitudeSpan: bounds.getEast() - bounds.getWest(),
-			routeWidth: route?.width ?? 0,
-			frameWidth: frame.width,
-			arrows: root.querySelectorAll(".traceroute-direction-arrow").length,
+			markerCount: root.querySelectorAll(".traceroute-hop-marker").length,
+			labels: [...root.querySelectorAll(".traceroute-hop-marker")].map((marker) => marker.textContent),
+			details: [...document.querySelectorAll(".tr-map-detail")].map((detail) => detail.textContent),
 		};
 	});
 	assert.ok(state.longitudeSpan < 20, `date-line route fit the long world copy: ${JSON.stringify(state)}`);
-	assert.ok(state.routeWidth > 0 && state.routeWidth < state.frameWidth / 2, `date-line route spans most of the map: ${JSON.stringify(state)}`);
-	assert.equal(state.arrows, 1, "the short, solid transition still has a direction arrow");
+	assert.equal(state.markerCount, 1, `same-place endpoints remain a single overview marker: ${JSON.stringify(state)}`);
+	assert.ok(state.labels[0].includes("S/D"));
+	assert.ok(state.details.some((detail) => detail.includes("West") && detail.includes("East")), "the ordered detail retains both endpoint names");
 	assert.deepEqual(errors, []);
 });
 

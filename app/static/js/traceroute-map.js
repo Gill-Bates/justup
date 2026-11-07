@@ -985,17 +985,6 @@
 					lineCap: 'butt', lineJoin: 'round', dashArray: dashed ? style.line.dash : null,
 					className: pathClass
 				}).addTo(chainLayer);
-				var pathElement = pl.getElement();
-				if (pathElement) {
-					pathElement.dataset.routeOffset = String(seg.offset);
-					pathElement.dataset.markerHits = String(seg.markerHits);
-					pathElement.dataset.routeBoundsHits = String(seg.outside);
-					pathElement.dataset.routeFromBox = [from.x, from.y, from.w, from.h].join(',');
-					pathElement.dataset.routeTrimmedStart = [seg.a.x, seg.a.y].join(',');
-					pathElement.dataset.routeStartOffset = String(seg.startOffset);
-					pathElement.dataset.routeStartTangent = [seg.startTangent.x, seg.startTangent.y].join(',');
-					pathElement.dataset.routeMarkerSize = [seg.markerSize.w, seg.markerSize.h].join(',');
-				}
 				pl.bindTooltip(segmentTooltip(routePoints[i], dashed), { sticky: true, direction: 'top', className: 'traceroute-hop-tooltip' });
 				(function (segmentIndex) {
 					pl.on('click', function () { selectSegment(segmentIndex); });
@@ -1077,6 +1066,9 @@
 			if (!tangent) return null;
 			var angle = Math.atan2(tangent.ty, tangent.tx) * 180 / Math.PI;
 			var midpoint = map.unproject([tangent.x, tangent.y], zoom);
+			var containerPoint = map.latLngToContainerPoint(midpoint);
+			var mapSize = map.getSize();
+			if (containerPoint.x < 10 || containerPoint.y < 10 || containerPoint.x > mapSize.x - 10 || containerPoint.y > mapSize.y - 10) return null;
 			var arrow = document.createElement('span');
 			arrow.className = 'traceroute-direction-arrow';
 			arrow.setAttribute('aria-hidden', 'true');
@@ -1106,7 +1098,16 @@
 			if (typeof zoom !== 'number' || !isFinite(zoom)) return;
 			var byIndex = {};
 			chainRecords.forEach(function (rec) { byIndex[rec.index] = rec; });
-			var lengthAt = function (index) { return byIndex[index] ? byIndex[index].length : 0; };
+			var lengthAt = function (index) {
+				var rec = byIndex[index];
+				if (!rec) return 0;
+				var points = [map.latLngToContainerPoint(map.unproject(rec.a, zoom)), map.latLngToContainerPoint(map.unproject(rec.b, zoom))];
+				var minX = Math.min(points[0].x, points[1].x), maxX = Math.max(points[0].x, points[1].x);
+				var minY = Math.min(points[0].y, points[1].y), maxY = Math.max(points[0].y, points[1].y);
+				var size = map.getSize();
+				var visible = maxX >= 0 && minX <= size.x && maxY >= 0 && minY <= size.y;
+				return visible ? rec.length : 0;
+			};
 			computeArrowSegments(routePoints.length, routeSelection, lengthAt).forEach(function (index) {
 				var rec = byIndex[index];
 				directionArrowDistances(rec.length, style.web && style.web.arrowSpacing).forEach(function (distance, arrowIndex) {
@@ -1422,9 +1423,14 @@
 			var projectedRoute = unwrapProjectedRoute(validPoints, function (point) {
 				return map.project([point.lat, point.lon], zoom);
 			}, worldWidth);
-			var markerGroups = groupNearbyHopPoints(validPoints, function (_point, index) {
+			var markerGroups = groupNearbyHopPoints(routePoints, function (_point, index) {
 				return { x: projectedRoute[index].x, y: projectedRoute[index].y };
 			}, 36);
+			markerGroups = markerGroups.filter(function (group) {
+				var hasStart = routeStartIsMapped && group.members.some(function (member) { return pointContainsHop(member.point, routeStartHop); });
+				var hasDestination = group.members.some(function (member) { return Boolean(member.point._destination); });
+				return !(hasStart && hasDestination);
+			});
 			markerGroups.forEach(function (group) {
 				var groupInfo = describeMarkerGroup(group, routeStartHop, routeStartIsMapped);
 				group.markerWidth = Math.max(32, groupInfo.visibleLabel.length * 8 + 16);
@@ -1438,7 +1444,7 @@
 				var nodes = new Map();
 				markerGroups.forEach(function (group) {
 					group.members.forEach(function (member) {
-						nodes.set(member.index, { x: group.displayCenter.x, y: group.displayCenter.y,
+						nodes.set(member.index, { index: member.index, x: group.displayCenter.x, y: group.displayCenter.y,
 							w: group.markerWidth || 32, h: group.markerHeight || 32 });
 					});
 				});
@@ -1621,6 +1627,7 @@
 		var hasInitialZoom = false;
 		var displayFitComplete = false;
 		var displayFitAttempts = 0;
+		var displayFitScheduled = false;
 		function fitDisplayNodes(nodes, zoom) {
 			if (displayFitComplete) return true;
 			var size = map.getSize();
@@ -1642,7 +1649,13 @@
 			var minZoom = style.view.minZoom;
 			if ((tooWide || tooTall) && zoom > minZoom && displayFitAttempts < 6) {
 				displayFitAttempts++;
-				map.setZoom(zoom - 1, { animate: false });
+				if (!displayFitScheduled) {
+					displayFitScheduled = true;
+					requestAnimationFrame(function () {
+						displayFitScheduled = false;
+						if (mapContainer._leaflet_map === map) map.setZoom(zoom - 1, { animate: false });
+					});
+				}
 				return false;
 			}
 			displayFitComplete = true;

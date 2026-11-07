@@ -36,18 +36,20 @@ function setup({ geoPoints = 'not-json', leaflet = {} } = {}) {
       return [y / 20, x / 20];
     },
     getZoom() { return 4; }, getSize() { return { x: 400, y: 200 }; },
-    invalidateSize() {}, fitBounds() { removed.fitBounds += 1; }, setView() { removed.setView += 1; },
+    getPixelOrigin() { return { x: 0, y: 0 }; }, getContainer() { return { getBoundingClientRect() { return { left: 0, top: 0 }; } }; },
+    containerPointToLayerPoint([x, y]) { return { x, y }; }, latLngToContainerPoint() { return { x: 100, y: 100 }; },
+    invalidateSize() {}, panBy() {}, fitBounds() { removed.fitBounds += 1; }, setView() { removed.setView += 1; },
     on() {},
   };
   const layerGroup = () => ({ addTo() { return this; }, clearLayers() {}, addLayer() {} });
   const marker = () => {
     removed.markers += 1;
-    return { addTo() { return this; }, bindPopup() { return this; }, bindTooltip() { return this; }, on() {}, getElement() { return null; } };
+    return { addTo() { return this; }, bindPopup() { return this; }, bindTooltip() { return this; }, on() {}, setLatLng() { return this; }, getElement() { return null; } };
   };
   const polyline = (points) => {
     removed.polylines += 1;
     routeLines.push(points);
-    return { addTo() { return this; }, on() {}, setStyle() {}, bindTooltip() { return this; } };
+    return { addTo() { return this; }, on() {}, setStyle() {}, bindTooltip() { return this; }, getElement() { return null; } };
   };
   const element = () => ({
     style: {}, setAttribute() {}, appendChild() {}, addEventListener() {}, remove() {},

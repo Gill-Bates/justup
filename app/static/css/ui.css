@@ -3092,8 +3092,7 @@ textarea.smtp-editor-frame {
 		}
 
 		.ui-page .targets-table .check-badges {
-			align-content: center;
-			justify-content: center;
+			place-content: center;
 		}
 
 		.ui-page .targets-table .check-badges :is(.badge, .ju-status-item) {
