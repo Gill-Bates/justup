@@ -52,16 +52,15 @@ document.addEventListener('DOMContentLoaded', () => {
     initTooltips();
 
     // Re-init modules after HTMX fragments load (tabs are lazy-loaded)
-    document.body.addEventListener('htmx:afterSettle', () => {
+    document.body.addEventListener('htmx:afterSettle', (event) => {
         initTooltips();
-        initSignal();
+        if (event.target?.id === 'signal-pane') initSignal();
         initStorage();
         initTagInputs();
         initPublicEgress();
     });
     
     // Initialize all modules (for non-HTMX loaded content)
-    initSignal();
     initStorage();
     initTagInputs();
     initPublicEgress();

@@ -52,7 +52,7 @@ function setup() {
   const detail = el({ textContent: 'Select a hop to see its details.' });
   const diagnostics = el({ querySelectorAll: () => rows });
   const section = el({
-    dispatchEvent(evt) { events.push(evt.detail); },
+    dispatchEvent(evt) { events.push({ type: evt.type, detail: evt.detail }); },
     closest: (sel) => (sel === '.traceroute-diagnostics' ? diagnostics : section),
     querySelector: (sel) => (sel === '[data-tr-track]' ? track : sel === '[data-tr-detail]' ? detail : null),
     querySelectorAll: () => [hop, group],
@@ -80,10 +80,12 @@ test('selecting a hop marks it pressed, highlights overlapping rows and notifies
   assert.equal(t.hop.attrs['aria-pressed'], 'true');
   assert.deepEqual(t.rows.map((r) => r.classes.has('is-linked')), [false, false, true]);
   assert.equal(t.detail.textContent, 'Hop 5 · 10.0.0.5');
-  assert.deepEqual(JSON.parse(JSON.stringify(t.events.at(-1))), { on: true, first: 5, last: 5 });
+  assert.deepEqual(JSON.parse(JSON.stringify(t.events.find((event) => event.type === 'traceroute:hop-highlight').detail)), { on: true, first: 5, last: 5 });
+  assert.deepEqual(JSON.parse(JSON.stringify(t.events.at(-1).detail)), { source: 'timeline', first: 5, last: 5 });
   t.click(t.hop);
   assert.equal(t.hop.attrs['aria-pressed'], 'false');
-  assert.deepEqual(JSON.parse(JSON.stringify(t.events.at(-1))), { on: false });
+  assert.deepEqual(JSON.parse(JSON.stringify(t.events.filter((event) => event.type === 'traceroute:hop-highlight').at(-1).detail)), { on: false });
+  assert.deepEqual(JSON.parse(JSON.stringify(t.events.at(-1).detail)), { source: 'timeline', first: null, last: null });
   assert.ok(t.rows.every((r) => !r.classes.has('is-linked')));
 });
 test('a group toggles aria-expanded and its member list, and highlights its whole range', () => {

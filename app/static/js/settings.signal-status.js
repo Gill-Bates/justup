@@ -27,6 +27,7 @@ const apiFetch = window.apiFetch;
 // Dependency injection for circular dependency resolution
 let _signalUnlinkFn = null;
 let _signalSelectModeFn = null;
+let pendingForcedRefresh = false;
 
 /**
  * Set the unlink handler (called from signal-actions.js init)
@@ -59,9 +60,13 @@ export function initSignalStatus() {
 /**
  * Load and display Signal connection status badges and device info
  */
-export async function loadSignalStatus() {
+export async function loadSignalStatus({ forceRefresh = false } = {}) {
     // Skip status refresh during mutating operations to prevent UI jumping
     if (isSignalBusy()) {
+        return;
+    }
+    if (signalStatusGuard.isRunning()) {
+        if (forceRefresh) pendingForcedRefresh = true;
         return;
     }
     
@@ -85,12 +90,14 @@ export async function loadSignalStatus() {
         
         if (!container) return;
         
-        // Show loading state and hide mode selection until we know the status
-        container.innerHTML = '<span class="ju-status-item"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span>Checking...</span>';
-        if (modeSelection) modeSelection.hidden = true;
+        // Keep the last known status visible during a refresh.
+        if (!container.innerHTML.trim()) {
+            container.innerHTML = '<span class="ju-status-item"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span>Checking...</span>';
+            if (modeSelection) modeSelection.hidden = true;
+        }
 
         try {
-            const resp = await apiFetch(SIGNAL_API.status);
+            const resp = await apiFetch(forceRefresh ? `${SIGNAL_API.status}?refresh=true` : SIGNAL_API.status);
             if (!resp.ok) {
                 container.innerHTML = window.JuStatusDot.html('neutral', 'Status unavailable');
                 if (deviceInfo) deviceInfo.textContent = 'Could not connect to signal-cli';
@@ -201,6 +208,11 @@ export async function loadSignalStatus() {
             if (deviceInfo) deviceInfo.textContent = 'Connection error';
             if (modeSelection) modeSelection.hidden = false;
             hideRegisteredUi();
+        }
+    }).finally(() => {
+        if (pendingForcedRefresh) {
+            pendingForcedRefresh = false;
+            return loadSignalStatus({ forceRefresh: true });
         }
     });
 }

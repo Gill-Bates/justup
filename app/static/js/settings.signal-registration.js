@@ -64,7 +64,7 @@ export function setStatusLoader(fn) {
  */
 function refreshStatus() {
     if (_loadSignalStatus) {
-        _loadSignalStatus();
+        _loadSignalStatus({ forceRefresh: true });
     }
 }
 
@@ -638,6 +638,7 @@ export async function signalVerify() {
 
     const normalizedNumber = normalizeE164(number);
 
+    let verified = false;
     try {
         await withSpinner(btn, async () => {
             const resp = await apiFetch(SIGNAL_API.verify, {
@@ -647,6 +648,7 @@ export async function signalVerify() {
             });
 
             if (resp.ok) {
+                verified = true;
                 setSuccess(statusEl, 'Verified! Number registered successfully');
                 notify('success', 'Phone number verified');
                 
@@ -681,6 +683,7 @@ export async function signalVerify() {
         showVerificationCodeError();
     } finally {
         setSignalBusy(false);
+        if (verified) refreshStatus();
     }
 }
 

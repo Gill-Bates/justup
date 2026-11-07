@@ -42,7 +42,7 @@ import { loadSignalStatus } from './settings.signal-status.js';
 const apiFetch = window.apiFetch;
 let signalActionsBound = false;
 
-function refreshStatus() { loadSignalStatus(); }
+function refreshStatus() { return loadSignalStatus({ forceRefresh: true }); }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Test Message
@@ -154,6 +154,7 @@ function initUnlinkDeviceModal() {
 
         if (errorEl) errorEl.classList.add('d-none');
 
+        let unlinked = false;
         setSignalBusy(true);
         try {
             await withSpinner(confirmBtn, async () => {
@@ -167,7 +168,7 @@ function initUnlinkDeviceModal() {
                     hideModal(DOM.unlinkDeviceModal());
                     notify('success', 'Local Signal device data removed. Revoke the device from your primary Signal phone.');
 
-                    refreshStatus();
+                    unlinked = true;
                 } else {
                     const data = await resp.json().catch(() => ({}));
                     const error = formatErrorDetail(data.detail) || 'Failed to unlink device';
@@ -185,6 +186,7 @@ function initUnlinkDeviceModal() {
             }
         } finally {
             setSignalBusy(false);
+            if (unlinked) refreshStatus();
         }
     });
 
@@ -222,6 +224,7 @@ export async function unregisterPhone() {
     }
 
     showError(errorEl, null);
+    let unregistered = false;
     setSignalBusy(true);
 
     try {
@@ -236,7 +239,7 @@ export async function unregisterPhone() {
                 hideModal(DOM.unregisterPhoneModal());
                 notify('success', 'Signal account unregistered');
 
-                refreshStatus();
+                unregistered = true;
             } else {
                 // The server answers 200 for an already unregistered account, so any error is real
                 showError(errorEl, await getErrorMessage(resp));
@@ -247,6 +250,7 @@ export async function unregisterPhone() {
         showError(errorEl, 'Network error: ' + e.message);
     } finally {
         setSignalBusy(false);
+        if (unregistered) refreshStatus();
     }
 }
 

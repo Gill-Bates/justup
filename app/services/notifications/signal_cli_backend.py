@@ -188,11 +188,7 @@ _ALREADY_REGISTERED_MARKERS = ("already registered", "existing account", "alread
 
 
 class SignalCliBackend(SignalBackend):
-    """Signal backend using local signal-cli subprocess.
-
-    Status is always fetched fresh from signal-cli - no caching.
-    This ensures the UI always shows the real current state.
-    """
+    """Signal backend using local signal-cli subprocess."""
 
     def __init__(
         self,
@@ -212,6 +208,12 @@ class SignalCliBackend(SignalBackend):
         # Lock for operations that modify signal-cli state (link, unregister)
         # Prevents race conditions when multiple requests hit the same backend
         self._state_lock = threading.Lock()
+
+        self._status_condition = threading.Condition()
+        self._status_value: SignalStatus | None = None
+        self._status_expires_at = 0.0
+        self._status_generation = 0
+        self._status_fetching = False
 
         # Rate limiting: track last send time per sender to prevent overwhelming signal-cli
         # Using dict allows multiple sender accounts without blocking each other
@@ -390,28 +392,52 @@ class SignalCliBackend(SignalBackend):
         raise SignalSendFailed(f"Signal {operation} failed")
 
     def invalidate_cache(self) -> None:
-        """No-op for API compatibility. Status is always fetched fresh."""
+        """Discard cached status and fence any fetch already in progress."""
+        with self._status_condition:
+            self._status_generation += 1
+            self._status_value = None
+            self._status_expires_at = 0.0
+            self._status_condition.notify_all()
 
-    def status(self, force_refresh: bool = False) -> SignalStatus:  # noqa: ARG002 - SignalBackend interface
-        """Get current Signal status - always fresh from signal-cli.
+    def status(self, force_refresh: bool = False) -> SignalStatus:
+        """Get cached status, sharing an in-flight refresh across callers.
 
         Args:
-            force_refresh: Ignored (kept for API compatibility). Status is always fresh.
-
-        Always queries signal-cli directly to ensure accurate state.
-        No caching - the UI must always show the real current status.
+            force_refresh: Bypass a previously cached status.
         """
-        try:
-            return self._fetch_status_uncached()
-        except (SignalTimeout, SignalUnavailable) as e:
-            _log.warning("Signal status check failed: %s", e)
-            return SignalStatus(
-                reachable=False,
-                registered=False,
-                linked=False,
-                accounts=[],
-                error=str(e),
-            )
+        while True:
+            with self._status_condition:
+                if not force_refresh and self._status_value is not None and time.monotonic() < self._status_expires_at:
+                    return self._status_value
+                if self._status_fetching:
+                    generation = self._status_generation
+                    self._status_condition.wait_for(lambda: not self._status_fetching)
+                    if generation == self._status_generation:
+                        force_refresh = False
+                    continue
+                self._status_fetching = True
+                generation = self._status_generation
+
+            try:
+                result = self._fetch_status_uncached()
+            except (SignalTimeout, SignalUnavailable) as exc:
+                _log.warning("Signal status check failed: %s", exc)
+                result = SignalStatus(reachable=False, registered=False, linked=False, accounts=[], error=str(exc))
+            except BaseException:
+                with self._status_condition:
+                    self._status_fetching = False
+                    self._status_condition.notify_all()
+                raise
+
+            with self._status_condition:
+                self._status_fetching = False
+                if generation == self._status_generation:
+                    self._status_value = result
+                    self._status_expires_at = time.monotonic() + (10 if result.error or not result.reachable else 60)
+                    self._status_condition.notify_all()
+                    return result
+                self._status_condition.notify_all()
+            force_refresh = False
 
     def _fetch_status_uncached(self) -> SignalStatus:
         """Fetch fresh status from signal-cli (no caching).
@@ -755,6 +781,7 @@ class SignalCliBackend(SignalBackend):
 
             if returncode == 0:
                 _log.info("Link process completed successfully")
+                self.invalidate_cache()
                 return True
             _log.warning("Link process exited with code %d", returncode)
             return False
@@ -798,6 +825,7 @@ class SignalCliBackend(SignalBackend):
 
             response = self._run_signal_rpc("unregister", {"account": sender_number, "deleteAccount": True})
             self._require_rpc_success(response, "account removal", sender_number)
+            self.invalidate_cache()
 
             if delete_cache:
                 if sender_number in self.list_accounts():
@@ -823,6 +851,7 @@ class SignalCliBackend(SignalBackend):
                 {"account": sender_number, "ignoreRegistered": True},
             )
             self._require_rpc_success(response, "local data removal", sender_number)
+            self.invalidate_cache()
             if sender_number in self.list_accounts():
                 raise SignalSendFailed("Signal account remains after local data removal")
             _log.info("Local Signal data removed for %s", _mask_phone(sender_number))
@@ -921,6 +950,7 @@ class SignalCliBackend(SignalBackend):
             )
             self._require_rpc_success(response, "verification", number)
             _log.info("Signal registration verified for %s", _mask_phone(number))
+            self.invalidate_cache()
 
     def update_profile(self, name: str, avatar_path: str | None = None, sender: str | None = None) -> None:
         """Update Signal profile name and avatar.

@@ -32,15 +32,33 @@ def test_server_and_script_icon_maps_are_identical():
 
 def _icon_for(category: str) -> str:
     item = SimpleNamespace(
-        id=1, category=category, severity="success", title="T", body="", actor="", action=None,
-        is_read=True, created_at="2026-11-07T10:00:00+00:00", resource=None,
+        id=1,
+        category=category,
+        severity="success",
+        title="T",
+        body="",
+        actor="",
+        action=None,
+        is_read=True,
+        created_at="2026-11-07T10:00:00+00:00",
+        resource=None,
     )
     template = templates.env.get_template("notifications.html")
     context = template.new_context(
         {
-            "items": [item], "tabs": NOTIFICATION_TABS, "category": "all", "severity": "",
-            "category_icons": NOTIFICATION_CATEGORY_ICONS, "total": 1, "page": 1, "total_pages": 1,
-            "page_size": 20, "query_string": "", "unread_total": 0, "can_close_alerts": False, "user": None,
+            "items": [item],
+            "tabs": NOTIFICATION_TABS,
+            "category": "all",
+            "severity": "",
+            "category_icons": NOTIFICATION_CATEGORY_ICONS,
+            "total": 1,
+            "page": 1,
+            "total_pages": 1,
+            "page_size": 20,
+            "query_string": "",
+            "unread_total": 0,
+            "can_close_alerts": False,
+            "user": None,
         }
     )
     html = "".join(template.blocks["content"](context))
