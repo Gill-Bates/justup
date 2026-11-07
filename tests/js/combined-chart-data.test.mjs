@@ -343,7 +343,8 @@ test("zoom reloads finer buckets once and reset restores the overview", async ()
   ];
   const chartOptions = {
     plugins: { annotation: { annotations: { down0: { xMin: T0, xMax: T0 + 1 } } } },
-    scales: {},
+    // The loader only rebuilds the status lane when the chart has the yStatus scale.
+    scales: { yStatus: {} },
   };
   const chart = {
     data: { datasets }, scales: { x: { min: T0, max: T0 + 7 * 86400000 } },

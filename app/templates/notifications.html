@@ -53,7 +53,7 @@
             {% else %}
             <div class="ju-notif-swipe-content">
             {% endif %}
-               <span class="material-icons ju-notif-icon" aria-hidden="true">{{ {'monitoring':'monitor_heart','reports':'picture_as_pdf','delivery':'forward_to_inbox','security':'shield','activity':'history'}.get(n.category, 'notifications') }}</span>
+               <span class="material-icons ju-notif-icon" aria-hidden="true">{{ category_icons.get(n.category, 'notifications') }}</span>
                <div class="ju-notif-main">
                   <div class="ju-notif-title">
                      {% if not n.is_read %}<span class="ju-unread-dot" aria-hidden="true"></span><span class="visually-hidden">Unread: </span>{% endif %}

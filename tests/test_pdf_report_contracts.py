@@ -524,8 +524,7 @@ def test_plain_http_target_gets_a_neutral_marking_and_no_tls_section_or_secrets(
     b = _full_builder(
         monkeypatch, ssl=None, target_extra={"http_url": url, "host": None, "ping_host": None, "cert_host": None}
     )
-    b._assemble()
-    text = _texts(b)
+    text = _all_text(b)
     assert "Certificate" not in text and "Not applicable" not in text
     assert "HTTP" in text and "no TLS scan" in text
     assert "plain.example" in text
@@ -537,8 +536,7 @@ def test_plain_http_target_gets_a_neutral_marking_and_no_tls_section_or_secrets(
 
 def test_secure_target_still_shows_the_tls_sections(monkeypatch):
     b = _full_builder(monkeypatch, ssl=_tls_result())
-    b._assemble()
-    assert "Certificate" in _texts(b)
+    assert "Certificate" in _all_text(b)
 
 
 # ─── Layout contracts: chapters, page breaks, repeated headers, A4/Letter ──────────────────────
@@ -632,7 +630,7 @@ def _assert_chapter_layout(b: PDFReportBuilder) -> None:
     assert pages[0] == 1
     assert pages == sorted(set(pages)), pages  # strictly increasing: no two chapters share a page
     if merged:
-        assert b.chapter_pages["Downtime Log"] == b.page_count or b.chapter_pages["Downtime Log"] >= pages[-1]
+        assert b.chapter_pages["Downtime Log"] == pages[-1], b.chapter_pages
     b._assemble()  # build() consumes the flowables; re-compose them for the structural checks
     heads = [i for i, el in enumerate(b.elements) if getattr(el, "chapter_name", None) in names[1:]]
     assert len(heads) == len(names) - 1
@@ -1897,7 +1895,8 @@ def test_pdf_logo_comes_from_the_single_web_logo_asset():
     assert web_logo == pdf_logo.LOGO_SVG_PATH
     assert "/static/img/justup_1c.svg" in (repo / "app" / "templates" / "base.html").read_text(encoding="utf-8")
     # No second, stale copy of the wordmark and no hand-drawn footer signet.
-    assert not list((repo / "app" / "static").glob("justup_1c.*"))
+    copies = sorted(p for p in (repo / "app" / "static").rglob("justup_1c.*") if p != web_logo)
+    assert not copies, copies
     source = Path(pdf_report.__file__).read_text(encoding="utf-8")
     assert "justup_1c.png" not in source
     assert "heartbeat" not in source.lower()

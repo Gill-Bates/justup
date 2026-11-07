@@ -406,11 +406,15 @@ def _shaped_text(text: str, font_name: str, font_size: float) -> ShapedStr:
     return shaped
 
 
+def _shaped_width(shaped, font_size: float) -> float:
+    return sum(glyph.x_advance for glyph in shaped.__shapeData__) * font_size / 1000
+
+
 def _text_width(text: str, font_name: str, font_size: float) -> float:
     if not text:
         return 0.0
     shaped = _shaped_text(text, font_name, font_size)
-    return sum(glyph.x_advance for glyph in shaped.__shapeData__) * font_size / 1000
+    return _shaped_width(shaped, font_size)
 
 
 def _draw_text(canvas, x: float, y: float, text: str, *, align: str = "left") -> None:
@@ -419,7 +423,7 @@ def _draw_text(canvas, x: float, y: float, text: str, *, align: str = "left") ->
     font_name = canvas._fontname  # noqa: SLF001
     font_size = canvas._fontsize  # noqa: SLF001
     shaped = _shaped_text(text, font_name, font_size)
-    width = sum(glyph.x_advance for glyph in shaped.__shapeData__) * font_size / 1000
+    width = _shaped_width(shaped, font_size)
     if align == "center":
         x -= width / 2
     elif align == "right":
@@ -895,10 +899,14 @@ def _draw_latency(
     return handles
 
 
+def _tick_step(ticks: list[float]) -> float:
+    return ticks[1] - ticks[0] if len(ticks) > 1 else 1.0
+
+
 def _y_axis(ax, ticks: list[float], top: float, *, label: str | None = None) -> None:
     ax.set_ylim(0, top)
     ax.set_yticks(ticks)
-    step = ticks[1] - ticks[0] if len(ticks) > 1 else 1.0
+    step = _tick_step(ticks)
     ax.yaxis.set_major_formatter(mticker.FuncFormatter(_fmt_tick(step)))
     if label:
         ax.set_ylabel(label, fontsize=8, color="#495057")
@@ -906,7 +914,7 @@ def _y_axis(ax, ticks: list[float], top: float, *, label: str | None = None) -> 
 
 def _left_margin(ticks: list[float], width: float, has_label: bool = True) -> float:
     """Figure fraction for the Y tick labels and optional side title, derived from the widest tick label."""
-    step = ticks[1] - ticks[0] if len(ticks) > 1 else 1.0
+    step = _tick_step(ticks)
     chars = max(len(_fmt_tick(step)(t, 0)) for t in ticks)
     return min(0.25, (0.14 + 0.075 * chars + (0.22 if has_label else 0)) / width)
 
@@ -1283,9 +1291,7 @@ def _port_scales(port_data: dict[int, list[dict]], tz) -> tuple[dict, dict, list
     views = {port: _build_view(data, tz) for port, data in sorted(port_data.items())}
     shared = _ports_share_scale(list(views.values()))
     scales = {port: _axis_scale(list(views.values()) if shared else [views[port]], target=3) for port in views}
-    widest = max(
-        (s[1] for s in scales.values()), key=lambda t: len(_fmt_tick(1 if len(t) < 2 else t[1] - t[0])(t[-1], 0))
-    )
+    widest = max((s[1] for s in scales.values()), key=lambda t: len(_fmt_tick(_tick_step(t))(t[-1], 0)))
     return views, scales, widest
 
 
@@ -1299,7 +1305,8 @@ def _create_multi_port_tcp_chart(
 ) -> bytes | None:
     """Create a small-multiples TCP latency chart with one panel per port.
 
-    All panels share the time axis and the Y scale, so ports are directly comparable.
+    Panels share the time axis; they share the Y scale only when the ports are comparable (see
+    _ports_share_scale), otherwise each panel gets its own scale.
     """
     port_data = {port: data for port, data in (port_data or {}).items() if data}
     if not port_data:
@@ -1512,6 +1519,10 @@ _IMPERFECT_CEILING_PCT = 99.99
 LOW_COVERAGE_PCT = 80.0
 
 
+def _interval_seconds(report_data: ReportData) -> float:
+    return report_data.target.get("interval_seconds") or 60
+
+
 def _coverage_pct(report_data: ReportData, total_checks: int, interval_seconds: float) -> float | None:
     window = (report_data.to_date - report_data.from_date).total_seconds()
     if window <= 0:
@@ -1547,12 +1558,12 @@ def _downtime_minutes(
     return total
 
 
-def _compute_kpis(report_data: ReportData) -> KPIMetrics:
+def _compute_kpis(report_data: ReportData, events: list[DowntimeEvent] | None = None) -> KPIMetrics:
     """Compute KPI metrics; a metric without measurements stays None (never 0).
 
     downtime_minutes sums the measured outages of the downtime table (shared rule, gaps excluded).
     """
-    interval_seconds = report_data.target.get("interval_seconds") or 60
+    interval_seconds = _interval_seconds(report_data)
 
     response = _valid_values(report_data.http_data)
     ping = _valid_values(report_data.ping_data)
@@ -1568,7 +1579,7 @@ def _compute_kpis(report_data: ReportData) -> KPIMetrics:
         downtime_minutes=_downtime_minutes(
             report_data.uptime_data,
             interval_seconds,
-            _report_downtime_events(report_data),
+            events if events is not None else _report_downtime_events(report_data),
             tz=_report_tz(report_data.from_date),
             fallback=report_data.to_date,
         ),
@@ -1581,6 +1592,12 @@ def _compute_kpis(report_data: ReportData) -> KPIMetrics:
     )
 
 
+def _downtime_event(start: datetime, end: datetime | None) -> DowntimeEvent:
+    return DowntimeEvent(
+        start=start, end=end, duration_minutes=None if end is None else display_seconds(start, end) // 60
+    )
+
+
 def _extract_downtime_events(
     uptime_data: AvailabilitySeries | list[dict], interval_seconds: float = 60, now: datetime | None = None
 ) -> list[DowntimeEvent]:
@@ -1590,11 +1607,7 @@ def _extract_downtime_events(
     """
     series = _as_series(uptime_data, interval_seconds)
     return [
-        DowntimeEvent(
-            start=o.start,
-            end=o.end,
-            duration_minutes=None if o.end is None else display_seconds(o.start, o.end) // 60,
-        )
+        _downtime_event(o.start, o.end)
         for o in measured_outages(series.outage_points(), interval_seconds=interval_seconds, now=now)
         if o.end is None or (o.seconds() or 0) >= MIN_DOWNTIME_SECONDS
     ]
@@ -1602,15 +1615,8 @@ def _extract_downtime_events(
 
 def _report_downtime_events(report_data: ReportData) -> list[DowntimeEvent]:
     if report_data.downtime_periods is not None:
-        return [
-            DowntimeEvent(
-                start=period.start,
-                end=period.end,
-                duration_minutes=None if period.end is None else display_seconds(period.start, period.end) // 60,
-            )
-            for period in reversed(report_data.downtime_periods)
-        ]
-    return _extract_downtime_events(report_data.uptime_data, report_data.target.get("interval_seconds") or 60)
+        return [_downtime_event(period.start, period.end) for period in reversed(report_data.downtime_periods)]
+    return _extract_downtime_events(report_data.uptime_data, _interval_seconds(report_data))
 
 
 # Custom Flowables
@@ -2127,7 +2133,7 @@ class RouteDiagram(Flowable):
         return self.width, self.height
 
     def split(self, availWidth, availHeight):  # noqa: N803, ARG002 - reportlab callback signature
-        """Break between hops when the route does not fit; a part needs at least three entries to stand alone."""
+        """Break between hops when the route does not fit; the first part keeps at least three entries."""
         if self.height <= availHeight:
             return []
         budget = availHeight - self._head_h - self._legend_h - 1  # 1 pt tolerance against float rounding
@@ -2336,8 +2342,8 @@ class PDFReportBuilder:
         self.font_bold = _get_font_bold()
         self.styles = self._create_styles()
         self.elements: list = []
-        self.kpis = _compute_kpis(report_data)
         self.downtime_events = _report_downtime_events(report_data)
+        self.kpis = _compute_kpis(report_data, self.downtime_events)
         self.chapter_pages: dict[str, int] = {}
         self.page_count = 0
         self.content_pages: set[int] = set()
@@ -2352,6 +2358,8 @@ class PDFReportBuilder:
         self._ssl_cache: TlsScanResult | None = None
         self._ssl_fetched: bool = False
         self._ssl_scanned_at: datetime | None = None
+        self._provider_fetched = False
+        self._provider_cache: dict[str, Any] | None = None
         # Decorative flag images by ISO code; filled by prefetch_external_data, empty means text only
         self._flags: dict[str, ImageReader] = {}
 
@@ -2971,18 +2979,14 @@ class PDFReportBuilder:
                     "Availability", sla_availability, actual, deviation, deviation, actual >= sla_availability, "%"
                 )
             )
-        if sla_response is not None and kpis.avg_response_ms is not None:
-            actual = kpis.avg_response_ms
-            deviation = actual - sla_response
-            pct = (deviation / sla_response * 100) if sla_response > 0 else 0
-            deviations.append(
-                SLADeviation("Response Time", sla_response, actual, deviation, pct, actual <= sla_response, "ms")
-            )
-        if sla_ping is not None and kpis.avg_ping_ms is not None:
-            actual = kpis.avg_ping_ms
-            deviation = actual - sla_ping
-            pct = (deviation / sla_ping * 100) if sla_ping > 0 else 0
-            deviations.append(SLADeviation("Ping Latency", sla_ping, actual, deviation, pct, actual <= sla_ping, "ms"))
+        for name, sla, actual in (
+            ("Response Time", sla_response, kpis.avg_response_ms),
+            ("Ping Latency", sla_ping, kpis.avg_ping_ms),
+        ):
+            if sla is not None and actual is not None:
+                deviation = actual - sla
+                pct = (deviation / sla * 100) if sla > 0 else 0
+                deviations.append(SLADeviation(name, sla, actual, deviation, pct, actual <= sla, "ms"))
 
         if not deviations:
             return
@@ -3345,7 +3349,7 @@ class PDFReportBuilder:
             rows.append(
                 ("Scan Status", Paragraph("All configured checks returned a result", token), ("info", "COMPLETE"))
             )
-        scanned = getattr(self, "_ssl_scanned_at", None)
+        scanned = self._ssl_scanned_at
         when = (
             f"{_fmt_dt(_to_tz(scanned, self.tz), self.tz)} {_tz_label(self.report_data.from_date)}"
             if scanned
@@ -3515,7 +3519,8 @@ class PDFReportBuilder:
 
     def _provider_info(self) -> dict[str, Any] | None:
         """Provider lookup of the target host, fetched once per report."""
-        if not hasattr(self, "_provider_cache"):
+        if not self._provider_fetched:
+            self._provider_fetched = True
             host = self._get_traceroute_host()
             self._provider_cache = lookup_provider_info(host) if host else None
         return self._provider_cache
@@ -3556,9 +3561,6 @@ class PDFReportBuilder:
         )
         # No KeepTogether: a long route splits between hops and marks the continuation
         self.elements.extend([diagram, Spacer(1, 3 * mm)])
-
-    def _status_badge(self, text: str, kind: str) -> Badge:
-        return self._state_badge(kind, text)
 
     def _add_traceroute(
         self,
@@ -3628,13 +3630,13 @@ class PDFReportBuilder:
             latency = f"{lat:.1f} ms" if lat and not silent else "—"  # interpolated values are not measurements
 
             if synthetic:
-                badge = self._status_badge(STATE_NOT_REACHED, "blocked")
+                badge = self._state_badge("blocked", STATE_NOT_REACHED)
             elif silent:
-                badge = self._status_badge(STATE_NO_REPLY, "blocked")
+                badge = self._state_badge("blocked", STATE_NO_REPLY)
             elif status in ("ok", "partial"):
-                badge = self._status_badge(status.upper(), status)
+                badge = self._state_badge(status, status.upper())
             else:
-                badge = self._status_badge(status.upper()[:10], "blocked")
+                badge = self._state_badge("blocked", status.upper()[:10])
 
             muted_location = location in (LOCATION_UNKNOWN, "—") or not (city or approx_destination)
             location_cell = Paragraph(_esc(location), td_muted_loc if muted_location else td)
@@ -3791,7 +3793,7 @@ class PDFReportBuilder:
                 data.from_date,
                 data.to_date,
                 width=width,
-                interval_seconds=data.target.get("interval_seconds") or 60,
+                interval_seconds=_interval_seconds(data),
                 plot_left_in=left_in,
             )
             if bar:

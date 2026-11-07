@@ -82,9 +82,11 @@ def test_failed_open_alert_load_is_retried_instead_of_forgetting_the_alert(db_pa
 
     restarted = _sched(db_path, tmp_path)
     real = sqlite_db.list_active_alerts
-    with mock.patch.object(sqlite_db, "list_active_alerts", side_effect=[sqlite_db.sqlite3.OperationalError("busy")]):
-        with pytest.raises(sqlite_db.sqlite3.OperationalError):
-            restarted._refresh_targets(utcnow())
+    with (
+        mock.patch.object(sqlite_db, "list_active_alerts", side_effect=[sqlite_db.sqlite3.OperationalError("busy")]),
+        pytest.raises(sqlite_db.sqlite3.OperationalError),
+    ):
+        restarted._refresh_targets(utcnow())
     assert not restarted._rt.get(tid)
 
     with mock.patch.object(sqlite_db, "list_active_alerts", real):

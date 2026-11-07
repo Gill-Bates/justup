@@ -251,10 +251,12 @@ textarea.smtp-editor-frame {
 
 .egress-list {
 	--egress-control: max(36px, var(--ui-target-min));
+
 	display: grid;
 	gap: 0.5rem;
 	container-type: inline-size;
 }
+
 /* Narrow: label left, status on top, address and copy button below. Wide: four fixed columns. */
 .egress-row {
 	display: grid;
@@ -263,10 +265,12 @@ textarea.smtp-editor-frame {
 	gap: 0.5rem;
 	min-width: 0;
 }
+
 .egress-label {
 	font-weight: 600;
 	line-height: var(--egress-control);
 }
+
 .egress-value {
 	display: grid;
 	grid-template-columns: minmax(0, 1fr) auto;
@@ -276,10 +280,12 @@ textarea.smtp-editor-frame {
 	margin: 0;
 	min-width: 0;
 }
+
 .egress-value .ju-status-item {
 	grid-area: status;
 	min-height: var(--egress-control);
 }
+
 .egress-address {
 	grid-area: address;
 	min-width: 0;
@@ -287,18 +293,22 @@ textarea.smtp-editor-frame {
 	font-size: 0.875rem;
 	color: var(--bs-body-color);
 }
+
 .egress-value [data-egress-copy] {
 	grid-area: copy;
 }
+
 @container (min-width: 28rem) {
 	.egress-value {
 		grid-template-columns: minmax(0, 1fr) 8rem auto;
 		grid-template-areas: "address status copy" "detail detail detail";
 	}
+
 	.egress-value .ju-status-item {
 		min-height: 0;
 	}
 }
+
 .egress-value [data-egress-detail] {
 	grid-area: detail;
 	display: block;
@@ -334,6 +344,7 @@ textarea.smtp-editor-frame {
 	min-width: var(--egress-control);
 	min-height: var(--egress-control);
 }
+
 .egress-value .btn-icon .material-icons {
 	font-size: 1.125rem;
 }
@@ -1871,6 +1882,8 @@ textarea.smtp-editor-frame {
 .ju-status-dot--warning {
 	--ju-dot-color: var(--bs-warning);
 
+	/* Dark edge: yellow alone on a light surface is about 1.6:1 (WCAG 1.4.11). */
+	border-color: var(--bs-warning-text-emphasis);
 	border-radius: 1px;
 	transform: rotate(45deg);
 }
@@ -2914,28 +2927,8 @@ textarea.smtp-editor-frame {
 	height: auto;
 }
 
-.status-up {
-	color: var(--status-up);
-}
-
-.status-down {
-	color: var(--status-down);
-}
-
-.status-degraded {
-	color: var(--status-degraded);
-}
-
-.status-warning {
-	color: var(--status-warning);
-}
-
 .status-unknown {
 	color: var(--status-unknown);
-}
-
-.status-disabled {
-	color: var(--status-disabled);
 }
 
 .card-status {
@@ -3032,6 +3025,7 @@ textarea.smtp-editor-frame {
 			color: var(--bs-secondary-color);
 		}
 
+		/* Preview of three checks; must match `visible_checks` in fragments/targets_table.html */
 		.ui-page .targets-table .check-badges :is(.badge, .ju-status-item):nth-child(n+4) {
 			display: none;
 		}
@@ -3043,7 +3037,7 @@ textarea.smtp-editor-frame {
 		.ui-page .targets-table .targets-check-toggle {
 			display: inline-flex;
 			align-items: center;
-			min-height: 24px;
+			min-height: var(--ui-target-min);
 			padding: 0.125rem 0.375rem;
 			border: 1px solid var(--bs-border-color);
 			border-radius: var(--bs-border-radius-pill);
@@ -3086,11 +3080,13 @@ textarea.smtp-editor-frame {
 	@container ju-table (width <288px) {
 		.ui-page .targets-table td[data-label="Checks"] {
 			flex-direction: column;
-			align-items: flex-start;
+			align-items: stretch;
 		}
 
 		.ui-page .targets-table .check-badges {
-			width: 100%;
+			width: max-content;
+			max-width: 100%;
+			margin-inline: auto;
 		}
 
 		.ui-page .targets-table .check-badges :is(.badge, .ju-status-item) {

@@ -265,7 +265,7 @@
 	flex: 2 1 15rem;
 }
 
-/* Badges wrap; the card keeps a modest share instead of absorbing spare width. */
+/* Status dots wrap; the card keeps a modest share instead of absorbing spare width. */
 .target-kpi-card--checks {
 	flex: 1.4 1 11rem;
 }
@@ -335,12 +335,6 @@
 
 .target-kpi-badges {
 	--ju-badges-gap: var(--ui-space-tile-compact);
-}
-
-.target-kpi-badges .badge {
-	padding: 0.45em 0.7em;
-	font-size: 0.8125rem;
-	font-weight: 600;
 }
 
 .target-kpi-badges .ju-status-item {
@@ -812,9 +806,11 @@
 
 .combined-legend {
 	display: flex;
+	flex: 1 1 auto;
 	flex-wrap: wrap;
 	gap: 0.5rem 0.75rem;
 	align-items: center;
+	min-width: 0;
 	font-size: 0.8125rem;
 }
 
@@ -825,11 +821,6 @@
 	justify-content: space-between;
 	gap: 0.25rem 1rem;
 	margin-bottom: 0.75rem;
-}
-
-.combined-legend {
-	flex: 1 1 auto;
-	min-width: 0;
 }
 
 .combined-peaks {
@@ -1289,10 +1280,6 @@
 
 	#target-dashboard-pane.active .combined-note {
 		margin-top: 0.35rem;
-	}
-
-	#target-dashboard-pane.active .combined-note:empty {
-		display: none;
 	}
 
 	#target-dashboard-pane.active .combined-donut {

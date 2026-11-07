@@ -1253,6 +1253,8 @@ NOTIFICATION_TABS = (
     ("activity", "Activity", "history"),
 )
 _NOTIFICATION_TAB_KEYS = {key for key, _label, _icon in NOTIFICATION_TABS}
+# Category -> icon of a notification row; app/static/js/notifications.js keeps the same map (tests pin the parity).
+NOTIFICATION_CATEGORY_ICONS = {key: icon for key, _label, icon in NOTIFICATION_TABS if key not in ("all", "unread")}
 
 
 @router.get("/ui/alerts", response_class=HTMLResponse)
@@ -1286,6 +1288,7 @@ def notifications_page(
         "active_page": "notifications",
         "user": user,
         "tabs": NOTIFICATION_TABS,
+        "category_icons": NOTIFICATION_CATEGORY_ICONS,
         "category": category,
         "severity": severity or "",
         "unread_total": inbox.count_unread(conn, user),

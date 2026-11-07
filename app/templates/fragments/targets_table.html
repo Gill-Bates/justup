@@ -83,8 +83,10 @@
 									{% for label, status, title, is_cert in all_checks %}
 										{% if is_cert %}{{ cert_dot(label, status) }}{% else %}{{ state_dot(label, status, title) }}{% endif %}
 									{% endfor %}
-									{% if all_checks|length > 3 %}
-									<button type="button" class="targets-check-toggle" aria-expanded="false" aria-controls="target-checks-{{ t.id }}" data-more="{{ all_checks|length - 3 }}">+{{ all_checks|length - 3 }} more</button>
+									{# Must match :nth-child(n+4) in ui.css (.targets-table .check-badges) #}
+					{% set visible_checks = 3 %}
+					{% if all_checks|length > visible_checks %}
+									<button type="button" class="targets-check-toggle" aria-expanded="false" aria-controls="target-checks-{{ t.id }}" data-more="{{ all_checks|length - visible_checks }}">+{{ all_checks|length - visible_checks }} more</button>
 									{% endif %}
 									</div>
 								</td>

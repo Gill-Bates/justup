@@ -117,6 +117,7 @@ function updateRangeActiveTick(input) {
 /**
  * Update SMTP status badge based on configuration
  */
+// Mirrors the server-rendered #smtp-status-badge in settings/smtp.html.
 function updateSmtpStatusBadge(data) {
     const badge = DOM.smtpStatusBadge();
     if (!badge) return;

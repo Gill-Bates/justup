@@ -323,7 +323,7 @@
 }
 
 /* Page rows: the unread dot is ringed (shape cue) and the title weight differs, so unread never
-   reads like the event-status badge; read rows use a lighter title. */
+   reads like the severity status dot beside it; read rows use a lighter title. */
 .ju-notif-list .ju-unread-dot {
 	box-shadow: 0 0 0 2px var(--ju-panel-bg, var(--bs-body-bg)), 0 0 0 3px var(--bs-primary);
 }
@@ -412,10 +412,6 @@
 .ju-notif-title .ju-unread-dot {
 	flex: 0 0 auto;
 	margin-right: 0;
-}
-
-.ju-notif-title .badge {
-	flex: 0 0 auto;
 }
 
 .ju-notif-title-text {

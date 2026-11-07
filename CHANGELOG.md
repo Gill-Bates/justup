@@ -4,6 +4,7 @@
 - `Changed` Dashboard widget status and notification severity show a coloured dot with the state word instead of a badge.
 
 - `Changed` Status badges no longer show a check, cross or other icon; the state is carried by the badge colour and its word. Remaining web badges come from the JS helper `JuStatusBadge`; check and endpoint states are dots (see below).
+- `Fix` The "Public outbound IPs" card on Settings > Network lines up IPv4 and IPv6 in the same columns (address, status, copy button) and no longer pushes the copy button under a long address.
 - `Fix` The recipient list in the target form uses the full card width on narrow screens instead of leaving an empty strip at each side.
 - `Fix` On the Targets page, a refresh requested by an action (delete, enable/disable) or by the search could be dropped for two seconds after a live update; the list now always refreshes. Closing a group by hand during a search no longer reopens it on the next live update.
 - `Fix` Mail subjects show `&`, `<` and quotes from the target name as typed instead of HTML entities such as `&amp;`; this covers alert mails, the test mail and the template preview.

@@ -10,7 +10,7 @@
 						<span class="material-icons align-middle me-1 ju-icon-20" aria-hidden="true">mail</span>
 						SMTP Email
 					</h2>
-					{# Mirrors settings.storage.js updateSmtpStatusBadge #}
+					{# Mirrors updateSmtpStatusBadge in settings.storage.js #}
 					<div id="smtp-status-badge">
 						{% if not smtp.smtp_enabled %}
 						{{ status_dot('neutral', 'Disabled') }}

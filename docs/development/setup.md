@@ -39,7 +39,7 @@ npm install
 ```
 
 For one-off interactive UX checks, the "Full browsers" block in `setup.conf`
-installs Playwright 1.64.1 and axe-core's Playwright integration 4.14.0 under
+installs Playwright and axe-core's Playwright integration (versions pinned in that block) under
 `/opt/ux-test-tools`. The committed layout suite uses this repository's
 `node_modules` and `package-lock.json` instead. The block's `playwright install
 --with-deps chromium webkit firefox` also installs operating-system packages;
@@ -64,7 +64,7 @@ The same checks as in CI:
 | Format | `ruff format --check .` |
 | Python tests | `pytest -n auto` (parallel via pytest-xdist; omit `-n` for a single test or a debugger) |
 | JS/CSS lint | `npm run lint` |
-| JS tests | `npm test` |
+| JS tests | `TZ=Europe/Berlin tools/run-limited.sh npm test` |
 | Container check | `docker build --check -f docker/Dockerfile .` |
 
 ### Heavy local runs

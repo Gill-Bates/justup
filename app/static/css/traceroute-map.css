@@ -505,13 +505,10 @@ code.tr-ip {
         position: absolute;
         width: 1px;
         height: 1px;
+        padding: 0;
         overflow: hidden;
         clip-path: inset(50%);
         white-space: nowrap;
-    }
-
-    .tr-step:not(.tr-step--first, .tr-step--destination, .tr-step--single) .tr-step-body {
-        padding: 0;
     }
 
     .tr-step-title {
@@ -901,10 +898,11 @@ code.tr-ip {
     display: inline-block;
     width: 1.6rem;
     height: 0;
-    border-top: 3px solid var(--tr-route-color, #0b4fc0);
+    border-top: 3px solid var(--tr-route-color);
 }
 
-/* Pattern, not color, marks an estimated or unknown link; dash and gap follow the shared 9:6 rule. */
+/* Pattern, not color, marks an estimated or unknown link; the browser's dash approximates the map's 9:6 dash
+   (a border survives forced colors, a gradient would not). */
 .tr-legend-line--dashed {
     border-top-style: dashed;
 }
