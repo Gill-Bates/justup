@@ -1036,12 +1036,6 @@
 	color: var(--bs-secondary-color);
 }
 
-.combined-donut-legend-value {
-	margin-inline-start: auto;
-	font-variant-numeric: tabular-nums;
-	white-space: nowrap;
-}
-
 .combined-empty--small {
 	flex: 1 1 auto;
 	min-height: 8rem;

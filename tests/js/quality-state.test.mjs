@@ -14,7 +14,7 @@ ctx.window = ctx;
 vm.runInContext(src, ctx);
 const describe = (data) => ctx.QualityState.describe(data);
 
-test("unknown state renders status dot and score neutral grey", () => {
+test("unknown state renders a neutral dot and a neutral score", () => {
   const v = describe({ state: "unknown", score: 42.5 });
   assert.equal(v.badgeTone, "neutral");
   assert.equal(v.badgeText, "Unknown");
@@ -39,14 +39,12 @@ test("an unrecognised state with a score is grey but keeps the measured number",
   assert.equal(v.scoreText, "50.0");
 });
 
-test("status dots keep their semantic tones while scores remain neutral", () => {
+test("the score takes the state colour; unknown stays neutral", () => {
+  const base = "dashboard-widget-value fw-bold";
+  assert.equal(describe({ state: "ok", score: 90 }).scoreClass, base + " quality-score--success");
+  assert.equal(describe({ state: "degraded", score: 55 }).scoreClass, base + " quality-score--warning");
+  assert.equal(describe({ state: "down", score: 10 }).scoreClass, base + " quality-score--danger");
   assert.equal(describe({ state: "ok", score: 90 }).badgeTone, "success");
-  assert.equal(describe({ state: "ok", score: 90 }).scoreClass, "dashboard-widget-value fw-bold");
-  assert.equal(describe({ state: "degraded", score: 55 }).badgeTone, "warning");
-  assert.equal(describe({ state: "degraded", score: 55 }).scoreClass, "dashboard-widget-value fw-bold");
-  const down = describe({ state: "down", score: 10 });
-  assert.equal(down.scoreClass, "dashboard-widget-value fw-bold");
-  assert.equal(down.badgeTone, "danger");
   assert.equal(describe({ state: "ok", score: 90 }).scoreText, "90.0");
 });
 

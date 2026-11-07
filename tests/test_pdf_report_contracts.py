@@ -630,7 +630,8 @@ def _assert_chapter_layout(b: PDFReportBuilder) -> None:
     assert pages[0] == 1
     assert pages == sorted(set(pages)), pages  # strictly increasing: no two chapters share a page
     if merged:
-        assert b.chapter_pages["Downtime Log"] == pages[-1], b.chapter_pages
+        # The performance chapter can span several pages; the merged summary closes it on the last page.
+        assert b.chapter_pages["Downtime Log"] == b.page_count, (b.chapter_pages, b.page_count)
     b._assemble()  # build() consumes the flowables; re-compose them for the structural checks
     heads = [i for i, el in enumerate(b.elements) if getattr(el, "chapter_name", None) in names[1:]]
     assert len(heads) == len(names) - 1

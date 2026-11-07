@@ -256,7 +256,7 @@ function geometryFindings(snapshot, narrow, revealed) {
 
 function stateFindings(snapshot, hovered) {
 	const findings = [];
-	const same = (a, b) => a.r === b.r && a.g === b.g && a.b === b.b;
+	const same = (a, b) => a === b || (a !== null && b !== null && a.r === b.r && a.g === b.g && a.b === b.b);
 	snapshot.rows.forEach((row, index) => {
 		for (const [name, value] of [["title", row.titleContrast], ["secondary", row.contextContrast]]) {
 			if (value !== null && value < MIN_TEXT_CONTRAST) findings.push({ type: "text-contrast", row: index, detail: `${name} ${value.toFixed(2)}` });

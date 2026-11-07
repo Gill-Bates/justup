@@ -5,7 +5,7 @@
 
 /**
  * Presentation of the monitor quality state for the dashboard widget.
- * The status dot carries status color; the score stays a neutral primary value in every state.
+ * The status dot and the score value carry the state color (success/warning/danger); unknown stays neutral.
  * @module utils/quality-state
  */
 (function (root) {
@@ -35,7 +35,7 @@
 		// Without a measured score the state has no basis, so it is shown as unknown.
 		if (score === null) state = 'unknown';
 		var b = BADGES[state];
-		// Unknown has no measurement basis, but score typography stays shared with measured states.
+		// Unknown has no measurement basis and stays neutral; typography is shared with measured states.
 		var label = 'Connectivity status unavailable';
 		if (state !== 'unknown') label = score >= 80 ? 'Excellent connectivity' : score >= 60 ? 'Good connectivity' : 'Poor connectivity';
 		return {
@@ -43,7 +43,7 @@
 			badgeTone: b.tone,
 			badgeText: b.text,
 			scoreText: score === null ? '--' : score.toFixed(1),
-			scoreClass: 'dashboard-widget-value fw-bold',
+			scoreClass: 'dashboard-widget-value fw-bold' + (b.tone === 'neutral' ? '' : ' quality-score--' + b.tone),
 			label: label,
 		};
 	}

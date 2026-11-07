@@ -1894,6 +1894,15 @@ textarea.smtp-editor-frame {
 	border-radius: 1px;
 }
 .ju-status-dot--info { --ju-dot-color: var(--bs-info); }
+
+/* Quality score value: state text colours from the DESIGN.md status palette (contrast on the card surface). */
+.quality-score--success { color: #146c43; }
+.quality-score--warning { color: #8a5a00; }
+.quality-score--danger { color: #b02a37; }
+
+[data-bs-theme="dark"] .quality-score--success { color: var(--bs-success-text-emphasis); }
+[data-bs-theme="dark"] .quality-score--warning { color: var(--bs-warning-text-emphasis); }
+[data-bs-theme="dark"] .quality-score--danger { color: var(--bs-danger-text-emphasis); }
 .ju-status-dot--unknown { background: transparent; }
 
 @media (forced-colors: active) {
@@ -3079,14 +3088,12 @@ textarea.smtp-editor-frame {
 
 	@container ju-table (width <288px) {
 		.ui-page .targets-table td[data-label="Checks"] {
-			flex-direction: column;
-			align-items: stretch;
+			text-align: center;
 		}
 
 		.ui-page .targets-table .check-badges {
-			width: max-content;
-			max-width: 100%;
-			margin-inline: auto;
+			align-content: center;
+			justify-content: center;
 		}
 
 		.ui-page .targets-table .check-badges :is(.badge, .ju-status-item) {

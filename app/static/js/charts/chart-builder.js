@@ -368,10 +368,9 @@ function buildAvailabilitySeriesChart(canvasId, data) {
 }
 
 /**
- * Fill the HTML legend under the donut: shape swatch (not colour alone), code, class name,
- * absolute count and share. Shares sum to exactly 100 %; the list wraps instead of overlapping.
+ * Fill the HTML legend under the donut with the status code and class; values are drawn on the arcs.
  */
-function _renderStatusDonutLegend(listEl, keys, values, colors, clsOf, shares) {
+function _renderStatusDonutLegend(listEl, keys, colors, clsOf) {
   if (!listEl) return;
   listEl.textContent = "";
   keys.forEach((k, i) => {
@@ -384,17 +383,44 @@ function _renderStatusDonutLegend(listEl, keys, values, colors, clsOf, shares) {
       name.appendChild(_el("span", "combined-donut-legend-class", cls.label));
     }
     item.appendChild(name);
-    item.appendChild(
-      _el("span", "combined-donut-legend-value", formatChartCount(values[i]) + " (" + formatChartShare(shares[i]) + ")"),
-    );
     listEl.appendChild(item);
   });
   listEl.hidden = false;
 }
 
+/** Draw each segment's count and share on the ring when the arc has room for a legible label. */
+function _drawStatusDonutLabels(chart, values, shares, theme) {
+  const arcs = chart.getDatasetMeta(0).data;
+  const ctx = chart.ctx;
+  ctx.save();
+  ctx.font = "600 12px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.lineWidth = 3;
+  ctx.lineJoin = "round";
+  ctx.strokeStyle = theme.bg;
+  ctx.fillStyle = theme.text;
+  values.forEach((value, index) => {
+    const arc = arcs[index];
+    if (!arc || !chart.getDataVisibility(index)) return;
+    const { x, y, startAngle, endAngle, innerRadius, outerRadius } = arc.getProps(
+      ["x", "y", "startAngle", "endAngle", "innerRadius", "outerRadius"], true,
+    );
+    const middleRadius = (innerRadius + outerRadius) / 2;
+    const label = formatChartCount(value) + " (" + formatChartShare(shares[index]) + ")";
+    if (Math.abs(endAngle - startAngle) * middleRadius < ctx.measureText(label).width + 8) return;
+    const angle = (startAngle + endAngle) / 2;
+    const labelX = x + Math.cos(angle) * middleRadius;
+    const labelY = y + Math.sin(angle) * middleRadius;
+    ctx.strokeText(label, labelX, labelY);
+    ctx.fillText(label, labelX, labelY);
+  });
+  ctx.restore();
+}
+
 /**
  * Build the HTTP status-code doughnut shown next to the combined chart.
- * Colors follow the status classes of the combined chart markers; counts and shares sit in the HTML legend.
+ * Colors follow the status classes of the combined chart markers; counts and shares are labeled on the arcs.
  * @param {string} canvasId
  * @param {object} data - { points: [{ ts, value }, ...], error?: boolean }  (value: HTTP status code)
  */
@@ -460,7 +486,8 @@ function buildStatusCodeChart(canvasId, data) {
   const values = keys.map((k) => statusCounts[k]);
   const shares = chartShares(values);
   const theme = appState.theme;
-  _renderStatusDonutLegend(legendEl, keys, values, colorsFor(theme), clsOf, shares);
+  const labelState = { values, shares, theme };
+  _renderStatusDonutLegend(legendEl, keys, colorsFor(theme), clsOf);
   const chart = _createOrUpdateChart(canvasId, ctx, {
     type: "doughnut",
     options: {
@@ -487,6 +514,13 @@ function buildStatusCodeChart(canvasId, data) {
         },
       },
     },
+    plugins: [{
+      id: "statusDonutLabels",
+      afterDatasetsDraw(chart) {
+        const labels = chart._statusDonutLabels || labelState;
+        if (labels) _drawStatusDonutLabels(chart, labels.values, labels.shares, labels.theme);
+      },
+    }],
     data: {
       labels: labels,
       datasets: [
@@ -499,11 +533,14 @@ function buildStatusCodeChart(canvasId, data) {
       ],
     },
   });
+  chart._statusDonutLabels = labelState;
+  chart.update("none");
   chart._fixedLegend = true;
   chart._themeHook = function (t) {
+    chart._statusDonutLabels.theme = t;
     chart.data.datasets[0].backgroundColor = colorsFor(t);
     chart.data.datasets[0].borderColor = t.bg;
-    _renderStatusDonutLegend(legendEl, keys, values, colorsFor(t), clsOf, shares);
+    _renderStatusDonutLegend(legendEl, keys, colorsFor(t), clsOf);
   };
   ctx.setAttribute("role", "img");
   ctx.setAttribute(

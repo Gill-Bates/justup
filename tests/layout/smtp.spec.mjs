@@ -34,6 +34,7 @@ window.JuFieldErrors = { clear() {}, show() {} };
 </script>`;
 const PAGE = (smtp) => `<!doctype html><html lang="en"><head><meta charset="utf-8"></head><body>${STUB}
 <div id="settings-form"><div id="smtp-host">${render(smtp)}</div></div>
+<script src="/static/js/utils/status-badge.js"></script>
 <script type="module">
 import { initStorage, loadSettings } from "/static/js/settings.storage.js";
 import { resetDomCache } from "/static/js/settings.core.js";
