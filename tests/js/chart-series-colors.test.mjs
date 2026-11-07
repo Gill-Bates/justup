@@ -112,6 +112,53 @@ test("palette reads the series tokens of the active theme at runtime", () => {
   assert.equal(dark.down, chart.COMBINED_PALETTES.dark.down);
 });
 
+test("a lone plotted metric uses online green while multiple metrics keep their slots", () => {
+  for (const [mode, tokens] of [["light", lightTokens], ["dark", darkTokens]]) {
+    const chart = loadChart({ getCssVar: (name, fallback) => tokens[name.slice(2)] ?? fallback });
+    const palette = chart._combinedPalette({ mode, text: "#000000" });
+    assert.equal(palette.singleMetric, tokens["ju-st-online"]);
+    assert.equal(chart._seriesColor(palette, { _slot: 2, _singleMetric: true }), tokens["ju-st-online"]);
+    assert.equal(chart._seriesColor(palette, { _slot: 2, _singleMetric: false }), tokens["ju-dv-3"]);
+    assert.ok(contrast(palette.singleMetric, tokens["ju-panel-bg"]) >= 3);
+  }
+});
+
+test("keyboard point inspection skips gaps and announces the selected metric", () => {
+  const listeners = {};
+  const announcement = { setAttribute() {}, textContent: "" };
+  const canvas = {
+    parentNode: { appendChild(child) { assert.equal(child, announcement); } },
+    setAttribute(name, value) { this[name] = value; },
+    addEventListener(name, callback) { listeners[name] = callback; },
+  };
+  const active = [];
+  const chart = {
+    data: { datasets: [{ label: "HTTP", _kind: "ms", data: [{ x: 1, y: 10 }, { x: 2, y: null }, { x: 3, y: 30 }] }] },
+    scales: { x: { min: 1, max: 3 } },
+    isDatasetVisible: () => true,
+    getDatasetMeta: () => ({ data: [{ x: 10, y: 20 }, {}, { x: 30, y: 40 }] }),
+    setActiveElements(points) { active.push(points); },
+    tooltip: { setActiveElements(points) { active.push(points); } },
+    update() {},
+  };
+  const context = loadChart({
+    document: { createElement: () => announcement },
+    Chart: { getChart: () => chart }, navigator: { language: "en-US" },
+    formatChartValue: (_, value) => `${value} ms`,
+  });
+  context._bindCombinedPointKeys(canvas);
+  assert.equal(canvas.tabIndex, 0);
+  let prevented = 0;
+  for (const key of ["ArrowRight", "ArrowRight", "Home", "End"]) {
+    listeners.keydown({ key, preventDefault() { prevented += 1; } });
+  }
+  assert.equal(prevented, 4);
+  assert.deepEqual(active.filter((_, index) => index % 2 === 0).map((item) => item[0].index), [0, 2, 0, 2]);
+  assert.match(announcement.textContent, /HTTP.*30 ms.*Point 2 of 2/);
+  context._bindCombinedPointKeys(canvas);
+  assert.deepEqual(Object.keys(listeners).sort(), ["click", "keydown"], "rebuilds do not add another listener");
+});
+
 test("the chart script holds no hard-coded series colors", () => {
   const chartSource = read("app/static/js/charts/combined-chart.js");
   const hexes = new Set(series(lightTokens).concat(series(darkTokens)));

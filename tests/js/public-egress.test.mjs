@@ -125,6 +125,7 @@ function makeCard() {
 		const parts = {
 			"[data-egress-address]": new El(),
 			"[data-egress-badge]": new El(),
+			"[data-egress-dot]": new El(),
 			"[data-egress-detail]": new El(),
 			"[data-egress-copy]": new El(),
 		};
@@ -152,7 +153,10 @@ const v4 = (address, status = "available") => ({ ipv4: { status, address, observ
 
 test("initPublicEgress binds once per element and rebinds a re-rendered fragment", async () => {
 	const calls = [];
-	globalThis.window = { apiFetch: async (url) => { calls.push(url); return ok(v4("93.184.216.34")); } };
+	globalThis.window = {
+		apiFetch: async (url) => { calls.push(url); return ok(v4("93.184.216.34")); },
+		JuStatusDot: { classes: (tone) => `dot-${tone}` },
+	};
 	const first = makeCard();
 	const root = { current: first, querySelector() { return this.current; } };
 	initPublicEgress(root);
@@ -168,6 +172,8 @@ test("initPublicEgress binds once per element and rebinds a re-rendered fragment
 	assert.deepEqual(calls, ["/x", "/x"]);
 	assert.equal(second.querySelector("[data-egress-refresh]").listeners.click.length, 1);
 	assert.equal(second.rows[0].parts["[data-egress-address]"].textContent, "93.184.216.34");
+	assert.equal(second.rows[0].parts["[data-egress-dot]"].className, "dot-success");
+	assert.equal(second.rows[1].parts["[data-egress-dot]"].className, "dot-neutral");
 	delete globalThis.window;
 });
 
@@ -175,6 +181,7 @@ test("a failing refresh keeps the last address as stale and not copyable; cached
 	let mode = "ok";
 	let cached = false;
 	globalThis.window = {
+		JuStatusDot: { classes: (tone) => `dot-${tone}` },
 		apiFetch: async () => {
 			if (mode === "fail") return { ok: false, status: 500, json: async () => ({}) };
 			return ok({ ...v4("93.184.216.34"), cached });
@@ -186,6 +193,7 @@ test("a failing refresh keeps the last address as stale and not copyable; cached
 	const row = card.rows[0];
 	const copy = row.parts["[data-egress-copy]"];
 	assert.equal(copy.disabled, false);
+	assert.equal(row.parts["[data-egress-dot]"].className, "dot-success");
 	assert.equal(card.querySelector("[data-egress-cached]").hidden, true);
 	cached = true;
 	card.querySelector("[data-egress-refresh]").listeners.click[0]({ preventDefault() {} });
@@ -195,10 +203,12 @@ test("a failing refresh keeps the last address as stale and not copyable; cached
 	card.querySelector("[data-egress-refresh]").listeners.click[0]({ preventDefault() {} });
 	assert.equal(row.parts["[data-egress-address]"].textContent, "93.184.216.34"); // visible while checking
 	assert.equal(copy.disabled, true);
+	assert.equal(row.parts["[data-egress-dot]"].className, "dot-neutral");
 	await flush();
 	assert.equal(row.dataset.egressState, "stale");
 	assert.equal(row.parts["[data-egress-address]"].textContent, "93.184.216.34");
 	assert.equal(copy.disabled, true);
+	assert.equal(row.parts["[data-egress-dot]"].className, "dot-warning");
 	assert.match(row.parts["[data-egress-detail]"].textContent, /Last confirmed.*HTTP 500/);
 	delete globalThis.window;
 });

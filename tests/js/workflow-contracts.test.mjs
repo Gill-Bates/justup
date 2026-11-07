@@ -91,7 +91,7 @@ test("source scan bypasses setup-trivy only after checksum-verifying the pinned 
   assert.match(install.run, /releases\/download\/v\$\{TRIVY_VERSION\}\/trivy_\$\{TRIVY_VERSION\}_Linux-64bit\.tar\.gz/);
   assert.match(job.env.TRIVY_SHA256, /^[a-f0-9]{64}$/);
   assert.match(job.env.TRIVY_VERSION, /^\d+\.\d+\.\d+$/);
-  assert.equal(scan.with.version, `v${job.env.TRIVY_VERSION}`, "action version equals the checksum-verified binary version");
+  assert.equal(scan.with.version, "v${{ env.TRIVY_VERSION }}", "action version references the checksum-verified binary version");
   assert.equal(scan.with["skip-setup-trivy"], "true");
 });
 

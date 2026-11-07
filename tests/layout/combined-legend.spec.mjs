@@ -69,6 +69,65 @@ const peakState = (page) => page.evaluate(() => {
 	};
 });
 
+test("single HTTP metric uses online green and touch/keyboard points at phone widths @combined-single", async ({ browser, app, adminState }) => {
+	for (const viewport of VIEWPORTS.slice(1)) {
+		const context = await browser.newContext({ viewport: { width: viewport.w, height: viewport.h }, hasTouch: true, storageState: adminState });
+		try {
+			const page = await context.newPage();
+			await page.route("**/metrics/http_ms?**", async (route) => {
+				const response = await route.fetch();
+				const body = await response.json();
+				const now = Date.now();
+				body.points = [100, 260, 120].map((value, i) => ({
+					ts: new Date(now - (3 - i) * 60_000).toISOString(), value, max: value, count: 1,
+				}));
+				await route.fulfill({ response, json: body });
+			});
+			await page.goto(`${app.base}/ui/targets/1`, { waitUntil: "load" });
+			await waitForChartReady(page, "chart-combined", { withData: true });
+			for (const theme of THEMES) {
+				await page.evaluate((mode) => document.documentElement.setAttribute("data-bs-theme", mode), theme);
+				await page.waitForFunction(() => {
+					const canvas = document.getElementById("chart-combined");
+					const chart = window.Chart.getChart(canvas);
+					const green = getComputedStyle(document.documentElement).getPropertyValue("--ju-st-online").trim().toLowerCase();
+					return chart?.data.datasets.find((d) => d._kind === "ms")?.borderColor.toLowerCase() === green;
+				});
+				await page.locator("#chart-combined").scrollIntoViewIfNeeded();
+				await waitForVisualStability(page);
+				const state = await page.evaluate(() => {
+					const canvas = document.getElementById("chart-combined");
+					const chart = window.Chart.getChart(canvas);
+					const ms = chart.data.datasets.find((d) => d._kind === "ms");
+					const dot = chart.getDatasetMeta(chart.data.datasets.indexOf(ms)).data[1];
+					const rect = canvas.getBoundingClientRect();
+					const card = document.getElementById("combined-card").getBoundingClientRect();
+					return {
+						seriesCount: chart.data.datasets.filter((d) => d._kind === "ms").length,
+						color: ms.borderColor.toLowerCase(), green: getComputedStyle(document.documentElement).getPropertyValue("--ju-st-online").trim().toLowerCase(),
+						pointRadius: ms.pointRadius, hitRadius: ms.pointHitRadius, x: rect.left + dot.x, y: rect.top + dot.y,
+						cardRight: card.right, pageOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+					};
+				});
+				assert.equal(state.seriesCount, 1);
+				assert.equal(state.color, state.green);
+				assert.ok(state.pointRadius > 0 && 2 * (state.pointRadius + state.hitRadius) >= 24);
+				assert.ok(state.pageOverflow <= 0 && state.cardRight <= viewport.w + 1, `${theme}: chart stays in ${viewport.w}px viewport`);
+				await page.touchscreen.tap(state.x, state.y);
+				const touched = await page.evaluate(() => window.Chart.getChart(document.getElementById("chart-combined")).tooltip.getActiveElements().length);
+				assert.ok(touched >= 1, `${theme}: tapping the point reveals a tooltip`);
+				await page.locator("#chart-combined").focus();
+				await page.keyboard.press("Home");
+				assert.match(await page.locator("#combined-point-announcement").textContent(), /HTTP.*100 ms.*Point 1 of 3/);
+				await page.keyboard.press("ArrowRight");
+				assert.match(await page.locator("#combined-point-announcement").textContent(), /HTTP.*260 ms.*Point 2 of 3/);
+			}
+		} finally {
+			await context.close();
+		}
+	}
+});
+
 for (const viewport of VIEWPORTS) {
 	test(`combined chart legend colors and Show peaks switch at ${viewport.w}x${viewport.h} @combined-legend`, async ({ browser, app, adminState }) => {
 		const { context, page, problems } = await openTarget(browser, app, adminState, viewport);

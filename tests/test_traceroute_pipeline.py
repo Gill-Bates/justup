@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import itertools
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
@@ -90,10 +91,20 @@ def _view(hops: list[dict]) -> list[tuple]:
 def test_web_and_pdf_build_the_same_route(monkeypatch: pytest.MonkeyPatch, route: str) -> None:
     _patch_sources(monkeypatch, ROUTES[route])
     web = _web_context(monkeypatch)
-    pdf_hops, pdf_points, pdf_interp = pdf_report._run_traceroute_with_interpolation(HOST)
-    # Only the web view strips trailing timeouts itself; the PDF strips them later, in _get_route_data.
-    while pdf_hops and pdf_hops[-1].get("status") == "timeout" and not pdf_hops[-1].get("_interpolated"):
-        pdf_hops.pop()
+    target = {"host": HOST, "interval_seconds": 60}
+    now = datetime.now(UTC)
+    report_data = pdf_report.ReportData(
+        target=target,
+        from_date=now - timedelta(days=1),
+        to_date=now,
+        http_data=[],
+        uptime_data=[],
+        ping_data=[],
+        tcp_data=[],
+        cert_data=[],
+        status_code_data=[],
+    )
+    pdf_hops, pdf_points, pdf_interp = pdf_report.PDFReportBuilder(report_data)._get_route_data()
     assert _view(web["hops"]) == _view(pdf_hops)
     assert [p["ip"] for p in web["geo_points"]] == [p["ip"] for p in pdf_points]
     assert web["has_interpolation"] == pdf_interp

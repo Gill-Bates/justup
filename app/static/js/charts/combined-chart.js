@@ -50,12 +50,13 @@ function _combinedPalette(theme) {
   var base = COMBINED_PALETTES[theme && theme.mode === "dark" ? "dark" : "light"];
   return Object.assign({ series: series }, base, {
     peak: getCssVar("--ju-peak", base.peak),
+    singleMetric: getCssVar("--ju-st-online", base["2xx"]),
   });
 }
 
 /** Color of a metric dataset: its stable palette slot, independent of visibility or order. */
 function _seriesColor(palette, dataset) {
-  return palette.series[dataset._slot];
+  return dataset._singleMetric ? palette.singleMetric : palette.series[dataset._slot];
 }
 
 function _prefersReducedMotion() {
@@ -777,6 +778,72 @@ function _configureCombinedAxes(options, width) {
   if (options.scales.yStatus) options.scales.yStatus.title.display = !compact;
 }
 
+function _bindCombinedPointKeys(canvas) {
+  if (canvas._combinedPointKeysBound) return;
+  canvas._combinedPointKeysBound = true;
+  canvas.tabIndex = 0;
+  var announcement = document.createElement("span");
+  announcement.id = "combined-point-announcement";
+  announcement.className = "visually-hidden";
+  announcement.setAttribute("role", "status");
+  announcement.textContent = "Use left and right arrow keys to inspect response-time points.";
+  canvas.parentNode.appendChild(announcement);
+  canvas.setAttribute("aria-describedby", announcement.id);
+  canvas.addEventListener("click", function (event) {
+    if (event.pointerType !== "touch" &&
+      !(window.matchMedia && window.matchMedia("(pointer: coarse)").matches)) return;
+    var chart = Chart.getChart(canvas);
+    if (!chart) return;
+    var hit = chart.getElementsAtEventForMode(event, "point", { intersect: true }, false)
+      .find(function (item) {
+        return chart.data.datasets[item.datasetIndex]._kind === "ms";
+      });
+    if (!hit) return;
+    var active = [{ datasetIndex: hit.datasetIndex, index: hit.index }];
+    var element = chart.getDatasetMeta(hit.datasetIndex).data[hit.index];
+    chart.setActiveElements(active);
+    chart.tooltip.setActiveElements(active, { x: element.x, y: element.y });
+    chart.update("none");
+  });
+  canvas.addEventListener("keydown", function (event) {
+    if (event.isComposing || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    var chart = Chart.getChart(canvas);
+    if (!chart) return;
+    var points = [];
+    chart.data.datasets.forEach(function (ds, datasetIndex) {
+      if (ds._kind !== "ms" || !chart.isDatasetVisible(datasetIndex)) return;
+      ds.data.forEach(function (point, index) {
+        if (point.y == null || !isFinite(point.x) || !isFinite(point.y)) return;
+        if (point.x < chart.scales.x.min || point.x > chart.scales.x.max) return;
+        points.push({ datasetIndex: datasetIndex, index: index, point: point });
+      });
+    });
+    if (!points.length) return;
+    event.preventDefault();
+    points.sort(function (a, b) {
+      return a.point.x - b.point.x || a.datasetIndex - b.datasetIndex;
+    });
+    var current = canvas._combinedPointIndex == null ? -1 : canvas._combinedPointIndex;
+    var next = event.key === "Home" ? 0 : event.key === "End" ? points.length - 1
+      : event.key === "ArrowLeft" ? (current < 0 ? points.length - 1 : Math.max(0, current - 1))
+        : Math.min(points.length - 1, current + 1);
+    canvas._combinedPointIndex = next;
+    var selected = points[next];
+    var active = [{ datasetIndex: selected.datasetIndex, index: selected.index }];
+    var element = chart.getDatasetMeta(selected.datasetIndex).data[selected.index];
+    chart.setActiveElements(active);
+    if (chart.tooltip && element)
+      chart.tooltip.setActiveElements(active, { x: element.x, y: element.y });
+    chart.update("none");
+    var label = chart.data.datasets[selected.datasetIndex].label;
+    announcement.textContent = label + ", " +
+      new Date(selected.point.x).toLocaleString(navigator.language || undefined) + ": " +
+      formatChartValue("ms", Math.round(selected.point.y)) +
+      ". Point " + (next + 1) + " of " + points.length + ".";
+  });
+}
+
 /**
  * Build or rebuild the combined chart.
  * @param {string} canvasId
@@ -818,25 +885,28 @@ function buildCombinedChart(canvasId, input) {
   var fullSeries = {};
   var firstWithData = true;
   var slaLines = [];
-  // Only plotted series take a slot, so ports without data never cause color collisions.
-  var slots = D.seriesSlots(
-    input.sources
-      .filter(function (src) {
-        return src.points && src.points.length;
-      })
-      .map(function (src) {
-        return src.key;
-      }),
-  );
-  input.sources.forEach(function (src) {
+  var plotted = input.sources.map(function (src) {
     var minGapMs = src.bucketSeconds ? src.bucketSeconds * 3000 : undefined;
     var series = D.toGappedSeries(src.points, minGapMs);
     summaries[src.key] = _summarizeSource(series, src.points);
     fullSeries[src.key] = series;
+    return { src: src, series: series };
+  });
+  // Only plotted series take a slot, so ports without data never cause color collisions.
+  var plottedKeys = plotted.filter(function (row) {
+    return row.series.length;
+  }).map(function (row) {
+    return row.src.key;
+  });
+  var slots = D.seriesSlots(plottedKeys);
+  var singleMetric = plottedKeys.length === 1;
+  plotted.forEach(function (row) {
+    var src = row.src;
+    var series = row.series;
     if (!series.length) return;
     if (src.sla) slaLines.push({ index: datasets.length, sla: src.sla });
     var slot = slots[src.key];
-    var seriesInfo = { _slot: slot.slot };
+    var seriesInfo = { _slot: slot.slot, _singleMetric: singleMetric };
     var color = _seriesColor(palette, seriesInfo);
     datasets.push({
       label: src.label,
@@ -845,6 +915,7 @@ function buildCombinedChart(canvasId, input) {
       _srcId: src.id,
       _srcKey: src.key,
       _slot: seriesInfo._slot,
+      _singleMetric: singleMetric,
       yAxisID: "y",
       borderColor: color,
       backgroundColor: createAreaGradient(color, 0.18),
@@ -852,8 +923,9 @@ function buildCombinedChart(canvasId, input) {
       spanGaps: false,
       tension: 0,
       borderWidth: 2,
-      pointRadius: 0,
-      pointHitRadius: 3,
+      pointRadius: 2,
+      pointHoverRadius: 5,
+      pointHitRadius: 12,
       hidden: !firstWithData,
     });
     // Peaks are single events on the response-time axis: markers plus stems, never a curve.
@@ -1076,6 +1148,8 @@ function buildCombinedChart(canvasId, input) {
     buildGeneration,
   );
   _registerChart(canvasId, chart, canvas, true);
+  canvas._combinedPointIndex = null;
+  _bindCombinedPointKeys(canvas);
   // An updated chart keeps the user's choice across rebuilds; a new one starts with peaks shown.
   chart._showPeaks = chart._showPeaks !== false;
   _syncPeaks(chart);
