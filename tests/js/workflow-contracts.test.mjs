@@ -65,7 +65,7 @@ test("CI runs on every branch and supports manual dispatch", () => {
 });
 
 test("notification, wizard and SMTP browser suites are listed and run once with JUnit output", () => {
-  const steps = ciWorkflow.jobs.browser.steps;
+  const steps = ciWorkflow.jobs["browser-shards"].steps;
   const selected = steps.filter((step) => step.run?.includes("--grep '@notifications|@wizard|@smtp-ui'"));
   const listStep = selected.find((step) => step.run.includes("--list"));
   const runSteps = selected.filter((step) => !step.run.includes("--list"));
@@ -179,25 +179,43 @@ test("every layout spec tag is selected by a CI grep or tests/layout/run.mjs", (
   const unselected = [...tags].filter((entry) => !selectors.includes(entry.split(" ")[1]));
   assert.deepEqual(unselected, [], "a spec whose tag no CI step selects never runs in CI");
 });
-test("browser test groups run independently after a successful setup and still fail the job", () => {
-  const job = ciWorkflow.jobs.browser;
-  assert.equal(job["continue-on-error"], undefined, "a failing group must fail the job");
+test("browser test groups run independently after a successful setup and still fail the shard", () => {
+  const job = ciWorkflow.jobs["browser-shards"];
+  assert.equal(job["continue-on-error"], undefined, "a failing group must fail the shard");
+  assert.equal(job.strategy["fail-fast"], false, "every shard must report");
   const steps = job.steps;
   const setupIndex = stepIndex(steps, (step) => step.id === "browsers", "browser installation");
   const uploadIndex = stepIndex(steps, (step) => step.uses?.startsWith("actions/upload-artifact@"), "report upload");
   assert.ok(setupIndex < uploadIndex);
   assert.equal(steps[uploadIndex].if, "always()");
+  assert.match(steps[uploadIndex].with.name, /\$\{\{ matrix\.artifact \}\}/, "artifact names are unique per shard");
   const groups = steps.slice(setupIndex + 1, uploadIndex);
   assert.ok(groups.length >= 9, "the browser test groups are present");
   for (const step of groups) {
     assert.equal(step["continue-on-error"], undefined, `${step.name} must not mask a failure`);
-    assert.equal(step.if, "${{ !cancelled() && steps.browsers.outcome == 'success' }}", `${step.name} must run after an earlier failed group, but not after failed setup or cancellation`);
+    assert.match(step.if, /^\$\{\{ !cancelled\(\) && steps\.browsers\.outcome == 'success' && matrix\.group == '[a-z]+' \}\}$/, `${step.name} must run after an earlier failed group, but not after failed setup or cancellation, and only in its shard`);
   }
+  const artifacts = job.strategy.matrix.include.map((entry) => entry.artifact);
+  assert.equal(new Set(artifacts).size, artifacts.length, "matrix artifact names are unique");
+  const usedGroups = new Set(groups.map((step) => /matrix\.group == '([a-z]+)'/.exec(step.if)[1]));
+  const matrixGroups = new Set(job.strategy.matrix.include.map((entry) => entry.group));
+  assert.deepEqual([...usedGroups].sort(), [...matrixGroups].sort(), "every matrix group has steps and every step group is in the matrix");
 });
+
+test("the browser gate keeps the required check name and fails unless every shard succeeded", () => {
+  const gate = ciWorkflow.jobs.browser;
+  assert.equal(gate.name, "Chromium + WebKit UI regressions");
+  assert.equal(gate.needs, "browser-shards");
+  assert.equal(gate.if, "${{ always() }}", "the gate must report even when a shard failed or was cancelled");
+  assert.equal(gate["continue-on-error"], undefined);
+  const run = gate.steps.map((step) => step.run ?? "").join("\n");
+  assert.match(run, /\[ "\$SHARDS_RESULT" = "success" \]/);
+});
+
 test("CI pins one explicit Node.js major in every setup-node step", () => {
   const versions = Object.values(ciWorkflow.jobs).flatMap((job) => job.steps ?? [])
     .filter((step) => step.uses?.startsWith("actions/setup-node@")).map((step) => String(step.with["node-version"]));
-  assert.ok(versions.length >= 3, "the frontend, browser and browser-matrix jobs set up Node.js");
+  assert.ok(versions.length >= 3, "the frontend, browser shard and browser-matrix jobs set up Node.js");
   assert.equal(new Set(versions).size, 1, "all jobs use the same Node.js version");
   assert.match(versions[0], /^\d+$/, "a Node.js major, not a moving alias such as lts/*");
 });

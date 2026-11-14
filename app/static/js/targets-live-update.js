@@ -246,6 +246,25 @@
 		};
 	}
 
+	function realign(anchor) {
+		const row = rowOf(anchor.id);
+		if (!row || row.getBoundingClientRect().height <= 0) return;
+		const delta = row.getBoundingClientRect().top - scroller.getBoundingClientRect().top - anchor.offset;
+		if (Math.abs(delta) >= 1) scroller.scrollTop += delta;
+	}
+
+	// The swapped rows load status and uptime cells with their own requests. They change row heights after the
+	// anchor was restored, and near the end of the region the shorter placeholder content had clamped scrollTop.
+	// WebKit has no scroll anchoring, so the anchor is restored again per cell until the user scrolls.
+	let holdAnchor = null;
+	['wheel', 'touchstart', 'keydown', 'pointerdown'].forEach(function (name) {
+		document.addEventListener(name, function () { holdAnchor = null; }, { capture: true, passive: true });
+	});
+	document.body.addEventListener('htmx:afterSettle', function (event) {
+		if (!holdAnchor || !scroller || event.target === container || !container.contains(event.target)) return;
+		realign(holdAnchor);
+	});
+
 	function finish(saved) {
 		if (saved.focus && !saved.focus.element.isConnected) {
 			const target = focusSuccessor(saved.focus, saved.order);
@@ -260,8 +279,8 @@
 		}
 		const row = saved.anchor ? rowOf(saved.anchor.id) : null;
 		if (row && row.getBoundingClientRect().height > 0) {
-			const delta = row.getBoundingClientRect().top - scroller.getBoundingClientRect().top - saved.anchor.offset;
-			if (Math.abs(delta) >= 1) scroller.scrollTop += delta;
+			holdAnchor = saved.anchor;
+			realign(saved.anchor);
 		} else if (scroller.scrollTop !== saved.top) {
 			scroller.scrollTop = saved.top;
 		}
@@ -343,6 +362,7 @@
 				return;
 			}
 		}
+		holdAnchor = null;
 		transaction = begin(userAction);
 	});
 

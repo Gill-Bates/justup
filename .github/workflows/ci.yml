@@ -204,10 +204,34 @@ jobs:
           TZ: Europe/Berlin
         run: npm test
 
-  browser:
-    name: Chromium + WebKit UI regressions
+  # The focused UI regressions (Chromium + WebKit) run as four parallel shards of two workers each, grouped by
+  # measured duration (about 6-8 min of tests per shard instead of ~27 min in one job). Every existing step keeps
+  # its tag list; the two "chart" shards split one grep with --shard=1/2 and 2/2, so each test runs in exactly one.
+  # Individual shard names are not required checks; the single `browser` gate job below is.
+  browser-shards:
+    name: Browser shard (${{ matrix.name }})
     runs-on: ubuntu-26.04
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - group: chart
+            shard: 1
+            name: chart 1/2
+            artifact: chart-1
+          - group: chart
+            shard: 2
+            name: chart 2/2
+            artifact: chart-2
+          - group: tabs
+            shard: 1
+            name: tabs, load, card, clip
+            artifact: tabs
+          - group: shell
+            shard: 1
+            name: sidebar, notifications, modal, focus, auth
+            artifact: shell
     env:
       JUSTUP_LAYOUT_PROFILE: quick
       # The shell viewport matrix needs both engines (DESIGN.md); Playwright fails if either cannot launch.
@@ -250,22 +274,34 @@ jobs:
       - name: Install frontend tools
         run: npm ci --ignore-scripts
 
+      - name: Resolve Playwright version
+        id: playwright
+        run: echo "version=$(node -p "require('./package-lock.json').packages['node_modules/playwright'].version")" >> "$GITHUB_OUTPUT"
+
+      # Only the browser downloads are cached; `playwright install --with-deps` below still installs the system
+      # packages on every run and skips browsers that are already present.
+      - name: Cache Playwright browsers
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright.outputs.version }}
+
       # Last setup step of the job: its success means checkout, Python, Node, dependencies and browsers are ready.
       - name: Install Chromium, WebKit and system dependencies
         id: browsers
         run: npx playwright install --with-deps chromium webkit
 
-      # Every test group below runs after a failed earlier group (diagnostic coverage), but never after a
-      # failed setup or a cancelled run. The job still fails when any group fails; no continue-on-error.
+      # Every test group of a shard runs after a failed earlier group (diagnostic coverage), but never after a
+      # failed setup or a cancelled run. The shard still fails when any group fails; no continue-on-error.
       - name: Run sidebar transition browser checks
-        if: ${{ !cancelled() && steps.browsers.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.browsers.outcome == 'success' && matrix.group == 'shell' }}
         env:
           JUSTUP_LAYOUT_BROWSERS: chromium
           JUSTUP_LAYOUT_OUTPUT: ${{ runner.temp }}/layout-artifacts
         run: npx playwright test --config tests/layout/playwright.config.mjs --grep @sidebar
 
       - name: Run notification dropdown browser checks
-        if: ${{ !cancelled() && steps.browsers.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.browsers.outcome == 'success' && matrix.group == 'shell' }}
         env:
           JUSTUP_LAYOUT_BROWSERS: chromium
           JUSTUP_LAYOUT_OUTPUT: ${{ runner.temp }}/layout-artifacts
@@ -273,7 +309,7 @@ jobs:
         run: npx playwright test --config tests/layout/playwright.config.mjs --grep @notification-dropdown
 
       - name: List notification, wizard and SMTP browser tests
-        if: ${{ !cancelled() && steps.browsers.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.browsers.outcome == 'success' && matrix.group == 'shell' }}
         env:
           JUSTUP_LAYOUT_BROWSERS: chromium
           JUSTUP_LAYOUT_OUTPUT: ${{ runner.temp }}/layout-artifacts
@@ -296,7 +332,7 @@ jobs:
           ' "$PLAYWRIGHT_LIST"
 
       - name: Run notification, wizard and SMTP browser checks
-        if: ${{ !cancelled() && steps.browsers.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.browsers.outcome == 'success' && matrix.group == 'shell' }}
         env:
           JUSTUP_LAYOUT_BROWSERS: chromium
           JUSTUP_LAYOUT_OUTPUT: ${{ runner.temp }}/layout-artifacts
@@ -304,7 +340,7 @@ jobs:
         run: npx playwright test --config tests/layout/playwright.config.mjs --grep '@notifications|@wizard|@smtp-ui'
 
       - name: Run strict Chromium browser checks
-        if: ${{ !cancelled() && steps.browsers.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.browsers.outcome == 'success' && matrix.group == 'shell' }}
         env:
           JUSTUP_LAYOUT_BROWSERS: chromium
           JUSTUP_LAYOUT_OUTPUT: ${{ runner.temp }}/layout-artifacts
@@ -316,36 +352,39 @@ jobs:
             tests/test_ui_layout_contract.py tests/test_modal_dismissal.py
 
       - name: Run modal browser checks
-        if: ${{ !cancelled() && steps.browsers.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.browsers.outcome == 'success' && matrix.group == 'shell' }}
         env:
           JUSTUP_LAYOUT_BROWSERS: chromium
           JUSTUP_LAYOUT_OUTPUT: ${{ runner.temp }}/layout-artifacts
           JUSTUP_LAYOUT_JUNIT: ${{ runner.temp }}/modal-browser-tests.xml
         run: npx playwright test --config tests/layout/playwright.config.mjs --grep '@modal|@scroll-lock|@dashboard-widgets-modal'
 
-      - name: Run chart, recipient, route map, confirm dialog, target form and other browser checks (Chromium + WebKit)
-        if: ${{ !cancelled() && steps.browsers.outcome == 'success' }}
+      # Shards 1/2 and 2/2 split this one grep; Playwright puts every test in exactly one of them.
+      - name: Run chart, recipient, route map, confirm dialog, target form and other browser checks (Chromium + WebKit, shard ${{ matrix.shard }}/2)
+        if: ${{ !cancelled() && steps.browsers.outcome == 'success' && matrix.group == 'chart' }}
         env:
           JUSTUP_LAYOUT_BROWSERS: chromium,webkit
           JUSTUP_LAYOUT_OUTPUT: ${{ runner.temp }}/layout-artifacts
-        run: npx playwright test --config tests/layout/playwright.config.mjs --grep '@combined-zoom-reset|@combined-single|@public-hostname-ui|@target-endpoints|@portpicker|@endpoint-state|@combined-legend|@recipients-search|@recipient-channels|@user-channels|@recipient-signal-recheck|@traceroute-map|@reset-confirm|@availability-clip|@targets-live-update|@smtp-link-field|@spooler-log|@combined-note|@edit-target-save|@network-diagnostics-layout|@public-egress|@service-detection|@downtime-widget-link|@field-group-error'
+          LAYOUT_SHARD: ${{ matrix.shard }}
+        run: npx playwright test --config tests/layout/playwright.config.mjs --shard="$LAYOUT_SHARD/2" --grep '@combined-zoom-reset|@combined-single|@public-hostname-ui|@target-endpoints|@portpicker|@endpoint-state|@combined-legend|@recipients-search|@recipient-channels|@user-channels|@recipient-signal-recheck|@traceroute-map|@reset-confirm|@availability-clip|@targets-live-update|@smtp-link-field|@spooler-log|@combined-note|@edit-target-save|@network-diagnostics-layout|@public-egress|@service-detection|@downtime-widget-link|@field-group-error'
+
       # These specs guard tab presses, edit-target tabs, load stability, card corners and overlays, chart clipping, the downtime card and dashboard metric labels.
       - name: Run tab, load stability, card, chart clip, downtime and dashboard metric browser checks (Chromium + WebKit)
-        if: ${{ !cancelled() && steps.browsers.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.browsers.outcome == 'success' && matrix.group == 'tabs' }}
         env:
           JUSTUP_LAYOUT_BROWSERS: chromium,webkit
           JUSTUP_LAYOUT_OUTPUT: ${{ runner.temp }}/layout-artifacts
         run: npx playwright test --config tests/layout/playwright.config.mjs --grep '@settings-tab-press|@tab-style|@edit-target-tabs|@load-stability|@card-corners|@card-overlays|@combined-clip|@downtime-history|@dashboard-metrics|@dashboard-values|@dashboard-refit|@contract-invariants|@target-size|@targets-counters'
 
       - name: Run focus, cursor and targets search browser checks
-        if: ${{ !cancelled() && steps.browsers.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.browsers.outcome == 'success' && matrix.group == 'shell' }}
         env:
           JUSTUP_LAYOUT_BROWSERS: chromium,webkit
           JUSTUP_LAYOUT_OUTPUT: ${{ runner.temp }}/layout-artifacts
         run: node tests/layout/run.mjs --focus
 
       - name: Run browser authentication flow
-        if: ${{ !cancelled() && steps.browsers.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.browsers.outcome == 'success' && matrix.group == 'shell' }}
         env:
           JUSTUP_LAYOUT_BROWSERS: chromium
           JUSTUP_LAYOUT_OUTPUT: ${{ runner.temp }}/layout-artifacts
@@ -355,7 +394,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: browser-tests
+          name: browser-tests-${{ matrix.artifact }}
           path: |
             ${{ runner.temp }}/browser-tests.xml
             ${{ runner.temp }}/browser-python-tests.xml
@@ -365,6 +404,24 @@ jobs:
             ${{ runner.temp }}/notification-dropdown/
           retention-days: 7
           if-no-files-found: warn
+
+  # Stable aggregate check: the required check "Chromium + WebKit UI regressions" keeps its name, so branch
+  # protection needs no change. It fails unless every shard succeeded (a cancelled, skipped or failed shard is a failure).
+  browser:
+    name: Chromium + WebKit UI regressions
+    needs: browser-shards
+    if: ${{ always() }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+
+    steps:
+      - name: Require all browser shards to succeed
+        env:
+          SHARDS_RESULT: ${{ needs.browser-shards.result }}
+        run: |
+          set -euo pipefail
+          echo "browser shards: $SHARDS_RESULT"
+          [ "$SHARDS_RESULT" = "success" ]
 
   # The strict shell viewport matrix (@layout plus the audit self-test, Chromium + WebKit) is split into two
   # shards. Playwright distributes the individual tests, so every test runs in exactly one shard. Both shards

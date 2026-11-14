@@ -28,7 +28,7 @@ GitHub repository automation and assets: CI/CD workflows (PR gate with Python, c
 - Do not commit secrets; workflows read Docker Hub credentials from repository secrets.
 - Renovate config is strict JSON (4-space indent).
 - Agents neither push nor publish (the user pushes); no weakening of gates and no skipped tests to get a workflow green.
-- `ci.yml` runs on pushes to all branches and gates PRs targeting `main`. The release workflow calls it again for the tagged commit. `docker-build.yml` only starts from version tags or a manual tag dispatch — keep that division when adding checks: deterministic checks, focused Chromium/WebKit UI regressions and the Chromium + WebKit shell viewport matrix belong in `ci.yml`; the full profile and Firefox remain local.
+- `ci.yml` runs on pushes to all branches and gates PRs targeting `main`. The release workflow calls it again for the tagged commit. `docker-build.yml` only starts from version tags or a manual tag dispatch — keep that division when adding checks: deterministic checks, focused Chromium/WebKit UI regressions (parallel `browser-shards`, aggregated by the required `browser` gate) and the Chromium + WebKit shell viewport matrix belong in `ci.yml`; the full profile and Firefox remain local.
 
 ### Testing Requirements
 - No local test runner for the workflows themselves; validate YAML syntax and rely on the PR run. Validate `renovate.json` with `npx renovate-config-validator` if available.
