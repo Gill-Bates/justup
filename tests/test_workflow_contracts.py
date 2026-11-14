@@ -41,7 +41,7 @@ def test_purity_gate_runs_before_the_registry_push():
 
 def test_version_tag_is_published_only_from_the_verified_candidate():
     candidate = RELEASE.index("Create candidate index")
-    verified = RELEASE.index("tools/verify-manifest.py verify manifest-candidate.json")
+    verified = RELEASE.index('tools/verify-manifest.py verify "$RUNNER_TEMP/manifest-candidate.json"')
     version = RELEASE.index('imagetools create --tag "${IMAGE_NAME}:${VERSION}"')
     assert candidate < verified < version
     assert RELEASE.count('imagetools create --tag "${IMAGE_NAME}:${VERSION}"') == 1
@@ -88,16 +88,16 @@ def test_release_is_a_verified_draft_before_it_is_published():
         release.index("tools/release-publish.py plan"),
         release.index("-F draft=true"),
         release.index("releases/${RELEASE_ID}/assets?name="),
-        release.index("tools/release-publish.py verify release-draft.json"),
+        release.index('tools/release-publish.py verify "$RUNNER_TEMP/release-draft.json"'),
         release.index("-F draft=false"),
-        release.index("tools/release-publish.py verify release-published.json"),
+        release.index('tools/release-publish.py verify "$RUNNER_TEMP/release-published.json"'),
     ]
     assert steps == sorted(steps)
     # A published tag is never edited, replaced or deleted by the workflow.
     assert "createRelease" not in release and "updateRelease" not in release
     # The only delete is the removal of stale assets the plan listed for an unpublished draft.
     assert release.count("-X DELETE") == 1
-    assert release.index("jq -r '.delete[] | .id' release-plan.json") < release.index("-X DELETE")
+    assert release.index("jq -r '.delete[] | .id' \"$RUNNER_TEMP/release-plan.json\"") < release.index("-X DELETE")
 
 
 def test_contents_write_is_confined_to_the_release_job():

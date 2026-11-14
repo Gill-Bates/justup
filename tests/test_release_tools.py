@@ -159,8 +159,11 @@ def test_parity_requires_every_direct_dependency(tmp_path, capsys):
     assert parity.main(["x", str(tmp_path / "t")]) == 0
 
 
-def report(vulns=(), classes=("os-pkgs",), name="justup:test-amd64", **extra):
+def report(vulns=(), classes=("os-pkgs",), types=(), name="justup:test-amd64", **extra):
     results = [{"Target": f"t{i}", "Class": c} for i, c in enumerate(classes)]
+    if types:
+        for result, result_type in zip(results, types, strict=True):
+            result["Type"] = result_type
     if vulns and results:
         results[0]["Vulnerabilities"] = [
             {"Severity": s, "VulnerabilityID": f"CVE-{i}", "PkgName": "p", "InstalledVersion": "1"}
@@ -211,11 +214,24 @@ def test_missing_report_and_wrong_target_fail(tmp_path):
     assert trivy.load(write(tmp_path, tagged), "justup:test-amd64")
 
 
+def test_trivy_report_can_prove_non_image_scan_coverage(tmp_path):
+    docs = report(classes=("lang-pkgs",), types=("pip",))
+    assert trivy.load(write(tmp_path, docs), expect_type="pip")
+    config = report(classes=("config",))
+    assert trivy.load(write(tmp_path, config), expect_class="config")
+    with pytest.raises(trivy.ReportError, match="pip result"):
+        trivy.load(write(tmp_path, config), expect_type="pip")
+
+
 def test_trivy_cli_exit_codes(tmp_path, capsys):
     good = write(tmp_path, report(["HIGH"]))
     assert trivy.main(["x", "status", str(good)]) == 0
     assert trivy.main(["x", "summary", str(good), "amd64", "--expect-ref", "justup:test-amd64"]) == 0
     assert "HIGH" in capsys.readouterr().out
+    docs = write(tmp_path, report(classes=("lang-pkgs",), types=("pip",)))
+    assert trivy.main(["x", "status", str(docs), "--expect-type", "pip"]) == 0
+    config = write(tmp_path, report(classes=("config",)))
+    assert trivy.main(["x", "status", str(config), "--expect-class", "config"]) == 0
     assert trivy.main(["x", "status", str(tmp_path / "absent.json")]) == 1
     assert "scanner failure" in capsys.readouterr().err
     assert trivy.main(["x", "status"]) == 2
@@ -510,9 +526,13 @@ def nmap_workflow_problems(workflow: str, builder_fields: set[str]) -> list[str]
         problems.append("meta does not resolve the version with `nmap-release.py latest`")
     if not re.search(r'nmap-release\.py fetch "\$nmap_version" "\$verify_dir"', workflow):
         problems.append("meta does not call `fetch VERSION DIR` with the new signature")
+    build = workflow[workflow.index("- name: Build image for smoke tests") :]
+    build = build[: build.index("- name: Log out of Docker Hub")]
     for arg, source in (("NMAP_VERSION", "nmap_version"), ("NMAP_SOURCE_SHA256", "nmap_source_sha256")):
-        if workflow.count(f'--build-arg "{arg}=${{{{ needs.meta.outputs.{source} }}}}"') != 1:
-            problems.append(f"build-arg {arg} is not passed (once, from meta) to the matrix build")
+        if build.count(f"{arg}: ${{{{ needs.meta.outputs.{source} }}}}") != 1:
+            problems.append(f"{arg} is not mapped once from meta into the build step environment")
+        if build.count(f'--build-arg "{arg}=${arg}"') != 1:
+            problems.append(f"build-arg {arg} does not read the quoted step environment value")
     gate = workflow[workflow.index("Verify Nmap TCP and UDP in the runtime image") :]
     gate = gate[: gate.index("- name: Upload Nmap provenance")]
     problems.extend(

@@ -71,6 +71,15 @@ jobs:
           # own head_sha would let a re-run of an older tag publish stale docs
           # over a newer site.
 
+      - name: Set temporary directories
+        run: |
+          set -euo pipefail
+          {
+            echo "TMPDIR=$RUNNER_TEMP"
+            echo "TMP=$RUNNER_TEMP"
+            echo "TEMP=$RUNNER_TEMP"
+          } >> "$GITHUB_ENV"
+
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
@@ -85,10 +94,10 @@ jobs:
       - name: Install dependencies
         run: |
           set -euo pipefail
-          python3 tools/pyproject-deps.py docs > requirements-docs.txt
-          cat requirements-docs.txt
+          python3 tools/pyproject-deps.py docs > "$RUNNER_TEMP/requirements-docs.txt"
+          cat "$RUNNER_TEMP/requirements-docs.txt"
           pip install --upgrade pip
-          pip install -r requirements-docs.txt
+          pip install -r "$RUNNER_TEMP/requirements-docs.txt"
 
       # The docs extra pins only direct dependencies, so the resolved transitive
       # set is only known here. Scanning this very environment, in the job
@@ -97,17 +106,18 @@ jobs:
       # direct dependencies; the frozen list adds the transitive ones. The file
       # name has to contain "requirement" or Trivy's pip analyzer skips it.
       - name: Freeze the resolved docs environment
-        run: pip freeze --all > docs-requirements-frozen.txt
+        run: pip freeze --all > "$RUNNER_TEMP/requirements.txt"
 
       - name: Trivy scan docs dependencies
         # Pinned to an immutable commit SHA, see GHSA-69fq-xp46-6x23.
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          cache: 'false'
+          cache: 'true'
           scan-type: 'fs'
-          scan-ref: 'docs-requirements-frozen.txt'
+          scan-ref: '${{ runner.temp }}/requirements.txt'
           # The reviewed action revision defaults to Trivy v0.70.0.
-          format: 'table'
+          format: 'json'
+          output: '${{ runner.temp }}/docs-trivy.json'
           exit-code: '1'
           ignore-unfixed: true
           # Source secrets and misconfiguration are gated in ci.yml.
@@ -116,6 +126,11 @@ jobs:
           timeout: '5m'
           trivyignores: '.trivyignore'
 
+      - name: Verify docs dependency scan coverage
+        run: |
+          set -euo pipefail
+          python3 tools/trivy-report.py status "$RUNNER_TEMP/docs-trivy.json" \
+            --expect-type pip >> "$GITHUB_STEP_SUMMARY"
 
       - name: Build documentation
         run: |

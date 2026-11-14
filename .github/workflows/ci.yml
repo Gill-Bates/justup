@@ -2,9 +2,9 @@
 # .github/workflows/ci.yml
 # Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 #
-# CI runs on every branch push and on pull requests targeting main. The release
-# workflow also calls it for the tagged commit. It runs the code quality, test,
-# container, browser, workflow, manifest and source-scan checks.
+# CI runs on every branch push and on pull requests targeting main. docker-build.yml
+# calls it for a tagged commit; docs-build.yml deploys pages and security.yml rescans
+# the published image. It runs code, test, container, browser and source-scan gates.
 #
 
 name: CI
@@ -164,11 +164,12 @@ jobs:
       # The entrypoint uses Bash syntax. -n parses without executing it.
       - name: Entrypoint shell syntax
         run: |
+          set -euo pipefail
           bash -n docker/entrypoint.sh
           bash -n docker/nmap-worker.sh
 
       - name: Entrypoint shellcheck
-        run: shellcheck docker/entrypoint.sh docker/nmap-worker.sh
+        run: shellcheck docker/entrypoint.sh docker/nmap-worker.sh docker/vendor/sslyze/build-wheel.sh
 
       # BuildKit checks the justUp image stages and COPY targets without
       # running the build.
@@ -415,9 +416,10 @@ jobs:
 
       - name: Run strict shell viewport matrix (Chromium + WebKit, shard ${{ matrix.shard }}/2)
         env:
+          LAYOUT_SHARD: ${{ matrix.shard }}
           JUSTUP_LAYOUT_OUTPUT: ${{ runner.temp }}/layout-artifacts
           JUSTUP_LAYOUT_JUNIT: ${{ runner.temp }}/browser-shell-${{ matrix.shard }}.xml
-        run: npx playwright test --config tests/layout/playwright.config.mjs --grep '@layout|@audit-self-test' --shard=${{ matrix.shard }}/2
+        run: npx playwright test --config tests/layout/playwright.config.mjs --grep '@layout|@audit-self-test' --shard="$LAYOUT_SHARD/2"
 
       - name: Upload browser matrix report
         if: always()
@@ -530,22 +532,34 @@ jobs:
           echo "$binary_dir" >> "$GITHUB_PATH"
           "$binary_dir/trivy" --version
 
-      # The release image scan owns vulnerabilities. Scan our checked-out
-      # source here for secrets and infrastructure misconfiguration.
+      # The release image scan owns vulnerabilities. Scan source here and prove
+      # the Dockerfile misconfiguration scanner actually analyzed a config.
       - name: Trivy source scan
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          cache: "false"
-          version: "v${{ env.TRIVY_VERSION }}"
-          skip-setup-trivy: "true"
-          scan-type: "fs"
-          scan-ref: "."
-          scanners: "secret,misconfig"
-          # Local caches and vendored assets are not authored in this repository.
-          skip-dirs: ".git,.venv,venv,__pycache__,data,site,app/static/vendor"
-          format: "table"
-          exit-code: "1"
-          ignore-unfixed: true
-          severity: "CRITICAL,HIGH"
-          timeout: "5m"
-          trivyignores: ".trivyignore.yaml"
+        env:
+          TRIVY_REPORT: ${{ runner.temp }}/source-trivy.json
+          TRIVY_LOG: ${{ runner.temp }}/source-trivy.log
+        run: |
+          set -euo pipefail
+          scan_status=0
+          # Generated/local paths and third-party browser assets are not authored source.
+          trivy fs \
+            --scanners secret,misconfig \
+            --skip-dirs .git,.venv,venv,__pycache__,data,site,app/static/vendor \
+            --format json \
+            --output "$TRIVY_REPORT" \
+            --exit-code 1 \
+            --severity CRITICAL,HIGH \
+            --timeout 5m \
+            --ignorefile .trivyignore.yaml . > "$TRIVY_LOG" 2>&1 || scan_status=$?
+          cat "$TRIVY_LOG"
+          if grep -Eq 'No enabled scanners found|Falling back to embedded checks' "$TRIVY_LOG"; then
+            echo "ERROR: Trivy did not load the requested source scanners and checks bundle." >&2
+            exit 1
+          fi
+          result="$(python3 tools/trivy-report.py status "$TRIVY_REPORT" --expect-class config)"
+          echo "### Trivy source scan" >> "$GITHUB_STEP_SUMMARY"
+          echo "$result" >> "$GITHUB_STEP_SUMMARY"
+          echo "$result"
+          if [[ "$scan_status" -ne 0 ]]; then
+            exit "$scan_status"
+          fi

@@ -138,10 +138,10 @@ jobs:
           python_base="python:3.13-slim"
           digest="$(docker buildx imagetools inspect "$python_base" \
             --format '{{.Manifest.Digest}}')"
-          case "$digest" in
-            sha256:*) ;;
-            *) echo "ERROR: could not resolve a digest for ${python_base}"; exit 1 ;;
-          esac
+          if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "ERROR: could not resolve a valid digest for ${python_base}" >&2
+            exit 1
+          fi
           python_base="python:3.13-slim@${digest}"
 
           # Resolved once here, not per Docker build.
@@ -192,7 +192,7 @@ jobs:
           name: nmap-source
           path: ${{ runner.temp }}/nmap-source/
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 14
 
       # The only place architectures are declared: build, create-manifest,
       # release-newest.py and the release notes all derive from it. Native
@@ -230,7 +230,7 @@ jobs:
           ARCHS: ${{ steps.matrix.outputs.archs }}
         run: |
           set -euo pipefail
-          listing="$(mktemp)"
+          listing="$(mktemp "$RUNNER_TEMP/tag-list.XXXXXX")"
           trap 'rm -f "$listing"' EXIT
           python3 tools/dockerhub.py list --allow-missing-repo > "$listing"
           # Unquoted: ARCHS is a space-separated list. Only key=value lines go to GITHUB_OUTPUT.
@@ -291,23 +291,34 @@ jobs:
 
       # The shared base digest and signal-cli release come from meta.
       - name: Build image for smoke tests
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          CACHE_SCOPE: ${{ matrix.cache_scope }}
+          PYTHON_BASE: ${{ needs.meta.outputs.python_base }}
+          SIGNAL_CLI_VERSION: ${{ needs.meta.outputs.signal_cli_version }}
+          NMAP_VERSION: ${{ needs.meta.outputs.nmap_version }}
+          NMAP_SOURCE_SHA256: ${{ needs.meta.outputs.nmap_source_sha256 }}
+          APP_VERSION: ${{ needs.meta.outputs.tag }}
+          BUILD_DATE: ${{ needs.meta.outputs.build_date }}
+          VCS_REF: ${{ github.sha }}
+          TEST_IMAGE: ${{ matrix.test_image }}
         run: |
           set -euo pipefail
           docker buildx build \
             --pull \
-            --platform "${{ matrix.platform }}" \
+            --platform "$PLATFORM" \
             --target runtime \
             --load \
-            --cache-from type=gha,scope=${{ matrix.cache_scope }} \
-            --cache-to type=gha,mode=max,scope=${{ matrix.cache_scope }} \
-            --build-arg "PYTHON_BASE=${{ needs.meta.outputs.python_base }}" \
-            --build-arg "SIGNAL_CLI_VERSION=${{ needs.meta.outputs.signal_cli_version }}" \
-            --build-arg "NMAP_VERSION=${{ needs.meta.outputs.nmap_version }}" \
-            --build-arg "NMAP_SOURCE_SHA256=${{ needs.meta.outputs.nmap_source_sha256 }}" \
-            --build-arg "APP_VERSION=${{ needs.meta.outputs.tag }}" \
-            --build-arg "BUILD_DATE=${{ needs.meta.outputs.build_date }}" \
-            --build-arg "VCS_REF=${{ github.sha }}" \
-            -t "${{ matrix.test_image }}" \
+            --cache-from "type=gha,scope=$CACHE_SCOPE" \
+            --cache-to "type=gha,mode=max,scope=$CACHE_SCOPE" \
+            --build-arg "PYTHON_BASE=$PYTHON_BASE" \
+            --build-arg "SIGNAL_CLI_VERSION=$SIGNAL_CLI_VERSION" \
+            --build-arg "NMAP_VERSION=$NMAP_VERSION" \
+            --build-arg "NMAP_SOURCE_SHA256=$NMAP_SOURCE_SHA256" \
+            --build-arg "APP_VERSION=$APP_VERSION" \
+            --build-arg "BUILD_DATE=$BUILD_DATE" \
+            --build-arg "VCS_REF=$VCS_REF" \
+            -t "$TEST_IMAGE" \
             -f docker/Dockerfile \
             .
 
@@ -315,30 +326,34 @@ jobs:
         run: docker logout
 
       - name: Smoke test justUp
+        env:
+          CONTAINER_NAME: ${{ matrix.container_name }}
+          PLATFORM: ${{ matrix.platform }}
+          TEST_IMAGE: ${{ matrix.test_image }}
         run: |
           set -euo pipefail
 
           # shellcheck disable=SC2317,SC2329  # invoked by the trap below, not inline (shellcheck >= 0.11 reports SC2329)
           cleanup() {
-            docker rm -f "${{ matrix.container_name }}" 2>/dev/null || true
+            docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
           }
           trap cleanup EXIT
 
-          docker run -d --name "${{ matrix.container_name }}" \
-            --platform "${{ matrix.platform }}" \
+          docker run -d --name "$CONTAINER_NAME" \
+            --platform "$PLATFORM" \
             -e SECRET_KEY="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" \
-            "${{ matrix.test_image }}"
+            "$TEST_IMAGE"
 
           echo "Waiting for in-container health endpoint..."
           for i in $(seq 1 45); do
-            if ! docker ps -q -f name="${{ matrix.container_name }}" | grep -q .; then
+            if ! docker ps -q -f name="$CONTAINER_NAME" | grep -q .; then
               echo "✗ Container exited during startup after ${i}s"
               echo "=== Container logs ==="
-              docker logs "${{ matrix.container_name }}" 2>&1 || echo "Could not retrieve logs"
+              docker logs "$CONTAINER_NAME" 2>&1 || echo "Could not retrieve logs"
               exit 1
             fi
 
-            if docker exec "${{ matrix.container_name }}" python -c \
+            if docker exec "$CONTAINER_NAME" python -c \
                 'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8000/healthz", timeout=2)' \
                 > /dev/null 2>&1; then
               echo "✓ justUp health check passed after ${i}s"
@@ -350,9 +365,9 @@ jobs:
 
           echo "✗ Health check timeout after 45s"
           echo "=== Container logs ==="
-          docker logs "${{ matrix.container_name }}" 2>&1 || echo "Could not retrieve logs"
+          docker logs "$CONTAINER_NAME" 2>&1 || echo "Could not retrieve logs"
           echo "=== Container status ==="
-          docker ps -a -f name="${{ matrix.container_name }}"
+          docker ps -a -f name="$CONTAINER_NAME"
           exit 1
 
       - name: Verify Nmap TCP and UDP in the runtime image (${{ matrix.arch }})
@@ -508,10 +523,12 @@ jobs:
       - name: Verify libsignal native library (${{ matrix.arch }})
         env:
           EXPECTED_ARCH: ${{ matrix.arch }}
+          PLATFORM: ${{ matrix.platform }}
+          TEST_IMAGE: ${{ matrix.test_image }}
         run: |
           set -euo pipefail
-          docker run --rm -i --platform "${{ matrix.platform }}" \
-            --entrypoint python "${{ matrix.test_image }}" - --load "$EXPECTED_ARCH" \
+          docker run --rm -i --platform "$PLATFORM" \
+            --entrypoint python "$TEST_IMAGE" - --load "$EXPECTED_ARCH" \
             < tools/verify-libsignal-native.py
 
       # Runtime image purity (contract in tools/verify-runtime-image.py): no build tools,
@@ -536,31 +553,35 @@ jobs:
       # Evidence for the parity gate in create-manifest, read from the finished
       # image: a stale cached layer would hide an older toolchain from build args.
       - name: Record toolchain versions (${{ matrix.arch }})
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          TEST_IMAGE: ${{ matrix.test_image }}
+          IMAGE_SUFFIX: ${{ matrix.image_suffix }}
         run: |
           set -euo pipefail
           mkdir -p toolchain
 
           # Versions of the distributions pyproject.toml names, as installed in the image.
-          docker run --rm -i --platform "${{ matrix.platform }}" \
-            --entrypoint python "${{ matrix.test_image }}" - \
-            < tools/image-dependency-versions.py > "toolchain/${{ matrix.image_suffix }}.txt"
-          signal_cli_version="$(docker run --rm --platform "${{ matrix.platform }}" \
-            --entrypoint signal-cli "${{ matrix.test_image }}" --version)"
-          printf 'signal_cli=%s\n' "$signal_cli_version" >> "toolchain/${{ matrix.image_suffix }}.txt"
-          printf 'nmap=%s\n' "$NMAP_ACTUAL_VERSION" >> "toolchain/${{ matrix.image_suffix }}.txt"
+          docker run --rm -i --platform "$PLATFORM" \
+            --entrypoint python "$TEST_IMAGE" - \
+            < tools/image-dependency-versions.py > "toolchain/${IMAGE_SUFFIX}.txt"
+          signal_cli_version="$(docker run --rm --platform "$PLATFORM" \
+            --entrypoint signal-cli "$TEST_IMAGE" --version)"
+          printf 'signal_cli=%s\n' "$signal_cli_version" >> "toolchain/${IMAGE_SUFFIX}.txt"
+          printf 'nmap=%s\n' "$NMAP_ACTUAL_VERSION" >> "toolchain/${IMAGE_SUFFIX}.txt"
           # Taken from the image, not from the build args: a stale layer cannot hide a different archive.
-          nmap_source_sha256="$(docker run --rm --platform "${{ matrix.platform }}" --entrypoint cat \
-            "${{ matrix.test_image }}" /usr/share/doc/nmap/PROVENANCE.txt | sed -n 's/^source_sha256=//p')"
-          printf 'nmap_source_sha256=%s\n' "$nmap_source_sha256" >> "toolchain/${{ matrix.image_suffix }}.txt"
+          nmap_source_sha256="$(docker run --rm --platform "$PLATFORM" --entrypoint cat \
+            "$TEST_IMAGE" /usr/share/doc/nmap/PROVENANCE.txt | sed -n 's/^source_sha256=//p')"
+          printf 'nmap_source_sha256=%s\n' "$nmap_source_sha256" >> "toolchain/${IMAGE_SUFFIX}.txt"
           # Compiled into the binary from the same signed source, so identical on every architecture.
-          nmap_bundled_libraries="$(docker run --rm --platform "${{ matrix.platform }}" --entrypoint cat \
-            "${{ matrix.test_image }}" /usr/share/doc/nmap/PROVENANCE.txt | sed -n 's/^bundled_libraries=//p')"
-          printf 'nmap_bundled_libraries=%s\n' "$nmap_bundled_libraries" >> "toolchain/${{ matrix.image_suffix }}.txt"
+          nmap_bundled_libraries="$(docker run --rm --platform "$PLATFORM" --entrypoint cat \
+            "$TEST_IMAGE" /usr/share/doc/nmap/PROVENANCE.txt | sed -n 's/^bundled_libraries=//p')"
+          printf 'nmap_bundled_libraries=%s\n' "$nmap_bundled_libraries" >> "toolchain/${IMAGE_SUFFIX}.txt"
 
           # COMPONENTS.txt mixes formats, so each value is extracted on its own.
           # Only arch-independent values belong here; library names and hashes differ by design.
-          components="$(docker run --rm --platform "${{ matrix.platform }}" \
-            --entrypoint cat "${{ matrix.test_image }}" /opt/COMPONENTS.txt)"
+          components="$(docker run --rm --platform "$PLATFORM" \
+            --entrypoint cat "$TEST_IMAGE" /opt/COMPONENTS.txt)"
           java_version="$(printf '%s\n' "$components" \
             | sed -n 's/^JAVA_VERSION="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p')"
           if [ -z "$java_version" ] || [ "$(printf '%s\n' "$java_version" | wc -l)" -ne 1 ]; then
@@ -574,22 +595,22 @@ jobs:
             exit 1
           fi
           printf 'java_version=%s\nlibsignal_client=%s\n' \
-            "$java_version" "$libsignal_client" >> "toolchain/${{ matrix.image_suffix }}.txt"
+            "$java_version" "$libsignal_client" >> "toolchain/${IMAGE_SUFFIX}.txt"
 
           # The jlink runtime is copied from the builder, so its Debian package is absent here.
-          temurin_package_version="$(docker run --rm --platform "${{ matrix.platform }}" \
-            --entrypoint cat "${{ matrix.test_image }}" /opt/java/.temurin-package-version)"
+          temurin_package_version="$(docker run --rm --platform "$PLATFORM" \
+            --entrypoint cat "$TEST_IMAGE" /opt/java/.temurin-package-version)"
           test -n "$temurin_package_version"
-          printf 'temurin_package_version=%s\n' "$temurin_package_version" >> "toolchain/${{ matrix.image_suffix }}.txt"
+          printf 'temurin_package_version=%s\n' "$temurin_package_version" >> "toolchain/${IMAGE_SUFFIX}.txt"
 
           # Preserve the full per-architecture dpkg inventory without requiring identical Debian revisions.
-          debian_packages="$(docker run --rm --platform "${{ matrix.platform }}" \
-            --entrypoint dpkg-query "${{ matrix.test_image }}" -W -f='${binary:Package}=${Version}\n' | sort | paste -sd, -)"
+          debian_packages="$(docker run --rm --platform "$PLATFORM" \
+            --entrypoint dpkg-query "$TEST_IMAGE" -W -f='${binary:Package}=${Version}\n' | sort | paste -sd, -)"
           test -n "$debian_packages"
-          printf 'debian_packages=%s\n' "$debian_packages" >> "toolchain/${{ matrix.image_suffix }}.txt"
+          printf 'debian_packages=%s\n' "$debian_packages" >> "toolchain/${IMAGE_SUFFIX}.txt"
 
-          echo "--- ${{ matrix.image_suffix }} ---"
-          cat "toolchain/${{ matrix.image_suffix }}.txt"
+          echo "--- $IMAGE_SUFFIX ---"
+          cat "toolchain/${IMAGE_SUFFIX}.txt"
 
       - name: Upload toolchain versions (${{ matrix.arch }})
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
@@ -600,9 +621,12 @@ jobs:
           if-no-files-found: error
 
       - name: Tag image for push
+        env:
+          TEST_IMAGE: ${{ matrix.test_image }}
+          IMAGE_SUFFIX: ${{ matrix.image_suffix }}
         run: |
           set -euo pipefail
-          docker tag "${{ matrix.test_image }}" "${IMAGE_NAME}:${VERSION}-${{ matrix.image_suffix }}"
+          docker tag "$TEST_IMAGE" "${IMAGE_NAME}:${VERSION}-${IMAGE_SUFFIX}"
 
       - name: Trivy vulnerability scan
         id: trivy
@@ -610,7 +634,7 @@ jobs:
         # commit in March 2026 (GHSA-69fq-xp46-6x23). Runs between the Docker Hub logins.
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          cache: "false"
+          cache: "true"
           image-ref: "${{ matrix.test_image }}"
           # The reviewed action revision defaults to Trivy v0.70.0.
           format: "json"
@@ -675,39 +699,38 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Push arch-specific image
+        env:
+          IMAGE_SUFFIX: ${{ matrix.image_suffix }}
         run: |
           set -euo pipefail
-          docker push "${IMAGE_NAME}:${VERSION}-${{ matrix.image_suffix }}"
+          docker push "${IMAGE_NAME}:${VERSION}-${IMAGE_SUFFIX}"
 
       # The manifest is built from digests, not mutable arch tags that are
       # deleted afterwards. cleanup-arch-tags derives the fragment tags from the
       # version and the matrix, so a failure here still gets cleaned up.
       - name: Record image digest
+        env:
+          IMAGE_SUFFIX: ${{ matrix.image_suffix }}
         run: |
           set -euo pipefail
           mkdir -p digests
 
           digest="$(docker buildx imagetools inspect \
-            "${IMAGE_NAME}:${VERSION}-${{ matrix.image_suffix }}" \
+            "${IMAGE_NAME}:${VERSION}-${IMAGE_SUFFIX}" \
             --format '{{.Manifest.Digest}}')"
-
-          case "$digest" in
-            sha256:*) ;;
-            *)
-              echo "ERROR: unexpected digest for ${{ matrix.image_suffix }}: '${digest}'"
-              exit 1
-              ;;
-          esac
-
-          printf '%s' "$digest" > "digests/${{ matrix.image_suffix }}"
-          echo "${{ matrix.image_suffix }} -> ${digest}"
+          if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "ERROR: unexpected digest for ${IMAGE_SUFFIX}: '${digest}'" >&2
+            exit 1
+          fi
+          printf '%s' "$digest" > "digests/${IMAGE_SUFFIX}"
+          echo "${IMAGE_SUFFIX} -> ${digest}"
 
       - name: Upload image digest (${{ matrix.arch }})
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: image-digest-${{ matrix.image_suffix }}
           path: digests/${{ matrix.image_suffix }}
-          retention-days: 1
+          retention-days: 14
           if-no-files-found: error
 
   create-manifest:
@@ -775,8 +798,14 @@ jobs:
           shopt -s nullglob
           digest_files=(digests/*)
           toolchain_files=(toolchain/*)
-          found_digests="$( (( ${#digest_files[@]} )) && printf '%s\n' "${digest_files[@]##*/}" | sort || true)"
-          found_toolchain="$( (( ${#toolchain_files[@]} )) && printf '%s\n' "${toolchain_files[@]##*/}" | sed 's/\.txt$//' | sort || true)"
+          found_digests=""
+          found_toolchain=""
+          if (( ${#digest_files[@]} > 0 )); then
+            found_digests="$(printf '%s\n' "${digest_files[@]##*/}" | sort)"
+          fi
+          if (( ${#toolchain_files[@]} > 0 )); then
+            found_toolchain="$(printf '%s\n' "${toolchain_files[@]##*/}" | sed 's/\.txt$//' | sort)"
+          fi
           if [[ "$found_digests" != "$expected" ]]; then
             echo "ERROR: digest files [$(tr '\n' ' ' <<< "$found_digests")] differ from the build matrix [${EXPECTED_ARCHS}]"
             exit 1
@@ -832,15 +861,16 @@ jobs:
       - name: Verify candidate index
         run: |
           set -euo pipefail
-          docker buildx imagetools inspect --raw "${IMAGE_NAME}:${CANDIDATE_TAG}" > manifest-candidate.json
-          python3 tools/verify-manifest.py verify manifest-candidate.json digests
+          docker buildx imagetools inspect --raw "${IMAGE_NAME}:${CANDIDATE_TAG}" \
+            > "$RUNNER_TEMP/manifest-candidate.json"
+          python3 tools/verify-manifest.py verify "$RUNNER_TEMP/manifest-candidate.json" digests
 
           index_digest="$(docker buildx imagetools inspect "${IMAGE_NAME}:${CANDIDATE_TAG}" \
             --format '{{.Manifest.Digest}}')"
-          case "$index_digest" in
-            sha256:*) ;;
-            *) echo "ERROR: could not resolve the digest of ${IMAGE_NAME}:${CANDIDATE_TAG}"; exit 1 ;;
-          esac
+          if [[ ! "$index_digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "ERROR: could not resolve a valid digest of ${IMAGE_NAME}:${CANDIDATE_TAG}" >&2
+            exit 1
+          fi
           echo "INDEX_DIGEST=${index_digest}" >> "$GITHUB_ENV"
 
       # Only the verified index digest is published; nothing is rebuilt or re-resolved.
@@ -855,18 +885,19 @@ jobs:
           set -euo pipefail
           state="$(python3 tools/dockerhub.py exists "$VERSION")"
           if [[ "$state" == "present" ]]; then
-            docker buildx imagetools inspect --raw "${IMAGE_NAME}:${VERSION}" > manifest-existing.json
-            if ! python3 tools/verify-manifest.py verify manifest-existing.json digests; then
+            docker buildx imagetools inspect --raw "${IMAGE_NAME}:${VERSION}" \
+              > "$RUNNER_TEMP/manifest-existing.json"
+            if ! python3 tools/verify-manifest.py verify "$RUNNER_TEMP/manifest-existing.json" digests; then
               echo "ERROR: ${IMAGE_NAME}:${VERSION} is already published with different content." >&2
               echo "A version tag is immutable. Release the changed components as a new justUp version." >&2
               exit 1
             fi
             existing_digest="$(docker buildx imagetools inspect "${IMAGE_NAME}:${VERSION}" \
               --format '{{.Manifest.Digest}}')"
-            case "$existing_digest" in
-              sha256:*) ;;
-              *) echo "ERROR: could not resolve the digest of ${IMAGE_NAME}:${VERSION}" >&2; exit 1 ;;
-            esac
+            if [[ ! "$existing_digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "ERROR: could not resolve a valid digest of ${IMAGE_NAME}:${VERSION}" >&2
+              exit 1
+            fi
             echo "INDEX_DIGEST=${existing_digest}" >> "$GITHUB_ENV"
             echo "Confirmed: ${IMAGE_NAME}:${VERSION} already carries these images (${existing_digest}); not republished"
             exit 0
@@ -876,8 +907,9 @@ jobs:
             exit 1
           fi
           docker buildx imagetools create --tag "${IMAGE_NAME}:${VERSION}" "${IMAGE_NAME}@${INDEX_DIGEST}"
-          docker buildx imagetools inspect --raw "${IMAGE_NAME}:${VERSION}" > manifest-version.json
-          python3 tools/verify-manifest.py verify manifest-version.json digests
+          docker buildx imagetools inspect --raw "${IMAGE_NAME}:${VERSION}" \
+            > "$RUNNER_TEMP/manifest-version.json"
+          python3 tools/verify-manifest.py verify "$RUNNER_TEMP/manifest-version.json" digests
           echo "Pushed manifest: ${IMAGE_NAME}:${VERSION} -> ${INDEX_DIGEST}"
 
       # 'latest' moves only after the candidate passed verification, and only for the
@@ -899,7 +931,7 @@ jobs:
           fi
 
           # The meta decision may be hours old: re-read the registry right before moving 'latest'.
-          work="$(mktemp -d)"
+          work="$(mktemp -d "$RUNNER_TEMP/latest-check.XXXXXX")"
           trap 'rm -rf "$work"' EXIT
           python3 tools/dockerhub.py list > "$work/tags.txt"
           # shellcheck disable=SC2086 # EXPECTED_ARCHS is a space-separated list
@@ -912,8 +944,8 @@ jobs:
           docker buildx imagetools create --tag "${IMAGE_NAME}:latest" "${IMAGE_NAME}@${INDEX_DIGEST}"
           echo "Pushed manifest: ${IMAGE_NAME}:latest -> ${INDEX_DIGEST}"
 
-          docker buildx imagetools inspect --raw "${IMAGE_NAME}:latest" > manifest-latest.json
-          python3 tools/verify-manifest.py verify manifest-latest.json digests
+          docker buildx imagetools inspect --raw "${IMAGE_NAME}:latest" > "$RUNNER_TEMP/manifest-latest.json"
+          python3 tools/verify-manifest.py verify "$RUNNER_TEMP/manifest-latest.json" digests
       # The verified index digest, for the release record of the Nmap source archive.
       - name: Export index digest
         id: index
@@ -999,7 +1031,7 @@ jobs:
           ARCHS: ${{ needs.meta.outputs.archs }}
         run: |
           set -euo pipefail
-          work="$(mktemp -d)"
+          work="$(mktemp -d "$RUNNER_TEMP/dockerhub-tags.XXXXXX")"
           trap 'rm -rf "$work"' EXIT
 
           echo "Keeping Docker Hub tags: ${VERSION} latest"
@@ -1242,7 +1274,7 @@ jobs:
               '**Source:** [justUp! Repository](https://github.com/' + context.repo.owner + '/' + context.repo.repo + ')'
             ].join('\n');
 
-            fs.writeFileSync('release-notes.md', body + '\n');
+            fs.writeFileSync(path.join(process.env.RUNNER_TEMP, 'release-notes.md'), body + '\n');
             console.log(`Wrote the release notes for ${tagName} (${body.length} characters)`);
 
       # One directory holds exactly the expected assets. A missing, empty or additional file stops
@@ -1264,8 +1296,8 @@ jobs:
             names+=("trivy-${arch}.json" "toolchain-${arch}.txt" "nmap-provenance-${arch}.txt" \
               "nmap-sbom-${arch}.cdx.json" "nmap-nvd-${arch}.json")
           done
-          python3 tools/release-publish.py manifest expected-assets.json release-files "${names[@]}"
-          cat expected-assets.json
+          python3 tools/release-publish.py manifest "$RUNNER_TEMP/expected-assets.json" release-files "${names[@]}"
+          cat "$RUNNER_TEMP/expected-assets.json"
 
       # Decide from the published state of the tag: create a draft, resume an unpublished draft, or
       # leave a complete release alone. A published release with missing or different assets fails
@@ -1276,12 +1308,13 @@ jobs:
           TAG: ${{ needs.meta.outputs.tag }}
         run: |
           set -euo pipefail
-          gh api --paginate --slurp "repos/${GH_REPO}/releases?per_page=100" > releases.json
-          python3 tools/release-publish.py plan releases.json "$TAG" expected-assets.json > release-plan.json
-          cat release-plan.json
+          gh api --paginate --slurp "repos/${GH_REPO}/releases?per_page=100" > "$RUNNER_TEMP/releases.json"
+          python3 tools/release-publish.py plan "$RUNNER_TEMP/releases.json" "$TAG" \
+            "$RUNNER_TEMP/expected-assets.json" > "$RUNNER_TEMP/release-plan.json"
+          cat "$RUNNER_TEMP/release-plan.json"
           {
-            echo "state=$(jq -r '.state' release-plan.json)"
-            echo "release_id=$(jq -r '.release_id // empty' release-plan.json)"
+            echo "state=$(jq -r '.state' "$RUNNER_TEMP/release-plan.json")"
+            echo "release_id=$(jq -r '.release_id // empty' "$RUNNER_TEMP/release-plan.json")"
           } >> "$GITHUB_OUTPUT"
 
       - name: Create the draft release
@@ -1296,18 +1329,21 @@ jobs:
           prerelease=false
           [[ "$VERSION" == *-* ]] && prerelease=true
           id="$(gh api -X POST "repos/${GH_REPO}/releases" -f tag_name="$TAG" -f name="justUp! ${VERSION}" \
-            -F body=@release-notes.md -F draft=true -F prerelease="$prerelease" --jq '.id')"
+            -F "body=@$RUNNER_TEMP/release-notes.md" -F draft=true -F prerelease="$prerelease" --jq '.id')"
           [[ "$id" =~ ^[0-9]+$ ]] || { echo "ERROR: no release id returned" >&2; exit 1; }
           echo "release_id=${id}" >> "$GITHUB_OUTPUT"
 
       - name: Refresh the unpublished draft
         if: steps.plan.outputs.state == 'draft'
+        env:
+          RELEASE_ID: ${{ steps.plan.outputs.release_id }}
         run: |
           set -euo pipefail
           prerelease=false
           [[ "$VERSION" == *-* ]] && prerelease=true
-          gh api -X PATCH "repos/${GH_REPO}/releases/${{ steps.plan.outputs.release_id }}" \
-            -f name="justUp! ${VERSION}" -F body=@release-notes.md -F draft=true -F prerelease="$prerelease" > /dev/null
+          gh api -X PATCH "repos/${GH_REPO}/releases/${RELEASE_ID}" \
+            -f name="justUp! ${VERSION}" -F "body=@$RUNNER_TEMP/release-notes.md" \
+            -F draft=true -F prerelease="$prerelease" > /dev/null
 
       # Only assets of the still unpublished draft are replaced.
       - name: Upload the release assets to the draft
@@ -1316,10 +1352,10 @@ jobs:
           RELEASE_ID: ${{ steps.draft.outputs.release_id || steps.plan.outputs.release_id }}
         run: |
           set -euo pipefail
-          jq -r '.delete[] | .id' release-plan.json | while read -r asset_id; do
+          jq -r '.delete[] | .id' "$RUNNER_TEMP/release-plan.json" | while read -r asset_id; do
             gh api -X DELETE "repos/${GH_REPO}/releases/assets/${asset_id}"
           done
-          jq -r '.upload[]' release-plan.json | while read -r name; do
+          jq -r '.upload[]' "$RUNNER_TEMP/release-plan.json" | while read -r name; do
             case "$name" in
               *.bz2) type="application/x-bzip2" ;;
               *.asc) type="application/pgp-signature" ;;
@@ -1338,15 +1374,17 @@ jobs:
           RELEASE_ID: ${{ steps.draft.outputs.release_id || steps.plan.outputs.release_id }}
         run: |
           set -euo pipefail
-          gh api "repos/${GH_REPO}/releases/${RELEASE_ID}" > release-draft.json
-          mkdir release-downloads
-          jq -r '.assets[] | "\(.id) \(.name)"' release-draft.json | while read -r asset_id name; do
+          gh api "repos/${GH_REPO}/releases/${RELEASE_ID}" > "$RUNNER_TEMP/release-draft.json"
+          release_downloads="$RUNNER_TEMP/release-downloads"
+          mkdir -p "$release_downloads"
+          jq -r '.assets[] | "\(.id) \(.name)"' "$RUNNER_TEMP/release-draft.json" | while read -r asset_id name; do
             [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || continue
             gh api -H "Accept: application/octet-stream" "repos/${GH_REPO}/releases/assets/${asset_id}" \
-              > "release-downloads/${name}"
+              > "$release_downloads/${name}"
           done
-          python3 tools/release-publish.py verify release-draft.json expected-assets.json --draft \
-            --downloads release-downloads
+          python3 tools/release-publish.py verify "$RUNNER_TEMP/release-draft.json" \
+            "$RUNNER_TEMP/expected-assets.json" --draft \
+            --downloads "$release_downloads"
 
       - name: Publish the verified release
         if: steps.plan.outputs.state != 'published-complete'
@@ -1357,10 +1395,11 @@ jobs:
           make_latest=false
           [[ "$VERSION" != *-* && "$MOVES_LATEST" == "true" ]] && make_latest=true
           gh api -X PATCH "repos/${GH_REPO}/releases/${RELEASE_ID}" -F draft=false -f make_latest="$make_latest" > /dev/null
-          gh api "repos/${GH_REPO}/releases/${RELEASE_ID}" > release-published.json
-          python3 tools/release-publish.py verify release-published.json expected-assets.json --published \
+          gh api "repos/${GH_REPO}/releases/${RELEASE_ID}" > "$RUNNER_TEMP/release-published.json"
+          python3 tools/release-publish.py verify "$RUNNER_TEMP/release-published.json" \
+            "$RUNNER_TEMP/expected-assets.json" --published \
             --downloads release-downloads
-          echo "Published v${VERSION} with $(jq '.assets | length' release-published.json) verified assets"
+          echo "Published v${VERSION} with $(jq '.assets | length' "$RUNNER_TEMP/release-published.json") verified assets"
 
       - name: Release already published
         if: steps.plan.outputs.state == 'published-complete'
