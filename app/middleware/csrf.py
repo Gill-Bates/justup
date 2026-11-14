@@ -17,6 +17,7 @@ from fastapi import Request, Response
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from ..utils.auth_helpers import session_cookie_name
 from ..utils.client_ip import request_is_https
 from ..utils.constants import SESSION_MAX_DAYS_MAX
 from .security_headers import CSP_REPORT_PATH
@@ -56,7 +57,7 @@ class CSRFMiddleware(BaseHTTPMiddleware):
 
     def _check_origin(self, request: Request, *, required: bool = False) -> bool:
         """
-        Validate Origin header matches Host (hardened against spoofing).
+        Validate that the Origin header matches the Host header (Host itself is client-controlled, see below).
 
         Returns True if valid or no Origin header present.
         Note: Only uses Host header (not X-Forwarded-Host) to prevent
@@ -67,7 +68,9 @@ class CSRFMiddleware(BaseHTTPMiddleware):
         if not origin:
             return not required
 
-        # Use only Host header (set by server, not spoofable by client)
+        # The Host header is set by the client and can be forged; this comparison only ties Origin to
+        # whatever Host the request carries. It is a defence in depth on top of the CSRF token. It relies on
+        # the deployment to validate Host (a reverse proxy with a fixed server name or trusted-host rules).
         host = request.headers.get("Host", "")
 
         try:
@@ -97,7 +100,7 @@ class CSRFMiddleware(BaseHTTPMiddleware):
 
         request.state.csrf_token = csrf_token
 
-        cookie_name = "__Host-token" if request_is_https(request) else "token"
+        cookie_name = session_cookie_name(request)
         # The CSP report sink ignores the session; browsers send reports with cookies but never with a CSRF header.
         cookie_auth = (
             bool(request.cookies.get(cookie_name))

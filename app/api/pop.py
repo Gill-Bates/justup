@@ -36,17 +36,22 @@ _log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/admin/pop", tags=["admin", "pop"])
 
 
-# ---------------------------------------------------------------------------
-# Enums & Response Models
-# ---------------------------------------------------------------------------
-
-
 class RefreshSource(StrEnum):
     """Valid refresh source types."""
 
     PEERINGDB = "peeringdb"
     UNLOCODE = "unlocode"
     ALL = "all"
+
+
+class IxpSnapshotStatus(BaseModel):
+    """Metadata of the active IXP prefix snapshot (no prefixes, no credentials)."""
+
+    import_run_id: str
+    completed_at: str
+    exchange_count: int
+    prefix_count: int
+    source: str
 
 
 class PopStatusResponse(BaseModel):
@@ -58,6 +63,9 @@ class PopStatusResponse(BaseModel):
     sources: dict[str, int] = Field(description="Breakdown by source (active only)")
     last_peeringdb_run: dict | None = Field(description="Last PeeringDB import run")
     last_unlocode_run: dict | None = Field(description="Last UN/LOCODE import run")
+    ixp_snapshot: IxpSnapshotStatus | None = Field(
+        description="Active IXP prefix snapshot; null before the first import"
+    )
     recent_runs: list[dict] = Field(description="Recent import runs")
     auto_refresh: dict = Field(description="Self-managing refresh state: last success/attempt, next attempt")
     locks: dict[str, dict] = Field(description="Lock status per source (process-local)")
@@ -91,11 +99,6 @@ def _result_row(result: Any) -> dict[str, Any]:
     return {name: getattr(result, name) for name in RefreshResultItem.model_fields}
 
 
-# ---------------------------------------------------------------------------
-# Endpoints
-# ---------------------------------------------------------------------------
-
-
 @router.get("/status", dependencies=[Depends(require_admin)], response_model=PopStatusResponse)
 def get_pop_status(request: Request, conn=Depends(get_conn)) -> dict[str, Any]:
     """
@@ -106,6 +109,7 @@ def get_pop_status(request: Request, conn=Depends(get_conn)) -> dict[str, Any]:
         - retired_locations: Count of retired POP locations
         - total_locations: Total count (active + retired)
         - sources: Breakdown by source (active only)
+        - ixp_snapshot: Active IXP prefix snapshot metadata, null before the first import
         - locks: Current lock status (process-local only!)
     """
     status = pop_refresh.get_refresh_status(partial(sqlite_db.connect, request.app.state.db_path))
@@ -164,6 +168,7 @@ def trigger_refresh(
         - 200: Success (full or partial)
         - 207: Multi-status (some sources failed)
         - 409: Conflict (already running)
+        - 501: Only sources that are not implemented (UN/LOCODE) were requested
         - 502: All sources failed
     """
     _log.info("Manual POP refresh triggered for source: %s", source.value)
@@ -181,7 +186,8 @@ def trigger_refresh(
 
     total_processed = sum(r["processed"] for r in results)
     total_inserted = sum(r["inserted"] for r in results)
-    failures = [r for r in results if not r["success"]]
+    # A source that is not implemented is reported but is neither a failure nor a partial success.
+    failures = [r for r in results if not r["success"] and r["error"] != pop_refresh.ERROR_NOT_IMPLEMENTED]
     already_running = [r for r in results if r["error"] == "already_running"]
 
     response_data = {
@@ -197,6 +203,8 @@ def trigger_refresh(
 
     if already_running and len(already_running) == len(results):
         return JSONResponse(status_code=409, content=response_data)
+    if results and all(r["error"] == pop_refresh.ERROR_NOT_IMPLEMENTED for r in results):
+        return JSONResponse(status_code=501, content=response_data)
     if len(failures) == len(results) and len(results) > 0:
         return JSONResponse(status_code=502, content=response_data)
     if len(failures) > 0:

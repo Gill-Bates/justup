@@ -5,17 +5,17 @@
 
 /**
  * Presentation of the monitor quality state for the dashboard widget.
- * The badge carries status color; the score stays a neutral primary value in every state.
+ * The status dot and the score value carry the state color (success/warning/danger); unknown stays neutral.
  * @module utils/quality-state
  */
 (function (root) {
 	'use strict';
 
 	var BADGES = {
-		ok: { cls: 'ju-status-badge--success', text: 'OK' },
-		degraded: { cls: 'ju-status-badge--warning', text: 'Degraded' },
-		down: { cls: 'ju-status-badge--danger', text: 'Down' },
-		unknown: { cls: 'ju-status-badge--neutral', text: 'Unknown' },
+		ok: { tone: 'success', text: 'OK' },
+		degraded: { tone: 'warning', text: 'Degraded' },
+		down: { tone: 'danger', text: 'Down' },
+		unknown: { tone: 'neutral', text: 'Unknown' },
 	};
 
 	/** Finite score or null for null, undefined, empty and non-numeric values. */
@@ -27,7 +27,7 @@
 
 	/**
 	 * @param {{state?: string, score?: number|string|null}|null|undefined} data - /quality/current payload
-	 * @returns {{state: string, badgeClass: string, badgeText: string, scoreText: string, scoreClass: string, label: string}}
+	 * @returns {{state: string, badgeTone: string, badgeText: string, scoreText: string, scoreClass: string, label: string}}
 	 */
 	function describe(data) {
 		var score = parseScore(data && data.score);
@@ -35,15 +35,15 @@
 		// Without a measured score the state has no basis, so it is shown as unknown.
 		if (score === null) state = 'unknown';
 		var b = BADGES[state];
-		// Unknown has no measurement basis, but score typography stays shared with measured states.
+		// Unknown has no measurement basis and stays neutral; typography is shared with measured states.
 		var label = 'Connectivity status unavailable';
 		if (state !== 'unknown') label = score >= 80 ? 'Excellent connectivity' : score >= 60 ? 'Good connectivity' : 'Poor connectivity';
 		return {
 			state: state,
-			badgeClass: b.cls,
+			badgeTone: b.tone,
 			badgeText: b.text,
 			scoreText: score === null ? '--' : score.toFixed(1),
-			scoreClass: 'dashboard-widget-value fw-bold',
+			scoreClass: 'dashboard-widget-value fw-bold' + (b.tone === 'neutral' ? '' : ' quality-score--' + b.tone),
 			label: label,
 		};
 	}

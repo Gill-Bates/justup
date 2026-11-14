@@ -128,6 +128,7 @@ class _Service:
     settled: bool = False  # the first stable run of this process was checked for a stale open incident
     fail_streak: int = 0  # consecutive failed iterations reported by the running service
     fail_since: float | None = None
+    last_failure_at: float | None = None  # clock time of the latest reported failure; restarts the recovery window
     fail_degraded: bool = False
     ok_since: float | None = None  # first success after a failure series that degraded the service
 
@@ -176,6 +177,7 @@ class ServiceSupervisor:
         if svc is None or self._stopping or maintenance.is_active():
             return  # intended stops and restores are no failures
         now = self._clock()
+        svc.last_failure_at = now
         if svc.fail_streak == 0:
             svc.fail_since = now
         svc.fail_streak += 1
@@ -368,7 +370,7 @@ class ServiceSupervisor:
                     self._mark_stable(svc)
                 if svc.fail_degraded and svc.ok_since is not None and now - svc.ok_since >= p.stable_after:
                     self._clear_failure_series(svc)
-                if svc.hangs and now - started >= p.hang_recovery_after:
+                if svc.hangs and now - max(started, svc.last_failure_at or started) >= p.hang_recovery_after:
                     self._clear_hangs(svc)
                 if hb_timeout is not None and now - svc.last_beat > hb_timeout:
                     task.cancel()

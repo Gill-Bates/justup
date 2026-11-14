@@ -216,11 +216,7 @@ def test_pop_candidate_retention_preserves_reviews_and_deletes_unreviewed_atomic
 
 
 def test_retention_keeps_open_and_recent_alerts_and_drops_old_resolved(conn):
-    conn.execute(
-        "INSERT INTO targets (name, interval_seconds, retention_days, enable_ping, enable_http_check,"
-        " enable_cert_expiration, host, created_at, updated_at) VALUES ('t',60,30,1,0,0,'h',?,?)",
-        (utcnow(), utcnow()),
-    )
+    _insert_target(conn)
     old = utcnow() - timedelta(days=retention.ALERT_RETENTION_DAYS + 5)
     for aid, status, started in [("a", "resolved", old), ("b", "open", old), ("c", "resolved", utcnow())]:
         conn.execute(
@@ -232,6 +228,68 @@ def test_retention_keeps_open_and_recent_alerts_and_drops_old_resolved(conn):
     conn.commit()
     retention.run_retention(conn)
     assert {r[0] for r in conn.execute("SELECT id FROM alerts")} == {"b", "c"}
+
+
+def _outbox(conn, alert_id, event_type, status, age_days=0):
+    ts = utcnow() - timedelta(days=age_days)
+    conn.execute(
+        "INSERT INTO alert_dispatch_outbox (alert_id, event_type, target_id, target_name, failed_service, started_at,"
+        " status, next_attempt_at, created_at, updated_at) VALUES (?, ?, 1, 't', 'http', ?, ?, ?, ?, ?)",
+        (alert_id, event_type, ts, status, ts, ts, ts),
+    )
+
+
+def _open_alert(conn, alert_id):
+    now = utcnow()
+    conn.execute(
+        "INSERT INTO alerts (id, target_id, target_name, failed_service, status, started_at, created_at, updated_at)"
+        " VALUES (?, 1, 't', 'http', 'open', ?, ?, ?)",
+        (alert_id, now, now, now),
+    )
+
+
+def test_retention_prunes_old_completed_outbox_rows_only(conn):
+    _insert_target(conn)
+    _open_alert(conn, "a")
+    _outbox(conn, "a", "open", "completed", age_days=retention.NOTIFICATION_RETENTION_DAYS + 1)
+    _outbox(conn, "a", "resolved", "pending", age_days=retention.NOTIFICATION_RETENTION_DAYS + 1)
+    _open_alert(conn, "b")
+    _outbox(conn, "b", "open", "completed", age_days=0)  # a young completed row is kept
+    conn.commit()
+    retention.run_retention(conn)
+    assert sorted(r[0] for r in conn.execute("SELECT alert_id || ':' || event_type FROM alert_dispatch_outbox")) == [
+        "a:resolved",
+        "b:open",
+    ]
+
+
+def test_deleting_alerts_or_target_removes_their_pending_outbox_rows(conn):
+    _insert_target(conn)
+    _open_alert(conn, "a")
+    _open_alert(conn, "b")
+    _outbox(conn, "a", "open", "pending")
+    _outbox(conn, "b", "open", "pending")
+    conn.commit()
+    sqlite_db.delete_alerts_by_target(conn, 1)
+    assert conn.execute("SELECT COUNT(*) FROM alert_dispatch_outbox").fetchone()[0] == 0
+    _open_alert(conn, "c")
+    _outbox(conn, "c", "open", "pending")
+    conn.commit()
+    sqlite_db.delete_all_alerts(conn)
+    assert conn.execute("SELECT COUNT(*) FROM alert_dispatch_outbox").fetchone()[0] == 0
+
+
+def test_outbox_row_of_a_cascade_deleted_alert_is_neither_dispatched_nor_kept(conn):
+    _insert_target(conn)
+    _open_alert(conn, "a")
+    _outbox(conn, "a", "open", "pending")
+    conn.commit()
+    conn.execute("DELETE FROM targets WHERE id = 1")  # alerts go with the target, the outbox row does not
+    conn.commit()
+    assert sqlite_db.list_pending_alert_dispatches(conn) == []
+    assert sqlite_db.has_pending_alert_dispatches(conn) is False
+    retention.run_retention(conn)
+    assert conn.execute("SELECT COUNT(*) FROM alert_dispatch_outbox").fetchone()[0] == 0
 
 
 def test_failed_retention_task_is_reported_and_does_not_block_others(conn, monkeypatch):
@@ -343,6 +401,15 @@ def test_inbox_retention_cascades_to_reads_and_dismissals(conn):
     assert conn.execute("SELECT COUNT(*) FROM notification_dismissals").fetchone()[0] == 1
 
 
+def _insert_target(conn, now=None) -> None:
+    now = now or utcnow()
+    conn.execute(
+        "INSERT INTO targets (name, interval_seconds, retention_days, enable_ping, enable_http_check,"
+        " enable_cert_expiration, host, created_at, updated_at) VALUES ('t',60,30,1,0,0,'h',?,?)",
+        (now, now),
+    )
+
+
 def test_inbox_retention_runs_in_batches_across_runs(conn, monkeypatch):
     monkeypatch.setattr(retention.time, "sleep", lambda _s: None)
     _inbox(conn, 300, key="old", n=2500)  # more than two default batches
@@ -350,14 +417,15 @@ def test_inbox_retention_runs_in_batches_across_runs(conn, monkeypatch):
     real = retention.delete_in_batches
     ticks = iter([0.0, 1e12])  # stop the first run after one batch
 
-    def limited(c, table, where, params=(), **kw):
-        if table == "notifications" and kw.get("deadline") is not None:
-            monkeypatch.setattr(retention.time, "monotonic", lambda: next(ticks))
-        return real(c, table, where, params, **kw)
+    with monkeypatch.context() as patch:
 
-    monkeypatch.setattr(retention, "delete_in_batches", limited)
-    first = retention.run_retention(conn)
-    monkeypatch.undo()
+        def limited(c, table, where, params=(), **kw):
+            if table == "notifications" and kw.get("deadline") is not None:
+                patch.setattr(retention.time, "monotonic", lambda: next(ticks))
+            return real(c, table, where, params, **kw)
+
+        patch.setattr(retention, "delete_in_batches", limited)
+        first = retention.run_retention(conn)
     assert not first.complete
     assert count() == 1500
     assert retention.run_retention(conn).complete
@@ -365,11 +433,7 @@ def test_inbox_retention_runs_in_batches_across_runs(conn, monkeypatch):
 
 
 def test_inbox_retention_keeps_alerts_queue_and_bumped_grouped_rows(conn):
-    conn.execute(
-        "INSERT INTO targets (name, interval_seconds, retention_days, enable_ping, enable_http_check,"
-        " enable_cert_expiration, host, created_at, updated_at) VALUES ('t',60,30,1,0,0,'h',?,?)",
-        (utcnow(), utcnow()),
-    )
+    _insert_target(conn)
     old = utcnow() - timedelta(days=400)
     conn.execute(
         "INSERT INTO alerts (id, target_id, target_name, failed_service, status, started_at, created_at, updated_at)"
@@ -476,11 +540,7 @@ def test_resolved_alert_retention_counts_from_resolution_with_legacy_fallback(co
     now = utcnow()
     limit = retention.ALERT_RETENTION_DAYS
     long_ago = now - timedelta(days=limit + 70)
-    conn.execute(
-        "INSERT INTO targets (name, interval_seconds, retention_days, enable_ping, enable_http_check,"
-        " enable_cert_expiration, host, created_at, updated_at) VALUES ('t',60,30,1,0,0,'h',?,?)",
-        (now, now),
-    )
+    _insert_target(conn, now)
     _alert(conn, "resolved-today", "resolved", long_ago, now)
     _alert(conn, "resolved-long-ago", "resolved", long_ago, now - timedelta(days=limit + 5))
     _alert(conn, "open", "open", long_ago)

@@ -8,11 +8,14 @@
 
 from __future__ import annotations
 
+import base64
 import io
 import json
+import os
 import sqlite3
 import tarfile
 import threading
+from collections.abc import Iterable
 from datetime import timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -28,7 +31,9 @@ from app.utils import backup as backup_mod
 from app.utils import crypto, maintenance
 from app.utils.backup import BackupError, parse_backup_filename, verify_backup_hmac
 from app.utils.rate_limit import reset_all
+from app.utils.version import get_version
 from tests import _support  # noqa: F401 - imported for its sys.path side effect
+from tests._legacy_db import build_v1_database
 
 PASSWORD = "correct horse battery"  # noqa: S105 - throwaway test value
 
@@ -68,19 +73,52 @@ def _tar(path: Path, entries: list[tuple[str, bytes | None]], *, extra=None) -> 
     return path
 
 
-def _db_bytes(schema_version: int = sqlite_db.SCHEMA_VERSION) -> bytes:
-    """A real application database image at the requested supported schema version."""
+def _db_bytes(
+    schema_version: int = sqlite_db.SCHEMA_VERSION, *, legacy_target: bool = False, legacy_delay: int | None = None
+) -> bytes:
+    """A database with a chosen version stamp for compatibility checks.
+
+    Stamps 1 and the former-current 10 get the real version-1 layout (with one user and no recipient for it);
+    every other stamp is written onto the current layout. ``legacy_delay`` stores the former global
+    ``metrics_timeout_minutes`` setting (version-1 layouts only).
+    """
     with TemporaryDirectory() as tmp:
         db = Path(tmp) / "justup.db"
-        conn = sqlite_db.connect(db)
-        sqlite_db.init_schema(conn)
-        if schema_version <= 2:
-            conn.execute("DROP TABLE alert_dispatch_outbox")
-            conn.execute("ALTER TABLE alerts DROP COLUMN active_incident")
-        if schema_version == 1:
-            conn.execute("DROP TABLE notification_channel_state")
-            conn.execute("ALTER TABLE notification_queue DROP COLUMN limited_attempts")
+        if schema_version in (1, sqlite_db.LEGACY_SCHEMA_VERSION):
+            build_v1_database(db, stamp=schema_version)
+            conn = sqlite_db.connect(db)  # no init_schema: the file keeps its old layout
+            conn.execute("INSERT INTO users(username, password_hash, created_at) VALUES ('old-user', 'x', 't')")
+            conn.commit()
+        else:
+            conn = sqlite_db.connect(db)
+            sqlite_db.init_schema(conn)
+        if legacy_target and schema_version in (1, sqlite_db.LEGACY_SCHEMA_VERSION):
+            # The version-1 layout has no down_alert_delay_minutes column: insert with raw SQL.
+            conn.execute(
+                "INSERT INTO targets(name, interval_seconds, retention_days, enable_ping, enable_http_check, "
+                "enable_cert_expiration, enable_tcp_connect, host, tcp_host, tcp_ports, created_at, updated_at) "
+                "VALUES ('legacy', 60, 30, 1, 0, 0, 1, 'legacy.example.com', 'legacy.example.com', '22,53', "
+                "'2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')"
+            )
+        elif legacy_target:
+            sqlite_db.create_target(
+                conn,
+                {
+                    "name": "legacy",
+                    "host": "legacy.example.com",
+                    "interval_seconds": 60,
+                    "retention_days": 30,
+                    "enable_ping": True,
+                    "enable_tcp_connect": True,
+                    "tcp_host": "legacy.example.com",
+                    "tcp_ports": "22,53",
+                },
+            )
         conn.execute("INSERT INTO settings VALUES (?, ?, ?)", ("migration-marker", "preserved", "2026-01-01T00:00:00Z"))
+        if legacy_delay is not None:
+            conn.execute(
+                "INSERT INTO settings VALUES (?, ?, ?)", ("metrics_timeout_minutes", str(legacy_delay), "2026-01-01")
+            )
         conn.execute(f"PRAGMA user_version = {schema_version}")
         conn.commit()
         conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
@@ -114,16 +152,7 @@ def _good(
     manifest_bytes = _manifest_bytes(
         db if manifest_db is None else manifest_db, app_version=app_version, build_id=build_id
     )
-    return _tar(
-        path,
-        [
-            ("data", None),
-            ("data/sqlite", None),
-            ("data/sqlite/justup.db", db),
-            ("data/tsdb", None),
-            ("data/backup-manifest.json", manifest_bytes),
-        ],
-    )
+    return _tar(path, _entries(db, manifest_bytes))
 
 
 class TestFilenameAndHmac:
@@ -168,13 +197,28 @@ class TestFilenameAndHmac:
     def test_rotated_key_still_verifies_old_backup(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         archive = _good(tmp_path / "a.tar.bz2")
         digest = backup_mod.compute_backup_hmac(archive)
-        old = __import__("os").environ["SECRET_KEY"]
+        old = os.environ["SECRET_KEY"]
         monkeypatch.delenv("SECRET_KEY")
         monkeypatch.setenv("SECRET_KEYS", f"{Fernet.generate_key().decode('ascii')},{old}")
         assert verify_backup_hmac(archive, digest)
 
-    def test_signing_key_is_not_stored_in_the_database(self):
-        assert "backup_hmac_secret" not in Path(backup_mod.__file__).read_text().replace("backup_hmac_secret(", "")
+    def test_signing_key_is_not_stored_in_the_database(self, env):
+        client, token, _ = env
+        headers = {"Authorization": f"Bearer {token}", "X-CSRF-Token": client.cookies.get("csrf_token")}
+        assert client.post("/settings/backup", headers=headers).status_code == 200
+        conn = sqlite_db.connect(client.app.state.db_path)
+        try:
+            stored = "\n".join(str(v) for row in conn.execute("SELECT value FROM settings") for v in row)
+        finally:
+            sqlite_db.close_connection(conn)
+        for key in backup_mod.backup_hmac_keys():
+            encodings = {
+                key.hex(),
+                key.decode("latin-1"),
+                base64.b64encode(key).decode(),
+                base64.urlsafe_b64encode(key).decode(),
+            }
+            assert not any(form in stored for form in encodings)
 
     def test_legacy_format_is_rejected_with_clear_message(self):
         with pytest.raises(BackupError, match="legacy backup format"):
@@ -260,9 +304,8 @@ class TestArchiveValidation:
         with pytest.raises(BackupError, match="identical, verifiable build ID"):
             backup_mod.validate_backup_compatibility(manifest)
 
-    def test_missing_migration_path_is_rejected(self, monkeypatch: pytest.MonkeyPatch):
-        manifest = backup_mod.validate_backup_manifest(_manifest_bytes(_db_bytes(1)))
-        monkeypatch.setattr(sqlite_db, "_missing_migrations", lambda _version: True)
+    def test_missing_migration_path_is_rejected(self):
+        manifest = backup_mod.validate_backup_manifest(_manifest_bytes(_db_bytes(9)))
         with pytest.raises(BackupError, match="No migration path"):
             backup_mod.validate_backup_compatibility(manifest)
 
@@ -292,12 +335,23 @@ class TestArchiveValidation:
         with pytest.raises(BackupError, match="Links or special"):
             backup_mod.extract_backup(archive, tmp_path / "out")
 
-    @pytest.mark.parametrize("name", ["../evil", "data/../../evil", "/etc/passwd", "other/file", "data/unknown/x"])
-    def test_traversal_and_unexpected_paths_are_rejected(self, tmp_path: Path, name):
-        archive = _tar(tmp_path / "a.tar.bz2", [("data", None), (name, b"x")])
-        with pytest.raises(BackupError):
+    @pytest.mark.parametrize(
+        ("name", "reason"),
+        [
+            ("../evil", "Unsafe path"),
+            ("data/../../evil", "Unsafe path"),
+            ("/etc/passwd", "Unsafe path"),
+            ("other/file", "Unsafe path"),
+            ("data/unknown/x", "Unexpected content"),
+        ],
+    )
+    def test_traversal_and_unexpected_paths_are_rejected(self, tmp_path: Path, name, reason):
+        # A valid manifest and database are present, so only the path can cause the rejection.
+        archive = _tar(tmp_path / "a.tar.bz2", _entries(extra=[(name, b"x")]))
+        with pytest.raises(BackupError, match=reason):
             backup_mod.extract_backup(archive, tmp_path / "out")
         assert not (tmp_path / "evil").exists()
+        assert not (tmp_path / "out" / "evil").exists()
 
     def test_garbage_is_reported_as_corrupt(self, tmp_path: Path):
         bad = tmp_path / "bad.tar.bz2"
@@ -306,13 +360,17 @@ class TestArchiveValidation:
             backup_mod.extract_backup(bad, tmp_path / "out")
 
 
-def _entries(db: bytes = DB_BYTES, manifest_bytes: bytes | None = None) -> list[tuple[str, bytes | None]]:
+def _entries(
+    db: bytes = DB_BYTES, manifest_bytes: bytes | None = None, extra: Iterable[tuple[str, bytes | None]] = ()
+) -> list[tuple[str, bytes | None]]:
+    """The one definition of the required backup layout."""
     return [
         ("data", None),
         ("data/sqlite", None),
         ("data/sqlite/justup.db", db),
         ("data/tsdb", None),
         ("data/backup-manifest.json", manifest_bytes or _manifest_bytes(db)),
+        *extra,
     ]
 
 
@@ -359,7 +417,7 @@ class TestExtractionRevalidatesTheArchive:
 
     def test_manifest_that_differs_from_the_inspected_one_is_rejected(self, tmp_path: Path):
         _raw, manifest = self._signed()
-        other_db = _db_bytes(2)
+        other_db = _db_bytes(9)
         archive = _good(tmp_path / "other.tar.bz2", other_db)
         with pytest.raises(BackupError, match="Manifest changed"):
             backup_mod.extract_backup(archive, tmp_path / "out", manifest=manifest)
@@ -447,7 +505,7 @@ class TestBoundedMemberHandling:
         monkeypatch.setattr(tarfile.TarFile, "next", counting_next)
         with pytest.raises(BackupError, match="Too many"):
             backup_mod.inspect_backup_archive(archive, max_members=50)
-        assert parsed <= 60  # aborted right after the limit instead of reading all 5001 headers
+        assert 50 <= parsed <= 60  # aborted right after the limit instead of reading all 5001 headers
 
     def test_many_small_entries_stay_within_a_modest_memory_budget(self, tmp_path: Path):
         import tracemalloc
@@ -615,9 +673,6 @@ class TestRestoreEndpoint:
 
     def test_roundtrip_keeps_plain_and_compressed_series_identical(self, env):
         """A backup holds the legacy JSONL and the gzip segments; restore brings both back unchanged."""
-        import io
-        from datetime import timedelta
-
         from app.db import tsdb
 
         client, token, data_dir = env
@@ -689,7 +744,7 @@ class TestRestoreEndpoint:
         old_db = tmp_path / "old.db"
         raw = sqlite3.connect(old_db)
         raw.execute("CREATE TABLE t(a INTEGER)")
-        raw.execute("PRAGMA user_version=7")
+        raw.execute(f"PRAGMA user_version={sqlite_db.SCHEMA_VERSION + 1}")
         raw.commit()
         raw.close()
         archive = _tar(
@@ -711,18 +766,20 @@ class TestRestoreEndpoint:
         assert live.read_bytes() == before
 
     def test_backup_from_newer_application_is_rejected(self, env, tmp_path: Path):
-        name, payload = _named(_good(tmp_path / "newer-app.tar.bz2", app_version="1.0.3"))
+        major, *_rest = get_version().split(".")
+        newer = f"{int(major) + 1}.0.0"  # always newer than the installed application
+        name, payload = _named(_good(tmp_path / "newer-app.tar.bz2", app_version=newer))
         resp = _post(env, name, payload)
         assert resp.status_code == 400
         assert "newer application version" in resp.json()["detail"]
 
-    @pytest.mark.parametrize("schema_version", [1, 2])
-    def test_older_schema_is_migrated_before_restore(self, env, tmp_path: Path, schema_version: int):
-        name, payload = _named(_good(tmp_path / f"schema-{schema_version}.tar.bz2", db=_db_bytes(schema_version)))
+    def test_former_current_schema_is_restamped_before_restore(self, env, tmp_path: Path):
+        schema_version = sqlite_db.LEGACY_SCHEMA_VERSION
+        name, payload = _named(_good(tmp_path / "schema-10.tar.bz2", db=_db_bytes(schema_version)))
         resp = _post(env, name, payload)
         assert resp.status_code == 200, resp.text
         assert "Backup compatible" in resp.json()["message"]
-        assert f"migrated from {schema_version} to {sqlite_db.SCHEMA_VERSION}" in resp.json()["message"]
+        assert f"reset from {schema_version} to {sqlite_db.SCHEMA_VERSION}" in resp.json()["message"]
         live = env[2] / "sqlite" / "justup.db"
         conn = sqlite3.connect(f"{live.resolve().as_uri()}?mode=ro&immutable=1", uri=True)
         try:
@@ -730,6 +787,52 @@ class TestRestoreEndpoint:
             assert conn.execute("SELECT value FROM settings WHERE key='migration-marker'").fetchone()[0] == "preserved"
             assert conn.execute("PRAGMA foreign_key_check").fetchone() is None
             assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        finally:
+            conn.close()
+
+    def test_new_backup_carries_udp_configuration_and_port_metadata(self, env):
+        client, token, data_dir = env
+        live = data_dir / "sqlite" / "justup.db"
+        conn = sqlite_db.connect(live)
+        try:
+            tid = sqlite_db.create_target(
+                conn,
+                {
+                    "name": "multi",
+                    "host": "multi.example.com",
+                    "interval_seconds": 60,
+                    "retention_days": 30,
+                    "enable_ping": True,
+                    "enable_tcp_connect": True,
+                    "tcp_host": "multi.example.com",
+                    "tcp_ports": "53",
+                    "enable_udp_scan": True,
+                    "udp_ports": "53",
+                },
+            )
+            sqlite_db.sync_network_ports(conn, tid, tcp_ports=[53], udp_ports=[53])
+            sqlite_db.update_network_port_status(conn, tid, "udp", 53, "unknown", raw_state="open|filtered")
+            conn.commit()
+        finally:
+            sqlite_db.close_connection(conn)
+        headers = {"Authorization": f"Bearer {token}", "X-CSRF-Token": client.cookies.get("csrf_token")}
+        resp = client.post("/settings/backup", headers=headers)
+        assert resp.status_code == 200, resp.text
+        name = resp.headers["content-disposition"].split("filename=")[1]
+        conn = sqlite_db.connect(live)
+        try:
+            conn.execute("DELETE FROM targets")
+            conn.commit()
+        finally:
+            sqlite_db.close_connection(conn)
+        assert _post(env, name, resp.content).status_code == 200
+        conn = sqlite3.connect(f"{live.resolve().as_uri()}?mode=ro&immutable=1", uri=True)
+        try:
+            assert conn.execute("SELECT enable_udp_scan, udp_ports FROM targets").fetchone() == (1, "53")
+            rows = conn.execute(
+                "SELECT protocol, port, status, raw_state, service_identity FROM target_network_ports ORDER BY protocol"
+            ).fetchall()
+            assert rows == [("tcp", 53, None, None, "unknown"), ("udp", 53, "unknown", "open|filtered", "unknown")]
         finally:
             conn.close()
 
@@ -745,7 +848,7 @@ class TestRestoreEndpoint:
         def fail_migration(_conn):
             raise RuntimeError("injected staging migration failure")
 
-        backup_db = _db_bytes(2)
+        backup_db = _db_bytes(sqlite_db.LEGACY_SCHEMA_VERSION)
         monkeypatch.setattr(sqlite_db, "init_schema", fail_migration)
         name, payload = _named(_good(tmp_path / "migration-failure.tar.bz2", db=backup_db))
         resp = _post(env, name, payload)
@@ -764,7 +867,7 @@ class TestRestoreEndpoint:
 class TestHmacKeys:
     def test_all_keys_are_evaluated_in_one_read(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         archive = _good(tmp_path / "a.tar.bz2")
-        old = __import__("os").environ["SECRET_KEY"]
+        old = os.environ["SECRET_KEY"]
         monkeypatch.delenv("SECRET_KEY")
         monkeypatch.setenv("SECRET_KEYS", f"{Fernet.generate_key().decode('ascii')},{old}")
         monkeypatch.setattr(crypto, "_primary_key", None)
@@ -804,7 +907,7 @@ class TestHmacKeys:
         assert not verify_backup_hmac(archive, digest)  # changing the external secret does not rotate
 
     def test_primary_key_change_invalidates_issued_tokens(self, monkeypatch: pytest.MonkeyPatch):
-        old = __import__("os").environ["SECRET_KEY"]
+        old = os.environ["SECRET_KEY"]
         token = "session-token"  # noqa: S105 - throwaway test value
         before = hash_token(token)
         monkeypatch.delenv("SECRET_KEY")
@@ -817,9 +920,6 @@ class TestHmacKeys:
 
 class TestSnapshotAndIntegrity:
     def test_snapshot_is_consistent_during_active_writes(self, tmp_path: Path):
-        import sqlite3
-        import threading
-
         src = tmp_path / "sqlite"
         src.mkdir()
         db = src / "justup.db"
@@ -827,7 +927,7 @@ class TestSnapshotAndIntegrity:
         conn.execute("CREATE TABLE ledger(id INTEGER PRIMARY KEY, a INTEGER NOT NULL, b INTEGER NOT NULL)")
         conn.commit()
         conn.close()
-        stop = threading.Event()
+        stop, wrote = threading.Event(), threading.Event()
         errors: list[Exception] = []
 
         def writer():
@@ -837,6 +937,7 @@ class TestSnapshotAndIntegrity:
                     with sqlite_db.transaction(wconn):  # a and b always change together
                         wconn.execute("INSERT INTO ledger(a, b) VALUES (1, 1)")
                         wconn.execute("UPDATE ledger SET a = a + 1, b = b + 1")
+                    wrote.set()
             except Exception as exc:  # noqa: BLE001 - surfaced by the assertion below
                 errors.append(exc)
             finally:
@@ -845,6 +946,7 @@ class TestSnapshotAndIntegrity:
         thread = threading.Thread(target=writer)
         thread.start()
         try:
+            assert wrote.wait(5)  # snapshots must overlap real writes
             for index in range(5):
                 backup_mod.snapshot_sqlite_dir(src, tmp_path / f"snap{index}")
         finally:
@@ -855,6 +957,7 @@ class TestSnapshotAndIntegrity:
             backup_mod.check_sqlite_integrity(tmp_path / f"snap{index}" / "justup.db", full=True)
             snap = sqlite3.connect(tmp_path / f"snap{index}" / "justup.db")
             assert snap.execute("SELECT COUNT(*) FROM ledger WHERE a != b").fetchone()[0] == 0
+            assert snap.execute("SELECT COUNT(*) FROM ledger").fetchone()[0] > 0
             snap.close()
         assert not list((tmp_path / "snap0").glob("*-wal"))
 
@@ -898,8 +1001,6 @@ class TestSnapshotAndIntegrity:
         assert marker.read_text() == "original"
 
     def test_garbage_in_database_pages_fails_quick_check(self, tmp_path: Path):
-        import sqlite3
-
         db = tmp_path / "broken.db"
         conn = sqlite3.connect(db)
         conn.execute("CREATE TABLE t(a TEXT)")
@@ -935,7 +1036,7 @@ class TestSnapshotAndIntegrity:
             snapshot_db.write_bytes(snapshot_bytes)
             actual_snapshot_manifest = backup_mod.create_backup_manifest(snapshot_db)
             assert manifest["format_version"] == 1
-            assert manifest["application"]["version"] == "1.0.2"
+            assert manifest["application"]["version"] == get_version()
             assert manifest["database"] == actual_snapshot_manifest["database"]
             assert manifest["created_at"].endswith("Z")
             assert not any(n.endswith(("-wal", "-shm")) for n in names)
@@ -1194,10 +1295,6 @@ class TestCoordinatedMaintenance:
         return {"Authorization": f"Bearer {token}", "X-CSRF-Token": client.cookies.get("csrf_token")}
 
     def test_backup_archives_complete_tsdb_series_while_writers_append(self, env):
-        import json
-        import threading
-
-        from app.db import sqlite as _s  # noqa: F401
         from app.db import tsdb
 
         client, _token, data_dir = env
@@ -1286,8 +1383,6 @@ class TestCoordinatedMaintenance:
             maintenance.end_maintenance()
 
     def test_restore_waits_for_a_running_tsdb_writer_then_applies(self, env, tmp_path: Path, monkeypatch):
-        import threading
-
         monkeypatch.setattr(settings_api, "RESTORE_QUIESCE_TIMEOUT_SECONDS", 5.0)
         name, payload = _named(_good(tmp_path / "a.tar.bz2"))
         entered, release = threading.Event(), threading.Event()
@@ -1328,8 +1423,6 @@ class TestCoordinatedMaintenance:
         assert (env[2] / "sqlite" / "justup.db").read_bytes() == DB_BYTES
 
     def test_restore_503_changes_nothing_and_resets_the_state(self, env, tmp_path: Path, monkeypatch):
-        import threading
-
         monkeypatch.setattr(settings_api, "RESTORE_QUIESCE_TIMEOUT_SECONDS", 0.3)
         db_file = env[2] / "sqlite" / "justup.db"
         before = db_file.read_bytes()
@@ -1343,7 +1436,7 @@ class TestCoordinatedMaintenance:
 
         t = threading.Thread(target=stuck_writer)
         t.start()
-        entered.wait(5)
+        assert entered.wait(5)
         try:
             resp = _post(env, name, payload)
         finally:
@@ -1352,7 +1445,7 @@ class TestCoordinatedMaintenance:
         assert resp.status_code == 503
         assert resp.headers["retry-after"] == "30"
         assert db_file.read_bytes() == before
-        assert not (env[2] / "sqlite" / "x.db").exists()
+        assert not list(env[2].glob(".restore_staging_*"))  # staging directory cleaned up
         assert not maintenance.is_active()  # refusal lifted
         with maintenance.work_section():
             pass
@@ -1450,8 +1543,6 @@ class TestCoordinatedMaintenance:
         assert maintenance.current_generation() == generation_before + 1
 
     def test_two_simultaneous_restores_reject_second_before_extraction(self, env, tmp_path: Path, monkeypatch):
-        import threading
-
         name, payload = _named(_good(tmp_path / "a.tar.bz2"))
 
         real_extract = settings_api.extract_backup
@@ -1496,45 +1587,7 @@ class TestCoordinatedMaintenance:
         assert first_result == [200]
 
 
-# ---------------------------------------------------------------------------
 # Hardening of the manifest-based restore: versions, hostile databases, real v1 history
-# ---------------------------------------------------------------------------
-
-FIXTURES = Path(__file__).parent / "fixtures"
-
-_V1_ROWS = """
-INSERT INTO users(id, username, password_hash, is_admin, created_at) VALUES (3, 'alice', 'x', 1, '2026-01-01 00:00:00');
-INSERT INTO groups(id, name, created_at, updated_at) VALUES (5, 'Prod', '2026-01-01 00:00:00', '2026-01-01 00:00:00');
-INSERT INTO targets(id, name, group_id, interval_seconds, retention_days, enable_ping, enable_http_check,
-    enable_cert_expiration, created_at, updated_at)
-VALUES (7, 'web', 5, 60, 365, 1, 0, 0, '2026-01-01 00:00:00', '2026-01-01 00:00:00');
-INSERT INTO target_status(target_id, overall_status, updated_at) VALUES (7, 'down', '2026-01-02 00:00:00');
-INSERT INTO alerts(id, target_id, target_name, failed_service, status, started_at, created_at, updated_at)
-VALUES ('a-1', 7, 'web', 'PING', 'open', '2026-01-02 00:00:00', '2026-01-02 00:00:00', '2026-01-02 00:00:00');
-INSERT INTO recipients(id, name, email, created_at, updated_at)
-VALUES (9, 'ops', 'ops@example.com', '2026-01-01 00:00:00', '2026-01-01 00:00:00');
-INSERT INTO target_recipients(target_id, recipient_id) VALUES (7, 9);
-INSERT INTO notification_queue(notification_type, channel_type, recipient_id, recipient_name, recipient_address,
-    payload, retry_count, next_retry_at, created_at, updated_at, target_id)
-VALUES ('alert', 'email', 9, 'ops', 'ops@example.com', '{}', 3, '2026-01-02 00:00:00', '2026-01-02 00:00:00',
-    '2026-01-02 00:00:00', 7);
-INSERT INTO settings(key, value, updated_at) VALUES ('keep_me', '"yes"', '2026-01-01 00:00:00');
-"""
-
-
-def _v1_db_bytes() -> bytes:
-    """A schema-1 database built from the DDL of the v1.0.0 release (tests/fixtures/schema_v1.sql) plus history."""
-    with TemporaryDirectory() as tmp:
-        db = Path(tmp) / "justup.db"
-        raw = sqlite3.connect(db)
-        try:
-            raw.executescript((FIXTURES / "schema_v1.sql").read_text(encoding="utf-8"))
-            raw.executescript(_V1_ROWS)
-            raw.execute("PRAGMA user_version = 1")
-            raw.commit()
-        finally:
-            raw.close()
-        return db.read_bytes()
 
 
 def _app_db_with(*statements: str) -> bytes:
@@ -1555,15 +1608,7 @@ def _app_db_with(*statements: str) -> bytes:
 
 def _archive(path: Path, db: bytes, *, app_version: str | None = None, extra=()) -> Path:
     """A signed-style archive whose manifest describes ``db`` exactly (what the export would write)."""
-    entries = [
-        ("data", None),
-        ("data/sqlite", None),
-        ("data/sqlite/justup.db", db),
-        ("data/tsdb", None),
-        ("data/backup-manifest.json", _manifest_bytes(db, app_version=app_version)),
-        *extra,
-    ]
-    return _tar(path, entries)
+    return _tar(path, _entries(db, _manifest_bytes(db, app_version=app_version), extra))
 
 
 def _assert_rejected(env, archive: Path, fragment: str, status: int = 400) -> None:
@@ -1645,6 +1690,18 @@ class TestHostileBackupContent:
         view = _app_db_with("CREATE VIEW sneaky AS SELECT * FROM users")
         _assert_rejected(env, _archive(tmp_path / "v.tar.bz2", view), "triggers or views")
 
+    def test_the_schema_own_triggers_are_accepted_but_not_a_modified_copy_of_them(self, env, tmp_path: Path):
+        assert set(sqlite_db.expected_triggers()) == {
+            "trg_users_create_recipient",
+            "trg_recipients_guard_delete",
+            "trg_recipients_user_id_immutable",
+        }
+        tampered = _app_db_with(
+            "DROP TRIGGER trg_users_create_recipient",
+            "CREATE TRIGGER trg_users_create_recipient AFTER INSERT ON users BEGIN DELETE FROM settings; END",
+        )
+        _assert_rejected(env, _archive(tmp_path / "t.tar.bz2", tampered), "triggers or views")
+
     def test_foreign_key_violations_are_rejected_before_the_swap(self, env, tmp_path: Path):
         dangling = _app_db_with(
             "INSERT INTO alerts(id, target_id, target_name, failed_service, started_at, created_at, updated_at)"
@@ -1664,7 +1721,11 @@ class TestHostileBackupContent:
             return closed
 
         monkeypatch.setattr(sqlite_db, "close_connection", close_and_leave_wal)
-        _assert_rejected(env, _archive(tmp_path / "a.tar.bz2", _db_bytes(2)), "existing data was not changed")
+        _assert_rejected(
+            env,
+            _archive(tmp_path / "a.tar.bz2", _db_bytes(sqlite_db.LEGACY_SCHEMA_VERSION)),
+            "existing data was not changed",
+        )
 
     def test_unexpected_exception_while_opening_the_staged_database_rejects_the_backup(
         self, env, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1689,65 +1750,86 @@ class TestRestoreAfterRestore:
         assert again.headers["retry-after"] == "30"
 
 
-class TestRealSchemaOneBackup:
-    """A schema-1 database built from the DDL of the v1.0.0 release, with history."""
+class TestFormerCurrentSchemaBackup:
+    """A version-10 backup keeps its data when restamped to the new version-1 baseline."""
 
     def _restore(self, env, tmp_path: Path):
-        name, payload = _named(
-            _archive(
-                tmp_path / "v1.tar.bz2",
-                _v1_db_bytes(),
-                app_version="1.0.0",
-                extra=(("data/tsdb/7/ping.jsonl", b'{"t": 1, "v": 12.5}\n'),),
-            )
+        archive = _archive(
+            tmp_path / "v10.tar.bz2",
+            _db_bytes(sqlite_db.LEGACY_SCHEMA_VERSION, legacy_target=True, legacy_delay=9),
+            extra=(("data/tsdb/1/ping.jsonl", b'{"t": 1, "v": 12.5}\n'),),
         )
-        resp = _post(env, name, payload)
-        assert resp.status_code == 200, resp.text
+        name, payload = _named(archive)
+        response = _post(env, name, payload)
+        assert response.status_code == 200, response.text
         sqlite_db.end_quiesce()
-        return resp
+        return response
 
-    def test_history_survives_the_migration_that_runs_before_the_swap(self, env, tmp_path: Path):
-        resp = self._restore(env, tmp_path)
-        assert f"migrated from 1 to {sqlite_db.SCHEMA_VERSION}" in resp.json()["message"]
-        assert resp.json()["migrated"] is True
-        assert resp.json()["backup_schema_version"] == 1
-        assert (env[2] / "tsdb" / "7" / "ping.jsonl").read_bytes() == b'{"t": 1, "v": 12.5}\n'
-        conn = sqlite3.connect(env[2] / "sqlite" / "justup.db")  # no application start happened yet
+    def test_data_survives_restamp_before_swap(self, env, tmp_path: Path):
+        response = self._restore(env, tmp_path)
+        assert (
+            f"reset from {sqlite_db.LEGACY_SCHEMA_VERSION} to {sqlite_db.SCHEMA_VERSION}" in response.json()["message"]
+        )
+        assert response.json()["migrated"] is True
+        assert response.json()["backup_schema_version"] == sqlite_db.LEGACY_SCHEMA_VERSION
+        assert (env[2] / "tsdb" / "1" / "ping.jsonl").read_bytes() == b'{"t": 1, "v": 12.5}\n'
+        conn = sqlite3.connect(env[2] / "sqlite" / "justup.db")
         try:
             assert conn.execute("PRAGMA user_version").fetchone()[0] == sqlite_db.SCHEMA_VERSION
             assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
             assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
-            assert conn.execute("SELECT id, name, group_id FROM targets").fetchall() == [(7, "web", 5)]
-            assert conn.execute("SELECT id, username FROM users").fetchall() == [(3, "alice")]
-            assert conn.execute("SELECT target_id, recipient_id FROM target_recipients").fetchall() == [(7, 9)]
-            assert conn.execute("SELECT limited_attempts, retry_count FROM notification_queue").fetchall() == [(3, 3)]
-            assert conn.execute("SELECT id, active_incident FROM alerts").fetchall() == [("a-1", 1)]
-            assert conn.execute("SELECT alert_id FROM alert_dispatch_outbox").fetchall() == [("a-1",)]
+            assert conn.execute("SELECT id, name FROM targets").fetchall() == [(1, "legacy")]
+            # The former global down alert delay moved into the target and its setting is gone.
+            assert conn.execute("SELECT down_alert_delay_minutes FROM targets").fetchall() == [(9,)]
+            assert conn.execute("SELECT 1 FROM settings WHERE key='metrics_timeout_minutes'").fetchone() is None
+            assert conn.execute(
+                "SELECT r.name, r.is_enabled, r.phone, r.email FROM recipients r JOIN users u ON u.id = r.user_id"
+            ).fetchall() == [("old-user", 0, None, None)]
+            assert conn.execute("SELECT value FROM settings WHERE key='migration-marker'").fetchone()[0] == "preserved"
         finally:
             conn.close()
-        assert not list((env[2] / "sqlite").glob("*-shm"))
 
-    def test_start_after_the_restore_needs_no_further_migration(self, env, tmp_path: Path, monkeypatch):
+    def test_version_1_backup_is_migrated_and_keeps_its_users(self, env, tmp_path: Path):
+        name, payload = _named(_archive(tmp_path / "v1.tar.bz2", _db_bytes(1, legacy_target=True, legacy_delay=3)))
+        response = _post(env, name, payload)
+        assert response.status_code == 200, response.text
+        sqlite_db.end_quiesce()
+        assert f"migrated from 1 to {sqlite_db.SCHEMA_VERSION}" in response.json()["message"]
+        conn = sqlite3.connect(env[2] / "sqlite" / "justup.db")
+        try:
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == sqlite_db.SCHEMA_VERSION
+            assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+            assert conn.execute("SELECT username FROM users").fetchall() == [("old-user",)]
+            assert conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'idx_report_jobs_target'").fetchone()
+            assert conn.execute("SELECT COUNT(*) FROM recipients WHERE user_id IS NOT NULL").fetchone()[0] == 1
+            assert conn.execute("SELECT down_alert_delay_minutes FROM targets").fetchall() == [(3,)]
+            assert conn.execute("SELECT 1 FROM settings WHERE key='metrics_timeout_minutes'").fetchone() is None
+        finally:
+            conn.close()
+
+    def test_backup_without_the_former_global_value_gets_the_default_delay(self, env, tmp_path: Path):
+        name, payload = _named(_archive(tmp_path / "v1.tar.bz2", _db_bytes(1, legacy_target=True)))
+        response = _post(env, name, payload)
+        assert response.status_code == 200, response.text
+        sqlite_db.end_quiesce()
+        conn = sqlite3.connect(env[2] / "sqlite" / "justup.db")
+        try:
+            assert conn.execute("SELECT down_alert_delay_minutes FROM targets").fetchall() == [(5,)]
+        finally:
+            conn.close()
+
+    def test_second_start_does_not_change_restored_data(self, env, tmp_path: Path):
         self._restore(env, tmp_path)
-        applied: list[int] = []
-        monkeypatch.setattr(
-            sqlite_db,
-            "MIGRATIONS",
-            tuple(
-                sqlite_db.Migration(m.version, m.description, lambda _c, v=m.version: applied.append(v))
-                for m in sqlite_db.MIGRATIONS
-            ),
-        )
         conn = sqlite_db.connect(env[2] / "sqlite" / "justup.db")
         try:
             sqlite_db.init_schema(conn)
+            assert sqlite_db.get_schema_version(conn) == sqlite_db.SCHEMA_VERSION
+            assert conn.execute("SELECT name FROM targets").fetchone()[0] == "legacy"
+            assert conn.execute("SELECT COUNT(*) FROM recipients").fetchone()[0] == 1
         finally:
             sqlite_db.close_connection(conn)
-        assert applied == []
 
-    def test_failed_swap_after_a_migration_leaves_the_live_database_untouched(
-        self, env, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
+    def test_failed_swap_leaves_live_database_untouched(self, env, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         live = env[2] / "sqlite" / "justup.db"
         before = live.read_bytes()
 
@@ -1755,9 +1837,99 @@ class TestRealSchemaOneBackup:
             raise backup_mod.RestoreFailedError("restore failed", rolled_back=True)
 
         monkeypatch.setattr(settings_api, "apply_restore", failing_swap)
-        name, payload = _named(_archive(tmp_path / "v1.tar.bz2", _v1_db_bytes(), app_version="1.0.0"))
-        resp = _post(env, name, payload)
-        assert resp.status_code == 500
-        assert "rollback successful" in resp.json()["detail"]
+        archive = _archive(tmp_path / "v10.tar.bz2", _db_bytes(sqlite_db.LEGACY_SCHEMA_VERSION))
+        name, payload = _named(archive)
+        response = _post(env, name, payload)
+        assert response.status_code == 500
+        assert "rollback successful" in response.json()["detail"]
         assert live.read_bytes() == before
         assert not maintenance.is_active()
+
+
+_OCT = {"Content-Type": "application/octet-stream"}
+
+
+class TestRestoreBodyLimit:
+    @pytest.fixture(autouse=True)
+    def _small_limit(self, monkeypatch):
+        from app.middleware import body_limit
+
+        monkeypatch.setattr(body_limit, "MAX_RESTORE_BODY_BYTES", 4096)
+
+    def test_oversized_content_length_rejected_before_auth(self, env):
+        client, _, _ = env
+        resp = client.post("/settings/restore", content=b"x" * 5000, headers=_OCT)
+        assert resp.status_code == 413
+
+    def test_chunked_without_content_length_rejected_early(self, env):
+        client, _, _ = env
+        boundary = "bnd"
+
+        def body():
+            yield f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="a.tar.bz2"\r\n\r\n'.encode()
+            for _ in range(200):
+                yield b"x" * 1024
+
+        resp = client.post(
+            "/settings/restore", content=body(), headers={"Content-Type": f"multipart/form-data; boundary={boundary}"}
+        )
+        assert resp.status_code == 413
+
+    def test_below_limit_reaches_the_endpoint(self, env):
+        client, _, _ = env
+        resp = client.post("/settings/restore", content=b"x" * 1000, headers=_OCT)
+        assert resp.status_code != 413
+
+    def test_other_paths_unaffected(self, env):
+        client, _, _ = env
+        resp = client.post("/csp-report", content=b"x" * 5000)
+        assert resp.status_code != 413
+
+    def test_real_multipart_oversized_single_chunk_one_413(self, env):
+        client, _, _ = env
+        files = {"file": ("a.tar.bz2", b"x" * 9000, "application/octet-stream")}
+        resp = client.post("/settings/restore", files=files)
+        assert resp.status_code == 413
+        assert resp.json() == {"detail": "Request body too large"}
+
+    def test_asgi_abort_sends_exactly_one_413_and_stops_reading(self):
+        import asyncio
+
+        from app.middleware.body_limit import RestoreBodyLimitMiddleware
+
+        reads = 0
+
+        async def app(_scope, receive, send):
+            while True:
+                msg = await receive()
+                if msg["type"] != "http.request":
+                    raise RuntimeError("disconnect")
+                if not msg.get("more_body"):
+                    break
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b"ok"})
+
+        async def run(headers):
+            nonlocal reads
+            reads = 0
+            chunks = [{"type": "http.request", "body": b"x" * 100, "more_body": True} for _ in range(500)]
+
+            async def receive():
+                nonlocal reads
+                reads += 1
+                return chunks.pop(0)
+
+            sent = []
+
+            async def send(m):
+                sent.append(m)
+
+            scope = {"type": "http", "method": "POST", "path": "/settings/restore", "headers": headers}
+            await RestoreBodyLimitMiddleware(app)(scope, receive, send)
+            return sent
+
+        for headers in ([], [(b"content-length", b"50")]):
+            sent = asyncio.run(run(headers))
+            starts = [m for m in sent if m["type"] == "http.response.start"]
+            assert [m["status"] for m in starts] == [413]
+            assert reads < 500

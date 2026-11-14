@@ -166,6 +166,10 @@ test("Enter on a download anchor is not intercepted", () => {
   h.handlers.keydown(event);
   assert.equal(event.prevented, undefined);
 });
+const dismissButton = (id) => {
+  const attrs = new Map();
+  return { dataset: { notificationId: id }, attrs, getAttribute: n => attrs.get(n) ?? null, setAttribute: (n, v) => attrs.set(n, String(v)), removeAttribute: n => attrs.delete(n) };
+};
 const dismissEvent = button => ({
   target: { closest: selector => selector === ".ju-notif-dismiss-button" ? button : null },
   preventDefault() { this.prevented = true; },
@@ -179,11 +183,11 @@ test("the page binds swipe handling to the list container", () => {
 test("delete sends the dismiss request through apiFetch, notifies the bell and reloads", async () => {
   const requests = [];
   const h = harness(async (url, options) => { requests.push([url, options]); return { ok: true }; });
-  const button = { dataset: { notificationId: "42" }, disabled: false };
+  const button = dismissButton("42");
   const event = dismissEvent(button);
   h.handlers.click(event);
   assert.equal(event.prevented, true);
-  assert.equal(button.disabled, true);
+  assert.equal(button.getAttribute("aria-busy"), "true");
   await tick();
   assert.equal(JSON.stringify(requests), JSON.stringify([["/ui/notifications/42/dismiss", { method: "POST" }]]));
   assert.equal(h.events.length, 1);
@@ -191,13 +195,13 @@ test("delete sends the dismiss request through apiFetch, notifies the bell and r
   assert.equal(h.window.reloaded, 1);
 });
 
-test("a failed delete re-enables the button, shows an error and keeps the page", async () => {
+test("a failed delete clears the busy state of the button, shows an error and keeps the page", async () => {
   const toasts = [];
   const h = harness(async () => ({ ok: false, status: 404 }), { justUpToast: { error: m => toasts.push(m) } });
-  const button = { dataset: { notificationId: "5" }, disabled: false };
+  const button = dismissButton("5");
   h.handlers.click(dismissEvent(button));
   await tick();
-  assert.equal(button.disabled, false);
+  assert.equal(button.getAttribute("aria-busy"), null);
   assert.deepEqual(toasts, ["Notification could not be deleted"]);
   assert.equal(h.window.reloaded, undefined);
   assert.equal(h.events.length, 0);
@@ -206,7 +210,7 @@ test("a failed delete re-enables the button, shows an error and keeps the page",
 test("the delete id is URL-encoded", async () => {
   const urls = [];
   const h = harness(async url => { urls.push(url); return { ok: true }; });
-  h.handlers.click(dismissEvent({ dataset: { notificationId: "1/../2" }, disabled: false }));
+  h.handlers.click(dismissEvent(dismissButton("1/../2")));
   await tick();
   assert.deepEqual(urls, ["/ui/notifications/1%2F..%2F2/dismiss"]);
 });

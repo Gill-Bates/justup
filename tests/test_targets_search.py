@@ -68,7 +68,8 @@ def test_page_has_a_labelled_search_field_and_a_polite_status_region() -> None:
     assert field and 'type="search"' in field.group(0) and 'autocomplete="off"' in field.group(0)
     assert re.search(r'<label\b[^>]*for="targets-search"[^>]*>\s*Search targets', page), "placeholder is no label"
     assert re.search(r'id="targets-search-status"[^>]*role="status"|role="status"[^>]*id="targets-search-status"', page)
-    assert 'aria-live="polite"' in page
+    status = re.search(r'<[^>]*id="targets-search-status"[^>]*>', page)
+    assert status and 'aria-live="polite"' in status.group(0), "the status tag itself is the polite live region"
     # The field and the query live outside the swapped fragment, so polling cannot drop them.
     assert page.index('id="targets-search"') < page.index('id="targets-table"')
     assert 'name="all"' in page and "#targets-scope-state" in page
@@ -85,7 +86,7 @@ def test_fragment_pages_by_default_and_lists_every_target_for_the_search(client)
     assert 'data-total-pages="1"' in everything.text and 'data-scope="all"' in everything.text
     # Leaving the search returns to the page the user was on.
     assert re.search(r'id="targets-page-state"[^>]*value="2"', everything.text)
-    assert "T054" in "".join(_rows(everything.text))
+    assert f"T{UI_PAGE_SIZE_TARGETS + EXTRA - 1:03d}" in "".join(_rows(everything.text))  # a row from page 2
 
 
 def test_search_data_lists_name_host_and_group_but_no_unrelated_defaults(client) -> None:
@@ -94,3 +95,10 @@ def test_search_data_lists_name_host_and_group_but_no_unrelated_defaults(client)
     assert "host-000.example.org" in first and "Ungrouped" in first
     # tcp_ports defaults to 80 even when TCP is off; it must not become a searchable port.
     assert " 80" not in first
+
+
+def test_rows_carry_the_target_id_the_live_update_matches_on(client) -> None:
+    html = client.get("/ui/fragments/targets-table?all=1").text
+    ids = re.findall(r'<tr data-search="[^"]*" data-target-id="(\d+)"', html)
+    assert len(ids) == len(_rows(html)) > 0
+    assert len(set(ids)) == len(ids)

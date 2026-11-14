@@ -29,7 +29,6 @@ Scope:
 from __future__ import annotations
 
 import logging
-import re
 import sqlite3
 import time
 from collections.abc import Callable
@@ -61,9 +60,7 @@ class Location(TypedDict, total=False):
     hostname: str
 
 
-# ---------------------------------------------------------------------------
 # Rate-limited logging for lookup misses (prevent log spam)
-# ---------------------------------------------------------------------------
 
 _MISS_LOG_INTERVAL_SECONDS = 60
 _MISS_SAMPLE_RATE = 100
@@ -73,9 +70,8 @@ _lookup_miss_last_log: float = 0.0
 
 
 def _log_lookup_miss_sampled(tokens: list[str], hostname: str) -> None:
-    # NOTE: counters are intentionally racy; duplicate logs are acceptable
-    # and cheaper than synchronization in hot paths.
     """Log a lookup miss with rate limiting (sampling-based)."""
+    # Counters are intentionally racy: an occasional duplicate log is cheaper than a lock in this hot path.
     global _lookup_miss_count, _lookup_miss_last_log
 
     _lookup_miss_count += 1
@@ -96,16 +92,12 @@ def _log_lookup_miss_sampled(tokens: list[str], hostname: str) -> None:
         _lookup_miss_last_log = now
 
 
-# ---------------------------------------------------------------------------
 # Connection factory (set by app on startup)
-# ---------------------------------------------------------------------------
 
 _pop_get_conn: Callable[[], sqlite3.Connection] | None = None
 
 
 def set_pop_db_connection_factory(factory) -> None:
-    # NOTE: This setter is expected to be called during single-threaded startup.
-    # Subsequent lookups assume the factory reference is stable.
     """
     Set the database connection factory for SQL-based POP lookups.
 
@@ -120,6 +112,7 @@ def set_pop_db_connection_factory(factory) -> None:
     Raises:
         RuntimeError: If factory is None or doesn't return a connection
     """
+    # Called during single-threaded startup; later lookups assume the factory reference is stable.
     global _pop_get_conn
 
     if factory is None:
@@ -139,6 +132,11 @@ def set_pop_db_connection_factory(factory) -> None:
     _log.debug("POP codes: SQL lookup enabled (factory validated)")
 
 
+def open_pop_connection() -> sqlite3.Connection | None:
+    """A new connection from the factory, or None while no database is wired. The caller closes it."""
+    return _pop_get_conn() if _pop_get_conn is not None else None
+
+
 def _get_pop_conn():
     """Get a new connection from the factory."""
     if _pop_get_conn is None:
@@ -156,7 +154,7 @@ def observe_unknown_pop(
 
     parser = parse_provider_hostname(hostname)
     codes = [parser.pop_code] if parser else extract_pop_tokens(hostname)
-    code = next((c for c in codes if re.fullmatch(r"[a-z][a-z0-9]{1,4}", c)), None)
+    code = next((c for c in codes if pop_candidates.CANDIDATE_CODE_RE.fullmatch(c)), None)
     if not code:
         return
     conn = _get_pop_conn()
@@ -172,22 +170,23 @@ def observe_unknown_pop(
                 **proposal,
                 "canonical_guess": city_code_for_country(proposal.get("city"), proposal.get("country")),
             }
-        pop_candidates.observe(
-            conn,
-            code=code,
-            hostname=hostname,
-            public_ip=ip,
-            provider=parser.provider if parser else "generic",
-            measurement_key=measurement_key,
-            proposal=proposal,
-        )
+        try:
+            pop_candidates.observe(
+                conn,
+                code=code,
+                hostname=hostname,
+                public_ip=ip,
+                provider=parser.provider if parser else "generic",
+                measurement_key=measurement_key,
+                proposal=proposal,
+            )
+        except sqlite3.OperationalError as exc:  # writer lock held elsewhere: skip, the next hop retries
+            _log.debug("PoP candidate observation skipped: %s", exc)
     finally:
         sqlite_db.close_connection(conn)
 
 
-# ---------------------------------------------------------------------------
 # Main lookup function
-# ---------------------------------------------------------------------------
 
 
 def lookup_pop_code(hostname: str, conn: sqlite3.Connection | None = None) -> Location | None:
@@ -213,7 +212,7 @@ def lookup_pop_code(hostname: str, conn: sqlite3.Connection | None = None) -> Lo
 
     h = hostname.lower()
 
-    # ── Strategy 0: Provider-specific parser (highest confidence) ──
+    # Strategy 0: Provider-specific parser (highest confidence)
     from .pop_codes_providers import clli_city, parse_provider_hostname
 
     provider_result = parse_provider_hostname(h)
@@ -223,7 +222,11 @@ def lookup_pop_code(hostname: str, conn: sqlite3.Connection | None = None) -> Lo
         db = _get_pop_conn() if owns_db else conn
         try:
             if db:
-                loc = lookup_pop_by_tokens(db, [provider_result.pop_code])
+                try:
+                    loc = lookup_pop_by_tokens(db, [provider_result.pop_code])
+                except sqlite3.OperationalError as exc:  # busy DB degrades to the embedded fallback
+                    _log.debug("POP provider lookup DB error: %s", exc)
+                    loc = None
                 if loc:
                     return {
                         "city": loc["city"],
@@ -259,7 +262,7 @@ def lookup_pop_code(hostname: str, conn: sqlite3.Connection | None = None) -> Lo
             if owns_db and db is not None:
                 sqlite_db.close_connection(db)
 
-    # ── Generic token extraction for DB lookup ──
+    # Generic token extraction for DB lookup
     tokens = extract_pop_tokens(h)  # longest first, deterministic
 
     if not tokens:

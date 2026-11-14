@@ -74,7 +74,7 @@ CHILD = textwrap.dedent(
 class DummySmtp:
     def __init__(self, port: int) -> None:
         self.messages: list[str] = []
-        self.times: list[float] = []
+        self.starts: list[float] = []  # connection-accept time of each delivered message
         self._sock = socket.create_server(("127.0.0.1", port))
         self._sock.settimeout(0.2)
         self._stop = threading.Event()
@@ -90,6 +90,7 @@ class DummySmtp:
             threading.Thread(target=self._session, args=(client,), daemon=True).start()
 
     def _session(self, client: socket.socket) -> None:
+        started = time.monotonic()
         with client, client.makefile("rwb") as io:
             io.write(b"220 dummy\r\n")
             io.flush()
@@ -99,7 +100,7 @@ class DummySmtp:
                 if in_data:
                     if raw == b".\r\n":
                         self.messages.append(b"".join(data).decode())
-                        self.times.append(time.monotonic())
+                        self.starts.append(started)
                         in_data = False
                         io.write(b"250 queued\r\n")
                     else:
@@ -176,8 +177,10 @@ def test_killed_process_is_replaced_and_every_mail_arrives_exactly_once(tmp_path
     ids = [re.search(r"^Message-ID: <(.+?)>", m, re.MULTILINE | re.IGNORECASE).group(1) for m in server.messages]
     assert len(ids) == 3
     assert len(set(ids)) == 3  # no duplicate delivery after the restart
-    gaps = [b - a for a, b in zip(server.times, server.times[1:], strict=False)]
-    assert min(gaps) >= 0.25  # the shortened pacing gap holds between sends
+    # The spooler paces start-to-start (the attempt start is persisted before the send), so measure the
+    # gap between connection accepts, not between finished DATA, which also contains each send's duration.
+    gaps = [b - a for a, b in zip(server.starts, server.starts[1:], strict=False)]
+    assert min(gaps) >= 0.3 - 0.1  # configured min_interval_seconds=0.3 minus connect-latency jitter
 
     rows = sqlite3.connect(db).execute("SELECT status, retry_count FROM notification_queue").fetchall()
     assert [r[0] for r in rows] == ["sent"] * 3

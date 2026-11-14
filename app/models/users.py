@@ -15,9 +15,15 @@ import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
 from app.utils.crypto import get_primary_key
+
+from .recipients import _E164_PATTERN
+
+# Single source for the password length limits; templates render them as minlength/maxlength.
+PASSWORD_MIN_LENGTH = 8
+PASSWORD_MAX_LENGTH = 256
 
 
 def normalize_username(v: str) -> str:
@@ -32,13 +38,49 @@ def _normalize_nonblank_username(v: str) -> str:
     return out
 
 
+class UserRecipientConfig(BaseModel):
+    """Notification channels of a user's recipient, saved together with the user.
+
+    ``None`` switches a channel off. A recipient without channel is stored disabled.
+    """
+
+    phone: str | None = Field(default=None, max_length=32, pattern=_E164_PATTERN, description="Signal number (E.164)")
+    email: EmailStr | None = Field(default=None, description="Email address")
+    is_enabled: bool | None = Field(
+        default=None, description="Unset: enabled when a channel exists. True without a channel is rejected."
+    )
+    enable_for_all_targets: bool = False
+
+    @field_validator("phone", "email", mode="before")
+    @classmethod
+    def _blank_is_off(cls, v):
+        return None if isinstance(v, str) and not v.strip() else v
+
+    @model_validator(mode="after")
+    def _enabled_needs_a_channel(self):
+        if self.is_enabled and not (self.phone or self.email):
+            raise ValueError("A recipient without phone number and email address cannot be enabled")
+        return self
+
+
+class UserRecipientPublic(BaseModel):
+    """The recipient bound to a user, as shown in the user list."""
+
+    id: int
+    phone: str | None = None
+    email: str | None = None
+    is_enabled: bool = False
+    enable_for_all_targets: bool = False
+
+
 class UserCreate(BaseModel):
     """Request model for creating a user."""
 
     username: str = Field(min_length=1, max_length=64)
-    password: str = Field(min_length=8, max_length=256)
+    password: str = Field(min_length=PASSWORD_MIN_LENGTH, max_length=PASSWORD_MAX_LENGTH)
     is_admin: bool = False
     can_close_alerts: bool = False
+    recipient: UserRecipientConfig | None = None
 
     @field_validator("username", mode="after")
     @classmethod
@@ -58,6 +100,7 @@ class UserPublic(BaseModel):
     created_at: datetime
     last_login_at: datetime | None = None
     last_login_ip: str | None = None
+    recipient: UserRecipientPublic | None = None
 
 
 class UserUpdate(BaseModel):
@@ -70,7 +113,9 @@ class UserUpdate(BaseModel):
     username: str = Field(min_length=1, max_length=64)
     is_admin: bool = False
     can_close_alerts: bool = False
-    new_password: str | None = Field(default=None, min_length=8, max_length=256)
+    new_password: str | None = Field(default=None, min_length=PASSWORD_MIN_LENGTH, max_length=PASSWORD_MAX_LENGTH)
+    # Omitted: the recipient stays as it is. Present: saved in the same transaction as the user.
+    recipient: UserRecipientConfig | None = None
 
     @field_validator("username", mode="after")
     @classmethod
@@ -81,8 +126,9 @@ class UserUpdate(BaseModel):
 class LoginRequest(BaseModel):
     """Request body for user login."""
 
-    username: str
-    password: str
+    # Same caps as UserCreate; no minimum, so legacy short credentials still log in.
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=1, max_length=PASSWORD_MAX_LENGTH)
     # Honeypot: hidden in the login form; humans never fill it (see api/users.py).
     website: str = Field(default="", max_length=1024, repr=False)
 
@@ -95,8 +141,8 @@ class LoginRequest(BaseModel):
 class PasswordChangeRequest(BaseModel):
     """Request body for changing a user's password."""
 
-    current_password: str = Field(min_length=8, max_length=256)
-    new_password: str = Field(min_length=8, max_length=256)
+    current_password: str = Field(min_length=PASSWORD_MIN_LENGTH, max_length=PASSWORD_MAX_LENGTH)
+    new_password: str = Field(min_length=PASSWORD_MIN_LENGTH, max_length=PASSWORD_MAX_LENGTH)
 
 
 class RequiredPasswordChangeRequest(BaseModel):
@@ -106,7 +152,7 @@ class RequiredPasswordChangeRequest(BaseModel):
     not re-entered; only the new password is required.
     """
 
-    new_password: str = Field(min_length=8, max_length=256)
+    new_password: str = Field(min_length=PASSWORD_MIN_LENGTH, max_length=PASSWORD_MAX_LENGTH)
 
 
 class TokenResponse(BaseModel):
@@ -235,17 +281,3 @@ def hash_token(token: str) -> str:
             Hex-encoded HMAC-SHA256 hash
     """
     return hmac.new(get_primary_key(), token.encode("utf-8"), hashlib.sha256).hexdigest()
-
-
-def token_expired(expires_at: datetime) -> bool:
-    """Return True if the token expiry timestamp is in the past.
-
-    Args:
-            expires_at: Token expiration timestamp (timezone-aware)
-
-    Returns:
-            True if token has expired, False otherwise
-    """
-    if expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=UTC)
-    return datetime.now(tz=UTC) >= expires_at

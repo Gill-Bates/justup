@@ -11,7 +11,7 @@ import sqlite3
 from typing import Any
 
 from ..db import sqlite as sqlite_db
-from .formatters import format_percent
+from .formatters import format_availability
 from .uptime_metric import uptime_level
 
 CERT_CRITICAL_DAYS = 3
@@ -41,6 +41,7 @@ def get_status_defaults() -> dict[str, Any]:
     """
     return {
         "ping_status": "unknown",
+        "ping_checked_at": None,
         "http_status": "unknown",
         "http_response_code": None,
         "tcp_status": "unknown",
@@ -81,26 +82,21 @@ def build_target_status(row: sqlite3.Row, cached: sqlite3.Row | None) -> dict[st
     Returns:
             A status dict suitable for templates and API responses.
     """
-    uptime_percent = None
-    if cached and _has_col(cached, "uptime_percent") and cached["uptime_percent"] is not None:
-        uptime_percent = cached["uptime_percent"]
-
-    uptime_percent_30d = None
-    if cached and _has_col(cached, "uptime_percent_30d") and cached["uptime_percent_30d"] is not None:
-        uptime_percent_30d = cached["uptime_percent_30d"]
+    uptime_percent = _col(cached, "uptime_percent") if cached else None
+    uptime_percent_30d = _col(cached, "uptime_percent_30d") if cached else None
 
     # One classification for list, KPI cards and the lazy uptime fragment.
     sla = {"sla_enabled": bool(_col(row, "sla_enabled")), "sla_availability_pct": _col(row, "sla_availability_pct")}
     result = get_status_defaults()
     result |= {
         "uptime_percent": uptime_percent,
-        "uptime_percent_display": format_percent(uptime_percent),
+        "uptime_percent_display": format_availability(uptime_percent),
         "uptime_percent_30d": uptime_percent_30d,
-        "uptime_percent_30d_display": format_percent(uptime_percent_30d),
+        "uptime_percent_30d_display": format_availability(uptime_percent_30d),
         "uptime_level": uptime_level(uptime_percent, **sla),
         "uptime_level_30d": uptime_level(uptime_percent_30d, **sla),
-        "last_downtime": cached["last_down_at"] if cached and _has_col(cached, "last_down_at") else None,
-        "last_check": cached["updated_at"] if cached and _has_col(cached, "updated_at") else None,
+        "last_downtime": _col(cached, "last_down_at") if cached else None,
+        "last_check": _col(cached, "updated_at") if cached else None,
     }
 
     if not bool(row["is_enabled"]):
@@ -109,11 +105,10 @@ def build_target_status(row: sqlite3.Row, cached: sqlite3.Row | None) -> dict[st
     if not cached:
         return result
 
-    if cached["overall_status"] == "unknown":
-        return result
-
+    # An UNKNOWN overall status (for example an unconfirmed UDP port) must not hide the checks that were measured.
     if bool(row["enable_ping"]) and cached["ping_up"] is not None:
         result["ping_status"] = "up" if cached["ping_up"] == 1 else "down"
+        result["ping_checked_at"] = _col(cached, "ping_checked_at")
 
     if bool(row["enable_http_check"]) and cached["http_up"] is not None:
         result["http_status"] = "up" if cached["http_up"] == 1 else "down"

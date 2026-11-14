@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Final
 
 from ...utils.phone import mask_phone as _mask_phone
+from .delivery_policy import IDENTITY_FAILURE_CODE
 from .signal_backend import SignalBackend
 from .signal_errors import (
     SignalNotInstalled,
@@ -183,12 +184,12 @@ def _finish_pipe_drain(proc: subprocess.Popen, threads: list[threading.Thread]) 
                 stream.close()
 
 
-class SignalCliBackend(SignalBackend):
-    """Signal backend using local signal-cli subprocess.
+# signal-cli wording that means the number already has an account; classified once here, not in the UI.
+_ALREADY_REGISTERED_MARKERS = ("already registered", "existing account", "already linked")
 
-    Status is always fetched fresh from signal-cli - no caching.
-    This ensures the UI always shows the real current state.
-    """
+
+class SignalCliBackend(SignalBackend):
+    """Signal backend using local signal-cli subprocess."""
 
     def __init__(
         self,
@@ -208,6 +209,12 @@ class SignalCliBackend(SignalBackend):
         # Lock for operations that modify signal-cli state (link, unregister)
         # Prevents race conditions when multiple requests hit the same backend
         self._state_lock = threading.Lock()
+
+        self._status_condition = threading.Condition()
+        self._status_value: SignalStatus | None = None
+        self._status_expires_at = 0.0
+        self._status_generation = 0
+        self._status_fetching = False
 
         # Rate limiting: track last send time per sender to prevent overwhelming signal-cli
         # Using dict allows multiple sender accounts without blocking each other
@@ -284,13 +291,13 @@ class SignalCliBackend(SignalBackend):
         Args:
             args: Command arguments (without signal-cli binary)
             timeout: Timeout in seconds
-            check: If True, raise on non-zero exit code
+            check: If True, log a warning on non-zero exit code; never raises, callers inspect returncode
 
         Returns:
             CompletedProcess with stdout/stderr
 
         Raises:
-            SignalUnavailable: if binary not found
+            SignalNotInstalled: if the binary is missing or cannot be started
             SignalTimeout: if command times out
         """
         resolved = self._resolve_cli()
@@ -378,90 +385,61 @@ class SignalCliBackend(SignalBackend):
         if code == -5 and operation in {"registration", "verification"}:
             raise SignalRateLimited(f"Signal {operation} rate limited", retry_after_seconds=retry_seconds)
         message = error.get("message")
-        if operation == "registration" and (code == -6 or (isinstance(message, str) and "captcha" in message.lower())):
-            raise SignalSendFailed("Captcha required")
+        lowered = message.lower() if isinstance(message, str) else ""
+        if operation == "registration" and (code == -6 or "captcha" in lowered):
+            raise SignalSendFailed("Captcha required", code="captcha_required")
+        if operation == "registration" and any(marker in lowered for marker in _ALREADY_REGISTERED_MARKERS):
+            raise SignalSendFailed("Number already registered", code="already_registered")
         raise SignalSendFailed(f"Signal {operation} failed")
 
-    def _run_signal_cli_binary(
-        self,
-        args: list[str],
-        timeout: int = DEFAULT_TIMEOUT,
-        check: bool = False,
-    ) -> bytes:
-        """Run signal-cli and return raw binary output (for images).
-
-        Args:
-            args: Command arguments
-            timeout: Timeout in seconds
-            check: If True, raise SignalSendFailed on non-zero exit code
-
-        Returns:
-            Raw stdout bytes
-
-        Raises:
-            SignalUnavailable: if binary not found
-            SignalTimeout: if command times out
-            SignalSendFailed: if check=True and exit code != 0
-        """
-        resolved = self._resolve_cli()
-
-        cmd = [
-            resolved,
-            "--config",
-            self._data_dir,
-            *args,
-        ]
-
-        # Ensure UTF-8 environment for proper emoji/unicode handling
-        env = os.environ.copy()
-        env["LC_ALL"] = "C.UTF-8"
-        env["LANG"] = "C.UTF-8"
-
-        try:
-            with _CLI_PROCESS_LOCK:
-                result = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    timeout=timeout,
-                    env=env,
-                    check=False,
-                )
-
-            if check and result.returncode != 0:
-                stderr = result.stderr.decode(errors="replace").strip() if result.stderr else "Unknown error"
-                _log.warning("signal-cli binary command failed (exit %d): %s", result.returncode, stderr[:100])
-                raise SignalSendFailed(f"signal-cli failed: {stderr[:100]}")
-
-            return result.stdout
-
-        except subprocess.TimeoutExpired as e:
-            raise SignalTimeout(f"signal-cli timed out after {timeout}s") from e
-        except (FileNotFoundError, OSError) as e:
-            raise SignalNotInstalled(f"Failed to run signal-cli: {e}") from e
-
     def invalidate_cache(self) -> None:
-        """No-op for API compatibility. Status is always fetched fresh."""
+        """Discard cached status and fence any fetch already in progress."""
+        with self._status_condition:
+            self._status_generation += 1
+            self._status_value = None
+            self._status_expires_at = 0.0
+            self._status_condition.notify_all()
 
-    def status(self, force_refresh: bool = False) -> SignalStatus:  # noqa: ARG002 - SignalBackend interface
-        """Get current Signal status - always fresh from signal-cli.
+    def status(self, force_refresh: bool = False) -> SignalStatus:
+        """Get cached status, sharing an in-flight refresh across callers.
 
         Args:
-            force_refresh: Ignored (kept for API compatibility). Status is always fresh.
-
-        Always queries signal-cli directly to ensure accurate state.
-        No caching - the UI must always show the real current status.
+            force_refresh: Bypass a cached status; a fetch already in progress is
+                shared instead of starting a second one.
         """
-        try:
-            return self._fetch_status_uncached()
-        except (SignalTimeout, SignalUnavailable) as e:
-            _log.warning("Signal status check failed: %s", e)
-            return SignalStatus(
-                reachable=False,
-                registered=False,
-                linked=False,
-                accounts=[],
-                error=str(e),
-            )
+        while True:
+            with self._status_condition:
+                if not force_refresh and self._status_value is not None and time.monotonic() < self._status_expires_at:
+                    return self._status_value
+                if self._status_fetching:
+                    generation = self._status_generation
+                    self._status_condition.wait_for(lambda: not self._status_fetching)
+                    if generation == self._status_generation:
+                        force_refresh = False
+                    continue
+                self._status_fetching = True
+                generation = self._status_generation
+
+            try:
+                result = self._fetch_status_uncached()
+            except (SignalTimeout, SignalUnavailable) as exc:
+                _log.warning("Signal status check failed: %s", exc)
+                result = SignalStatus(reachable=False, registered=False, linked=False, accounts=[], error=str(exc))
+            except BaseException:
+                with self._status_condition:
+                    self._status_fetching = False
+                    self._status_condition.notify_all()
+                raise
+
+            with self._status_condition:
+                self._status_fetching = False
+                if generation == self._status_generation:
+                    self._status_value = result
+                    self._status_expires_at = time.monotonic() + (10 if result.error or not result.reachable else 60)
+                    self._status_condition.notify_all()
+                    return result
+                self._status_condition.notify_all()
+            force_refresh = False
 
     def _fetch_status_uncached(self) -> SignalStatus:
         """Fetch fresh status from signal-cli (no caching).
@@ -512,13 +490,12 @@ class SignalCliBackend(SignalBackend):
         Args:
             recipient: Phone number to send to (E.164 format)
             message: Message text
-            sender: Sender phone number (optional, uses first available account if not valid)
+            sender: Sender phone number (optional; the first local account is used when omitted)
 
         Rate-limited: Enforces minimum interval between sends to prevent
         overwhelming signal-cli with rapid-fire alerts.
 
-        Note: Sender is ALWAYS validated against signal-cli accounts.
-        If the provided sender doesn't exist, uses first available account.
+        Note: A configured sender must be registered in signal-cli (SignalNotRegistered otherwise).
         """
         # CRITICAL: Validate sender against signal-cli (THE authority)
         # Never trust a sender value from DB/payload without validation
@@ -572,7 +549,9 @@ class SignalCliBackend(SignalBackend):
                 if outcome == "UNREGISTERED_FAILURE":
                     raise SignalRecipientInvalid(f"Recipient {_mask_phone(recipient)} is not registered with Signal")
                 if outcome == "IDENTITY_FAILURE":
-                    raise SignalSendFailed("Recipient identity changed; verify it in Signal")
+                    raise SignalSendFailed(
+                        "Recipient identity changed; verify it in Signal", code=IDENTITY_FAILURE_CODE
+                    )
                 if outcome in {"NETWORK_FAILURE", "INVALID_PRE_KEY_FAILURE"}:
                     raise SignalSendFailed("Signal delivery failed; retry later")
                 if outcome not in {None, "SUCCESS"}:
@@ -672,17 +651,30 @@ class SignalCliBackend(SignalBackend):
 
             _log.debug("Starting signal-cli link: %s", " ".join(cmd[:4]) + " ...")
 
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
+            # Hold the CLI lock only while the child starts and prints its URI, not during the scan wait.
+            if not _CLI_PROCESS_LOCK.acquire(timeout=QR_TIMEOUT):
+                _log.warning("signal-cli busy, link not started")
+                self._link_session_id = None
+                return None, None
+            try:
+                try:
+                    proc = subprocess.Popen(
+                        cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                    )
+                except OSError as exc:
+                    _log.warning("Failed to start signal-cli link: %s", exc)
+                    self._link_session_id = None
+                    return None, None
 
-            self._link_process = proc
+                self._link_process = proc
 
-            # Read the first line (the sgnl:// URI) within one overall deadline
-            raw_line = _read_line_until(proc.stdout, QR_TIMEOUT)
+                # Read the first line (the sgnl:// URI) within one overall deadline
+                raw_line = _read_line_until(proc.stdout, QR_TIMEOUT)
+            finally:
+                _CLI_PROCESS_LOCK.release()
 
             if raw_line is None:
                 _log.warning("signal-cli link timed out waiting for URI")
@@ -801,6 +793,7 @@ class SignalCliBackend(SignalBackend):
 
             if returncode == 0:
                 _log.info("Link process completed successfully")
+                self.invalidate_cache()
                 return True
             _log.warning("Link process exited with code %d", returncode)
             return False
@@ -844,6 +837,7 @@ class SignalCliBackend(SignalBackend):
 
             response = self._run_signal_rpc("unregister", {"account": sender_number, "deleteAccount": True})
             self._require_rpc_success(response, "account removal", sender_number)
+            self.invalidate_cache()
 
             if delete_cache:
                 if sender_number in self.list_accounts():
@@ -869,6 +863,7 @@ class SignalCliBackend(SignalBackend):
                 {"account": sender_number, "ignoreRegistered": True},
             )
             self._require_rpc_success(response, "local data removal", sender_number)
+            self.invalidate_cache()
             if sender_number in self.list_accounts():
                 raise SignalSendFailed("Signal account remains after local data removal")
             _log.info("Local Signal data removed for %s", _mask_phone(sender_number))
@@ -967,23 +962,22 @@ class SignalCliBackend(SignalBackend):
             )
             self._require_rpc_success(response, "verification", number)
             _log.info("Signal registration verified for %s", _mask_phone(number))
+            self.invalidate_cache()
 
-    def update_profile(self, name: str, avatar_path: str | None = None) -> None:
+    def update_profile(self, name: str, avatar_path: str | None = None, sender: str | None = None) -> None:
         """Update Signal profile name and avatar.
 
         Args:
             name: Display name shown in Signal chats
             avatar_path: Optional explicit path to avatar image. If None, tries default locations.
+            sender: Configured alert sender (SIGNAL_API_SENDER_NUMBER); falls back to the instance sender.
 
         Thread-safe: Uses lock to prevent concurrent state modifications.
         """
         with self._state_lock:
-            # Get the first registered account
-            accounts = self.list_accounts()
-            if not accounts:
-                raise SignalNotRegistered("No account registered to update profile")
+            # The caller passes the configured alert sender; raises when it is not registered.
+            account = self.get_valid_sender(sender or self._sender)
 
-            account = accounts[0]
             profile = {"account": account, "givenName": name}
 
             if avatar_path is None:

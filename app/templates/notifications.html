@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "fragments/_state_dot.html" import status_dot %}
 {% block title %}Notifications – justUp!{% endblock %}
 
 {% block content %}
@@ -17,16 +18,18 @@
       </div>
    </div>
 
-   <ul class="nav nav-pills ju-notif-tabs ju-scrollbar-accent" aria-label="Notification categories">
-      {% for key, label, icon in tabs %}
-      <li class="nav-item">
-         <a class="nav-link {% if key == category %}active{% endif %}" href="/ui/notifications?category={{ key }}"
-            {% if key == category %}aria-current="page"{% endif %}>
-            <span class="material-icons" aria-hidden="true">{{ icon }}</span>{{ label }}
-         </a>
-      </li>
-      {% endfor %}
-   </ul>
+   <nav aria-label="Notification categories">
+      <ul class="nav nav-pills ju-tabs">
+         {% for key, label, icon in tabs %}
+         <li class="nav-item">
+            <a class="nav-link {% if key == category %}active{% endif %}" href="/ui/notifications?category={{ key }}"
+               {% if key == category %}aria-current="page"{% endif %}>
+               <span class="material-icons" aria-hidden="true">{{ icon }}</span>{{ label }}
+            </a>
+         </li>
+         {% endfor %}
+      </ul>
+   </nav>
 
    {% if category == 'monitoring' %}
    {% include "notifications/_alerts_panel.html" %}
@@ -53,12 +56,12 @@
             {% else %}
             <div class="ju-notif-swipe-content">
             {% endif %}
-               <span class="material-icons ju-notif-icon" aria-hidden="true">{{ {'monitoring':'monitor_heart','reports':'picture_as_pdf','delivery':'forward_to_inbox','security':'shield','activity':'history'}.get(n.category, 'notifications') }}</span>
+               <span class="material-icons ju-notif-icon" aria-hidden="true">{{ category_icons.get(n.category, 'notifications') }}</span>
                <div class="ju-notif-main">
                   <div class="ju-notif-title">
                      {% if not n.is_read %}<span class="ju-unread-dot" aria-hidden="true"></span><span class="visually-hidden">Unread: </span>{% endif %}
                      <span class="ju-notif-title-text" title="{{ n.title }}">{{ n.title }}</span>
-                     {% set tone = 'danger' if n.severity == 'error' else ('warning' if n.severity == 'warning' else ('success' if n.severity == 'success' else 'neutral')) %}<span class="badge ju-notif-status ju-status-badge--{{ tone }}">{{ n.severity }}</span>
+                     {% set tone = 'danger' if n.severity == 'error' else ('warning' if n.severity == 'warning' else ('success' if n.severity == 'success' else 'neutral')) %}{{ status_dot(tone, (n.severity if tone != 'neutral' else 'info')|capitalize, '', 'ju-notif-status') }}
                   </div>
                   <div class="ju-notif-body text-body-secondary">
                      {% set context = n.body or n.actor or '' %}{% if context %}<span class="ju-notif-context" title="{{ context }}">{{ context }}</span>{% endif %}
@@ -107,4 +110,5 @@
 
 {% block scripts %}
 <script src="/static/js/notifications-page.js"></script>
+<script src="/static/js/alerts-panel.js"></script>
 {% endblock %}

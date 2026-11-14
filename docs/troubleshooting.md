@@ -16,13 +16,15 @@ docker logs -f justup
     See [Environment variables](configuration/environment.md).
 
 ??? failure "Entrypoint aborts"
-    The entrypoint exits if `PUID`/`PGID` are not numeric or are `0`, if `gosu`
+    The entrypoint exits if `PUID`/`PGID` are not numeric, are `0` or equal the reserved Nmap worker id
+    `10001`, if `gosu`
     is missing, or if `/app/data` is not writable by that user.
 
 ## Wrong client IP in rate limits or audit log
 
 ??? question "The proxy IP appears instead of the client IP"
-    Set `UPMON_TRUSTED_PROXIES` to the proxy address as the container sees it.
+    Set `UPMON_TRUSTED_PROXIES` (Compose passes it on as `TRUSTED_PROXIES`) to the proxy
+    address as the container sees it.
     See [Reverse proxy](configuration/reverse-proxy.md).
 
 ## Sign-in fails
@@ -55,8 +57,15 @@ docker logs -f justup
 ## Ping or traceroute does not work
 
 ??? failure "Missing capability"
-    `ping` and `mtr` need `cap_net_raw`. Keep `NET_RAW` in the container's
+    `ping` and the Nmap-based traceroute need `cap_net_raw`. Keep `NET_RAW` in the container's
     capabilities. See [Docker](getting-started/docker.md).
+
+## Port scan or UDP check does not work
+
+??? failure "Nmap worker unavailable or permission_denied"
+    The scan worker is down, or `NET_RAW` is missing. UDP results that are not clear stay
+    `unknown` and are never downtime. See
+    [Network monitoring with Nmap](features/network-monitoring.md#troubleshooting).
 
 ## Status does not update live
 
@@ -75,6 +84,12 @@ docker logs -f justup
 ??? info "GeoLite2 database missing"
     Traceroute still works, but hops without another location source stay off the
     map. See [Traceroute & maps](features/traceroute.md).
+
+??? info "ASN missing in the Public outbound IPs card"
+    The ASN comes from `geoip/GeoLite2-ASN.mmdb`. An existing installation gets the
+    file at the next start (restart the server so the new code loads); check
+    "GeoIP ASN (DB)" on the About page. Without the file, the ASN appears only with
+    Enhanced Accuracy and Provider Lookup on.
 
 ## A background service keeps crashing
 

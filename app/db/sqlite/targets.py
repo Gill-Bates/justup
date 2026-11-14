@@ -12,6 +12,7 @@ import sqlite3
 from contextlib import nullcontext
 from typing import Any
 
+from ...utils.constants import DEFAULT_TARGET_DOWN_ALERT_DELAY_MINUTES
 from ...utils.time import utcnow
 from .connection import transaction
 
@@ -31,18 +32,16 @@ def set_target_alert_users(conn: sqlite3.Connection, target_id: int, user_ids: l
 
 def get_target_alert_users(conn: sqlite3.Connection, target_id: int) -> list[sqlite3.Row]:
     """Get all users that should receive alerts for a target."""
-    return list(
-        conn.execute(
-            """
+    return conn.execute(
+        """
             SELECT u.*
             FROM users u
             JOIN target_alert_users tau ON tau.user_id = u.id
             WHERE tau.target_id = ?
             ORDER BY u.username
             """,
-            (target_id,),
-        ).fetchall()
-    )
+        (target_id,),
+    ).fetchall()
 
 
 # Target rows carry the group name from the groups table as "group" (the public API field).
@@ -67,8 +66,7 @@ def _resolve_group_id(conn: sqlite3.Connection, name: str | None) -> int | None:
 
 def list_targets(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     """List targets ordered by group/name/id."""
-    rows = conn.execute(f"{_TARGET_SELECT} ORDER BY g.name, t.name, t.id").fetchall()
-    return list(rows)
+    return conn.execute(f"{_TARGET_SELECT} ORDER BY g.name, t.name, t.id").fetchall()
 
 
 def list_targets_paginated(
@@ -89,7 +87,7 @@ def list_targets_paginated(
         (page_size, offset),
     ).fetchall()
 
-    return list(rows), total
+    return rows, total
 
 
 def get_target(conn: sqlite3.Connection, target_id: int) -> sqlite3.Row | None:
@@ -144,9 +142,10 @@ def create_target(conn: sqlite3.Connection, values: dict[str, Any], *, manage_tr
                     host, ping_host, http_url, http_username, http_password, http_prefer_head, http_basic_auth_enabled,
                     http_success_codes, http_port,
                     cert_host, cert_port, ignore_cert_errors, tcp_host, tcp_ports,
-                    max_retries, ping_timeout_minutes,
+                    max_retries, down_alert_delay_minutes, ping_timeout_minutes,
                     auto_close_alert,
                     sla_enabled, sla_availability_pct, sla_response_time_ms, sla_ping_latency_ms,
+                    enable_udp_scan, udp_ports,
                     identity_signature, created_at, updated_at
                 ) VALUES(
                     ?, ?, ?,
@@ -155,9 +154,10 @@ def create_target(conn: sqlite3.Connection, values: dict[str, Any], *, manage_tr
                     ?, ?, ?, ?, ?, ?, ?,
                     ?, ?,
                     ?, ?, ?, ?, ?,
-                    ?, ?,
+                    ?, ?, ?,
                     ?,
                     ?, ?, ?, ?,
+                    ?, ?,
                     ?, ?, ?
                 )
                 """,
@@ -186,12 +186,15 @@ def create_target(conn: sqlite3.Connection, values: dict[str, Any], *, manage_tr
                 values.get("tcp_host"),
                 str(values.get("tcp_ports") or "80"),
                 int(values.get("max_retries", 5)),
+                int(values.get("down_alert_delay_minutes", DEFAULT_TARGET_DOWN_ALERT_DELAY_MINUTES)),
                 int(values.get("ping_timeout_minutes", 5)),
                 1 if values.get("auto_close_alert", True) else 0,
                 1 if values.get("sla_enabled", False) else 0,
                 values.get("sla_availability_pct"),
                 values.get("sla_response_time_ms"),
                 values.get("sla_ping_latency_ms"),
+                1 if values.get("enable_udp_scan", False) else 0,
+                str(values.get("udp_ports") or ""),
                 identity_signature(values),
                 now,
                 now,
@@ -221,6 +224,7 @@ def update_target(
             "enable_http_check",
             "enable_cert_expiration",
             "enable_tcp_connect",
+            "enable_udp_scan",
             "host",
             "ping_host",
             "http_url",
@@ -235,7 +239,9 @@ def update_target(
             "ignore_cert_errors",
             "tcp_host",
             "tcp_ports",
+            "udp_ports",
             "max_retries",
+            "down_alert_delay_minutes",
             "auto_close_alert",
             "ping_timeout_minutes",
             "sla_enabled",
@@ -258,6 +264,7 @@ def update_target(
                 "enable_http_check",
                 "enable_cert_expiration",
                 "enable_tcp_connect",
+                "enable_udp_scan",
                 "ignore_cert_errors",
                 "sla_enabled",
                 "http_prefer_head",

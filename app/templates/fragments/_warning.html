@@ -1,0 +1,4 @@
+{# Shared S9 message marker (DESIGN.md DC-WARN-1); the message itself contains no icon. #}
+{% macro ju_warning(message) -%}
+<span class="ju-warning"><span class="material-icons" aria-hidden="true">warning</span><span>{{ message }}</span></span>
+{%- endmacro %}

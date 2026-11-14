@@ -31,10 +31,8 @@
 			min-height: 100dvh;
 			padding: 1rem 0;
 			/* Prevent cutoff on small screens */
-			/* iOS: Safe area padding for notch/home indicator (constant for iOS 11.0-11.2, env for 11.2+) */
-			padding-top: max(1rem, constant(safe-area-inset-top));
+			/* iOS: Safe area padding for notch/home indicator */
 			padding-top: max(1rem, env(safe-area-inset-top));
-			padding-bottom: max(1rem, constant(safe-area-inset-bottom));
 			padding-bottom: max(1rem, env(safe-area-inset-bottom));
 		}
 
@@ -48,19 +46,16 @@
 		/* The shared accent ties the sign-in panel to the application shell. */
 		.login-card {
 			border-top: 3px solid var(--bs-primary);
-			box-shadow: var(--bs-box-shadow-sm);
+			box-shadow: var(--ju-shadow);
+			max-width: 400px;
+			width: 100%;
+			margin: 0 1rem;
 		}
 
 		main {
 			display: flex;
 			justify-content: center;
 			width: 100%;
-		}
-
-		.login-card {
-			max-width: 400px;
-			width: 100%;
-			margin: 0 1rem;
 		}
 
 		/* Fixed SVG aspect ratio instead of a negative-margin hack */
@@ -106,7 +101,7 @@
 				<div class="mb-3">
 					<label for="username" class="form-label">Username</label>
 					<input type="text" class="form-control" id="username" name="username" required
-						autocomplete="username">
+						autocomplete="username" autocapitalize="none" spellcheck="false">
 				</div>
 				<div class="mb-3">
 					<label for="password" class="form-label">Password</label>

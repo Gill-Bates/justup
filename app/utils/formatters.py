@@ -82,7 +82,7 @@ def row_to_alert_dict(row: sqlite3.Row) -> dict[str, Any]:
 
 
 def format_percent(value: float | None) -> str:
-    """Format a percentage value cleanly.
+    """Format a generic percentage value cleanly (not for availability, see ``format_availability``).
 
     100.0 or >= 99.95 -> "100%" (rounds up visually)
     >= 10             -> "xx.x%" (1 decimal place)
@@ -96,6 +96,25 @@ def format_percent(value: float | None) -> str:
     if value >= 10:
         return f"{value:.1f}%"
     return f"{value:.2f}%"
+
+
+# Highest availability shown for a measurement series that had at least one failed or missing check.
+AVAILABILITY_IMPERFECT_CEILING_PCT = 99.99
+
+
+def format_availability(value: float | None) -> str:
+    """Format an availability percentage; anything below a perfect 100.0 never displays as "100%".
+
+    Like ``format_percent`` otherwise, but a value in [99.95, 100) is capped at "99.99%" because the
+    series contained a failed or incomplete check. Exactly 100.0 stays "100%"; None gives "–".
+    """
+    if value is None:
+        return "–"
+    if value >= 100:
+        return "100%"
+    if value >= 99.95:  # would round to "100%" in format_percent
+        return f"{AVAILABILITY_IMPERFECT_CEILING_PCT:.2f}%"
+    return format_percent(value)
 
 
 def format_compact_count(value: int) -> str:

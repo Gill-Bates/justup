@@ -25,13 +25,32 @@
 ---
 
 justUp! brings availability monitoring, network diagnostics, and PDF reporting
-together. Check hosts over ping, HTTP(S), and TCP, and track certificate expiry.
+together. Check hosts over ping, HTTP(S), TCP, and UDP, discover open ports with Nmap, and track certificate expiry.
 When something goes wrong, inspect the network route and share the findings
 without switching tools.
 
 Everything runs in **one container**, with application state and measurement
 history stored locally. No agents to install on monitored hosts, no separate
 Grafana instance, and no external database to maintain.
+
+<p align="center">
+  <img src=".github/img/screenshot_01.png" width="900" alt="justUp! dashboard with online, offline, disabled and total target counts, monitor quality, delivery queue, alerts and a 24-hour downtime overview">
+</p>
+
+<details>
+<summary>See more ...</summary>
+
+<p align="center">
+  <img src=".github/img/screenshot_02.png" width="900" alt="Target view with uptime, certificate expiry, response time chart, HTTP status codes and availability">
+</p>
+<p align="center">
+  <img src=".github/img/screenshot_03.png" width="900" alt="Network diagnostics with traceroute hops, hop table and route map">
+</p>
+<p align="center">
+  <img src=".github/img/screenshot_04.png" width="900" alt="SMTP settings with email template editor and alert preview">
+</p>
+
+</details>
 
 ## Why justUp!
 

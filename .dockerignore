@@ -12,9 +12,12 @@
 
 # ─── ALLOW: Build inputs read by docker/Dockerfile ───
 !docker/entrypoint.sh
+!docker/nmap-worker.sh
 !docker/libsignal-pins.txt
-!docker/requirements.lock
 !docker/vendor/wheels/
+!docker/vendor/PROVENANCE.json
+!tools/nmap-release.py
+!tools/pyproject-deps.py
 !pyproject.toml
 
 # ─── ALLOW: Documentation for About page ───
@@ -47,6 +50,8 @@
 # ─── BLOCK: Sensitive & temporary files ───
 **/.env
 **/.env.*
+**/.bootstrap-admin-credentials
+**/.bootstrap-admin-credentials.*
 **/*.log
 **/*.tmp
 **/*.bak

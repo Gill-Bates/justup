@@ -38,8 +38,16 @@
 									<td class="text-end"><code class="about-meta-value">{{ python_version }}</code></td>
 								</tr>
 								<tr>
+									<th scope="row" class="ps-0 fw-normal"><strong>Nmap</strong></th>
+									<td class="text-end"><code class="about-meta-value">{{ nmap_version }}</code></td>
+								</tr>
+								<tr>
 									<th scope="row" class="ps-0 fw-normal"><strong>GeoIP (DB)</strong></th>
 									<td class="text-end"><code class="about-meta-value">{{ geoip_build_info if geoip_build_info else 'N/A' }}</code></td>
+								</tr>
+								<tr>
+									<th scope="row" class="ps-0 fw-normal"><strong>GeoIP ASN (DB)</strong></th>
+									<td class="text-end"><code class="about-meta-value">{{ geoip_asn_build_info if geoip_asn_build_info else 'N/A' }}</code></td>
 								</tr>
 							</tbody>
 						</table>
@@ -77,6 +85,8 @@
 								<span class="material-icons me-2 about-accent-icon" aria-hidden="true">gavel</span>
 								<code class="about-meta-value">{{ license_name }}</code>
 							</div>
+							<p class="small text-body-secondary mt-2 mb-0">This product includes GeoLite2 Data created by MaxMind, available from
+								<a href="https://www.maxmind.com" target="_blank" rel="noopener noreferrer">maxmind.com<span class="visually-hidden"> (opens in new tab)</span></a>.</p>
 						</div>
 
 						<div class="mt-auto pt-3">
@@ -100,7 +110,7 @@
 						<h2 class="h6 fw-semibold mb-0">Dependencies</h2>
 					</div>
 					<div class="card-body p-0 d-flex flex-column">
-						<div class="table-responsive dependencies-scroll flex-grow-1" tabindex="0"
+						<div class="table-responsive dependencies-scroll flex-grow-1" tabindex="0" role="region"
 							aria-label="Dependencies">
 							<table class="table table-sm table-hover mb-0 dependencies-table">
 								<thead class="sticky-top">
@@ -130,7 +140,7 @@
 						<span class="material-icons me-2" aria-hidden="true">history</span>
 						<h2 class="h6 fw-semibold mb-0">Changelog</h2>
 					</div>
-					<div class="card-body changelog-content flex-grow-1">
+					<div class="card-body changelog-content flex-grow-1" tabindex="0" role="region" aria-label="Changelog">
 						{{ changelog_text | markdown | safe }}
 					</div>
 				</div>
@@ -139,168 +149,3 @@
 </div>
 {% endblock %}
 
-{% block styles %}
-<style>
-	/* About page layout: tiles are spaced by the shared tile gap */
-	.about-layout {
-		display: grid;
-		gap: var(--ui-space-tile);
-		min-height: 0;
-	}
-
-	.about-accent-icon {
-		color: var(--bs-primary);
-	}
-
-	.about-cell-label {
-		width: 6rem;
-	}
-
-	.about-divider {
-		height: 1px;
-		background-color: var(--bs-border-color);
-		margin: var(--ui-space-tile) 0;
-	}
-
-	.about-doc-link {
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		gap: 0.375rem;
-		line-height: 1.2;
-	}
-
-	.about-external-icon {
-		font-size: 1rem;
-	}
-
-	.about-meta-value {
-		display: inline-block;
-		font-size: 0.8rem;
-		font-weight: 500;
-		color: var(--bs-body-color);
-		background-color: var(--bs-tertiary-bg);
-		padding: 0.1rem 0.35rem;
-		border-radius: 3px;
-	}
-
-	.dependencies-table code {
-		color: var(--bs-body-color);
-	}
-
-	.dependencies-scroll {
-		overflow-y: auto;
-		padding: var(--ui-space-tile-compact) var(--ui-card-padding) var(--ui-card-padding);
-	}
-
-	.dependencies-table thead th {
-		background-color: var(--bs-tertiary-bg);
-		border-bottom: 1px solid var(--bs-border-color);
-	}
-
-	/* Desktop: equal-height top cards, scrolling dependency list */
-	@media (min-width: 992px) {
-		.ju-content > main:has(.about-page) {
-			display: flex;
-			flex-direction: column;
-		}
-		.about-page {
-			grid-template-rows: auto minmax(0, 1fr);
-			flex: 1 1 0;
-			min-height: 400px;
-		}
-
-		.about-layout {
-			grid-template-rows: auto minmax(0, 1fr);
-		}
-
-		.about-deps-card {
-			contain: size;
-			min-height: 14rem;
-		}
-
-		.about-deps-card .card-body {
-			flex: 1 1 0;
-			min-height: 0;
-		}
-
-		.about-deps-card .dependencies-scroll {
-			flex: 1 1 0;
-			min-height: 0;
-		}
-
-		.about-changelog-row,
-		.about-changelog-row>.card {
-			height: 100%;
-			min-height: 0;
-		}
-
-		.about-changelog-row .card-body {
-			min-height: 0;
-			overflow-y: auto;
-		}
-	}
-
-	/* Mobile: auto height, page scrolls */
-	@media (max-width: 991.98px) {
-		.about-deps-card .dependencies-scroll {
-			max-height: 18rem;
-		}
-	}
-
-	/* Changelog markdown styling */
-	.changelog-content h2 {
-		font-size: 1rem;
-		font-weight: 600;
-		color: var(--bs-primary);
-		border-bottom: 1px solid var(--bs-border-color);
-		padding-bottom: 0.5rem;
-		margin-top: 1rem;
-		margin-bottom: 0.75rem;
-	}
-
-	.changelog-content h2:first-child {
-		margin-top: 0;
-	}
-
-	.changelog-content ul {
-		padding-left: 1.25rem;
-		margin-bottom: 0.5rem;
-	}
-
-	.changelog-content li {
-		font-size: 0.875rem;
-		margin-bottom: 0.25rem;
-		color: var(--bs-body-color);
-	}
-
-	.changelog-content code {
-		font-size: 0.8rem;
-		background: var(--bs-tertiary-bg);
-		padding: 0.1rem 0.3rem;
-		border-radius: 3px;
-	}
-
-	.changelog-content details {
-		margin-top: 1rem;
-		border-top: 1px solid var(--bs-border-color);
-		padding-top: 0.75rem;
-	}
-
-	.changelog-content summary {
-		cursor: pointer;
-		font-weight: 500;
-		color: var(--bs-secondary);
-		font-size: 0.875rem;
-		margin-bottom: 0.5rem;
-	}
-
-	.changelog-content summary:hover {
-		color: var(--bs-primary);
-	}
-
-	.changelog-content details[open] summary {
-		margin-bottom: 1rem;
-	}
-</style>
-{% endblock %}

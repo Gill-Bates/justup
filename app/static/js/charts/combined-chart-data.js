@@ -147,42 +147,80 @@
     return insertGaps(series, minGapMs);
   }
 
+  /** Linear-interpolated percentile of an ascending array (q in 0..1). */
+  function quantile(sorted, q) {
+    if (!sorted.length) return 0;
+    var pos = (sorted.length - 1) * q;
+    var lo = Math.floor(pos);
+    var hi = Math.ceil(pos);
+    return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo);
+  }
+
+  /** A drawn peak never rises above this multiple of the series' highest median. */
+  var PEAK_CAP_FACTOR = 3;
+  var MIN_FENCE_ROWS = 4;
+
   /**
-   * Build a gap-preserving maximum-response-time line from raw display buckets.
-   * Rollups do not expose raw extrema, so those intervals stay null instead of implying data.
-   * @param {object[]} points
-   * @param {number} [minGapMs] - Fixed gap threshold in ms
-   * @returns {object[]}
+   * Notable latency peaks of one series: isolated events, not a curve. The selection follows the
+   * PDF report: a maximum counts when it exceeds the Tukey fence of all maxima (at least 1.5x the
+   * overall median; with fewer than four intervals only that median rule applies), is >= 1.5x its own interval median and rises >= 1 ms above it. Intervals
+   * without a finite maximum (rollups, gaps) yield nothing; nothing is interpolated.
+   * `y` is the plotted height on the response-time axis, capped so one extreme value cannot
+   * flatten the normal curve; `max` is always the real value and `capped` marks the difference.
+   * @param {object[]} points - display points {ts, value, max?, count?}
+   * @returns {{x: number, y: number, max: number, median: number, count: number, capped: boolean}[]}
    */
-  function toPeakSeries(points, minGapMs) {
-    var series = (points || [])
-      .map(function (point) {
-        var x = new Date(point.ts).getTime();
-        if (!isFinite(x)) return null;
-        var value = Number(point.value);
-        var max = point.max == null ? null : Number(point.max);
-        if (max === null || !isFinite(max)) {
-          return {
-            x: x,
-            y: null,
-            count: Number(point.count) || 0,
-            median: isFinite(value) ? value : null,
-            outlier: false,
-          };
-        }
-        return {
-          x: x,
-          y: max,
-          count: Number(point.count) || 1,
-          median: isFinite(value) ? value : null,
-          outlier: isFinite(value) && max > value * 2,
-        };
+  function toPeakSeries(points) {
+    var rows = [];
+    (points || []).forEach(function (point) {
+      var x = new Date(point.ts).getTime();
+      var median = Number(point.value);
+      var max = point.max == null ? NaN : Number(point.max);
+      if (!isFinite(x) || !isFinite(median) || !isFinite(max)) return;
+      rows.push({ x: x, median: median, max: max, count: Number(point.count) || 1 });
+    });
+    if (!rows.length) return [];
+    var maxes = rows
+      .map(function (r) {
+        return r.max;
       })
-      .filter(Boolean)
+      .sort(function (a, b) {
+        return a - b;
+      });
+    var medians = rows
+      .map(function (r) {
+        return r.median;
+      })
+      .sort(function (a, b) {
+        return a - b;
+      });
+    var medianFence = 1.5 * quantile(medians, 0.5);
+    var fence = medianFence;
+    // Quartiles of fewer than MIN_FENCE_ROWS maxima say nothing about spread: use the median rule only.
+    if (maxes.length >= MIN_FENCE_ROWS) {
+      var q1 = quantile(maxes, 0.25);
+      var q3 = quantile(maxes, 0.75);
+      fence = Math.max(q3 + 1.5 * (q3 - q1), medianFence);
+    }
+    var cap = medians[medians.length - 1] * PEAK_CAP_FACTOR;
+    return rows
+      .filter(function (r) {
+        return r.max > fence && r.max >= r.median * 1.5 && r.max - r.median >= 1;
+      })
       .sort(function (a, b) {
         return a.x - b.x;
+      })
+      .map(function (r) {
+        var y = Math.min(r.max, Math.max(cap, r.median));
+        return {
+          x: r.x,
+          y: y,
+          max: r.max,
+          median: r.median,
+          count: r.count,
+          capped: y < r.max,
+        };
       });
-    return insertGaps(series, minGapMs);
   }
 
   /**
@@ -369,11 +407,7 @@
     } else {
       parts.push("No response time data in this range");
     }
-    parts.push(
-      s.lastCode !== null
-        ? "last HTTP status " + s.lastCode
-        : "no HTTP status codes",
-    );
+    if (s.lastCode !== null) parts.push("last HTTP status " + s.lastCode);
     parts.push(s.outages + (s.outages === 1 ? " outage" : " outages"));
     return parts.join("; ");
   }
@@ -399,7 +433,7 @@
    * @param {string[]} tcpPorts
    * @param {object} results - { http, ping, tcp, tcpPorts: [{points,error}, ...] } fetch results
    * @param {object} slaConfig - pageConfig.slaConfig
-   * @returns {{key: string, id: string, label: string, points: object[], error: boolean, sla: object|null, dash: number}[]}
+   * @returns {{key: string, id: string, label: string, points: object[], error: boolean, sla: object|null}[]}
    */
   function buildLatencySources(flags, tcpPorts, results, slaConfig) {
     var out = [];
@@ -427,7 +461,6 @@
             bucketSeconds: r.bucket_seconds,
             error: !!r.error,
             sla: null,
-            dash: i,
           });
         });
         return;
@@ -441,7 +474,6 @@
         bucketSeconds: res.bucket_seconds,
         error: !!res.error,
         sla: slaFor(src.id, slaConfig),
-        dash: 0,
       });
     });
     return out;
@@ -454,7 +486,7 @@
   /**
    * Stable palette slot per series key. HTTP and Ping have fixed slots; TCP ports follow in
    * ascending port order, so a color never depends on legend visibility or on the order
-   * the sources arrive in. Beyond the palette size the slot wraps and `lap` shifts the dash pattern.
+   * the sources arrive in. Beyond the palette size the slot wraps and `lap` shifts the marker shape.
    * @param {string[]} keys - series keys ("http", "ping", "tcp", "tcp:<port>")
    * @returns {Object<string, {slot: number, lap: number}>}
    */
@@ -486,23 +518,34 @@
 
   /**
    * Visibility of the peak layer. One switch drives all peak lines; a series hidden in the
-   * legend shows no peaks, and the right axis is only visible while a peak line is.
+   * legend shows no peaks.
    * @param {{msVisible: boolean, hasPeakData: boolean}[]} series
    * @param {boolean} showPeaks
-   * @returns {{visible: boolean[], axisVisible: boolean}}
+   * @returns {{visible: boolean[]}}
    */
   function peakVisibility(series, showPeaks) {
     var visible = series.map(function (s) {
       return !!(showPeaks && s.msVisible && s.hasPeakData);
     });
-    return {
-      visible: visible,
-      axisVisible: visible.some(Boolean),
-    };
+    return { visible: visible };
   }
 
+  /** Vertex marker shapes of metric series in order (Chart.js pointStyle names); the triangle is reserved for peaks. */
+  var SERIES_MARKERS = ["circle", "rect", "rectRot", "cross", "crossRot", "star"];
+  /**
+   * Non-colour cue of a series (DESIGN.md, DC-CHART-5): shape index = (colour slot + lap) modulo 6, so
+   * the pair (colour, shape) stays unique for up to 48 series.
+   * @param {number} slot - colour slot 0..7
+   * @param {number} lap - series index divided by the slot count, rounded down
+   * @returns {string} Chart.js pointStyle
+   */
+  function markerStyle(slot, lap) {
+    return SERIES_MARKERS[((slot || 0) + (lap || 0)) % SERIES_MARKERS.length];
+  }
   var api = {
     seriesSlots: seriesSlots,
+    markerStyle: markerStyle,
+    SERIES_MARKERS: SERIES_MARKERS,
     peakVisibility: peakVisibility,
     SERIES_SLOT_COUNT: SERIES_SLOT_COUNT,
     slaFor: slaFor,

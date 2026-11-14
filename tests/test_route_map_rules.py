@@ -8,20 +8,12 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from app.services import route_map_rules as rules
-
-
-def _luminance(hex_color: str) -> float:
-    channels = [int(hex_color[i : i + 2], 16) / 255 for i in (1, 3, 5)]
-    lin = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4 for c in channels]
-    return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
-
-
-def contrast(a: str, b: str) -> float:
-    hi, lo = sorted((_luminance(a), _luminance(b)), reverse=True)
-    return (hi + 0.05) / (lo + 0.05)
+from tests._support import wcag_contrast
 
 
 def _p(hop, lat, lon, city, country, **extra):
@@ -44,15 +36,15 @@ CHAIN = [
 def test_route_line_has_graphics_contrast_against_land_and_sea(theme):
     palette = rules.PALETTE[theme]
     for ground in ("land", "water"):
-        assert contrast(palette["route"], palette[ground]) >= 3.0
-    assert contrast(palette["route"], palette["halo"]) >= 3.0  # the outline separates the line from borders
+        assert wcag_contrast(palette["route"], palette[ground]) >= 3.0
+    assert wcag_contrast(palette["route"], palette["halo"]) >= 3.0  # the outline separates the line from borders
 
 
 @pytest.mark.parametrize("theme", ["light", "dark"])
 def test_basemap_recedes_borders_and_land_stay_calm(theme):
     palette = rules.PALETTE[theme]
-    assert contrast(palette["border"], palette["land"]) < 1.6  # barely visible country borders
-    assert contrast(palette["land"], palette["water"]) < 1.4  # two quiet area tones
+    assert wcag_contrast(palette["border"], palette["land"]) < 1.6  # barely visible country borders
+    assert wcag_contrast(palette["land"], palette["water"]) < 1.4  # two quiet area tones
 
 
 def test_line_is_thick_enough_and_dashes_are_coarse():
@@ -95,3 +87,54 @@ def test_map_style_is_json_ready_and_carries_the_zoom_rule():
     style = json.loads(json.dumps(rules.map_style()))
     assert style["labels"]["countryMaxZoom"] >= style["labels"]["cityMinZoom"] - 1  # both name kinds meet at one zoom
     assert style["view"]["fitMaxZoom"] <= style["view"]["maxZoom"]
+    assert style["web"]["arrowSpacing"] == rules.WEB_ARROW_SPACING_PX
+
+
+def _themes() -> dict:
+    """The light/dark map themes of PALETTE (its marker colours are not a theme)."""
+    return {name: rules.PALETTE[name] for name in ("light", "dark")}
+
+
+def test_css_and_js_fallback_palettes_match_shared_palette():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    css = (root / "app/static/css/traceroute-map.css").read_text(encoding="utf-8")
+    css = css.split("/* Fallbacks only:", 1)[1]
+    javascript = (root / "app/static/js/traceroute-map.js").read_text(encoding="utf-8")
+    style_match = re.search(r"var DEFAULT_STYLE = (\{.*?\n\t\};)", javascript, re.DOTALL)
+    assert style_match, "the cached-fragment fallback style stays explicit"
+    js_style = style_match.group(1)
+
+    for theme, palette in _themes().items():
+        selector = (
+            r"\.tr-map-frame\s*\{([^}]*)\}"
+            if theme == "light"
+            else r'\[data-bs-theme="dark"\]\s+\.tr-map-frame\s*\{([^}]*)\}'
+        )
+        css_block = re.search(selector, css, re.DOTALL)
+        assert css_block, f"missing {theme} CSS fallback block"
+        css_values = dict(re.findall(r"(--tr-[\w-]+)\s*:\s*(#[0-9A-Fa-f]{6})", css_block.group(1)))
+        expected_css = {
+            "--tr-route-color": palette["route"].lower(),
+            "--tr-label-color": palette["label"].lower(),
+            "--tr-label-strong": palette["label_strong"].lower(),
+            "--tr-label-halo": palette["label_halo"].lower(),
+        }
+        assert {key: value.lower() for key, value in css_values.items()} == expected_css
+
+        js_theme = re.search(rf"{theme}:\s*\{{([^{{}}]+)\}}", js_style, re.DOTALL)
+        assert js_theme, f"missing {theme} JS fallback palette"
+        js_values = dict(re.findall(r"(\w+):\s*'(#?[0-9A-Fa-f]{6})'", js_theme.group(1)))
+        expected_js = {key: value.lower() for key, value in palette.items()}
+        assert {key: value.lower() for key, value in js_values.items()} == expected_js
+
+    map_backgrounds = re.findall(
+        r"(?:^|\n)(?:\[data-bs-theme=\"(dark)\"\]\s+)?\.traceroute-map-container\s*\{[^}]*background-color:\s*(#[0-9A-Fa-f]{6})",
+        css,
+    )
+    assert {theme or "light": color.lower() for theme, color in map_backgrounds} == {
+        theme: palette["water"].lower() for theme, palette in _themes().items()
+    }
+    js_dash = re.search(r"line:\s*\{[^}]*dash:\s*'([^']+)'", js_style, re.DOTALL)
+    assert js_dash and js_dash.group(1) == rules.DASH_ARRAY

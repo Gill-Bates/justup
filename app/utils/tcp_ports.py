@@ -52,6 +52,31 @@ def _is_whole(number: float | Decimal | Fraction) -> bool:
     return number.is_integer()  # False for nan and inf
 
 
+# The one default TCP port: new targets, the check scheduler (empty value) and the PDF report all use it.
+DEFAULT_TCP_PORTS = "80"
+
+
+def tcp_ports_or_default(value: Any) -> list[int]:
+    """Parsed TCP ports, or the default port when the value is empty; invalid entries raise ``ValueError``."""
+    return parse_port_list(value) or parse_port_list(DEFAULT_TCP_PORTS)
+
+
+def protocol_scan_hosts(target: Any) -> dict[str, str]:
+    """Return the host each protocol is probed on: TCP uses ``tcp_host`` (else ``host``), UDP uses ``host``.
+
+    ``target`` may be a mapping or ``sqlite3.Row``; a missing or empty value gives an empty string.
+    """
+
+    def field(key: str) -> str:
+        try:
+            return str(target[key] or "")
+        except (KeyError, IndexError):
+            return ""
+
+    host = field("host")
+    return {"tcp": field("tcp_host") or host, "udp": host}
+
+
 def parse_port_list(value: Any) -> list[int]:
     """Parse ports from an int, a list or a comma/space separated string.
 

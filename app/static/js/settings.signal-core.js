@@ -211,6 +211,11 @@ export function setOnPanelEnabled(callback) {
     _onPanelEnabled = callback;
 }
 
+/** Show or hide the panel through the shared optional-group mechanic (`hidden` plus aria-controls on the switch). */
+export function syncSignalPanel(enabledEl, panel) {
+    if (window.JuOptionalGroups) window.JuOptionalGroups.syncSwitches(enabledEl.closest('.card') || document);
+    else panel.hidden = !enabledEl.checked;
+}
 /**
  * Toggle Signal panel visibility based on enabled checkbox
  */
@@ -221,14 +226,13 @@ export function toggleSignalPanel() {
 
     if (!enabledEl || !panel || !badges) return;
 
+    syncSignalPanel(enabledEl, panel);
     if (enabledEl.checked) {
-        panel.classList.add('show');
         badges.style.display = 'flex';
         
         // Call registered callback (usually loadSignalStatus)
         if (_onPanelEnabled) _onPanelEnabled();
     } else {
-        panel.classList.remove('show');
         badges.innerHTML = '';
         badges.style.display = 'none';
 

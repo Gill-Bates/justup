@@ -16,6 +16,8 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 
+from app.utils.constants import HopStatus
+
 TIMELINE_GROUP_MIN = 3
 TIMELINE_NO_VALUE = frozenset({"", "*", "-", "—"})
 # Short state wording shared by the web table, the timeline and the PDF (one owner, no duplicates).
@@ -51,7 +53,8 @@ def timeline_measurement(hop: dict) -> str:
     """Classify a hop: measured, timeout (no reply, also inside the route) or synthetic destination."""
     if hop.get("_synthetic_destination"):
         return "unreached"
-    if hop.get("_collapsed") or hop.get("_interpolated") or hop.get("status") in ("timeout", "interpolated"):
+    timeout_states = (HopStatus.TIMEOUT, HopStatus.INTERPOLATED)
+    if hop.get("_collapsed") or hop.get("_interpolated") or hop.get("status") in timeout_states:
         return "timeout"
     return "measured"
 

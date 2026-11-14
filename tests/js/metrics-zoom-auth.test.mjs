@@ -10,6 +10,14 @@ import vm from 'node:vm';
 
 const source = readFileSync(new URL('../../app/static/js/target-detail/metrics.js', import.meta.url), 'utf8');
 
+test('display plot width follows the available space across the 500 px boundary', () => {
+  const context = {};
+  vm.runInNewContext(source, context);
+  assert.equal(context.displayPlotWidth(320), 320);
+  assert.equal(context.displayPlotWidth(499), 499);
+  assert.equal(context.displayPlotWidth(500), 500);
+});
+
 test('zoom-range metric requests use the authenticated apiFetch wrapper and preserve abort signals', async () => {
   const requests = [];
   const signal = { aborted: false };

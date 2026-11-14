@@ -8,8 +8,6 @@ on:
       - main
     paths:
       - 'docs/**'
-      - 'CHANGELOG.md'
-      - 'LICENSE'
       # The docs toolchain is installed from pyproject.toml's docs extra with
       # tools/pyproject-deps.py, so both decide what this workflow builds and
       # scans - a bump to either has to re-run it.
@@ -21,18 +19,12 @@ on:
       - main
     paths:
       - 'docs/**'
-      - 'CHANGELOG.md'
-      - 'LICENSE'
       - 'pyproject.toml'
       - 'tools/pyproject-deps.py'
       - '.github/workflows/docs-build.yml'
   workflow_dispatch:
-  # A release (docker-build.yml) can ship a version and changelog bump that
-  # never touches docs/** on its own. CHANGELOG.md's push trigger above already
-  # covers a plain commit, but a re-run of that workflow from an existing tag
-  # would not re-fire this one otherwise. Rebuilding docs after every successful
-  # release keeps the deployed site in step with what was actually published,
-  # independent of which paths changed.
+  # Rebuild after every successful release so the deployed site follows the
+  # published state, independent of which paths changed.
   workflow_run:
     workflows:
       - 'Docker Multi-Arch Build'
@@ -72,6 +64,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
+          persist-credentials: false
           fetch-depth: 0  # Full history for git-based plugins
           # No explicit ref: on workflow_run the default checkout is the head of
           # the default branch, which is what must be deployed. The release's
@@ -97,8 +90,8 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements-docs.txt
 
-      # The docs extra lists direct dependencies without versions, so what got
-      # resolved is only known here. Scanning this very environment, in the job
+      # The docs extra pins only direct dependencies, so the resolved transitive
+      # set is only known here. Scanning this very environment, in the job
       # that builds the site, keeps scan and build on one dependency set.
       # Trivy reports on what a manifest names, and the extra names only the
       # direct dependencies; the frozen list adds the transitive ones. The file

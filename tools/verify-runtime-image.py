@@ -9,12 +9,17 @@
 Contract. Allowed: the Python interpreter and modules, native libraries, signal-cli and its JARs,
 the jlink Java runtime, the application and its runtime configuration, package metadata.
 Forbidden: compilers and build tools (gcc, g++, cc, clang, cmake, make, cargo, rustc, rustup, javac,
-jar, jlink, jdeps, jshell) in a bin directory, Cargo/rustup/pip/Maven caches, a full JDK, .git
+jar, jlink, jdeps, jshell, autoconf, automake, libtool, rpm tools, gpg) in a bin directory,
+Nmap source archives, RPMs, signatures and unpacked source trees, libtool archives (.la),
+the mtr tools (mtr, mtr-packet and the mtr-tiny package entry; traceroute runs through Nmap),
+Cargo/rustup/pip/Maven caches, a full JDK, .git
 directories, build source trees (Cargo.toml/Cargo.lock), object files (.o, .rlib, .obj and static
 .a archives), test caches, build credentials, and leftovers in /tmp, /var/tmp and /usr/src.
 Exceptions that are part of the shipped runtime, not of the build: static .a archives inside
 site-packages (numpy ships libnpymath.a) and objects in the CPython config-* directory of the
-base interpreter. Compiled shared libraries (.so) are never forbidden; the required
+base interpreter. pip, setuptools and wheel must be gone from the final file system (``fs``); the
+base image still carries them in its own layer, which the layer scan accepts by design (see
+package_tooling). Compiled shared libraries (.so) are never forbidden; the required
 libsignal JNI library is asserted instead.
 
   fs <amd64|arm64> [root]   inspect the file system of a running container; docker-build.yml pipes
@@ -39,9 +44,11 @@ from pathlib import Path, PurePosixPath
 
 TOOL_NAME = re.compile(
     r"^(?:[a-z0-9_]+-linux-gnu-)?(?:gcc|g\+\+|cc|c\+\+|clang|clang\+\+|cmake|make|cargo|rustc|rustup|rustdoc"
-    r"|javac|jar|jlink|jdeps|jshell)(?:-[0-9][0-9.]*)?$"
+    r"|javac|jar|jlink|jdeps|jshell|autoconf|automake|autoreconf|aclocal|libtool|libtoolize|rpm|rpm2cpio|gpg|gpgv)"
+    r"(?:-[0-9][0-9.]*)?$"
 )
 BIN_DIRS = frozenset({"bin", "sbin"})
+MTR_TOOL = re.compile(r"^mtr(?:-packet|-tiny)?$")
 FORBIDDEN_PATHS = (
     "/root/.cargo",
     "/root/.rustup",
@@ -57,7 +64,12 @@ FORBIDDEN_PATHS = (
     "/usr/lib/jvm",
     "/build",
 )
-FORBIDDEN_DIR_NAMES = frozenset({".git", ".cache", ".pytest_cache", ".ruff_cache", ".mypy_cache"})
+FORBIDDEN_DIR_NAMES = frozenset({".git", ".cache", ".pytest_cache", ".ruff_cache", ".mypy_cache", ".gnupg"})
+# Nmap build leftovers: release archives, signatures, key files, an unpacked source tree, libtool archives.
+NMAP_ARTIFACT = re.compile(
+    r"^nmap-[0-9][0-9.]*.*\.(?:tar(?:\.[a-z0-9]+)?|tgz|rpm|asc)$|^nmap_gpgkeys\.txt$|^provenance\.txt$"
+)
+NMAP_SOURCE_DIR = re.compile(r"^nmap-[0-9][0-9.]*$")
 FORBIDDEN_FILE_NAMES = frozenset({"Cargo.toml", "Cargo.lock"})
 OBJECT_SUFFIXES = (".o", ".rlib", ".obj")
 STATIC_SUFFIX = ".a"
@@ -67,7 +79,16 @@ CPYTHON_CONFIG = re.compile(r"^/usr/local/lib/python3[0-9.]*/config-[^/]+/")
 EMPTY_DIRS = ("/tmp", "/var/tmp", "/usr/src")  # noqa: S108 # paths inside the audited image
 SKIPPED_ROOT_DIRS = frozenset({"proc", "sys", "dev"})
 LIBSIGNAL_JAR_DIR = "/opt/signal-cli/lib"
-REQUIRED_FILES = ("/opt/signal-cli/bin/signal-cli", "/opt/java/bin/java")
+REQUIRED_FILES = (
+    "/opt/signal-cli/bin/signal-cli",
+    "/opt/java/bin/java",
+    "/usr/bin/nmap",
+    "/usr/share/nmap/nmap-services",
+    "/usr/share/nmap/nmap-service-probes",
+    "/usr/share/doc/nmap/LICENSE",
+    "/usr/share/doc/nmap/PROVENANCE.txt",
+    "/usr/share/doc/nmap/NOTICE.txt",
+)
 ARCHS = frozenset({"amd64", "arm64"})
 MAX_LISTED = 50
 
@@ -80,9 +101,17 @@ def violation(path: str, is_dir: bool = False) -> str | None:
         if path == forbidden or path.startswith(forbidden + "/"):
             return f"forbidden location {forbidden}"
     if is_dir:
-        return f"forbidden directory {name}" if name in FORBIDDEN_DIR_NAMES else None
+        if name in FORBIDDEN_DIR_NAMES:
+            return f"forbidden directory {name}"
+        return f"unpacked Nmap source tree {name}" if NMAP_SOURCE_DIR.match(name) else None
+    if NMAP_ARTIFACT.match(name):
+        return f"Nmap build leftover {name}"
+    if name.endswith(".la"):
+        return f"libtool archive {name}"
     if posix.parent.name in BIN_DIRS and TOOL_NAME.match(name):
         return f"build tool {name}"
+    if posix.parent.name in BIN_DIRS and MTR_TOOL.match(name):
+        return f"removed tool {name} (traceroute uses Nmap)"
     if name in FORBIDDEN_FILE_NAMES:
         return f"build source file {name}"
     if name.endswith(OBJECT_SUFFIXES) and not CPYTHON_CONFIG.match(path):
@@ -105,12 +134,49 @@ def tree_violations(root: Path) -> list[str]:
             reason = violation(path, is_dir)
             if reason:
                 found.append(f"{path}: {reason}")
+    found.extend(package_tooling(root))
+    found.extend(mtr_package_entries(root))
     for directory in EMPTY_DIRS:
         target = root / directory.lstrip("/")
         if target.is_dir():
             leftovers = sorted(item.name for item in target.iterdir())
             if leftovers:
                 found.append(f"{directory}: leftovers {', '.join(leftovers[:5])}")
+    return found
+
+
+def mtr_package_entries(root: Path) -> list[str]:
+    """The dpkg database must not list the removed mtr-tiny package."""
+    found: list[str] = []
+    status = root / "var/lib/dpkg/status"
+    if status.is_file() and re.search(rb"^Package: mtr-tiny\s*$", status.read_bytes(), re.MULTILINE):
+        found.append("/var/lib/dpkg/status: package mtr-tiny is installed")
+    found.extend(
+        f"/var/lib/dpkg/info/{entry.name}: package mtr-tiny is installed"
+        for entry in sorted((root / "var/lib/dpkg/info").glob("mtr-tiny*"))
+    )
+    return found
+
+
+def package_tooling(root: Path) -> list[str]:
+    """Python package tooling must not be visible in the final file system.
+
+    The base image ships pip, setuptools and wheel in its own layer; the Dockerfile removes them
+    in a later layer. That hides them from the running image but leaves their bytes in the base
+    layer, so this is a file-system check only and the layer scan deliberately does not flag them.
+    """
+    found: list[str] = []
+    for site in sorted(root.glob("usr/local/lib/python3*/site-packages")):
+        found.extend(
+            f"/{entry.relative_to(root).as_posix()}: Python package tooling is still visible"
+            for entry in sorted(site.iterdir())
+            if re.match(r"^(?:pip|setuptools|wheel|pkg_resources)(?:-[0-9][^/]*\.(?:dist|egg)-info)?$", entry.name)
+        )
+    found.extend(
+        f"/usr/local/bin/{entry.name}: Python package tooling is still visible"
+        for entry in sorted((root / "usr/local/bin").glob("*"))
+        if re.match(r"^(?:pip[0-9.]*|wheel)$", entry.name)
+    )
     return found
 
 
@@ -143,7 +209,8 @@ def layer_violations(image_tar: Path) -> list[str]:
             layer_file = image.extractfile(layer_name)
             with tarfile.open(fileobj=layer_file, mode="r|*") as layer:
                 for entry in layer:
-                    path = "/" + entry.name.lstrip("./").rstrip("/")
+                    # removeprefix, not lstrip("./"): lstrip would turn "./.git" into "/git" and hide it.
+                    path = "/" + entry.name.removeprefix("./").strip("/")
                     if PurePosixPath(path).name.startswith(".wh."):
                         continue
                     if path.startswith(("/tmp/", "/var/tmp/")) and not entry.isdir():  # noqa: S108 # paths inside the audited image

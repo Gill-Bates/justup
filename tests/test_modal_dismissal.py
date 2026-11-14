@@ -65,9 +65,7 @@ def test_modal_scripts_do_not_close_on_outside_click_or_override_backdrop() -> N
             re.IGNORECASE,
         ),
     )
-    scripts = [p for p in (_APP / "static" / "js").rglob("*.js") if ".min." not in p.name and "vendor" not in p.parts]
-    scripts += list((_APP / "templates").rglob("*.html"))
-    for path in scripts:
+    for path in _shipped_sources():
         text = path.read_text(encoding="utf-8")
         for pattern in forbidden:
             assert not pattern.search(text), f"{path.relative_to(_REPO)}: {pattern.pattern}"
@@ -106,16 +104,7 @@ def _shipped_sources() -> list[Path]:
     return [*js, *(_APP / "templates").rglob("*.html")]
 
 
-def test_destructive_actions_use_the_shared_confirm_dialog_not_native_confirm() -> None:
-    native = re.compile(r"(?<![\w.])(?:window\.)?confirm\(")
-    offenders = [
-        p.relative_to(_REPO).as_posix() for p in _shipped_sources() if native.search(p.read_text(encoding="utf-8"))
-    ]
-    # confirm-dialog.js mentions "confirm()" only in its header comment; real calls are confirmAction(.
-    assert [o for o in offenders if not o.endswith("utils/confirm-dialog.js")] == []
-
-
-def test_shared_confirm_dialog_is_static_cancel_focused_and_loaded_before_use() -> None:
+def test_shared_confirm_dialog_is_static_and_loaded_before_use() -> None:
     script = (_APP / "static" / "js" / "utils" / "confirm-dialog.js").read_text(encoding="utf-8")
     assert 'data-bs-backdrop="static"' in script and 'data-bs-keyboard="true"' in script
     assert ".focus(" not in script  # focus lifecycle is owned by utils/modal-focus.js

@@ -137,13 +137,20 @@ class _WithHash:
         return getattr(self._cert, name)
 
 
-def _cert_attempt(cert, *, verified=True, order_ok=True):
-    deployment = SimpleNamespace(
+def _deployment(cert, *, verified=True, order_ok=True):
+    return SimpleNamespace(
         received_certificate_chain=[cert],
         verified_certificate_chain=[cert] if verified else None,
         received_chain_has_valid_order=order_ok,
     )
-    return _attempt(Status.COMPLETED, SimpleNamespace(certificate_deployments=[deployment]))
+
+
+def _multi(*deployments):
+    return _attempt(Status.COMPLETED, SimpleNamespace(certificate_deployments=list(deployments)))
+
+
+def _cert_attempt(cert, *, verified=True, order_ok=True):
+    return _multi(_deployment(cert, verified=verified, order_ok=order_ok))
 
 
 def _server_result(**overrides):
@@ -221,37 +228,13 @@ def test_clean_scan_is_secure_everywhere():
 def test_all_certificate_deployments_are_normalized():
     first, _ = _make_cert(cn="example.org", san=("example.org",))
     second, _ = _make_cert(cn="alt.example.org", san=("alt.example.org",))
-    attempt = _attempt(
-        Status.COMPLETED,
-        SimpleNamespace(
-            certificate_deployments=[
-                SimpleNamespace(
-                    received_certificate_chain=[cert],
-                    verified_certificate_chain=[cert],
-                    received_chain_has_valid_order=True,
-                )
-                for cert in (first, second)
-            ]
-        ),
-    )
+    attempt = _multi(_deployment(first), _deployment(second))
     result = _normalize(_server_result(certificate_info=attempt))
     assert [cert.subject for cert in result.certificate_deployments] == [
         "CN=example.org",
         "CN=alt.example.org",
     ]
     assert result.certificate is result.certificate_deployments[0]
-
-
-def _deployment(cert, *, verified=True, order_ok=True):
-    return SimpleNamespace(
-        received_certificate_chain=[cert],
-        verified_certificate_chain=[cert] if verified else None,
-        received_chain_has_valid_order=order_ok,
-    )
-
-
-def _multi(*deployments):
-    return _attempt(Status.COMPLETED, SimpleNamespace(certificate_deployments=list(deployments)))
 
 
 def _broken_deployment():
@@ -566,6 +549,17 @@ def test_weak_protocols_model_characterization():
     assert _with_protocols(_protocol_set(skip=("SSL 3.0",))).weak_protocols.verdict is Verdict.UNKNOWN
     assert _with_protocols(_protocol_set(untested=("SSL 3.0",))).weak_protocols.verdict is Verdict.UNKNOWN
     assert _with_protocols(()).weak_protocols.verdict is Verdict.UNKNOWN
+    # A confirmed legacy protocol outranks missing or unfinished checks of other protocols.
+    assert (
+        _with_protocols(_protocol_set(offered=("SSL 3.0",), skip=("SSL 2.0",))).weak_protocols.verdict
+        is Verdict.INSECURE
+    )
+    assert (
+        _with_protocols(_protocol_set(offered=("SSL 3.0",), untested=("TLS 1.0",))).weak_protocols.verdict
+        is Verdict.INSECURE
+    )
+    only_ssl3 = _with_protocols(_protocol_set(offered=("SSL 3.0",), skip=("SSL 2.0", "TLS 1.0", "TLS 1.1")))
+    assert only_ssl3.weak_protocols.verdict is Verdict.INSECURE and only_ssl3.weak_protocols.detail == "SSL 3.0"
     # Four results that are not the expected four protocols do not count as a complete set.
     dup = _protocol_set(skip=("SSL 3.0", "TLS 1.1")) + _protocol_set(skip=("SSL 3.0", "TLS 1.1"))
     assert _with_protocols(dup).weak_protocols.verdict is Verdict.UNKNOWN
@@ -626,6 +620,7 @@ def _fresh_pool():
 def test_log_label_drops_query_of_schemeless_target(caplog):
     caplog.set_level(logging.DEBUG)
     tls_scanner.scan_tls("bad host/p?token=SECRETTOKEN")
+    assert any("TLS scan refused for bad host" in r.getMessage() for r in caplog.records)  # it did log
     assert "SECRETTOKEN" not in caplog.text
 
 
@@ -713,10 +708,11 @@ def test_blocking_dns_is_admission_bounded_and_deadline_bound():
         for t in threads:
             t.start()
         for _ in range(200):
-            if not tls_scanner._admission.acquire(blocking=False):
+            if tls_scanner._admission._value == 0:  # read-only: never take permits from the test
                 break
-            tls_scanner._admission.release()
             threading.Event().wait(0.02)
+        else:
+            pytest.fail("pending scans never saturated admission")
         extra = tls_scanner.scan_tls("slow.example", deadline=30)
         release.set()
         for t in threads:
@@ -750,7 +746,9 @@ def test_secrets_are_not_logged(caplog):
     caplog.set_level(logging.DEBUG)
     with mock.patch.object(tls_scanner, "_run_sslyze", side_effect=RuntimeError("token=SECRETTOKEN")):
         tls_scanner.scan_tls("https://user:hunter2@127.0.0.1:9/p?token=SECRETTOKEN")
+    before = len(caplog.records)
     tls_scanner.scan_tls("https://user:hunter2@:bad/p?token=SECRETTOKEN")
+    assert len(caplog.records) > before  # the second call logged, so the absence check below is meaningful
     text = caplog.text
     assert "hunter2" not in text and "SECRETTOKEN" not in text
 
@@ -826,6 +824,9 @@ def _scan(server, host="localhost"):
     return tls_scanner.scan_tls(f"https://{host}:{server.port}", timeout=5, deadline=90)
 
 
+@pytest.mark.filterwarnings(
+    "ignore:Parsed a serial number which wasn't positive.*:cryptography.utils.CryptographyDeprecationWarning"
+)
 def test_self_signed_server_scan(tls_server):
     r = _scan(tls_server())
     assert r.status is ScanStatus.COMPLETED, r.command_errors
@@ -919,3 +920,79 @@ def test_ipv6_server_scan(tmp_path):
         assert r.certificate is not None
     finally:
         server.close()
+
+
+def _target_with(*addresses: str) -> tls_target.TlsTarget:
+    ips = tuple(ipaddress.ip_address(a) for a in addresses)
+    return tls_target.TlsTarget("a.example", 443, ips[0], False, ips)
+
+
+def test_resolve_target_keeps_every_validated_address_in_resolver_order():
+    ips = [ipaddress.ip_address("2001:db8::7"), ipaddress.ip_address("192.0.2.7")]
+    with mock.patch.object(tls_target, "resolve_validated", return_value=ips) as resolver:
+        t = tls_target.resolve_target("dual.example")
+    resolver.assert_called_once()
+    assert t.addresses == tuple(ips) and t.ip_address == ips[0]
+
+
+def test_unreachable_first_address_falls_back_to_the_next_one():
+    ok = tls_scanner._failed_result("a.example", 443, "stand-in for a completed scan", "192.0.2.7")
+    seen: list[str] = []
+
+    def run(host, port, ip, *_unused):
+        seen.append(ip)
+        return (
+            tls_scanner._failed_result(host, port, "connection to server failed", ip) if ip.startswith("2001") else ok
+        )
+
+    with (
+        mock.patch.object(tls_scanner, "resolve_target", return_value=_target_with("2001:db8::7", "192.0.2.7")),
+        mock.patch.object(tls_scanner, "_run_sslyze", side_effect=run),
+    ):
+        result = tls_scanner.scan_tls("a.example")
+    assert seen == ["2001:db8::7", "192.0.2.7"] and result is ok
+
+
+def test_all_addresses_unreachable_reports_the_last_failure_without_re_resolving():
+    seen: list[str] = []
+
+    def run(host, port, ip, *_unused):
+        seen.append(ip)
+        return tls_scanner._failed_result(host, port, "connection to server failed", ip)
+
+    with (
+        mock.patch.object(
+            tls_scanner, "resolve_target", return_value=_target_with("2001:db8::7", "192.0.2.7")
+        ) as resolve,
+        mock.patch.object(tls_scanner, "_run_sslyze", side_effect=run),
+    ):
+        result = tls_scanner.scan_tls("a.example")
+    assert seen == ["2001:db8::7", "192.0.2.7"] and resolve.call_count == 1
+    assert result.status is ScanStatus.FAILED and result.error == "connection to server failed"
+
+
+def test_a_blocked_dns_answer_scans_no_address():
+    with (
+        mock.patch.object(tls_target, "resolve_validated", return_value=None),  # any blocked answer rejects all
+        mock.patch.object(tls_scanner, "_run_sslyze") as run,
+    ):
+        result = tls_scanner.scan_tls("rebind.example")
+    run.assert_not_called()
+    assert result.status is ScanStatus.FAILED
+
+
+def test_no_further_address_is_tried_after_the_scan_deadline():
+    clock = iter([0.0, 500.0])
+    seen: list[str] = []
+
+    def run(host, port, ip, *_unused):
+        seen.append(ip)
+        return tls_scanner._failed_result(host, port, "connection to server failed", ip)
+
+    resolved = _target_with("2001:db8::7", "192.0.2.7")
+    with (
+        mock.patch.object(tls_scanner.time, "monotonic", side_effect=lambda: next(clock)),
+        mock.patch.object(tls_scanner, "_run_sslyze", side_effect=run),
+    ):
+        result = tls_scanner._scan_candidates(resolved, 10, deadline_at=100.0)
+    assert seen == ["2001:db8::7"] and result.status is ScanStatus.FAILED

@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(here, "../..");
 const options = new Map();
-const flags = new Set(["self-test", "gridstack", "matrix", "inspect", "help"]);
+const flags = new Set(["self-test", "gridstack", "focus", "matrix", "inspect", "help"]);
 const allowed = new Set(["profile", "browsers", "pages", "page", "viewports", "shots", "json", ...flags]);
 
 for (let index = 2; index < process.argv.length; index += 1) {
@@ -28,11 +28,11 @@ for (let index = 2; index < process.argv.length; index += 1) {
 }
 
 if (options.has("help")) {
-	console.log("node tests/layout/run.mjs [--profile quick|full] [--browsers chromium,webkit,firefox] [--pages FILTERS] [--page IDS] [--viewports NAMES] [--shots DIR] [--json FILE] [--self-test|--gridstack|--matrix]");
+	console.log("node tests/layout/run.mjs [--profile quick|full] [--browsers chromium,webkit,firefox] [--pages FILTERS] [--page IDS] [--viewports NAMES] [--shots DIR] [--json FILE] [--self-test|--gridstack|--focus|--matrix]");
 	process.exitCode = 0;
 } else {
-	if (["self-test", "gridstack", "matrix"].filter((name) => options.has(name)).length > 1) {
-		throw new Error("Choose only one of --self-test, --gridstack, or --matrix");
+	if (["self-test", "gridstack", "focus", "matrix"].filter((name) => options.has(name)).length > 1) {
+		throw new Error("Choose only one of --self-test, --gridstack, --focus, or --matrix");
 	}
 	const env = { ...process.env };
 	for (const [option, variable] of [
@@ -50,10 +50,12 @@ if (options.has("help")) {
 	const grepArgs = options.has("self-test")
 		? ["--grep", "@audit-self-test"]
 		: options.has("gridstack")
-			? ["--grep", "@gridstack"]
-			: options.has("matrix")
-				? ["--grep", "@layout|@audit-self-test"]
-				: ["--grep", "@layout"];
+			? ["--grep", "@gridstack|@dashboard-refit"]
+			: options.has("focus")
+				? ["--grep", "@focus|@targets-search"]
+				: options.has("matrix")
+					? ["--grep", "@layout|@audit-self-test"]
+					: ["--grep", "@layout"];
 	const cli = path.join(repo, "node_modules/@playwright/test/cli.js");
 	const result = spawnSync(process.execPath, [cli, "test", "--config", path.join(here, "playwright.config.mjs"), ...grepArgs], {
 		cwd: repo,

@@ -12,6 +12,7 @@
 		http: (c) => c.http,
 		tls: (c) => c.http || c.cert,
 		tcp: (c) => c.tcp,
+		udp: (c) => c.udp,
 		ping: (c) => c.ping,
 		cert: (c) => c.cert
 	};
@@ -21,6 +22,7 @@
 			http: Boolean(checks && checks.http),
 			ping: Boolean(checks && checks.ping),
 			tcp: Boolean(checks && checks.tcp),
+			udp: Boolean(checks && checks.udp),
 			cert: Boolean(checks && checks.cert)
 		};
 		const result = {};

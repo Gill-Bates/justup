@@ -23,6 +23,15 @@ _SEGMENT_SUFFIX = ".jsonl.gz"
 # decompression needed to count points is paid once per segment, not on every refresh.
 _segment_cache: dict[tuple[str, int, int], tuple[int, int]] = {}
 _cache_lock = threading.Lock()
+_cache_epoch = 0  # bumped by invalidate_segment_cache() so a run that started before it cannot repopulate
+
+
+def invalidate_segment_cache() -> None:
+    """Drop all cached segment counts; call when files were replaced wholesale (backup restore)."""
+    global _cache_epoch
+    with _cache_lock:
+        _cache_epoch += 1
+        _segment_cache.clear()
 
 
 def _count_stream(opener, path: Path) -> tuple[int, int] | None:
@@ -55,6 +64,8 @@ def compute_storage_stats(db_path: Path, tsdb_dir: Path) -> dict[str, int]:
     segment_raw_bytes = 0
     segment_stored_bytes = 0
     seen: dict[tuple[str, int, int], tuple[int, int]] = {}
+    with _cache_lock:
+        epoch = _cache_epoch
 
     if tsdb_dir.exists():
         for root, _dirs, files in os.walk(tsdb_dir):
@@ -86,8 +97,9 @@ def compute_storage_stats(db_path: Path, tsdb_dir: Path) -> dict[str, int]:
                         total_points += counted[0]
 
     with _cache_lock:
-        _segment_cache.clear()
-        _segment_cache.update(seen)
+        if epoch == _cache_epoch:
+            _segment_cache.clear()
+            _segment_cache.update(seen)
 
     return {
         "sql_size_bytes": sql_size_bytes,

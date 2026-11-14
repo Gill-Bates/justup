@@ -37,6 +37,7 @@ from typing import Any
 
 from ...utils.formatters import format_duration
 from ...utils.status_palette import STATUS_PALETTE
+from ...utils.time import assume_utc
 
 _log = logging.getLogger(__name__)
 
@@ -102,6 +103,7 @@ __all__ = [
     "LOGO_SRC",
     "LOGO_URL",
     "LOGO_URL_PREVIEW",
+    "PLACEHOLDER_DOCS",
     "STATUS_DISPLAY_MAP",
     "build_alert_context",
     "build_email_message",
@@ -109,6 +111,8 @@ __all__ = [
     "html_to_text",
     "load_email_templates",
     "load_template_preview",
+    "placeholder_doc_groups",
+    "render_subject",
     "render_template",
     "template_to_preview",
 ]
@@ -154,6 +158,46 @@ ALLOWED_PLACEHOLDERS = frozenset(
         "logo_url",
     }
 )
+
+# Reference shown next to the template editors: placeholder -> (category, description).
+# Keys must equal ALLOWED_PLACEHOLDERS (pinned by a test); dict order is display order.
+PLACEHOLDER_DOCS: dict[str, tuple[str, str]] = {
+    "target.name": ("Target", "Target display name"),
+    "target.host": ("Target", "Target hostname, IP or URL"),
+    "target.group": ("Target", "Target group"),
+    "target.check_type": ("Target", "Check type (HTTP/PING/TCP/UDP/CERT)"),
+    "target.check_badges": ("Target", "Check type badges (HTML, email only)"),
+    "alert.status": ("Alert", "OPEN or RESOLVED"),
+    "alert.started_at": ("Alert", "Alert start time"),
+    "alert.resolved_at": ("Alert", "Alert resolved time"),
+    "alert.duration": ("Alert", "Alert duration"),
+    "alert.reason": ("Alert", "Failure reason / service"),
+    "status.emoji": ("Status", "Status emoji"),
+    "status.color": ("Status", "Status color (hex)"),
+    "status.accent_color": ("Status", "Accent color (hex)"),
+    "status.foreground_color": ("Status", "Text color on the accent color (hex)"),
+    "status.text_color": ("Status", "Status text color (hex)"),
+    "status.text": ("Status", "Status text (Service DOWN / Service RESOLVED)"),
+    "status.label": ("Status", "Short status word (DOWN / RESOLVED)"),
+    "downtime.minutes": ("Downtime", "Downtime in minutes"),
+    "downtime.human": ("Downtime", "Human-readable downtime"),
+    "sla.threshold": ("SLA", "SLA threshold"),
+    "sla.actual": ("SLA", "Actual SLA"),
+    "system.name": ("System", "System name (justUp)"),
+    "system.url": ("System", "Dashboard URL"),
+    "system.timestamp": ("System", "Current timestamp"),
+    "system.github_url": ("System", "Project URL"),
+    "logo_url": ("System", "Logo image URL"),
+}
+
+
+def placeholder_doc_groups() -> list[tuple[str, list[tuple[str, str]]]]:
+    """Group PLACEHOLDER_DOCS by category as ``[(category, [(placeholder, description)])]``."""
+    groups: dict[str, list[tuple[str, str]]] = {}
+    for name, (category, description) in PLACEHOLDER_DOCS.items():
+        groups.setdefault(category, []).append((name, description))
+    return list(groups.items())
+
 
 # Pre-compiled regex: only allows alphanumeric, underscores, and dots
 # Rejects pipes, spaces, special chars, double-dots, etc.
@@ -216,7 +260,10 @@ DEFAULT_SUBJECT = "{{status.emoji}} {{target.name}} – {{status.text}}"
 # Default HTML email template (table-based for max compatibility)
 # Mobile-first responsive design - works in Gmail, Outlook, Apple Mail
 # Uses display:block on mobile for stacked layout
-DEFAULT_HTML_TEMPLATE = """<!DOCTYPE html>
+# Shared building blocks of the justUp! mail layout. DEFAULT_HTML_TEMPLATE is their exact
+# concatenation; the SMTP setup mail reuses every block except the alert-specific ones.
+# Document head, styles and <body> open.
+MAIL_BLOCK_HEAD = """<!DOCTYPE html>
 <html lang="en" xmlns="http://www.w3.org/1999/xhtml"
       xmlns:v="urn:schemas-microsoft-com:vml"
       xmlns:o="urn:schemas-microsoft-com:office:office">
@@ -229,7 +276,7 @@ DEFAULT_HTML_TEMPLATE = """<!DOCTYPE html>
   <meta name="supported-color-schemes" content="light">
   <meta name="format-detection" content="telephone=no,date=no,address=no,email=no">
   <meta http-equiv="X-UA-Compatible" content="IE=edge">
-  <title>justUp! Monitoring alert</title>
+  <title>justUp!</title>
 
   <!--[if mso]>
   <noscript><xml><o:OfficeDocumentSettings>
@@ -275,13 +322,19 @@ DEFAULT_HTML_TEMPLATE = """<!DOCTYPE html>
 
 <body class="ju-bg" style="margin:0;padding:0;word-spacing:normal;background-color:#eef1f5;">
 
-<!-- preheader: shown in the inbox list, hidden in the body -->
+"""
+
+# Hidden inbox preheader of an alert.
+MAIL_BLOCK_PREHEADER_ALERT = """<!-- preheader: shown in the inbox list, hidden in the body -->
 <div style="display:none;max-height:0;overflow:hidden;opacity:0;mso-hide:all;
             font-size:1px;line-height:1px;color:#eef1f5;">
   {{status.text}} &ndash; {{target.name}} ({{target.host}}) &middot; {{alert.reason}}
 </div>
 
-<table role="presentation" width="100%" cellspacing="0" cellpadding="0" class="ju-bg"
+"""
+
+# Outer background, white card, logo header and accent line.
+MAIL_BLOCK_SHELL_OPEN = """<table role="presentation" width="100%" cellspacing="0" cellpadding="0" class="ju-bg"
        style="background-color:#eef1f5;">
   <tr>
     <td align="center" style="padding:24px 12px;">
@@ -296,7 +349,7 @@ DEFAULT_HTML_TEMPLATE = """<!DOCTYPE html>
                     font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
                     color:#1b2733;">
 
-        <!-- HEADER: logo + Monitoring alert -->
+        <!-- HEADER: logo -->
         <tr>
           <td class="ju-pad" style="padding:22px 28px 16px 28px;">
             <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
@@ -305,12 +358,6 @@ DEFAULT_HTML_TEMPLATE = """<!DOCTYPE html>
                   <img src="{{logo_url}}" width="150" alt="justUp!"
                        style="display:inline-block;height:auto;width:150px;
                               max-width:60vw;vertical-align:middle;">
-                </td>
-                <td valign="middle" align="right" class="ju-muted"
-                    style="padding:0;font-size:13px;color:#5b6b7b;white-space:nowrap;">
-                  <span style="display:inline-block;border-left:1px solid #e2e7ee;padding-left:14px;">
-                    &#128276; Monitoring alert
-                  </span>
                 </td>
               </tr>
             </table>
@@ -323,7 +370,10 @@ DEFAULT_HTML_TEMPLATE = """<!DOCTYPE html>
                       font-size:1px;line-height:1px;">&nbsp;</div>
         </td></tr>
 
-        <!-- PRIMARY EVENT -->
+"""
+
+# Alert-specific sections: event, target, incident, SLA.
+MAIL_BLOCK_ALERT_BODY = """        <!-- PRIMARY EVENT -->
         <tr>
           <td class="ju-pad" style="padding:20px 28px 6px 28px;">
             <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
@@ -513,7 +563,10 @@ DEFAULT_HTML_TEMPLATE = """<!DOCTYPE html>
         </tr>
         {{/if sla}}
 
-        {{#if cta}}
+"""
+
+# Conditional "Open in justUp!" button.
+MAIL_BLOCK_CTA = """        {{#if cta}}
         <!-- CALL TO ACTION -->
         <tr>
           <td class="ju-pad ju-cta" align="center" style="padding:20px 28px 8px 28px;">
@@ -539,7 +592,10 @@ DEFAULT_HTML_TEMPLATE = """<!DOCTYPE html>
         </tr>
         {{/if cta}}
 
-        <!-- FOOTER -->
+"""
+
+# Footer with GitHub link and small logo; closes card, wrapper and document.
+MAIL_BLOCK_FOOTER = """        <!-- FOOTER -->
         <tr>
           <td class="ju-pad" style="padding:18px 28px 22px 28px;">
             <div style="border-top:1px solid #e9eef4;padding-top:16px;">
@@ -571,6 +627,15 @@ DEFAULT_HTML_TEMPLATE = """<!DOCTYPE html>
 </body>
 </html>
 """
+
+DEFAULT_HTML_TEMPLATE = (
+    MAIL_BLOCK_HEAD
+    + MAIL_BLOCK_PREHEADER_ALERT
+    + MAIL_BLOCK_SHELL_OPEN
+    + MAIL_BLOCK_ALERT_BODY
+    + MAIL_BLOCK_CTA
+    + MAIL_BLOCK_FOOTER
+)
 
 
 def render_template(template: str, context: dict[str, Any], *, mode: str = "html") -> str:
@@ -659,6 +724,13 @@ def render_template(template: str, context: dict[str, Any], *, mode: str = "html
     return _PLACEHOLDER_RE.sub(replace_placeholder, template)
 
 
+def render_subject(template: str, context: dict[str, Any]) -> str:
+    """Render the mail subject for the plain-text header: raw characters, no line breaks."""
+    rendered = render_template(template, context, mode="plain_text")
+    # A line break would split the header; collapse it so a target name cannot inject headers.
+    return re.sub(r"[\r\n]+\s*", " ", rendered).strip()
+
+
 def _to_utc(dt: datetime) -> datetime:
     """Convert aware datetimes to UTC; naive values are stored as UTC by convention."""
     if dt.tzinfo is None or dt.utcoffset() is None:
@@ -718,19 +790,7 @@ def _format_sla(value: float | str | None) -> str:
 # Status display mapping: status -> (emoji, color, text)
 # Used for visual distinction in email subject and HTML header. Colours match the app
 # status palette; status is never conveyed by colour alone (text + short label carry it).
-STATUS_DISPLAY_MAP: dict[str, tuple[str, str, str]] = {
-    "DOWN": ("🔴", STATUS_PALETTE["danger"].text, "Service DOWN"),
-    "OPEN": ("🔴", STATUS_PALETTE["danger"].text, "Service DOWN"),
-    "UP": ("🟢", STATUS_PALETTE["success"].text, "Service UP"),
-    "RESOLVED": ("🟢", STATUS_PALETTE["success"].text, "Service RESOLVED"),
-    "WARN": ("🟡", STATUS_PALETTE["warning"].text, "Degraded"),
-    "WARNING": ("🟡", STATUS_PALETTE["warning"].text, "Degraded"),
-    "UNKNOWN": ("⚪", STATUS_PALETTE["neutral"].text, "Unknown"),
-}
-
-# Default fallback for unknown status values
-_DEFAULT_STATUS_DISPLAY = ("⚪", STATUS_PALETTE["neutral"].text, "Unknown")
-
+# Status -> palette variant: the one place that decides every status colour of the mail.
 _STATUS_VARIANTS = {
     "DOWN": "danger",
     "OPEN": "danger",
@@ -740,6 +800,24 @@ _STATUS_VARIANTS = {
     "WARNING": "warning",
     "UNKNOWN": "neutral",
 }
+
+_STATUS_EMOJI_TEXT: dict[str, tuple[str, str]] = {
+    "DOWN": ("🔴", "Service DOWN"),
+    "OPEN": ("🔴", "Service DOWN"),
+    "UP": ("🟢", "Service UP"),
+    "RESOLVED": ("🟢", "Service RESOLVED"),
+    "WARN": ("🟡", "Degraded"),
+    "WARNING": ("🟡", "Degraded"),
+    "UNKNOWN": ("⚪", "Unknown"),
+}
+
+STATUS_DISPLAY_MAP: dict[str, tuple[str, str, str]] = {
+    status: (emoji, STATUS_PALETTE[_STATUS_VARIANTS[status]].text, text)
+    for status, (emoji, text) in _STATUS_EMOJI_TEXT.items()
+}
+
+# Default fallback for unknown status values
+_DEFAULT_STATUS_DISPLAY = STATUS_DISPLAY_MAP["UNKNOWN"]
 
 # Short, upper-case status word for the redundant text pill (never colour alone).
 STATUS_LABEL_MAP: dict[str, str] = {
@@ -765,9 +843,6 @@ def _render_check_badges(check_type: str) -> str:
     Input:  "HTTP + PING"  or  "HTTP,PING"  or  "HTTPS"
     Output: Table-based badge HTML safe for all email clients.
     """
-    if check_type is None:
-        check_type = ""
-
     raw = str(check_type).strip()
 
     # Handle empty, "None" string (from str(None)), or "N/A"
@@ -889,8 +964,9 @@ def build_alert_context(alert_data: dict[str, Any], target_data: dict[str, Any])
     if started_at_raw and resolved_at_raw:
         # Alert resolved: calculate full duration
         try:
-            started = datetime.fromisoformat(str(started_at_raw))
-            resolved = datetime.fromisoformat(str(resolved_at_raw))
+            # Naive values are UTC by convention (see _to_utc); mixing them with aware ones raised TypeError.
+            started = assume_utc(datetime.fromisoformat(str(started_at_raw)))
+            resolved = assume_utc(datetime.fromisoformat(str(resolved_at_raw)))
             duration_seconds = int((resolved - started).total_seconds())
             duration = format_duration(duration_seconds)
         except (ValueError, AttributeError, TypeError):
@@ -898,7 +974,7 @@ def build_alert_context(alert_data: dict[str, Any], target_data: dict[str, Any])
     elif started_at_raw:
         # Alert still active: calculate duration from start until now
         try:
-            started = datetime.fromisoformat(str(started_at_raw))
+            started = assume_utc(datetime.fromisoformat(str(started_at_raw)))
             now = datetime.now(UTC)
             duration_seconds = int((now - started).total_seconds())
             duration = f"{format_duration(duration_seconds)} (ongoing)"
@@ -1003,6 +1079,14 @@ def _is_valid_cta_url(url: str | None) -> bool:
     return bool(_CTA_URL_RE.match(str(url).strip()))
 
 
+_HTTP_LINK_RE = re.compile(r"""(?is)<a\b[^>]*?\bhref\s*=\s*"(https?://[^"\s]+)"[^>]*>(.*?)</a>""")
+
+
+def _link_with_url(match: re.Match) -> str:
+    url, label = match.group(1), match.group(2)
+    return f"{label.strip()} ({url})"
+
+
 def html_to_text(html_body: str) -> str:
     """Derive a readable plain-text part from rendered HTML.
 
@@ -1013,6 +1097,10 @@ def html_to_text(html_body: str) -> str:
     text = html_body or ""
     # Drop non-content elements entirely (including the hidden preheader's siblings are kept).
     text = re.sub(r"(?is)<(head|style|script)\b.*?</\1>", " ", text)
+    # Outlook-only fallback (VML button) would repeat the button label in the text part.
+    text = re.sub(r"(?is)<!--\[if mso\]>.*?<!\[endif\]-->", " ", text)
+    # An http(s) link keeps its URL as visible text; the href alone would vanish with the tags.
+    text = _HTTP_LINK_RE.sub(_link_with_url, text)
     # Block-level boundaries become line breaks.
     text = re.sub(r"(?i)<(br|/p|/div|/tr|/table|/h[1-6]|/li)\s*>", "\n", text)
     text = re.sub(r"(?i)<li\b[^>]*>", "- ", text)
@@ -1092,21 +1180,22 @@ def build_email_message(
     return msg
 
 
-# ── Test-mail sample data ────────────────────────────────────────────────────
-# Realistic, self-consistent example for the "Send Test Email" button and the
-# template preview: a test outage that opened ~15 minutes ago and is still open,
-# clearly marked as a test notification. The outage age is derived from ``now`` so
-# the duration always reads "15m (ongoing)" and never a stale hard-coded date; the
-# ``now`` parameter keeps automated tests deterministic. Production alert data is
-# built from live targets and is not affected by this helper.
+# ── Template-preview sample data ─────────────────────────────────────────────
+# Example outage (opened ~15 minutes ago, still open) for the alert-template editor preview
+# only; the SMTP setup test mail has its own renderer (smtp_test_email). The outage age is
+# derived from ``now`` so the duration never reads a stale date; ``now`` keeps tests
+# deterministic. Production alert data is built from live targets and is not affected.
 TEST_SAMPLE_DOWNTIME_MINUTES = 15
 
 
-def build_test_alert_sample(now: datetime | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
+def build_test_alert_sample(
+    now: datetime | None = None, *, system_url: str | None = None
+) -> tuple[dict[str, Any], dict[str, Any]]:
     """Return ``(alert_data, target_data)`` for a deterministic test notification.
 
     The outage started ``TEST_SAMPLE_DOWNTIME_MINUTES`` before ``now`` (default: current
-    UTC time) and is still open, so Started/Duration/Downtime stay consistent.
+    UTC time) and is still open, so Started/Duration/Downtime stay consistent. ``system_url``
+    is the link of the CTA button; without it the placeholder example URL is used (editor preview).
     """
     reference = now or datetime.now(UTC)
     started_at = reference - timedelta(minutes=TEST_SAMPLE_DOWNTIME_MINUTES)
@@ -1121,7 +1210,7 @@ def build_test_alert_sample(now: datetime | None = None) -> tuple[dict[str, Any]
         "sla_actual": 99.7,
         # Example instance URL so the sample shows the complete template incl. the CTA button
         # (matches the mock). Real alerts only get a button when a real instance URL is stored.
-        "system_url": "https://justup.example.com",
+        "system_url": system_url if system_url is not None else "https://justup.example.com",
     }
     target_data = {
         "name": "Test Target",

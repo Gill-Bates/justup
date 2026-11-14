@@ -4,7 +4,7 @@
 //
 
 /**
- * Classic script exposing getCsrfToken(). The token is read from the cookie on every call because
+ * Classic script exposing getCsrfToken() and withCsrf(). The token is read from the cookie on every call because
  * the server rotates it after successful authentication transitions.
  */
 (function (root) {
@@ -23,5 +23,21 @@
 		return '';
 	}
 
+	var CSRF_HEADER = 'X-CSRF-Token';
+	/**
+	 * Returns a copy of fetch() init carrying the CSRF header (unless the caller set one) and same-origin
+	 * credentials (unless the caller set them). Always sends the header, whatever the method.
+	 */
+	function withCsrf(init) {
+		var opts = init ? Object.assign({}, init) : {};
+		var headers = new Headers(opts.headers || {});
+		var token = getCsrfToken();
+		if (token && !headers.has(CSRF_HEADER)) headers.set(CSRF_HEADER, token);
+		opts.headers = headers;
+		if (!opts.credentials) opts.credentials = 'same-origin';
+		return opts;
+	}
 	root.getCsrfToken = getCsrfToken;
+	root.CSRF_HEADER = CSRF_HEADER;
+	root.withCsrf = withCsrf;
 })(typeof window !== 'undefined' ? window : globalThis);

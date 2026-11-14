@@ -19,18 +19,21 @@
   const fields = {
     address: document.getElementById('wizard-address'),
     ports: document.getElementById('wizard-ports'),
-    extraPorts: document.getElementById('wizard-extra-ports'),
+    udpPorts: document.getElementById('wizard-udp-ports'),
+    manualPorts: document.getElementById('wizard-manual-ports'),
     name: document.getElementById('wizard-name'),
     group: document.getElementById('wizard-group'),
     http: document.getElementById('wizard-http'),
     ping: document.getElementById('wizard-ping'),
     tcp: document.getElementById('wizard-tcp'),
+    udp: document.getElementById('wizard-udp'),
     cert: document.getElementById('wizard-cert'),
     url: document.getElementById('wizard-http-url'),
     method: document.getElementById('wizard-method'),
     codes: document.getElementById('wizard-codes'),
     interval: document.getElementById('wizard-interval'),
     retries: document.getElementById('wizard-retries'),
+    alertDelay: document.getElementById('wizard-alert-delay'),
     retention: document.getElementById('wizard-retention'),
     autoClose: document.getElementById('wizard-auto-close'),
     ignoreCert: document.getElementById('wizard-ignore-cert')
@@ -39,12 +42,14 @@
     enable_http_check: fields.http,
     enable_ping: fields.ping,
     enable_tcp_connect: fields.tcp,
+    enable_udp_scan: fields.udp,
     enable_cert_expiration: fields.cert,
     http_url: fields.url,
     http_prefer_head: fields.method,
     http_success_codes: fields.codes,
     interval_seconds: fields.interval,
     max_retries: fields.retries,
+    down_alert_delay_minutes: fields.alertDelay,
     retention_days: fields.retention,
     auto_close_alert: fields.autoClose,
     ignore_cert_errors: fields.ignoreCert
@@ -56,7 +61,14 @@
     http_success_codes: 'http',
     ignore_cert_errors: 'tls'
   };
-  const groupLabels = { http: 'HTTP settings', tls: 'TLS certificate option', tcp: 'TCP port field' };
+  // Ports are entered once (step 2) in the picker; wizard-ports and wizard-udp-ports are hidden backing fields.
+  // The checks step only shows them and links back to the visible manual input.
+  const portSummaries = {
+    tcp: { input: fields.ports, toggle: fields.tcp, label: 'TCP', summary: document.getElementById('wizard-tcp-summary'), value: document.getElementById('wizard-tcp-summary-value'), error: document.getElementById('wizard-tcp-summary-error') },
+    udp: { input: fields.udpPorts, toggle: fields.udp, label: 'UDP', summary: document.getElementById('wizard-udp-summary'), value: document.getElementById('wizard-udp-summary-value'), error: document.getElementById('wizard-udp-summary-error') }
+  };
+  const checksStatus = document.getElementById('wizard-checks-status');
+  const groupLabels = { http: 'HTTP settings', tls: 'TLS certificate option', tcp: 'TCP port field', udp: 'UDP port field' };
   const dirty = new Set();
   let shownGroups = {};
   let step = 0;
@@ -69,44 +81,25 @@
     return form.querySelector('input[name="profile"]:checked')?.value || 'website';
   }
 
-  // FastAPI sends a string, an object with a message, or a 422 list of {msg} entries.
-  function errorDetailMessage(detail, fallback) {
-    if (typeof detail === 'string') return detail;
-    return detail?.message || (Array.isArray(detail) ? detail.map(item => item.msg).join('; ') : null) || fallback;
-  }
+  // Field problems go through JuFieldErrors only (DC-FORM-6); errorBox holds form- and request-level failures.
   function clearError() {
     errorBox.classList.add('d-none');
     errorBox.textContent = '';
-    for (const field of form.querySelectorAll('.is-invalid')) {
-      field.classList.remove('is-invalid');
-      field.removeAttribute('aria-invalid');
-      const message = document.getElementById(`${field.id}-error`);
-      if (message) message.textContent = '';
+    window.JuFieldErrors.clearAll(form);
+    for (const { summary, error } of Object.values(portSummaries)) {
+      summary.classList.remove('is-invalid');
+      error.textContent = '';
     }
+    checksStatus.textContent = '';
   }
-
-  function showError(message, field) {
+  function showFieldError(field, message) {
+    window.JuFieldErrors.show(form, [{ id: field.id, message }]);
+  }
+  // Form-level and request-level failure: alert region, no focus move.
+  function showError(message) {
     errorBox.textContent = message;
     errorBox.classList.remove('d-none');
-    if (field) {
-      field.classList.add('is-invalid');
-      field.setAttribute('aria-invalid', 'true');
-      let detail = document.getElementById(`${field.id}-error`);
-      if (!detail) {
-        detail = document.createElement('div');
-        detail.id = `${field.id}-error`;
-        detail.className = 'invalid-feedback';
-        detail.setAttribute('role', 'alert');
-        field.after(detail);
-        field.setAttribute('aria-describedby', detail.id);
-      }
-      detail.textContent = message;
-      field.focus();
-    } else {
-      errorBox.focus();
-    }
   }
-
   function setStep(index, { scroll = true } = {}) {
     step = index;
     steps.forEach((section, position) => { section.hidden = position !== step; });
@@ -121,6 +114,7 @@
     nextButton.hidden = step === steps.length - 1;
     saveButton.hidden = step !== steps.length - 1;
     clearError();
+    updatePortSummaries();
     const heading = steps[step].querySelector('h2');
     heading?.focus({ preventScroll: true });
     if (scroll) heading?.scrollIntoView({ block: 'nearest' });
@@ -128,8 +122,11 @@
 
   function updateKindFields() {
     const kind = profile();
+    // An active port check on another profile still needs the port fields in step 2.
+    const portsNeeded = fields.tcp.checked || fields.udp.checked;
     for (const element of form.querySelectorAll('.wizard-kind')) {
-      element.hidden = !element.dataset.kinds.split(' ').includes(kind);
+      const onDemand = 'portsOnDemand' in element.dataset && portsNeeded;
+      element.hidden = !onDemand && !element.dataset.kinds.split(' ').includes(kind);
     }
     document.getElementById('wizard-address-label').textContent =
       ['website', 'api'].includes(kind) ? 'Full URL or domain *' : 'Hostname or IP address *';
@@ -137,7 +134,7 @@
   }
 
   function activeChecks() {
-    return { http: fields.http.checked, ping: fields.ping.checked, tcp: fields.tcp.checked, cert: fields.cert.checked };
+    return { http: fields.http.checked, ping: fields.ping.checked, tcp: fields.tcp.checked, udp: fields.udp.checked, cert: fields.cert.checked };
   }
 
   // Shows the field groups of the active checks; a user toggle is announced through the status region.
@@ -147,11 +144,43 @@
       const changes = Object.keys(groupLabels)
         .filter(group => visible[group] !== Boolean(shownGroups[group]))
         .map(group => `${groupLabels[group]} ${visible[group] ? 'shown' : 'hidden'}`);
-      document.getElementById('wizard-checks-status').textContent = changes.join('. ');
+      checksStatus.textContent = changes.join('. ');
     }
     shownGroups = visible;
   }
 
+  function updatePortSummaries() {
+    for (const { input, value } of Object.values(portSummaries)) {
+      value.textContent = input.value.trim().replace(/\s*,\s*/g, ', ') || 'None chosen yet';
+    }
+  }
+
+  function editPorts() {
+    updateKindFields();
+    setStep(1);
+    const input = fields.manualPorts;
+    input.focus();
+    input.scrollIntoView?.({ block: 'center' });
+  }
+
+  // A port problem on the address step is shown at the visible manual input, never at the hidden backing fields.
+  function showAddressPortsError(message) {
+    showFieldError(fields.manualPorts, message);
+  }
+  // Text typed into the manual input but not yet added counts as chosen ports; invalid text blocks Continue.
+  function commitPendingPorts() {
+    if (!fields.manualPorts.value.trim()) return true;
+    form.querySelector('[data-scan-action="manual-add"]')?.click();
+    return fields.manualPorts.getAttribute('aria-invalid') !== 'true';
+  }
+  // Reports a port problem at the summary of the checks step (polite echo) and focuses its Edit ports action.
+  function showPortsError(protocol, message) {
+    const { summary, error } = portSummaries[protocol];
+    summary.classList.add('is-invalid');
+    error.textContent = message;
+    checksStatus.textContent = message;
+    form.querySelector(`[data-edit-ports="${protocol}"]`)?.focus();
+  }
   function suggestName() {
     if (fields.name.dataset.userEdited === 'true') return;
     const address = fields.address.value.trim();
@@ -166,7 +195,7 @@
   function readOverride(key, field) {
     if (field.type === 'checkbox') return field.checked;
     if (key === 'http_prefer_head') return field.value === 'HEAD';
-    if (['interval_seconds', 'max_retries', 'retention_days'].includes(key)) return Number(field.value);
+    if (['interval_seconds', 'max_retries', 'down_alert_delay_minutes', 'retention_days'].includes(key)) return Number(field.value);
     return field.value.trim() || null;
   }
 
@@ -184,6 +213,7 @@
       name: fields.name.value.trim() || null,
       group: fields.group.value || null,
       tcp_ports: fields.ports.value.trim() || null,
+      udp_ports: fields.udpPorts.value.trim() || null,
       overrides
     };
   }
@@ -209,37 +239,60 @@
     if (!response.ok) {
       let detail;
       try { detail = (await response.json()).detail; } catch (_) { /* use status below */ }
-      throw new Error(errorDetailMessage(detail, `Unable to preview target (${response.status}).`));
+      throw new Error(window.JuApiError.message(detail, `Unable to preview target (${response.status}).`));
     }
     return response.json();
   }
 
   function validateAddress() {
     if (!fields.address.value.trim()) {
-      showError('Enter a URL, hostname, or IP address.', fields.address);
+      showFieldError(fields.address, 'Enter a URL, hostname, or IP address.');
       return false;
     }
-    if (profile() === 'tcp' && !fields.ports.value.trim()) {
-      showError('Choose at least one TCP port.', fields.ports);
+    if (!commitPendingPorts()) return false;
+    if (profile() === 'tcp' && !fields.ports.value.trim() && !fields.udpPorts.value.trim()) {
+      showAddressPortsError('Choose at least one TCP or UDP port.');
+      return false;
+    }
+    if (fields.ports.value.trim() && !validPorts(fields.ports.value)) {
+      showAddressPortsError('Enter TCP port numbers from 1 to 65535, separated by commas.');
+      return false;
+    }
+    if (fields.udpPorts.value.trim() && !validPorts(fields.udpPorts.value)) {
+      showAddressPortsError('Enter UDP port numbers from 1 to 65535, separated by commas.');
       return false;
     }
     return true;
   }
 
+  // Same rule as the port picker, so "22,,80" or a trailing comma passes in both places.
+  function validPorts(value) {
+    const parsed = window.JuPortScan.parsePortList(value);
+    return parsed.invalid.length === 0 && parsed.ports.length > 0;
+  }
+
   function validateChecks() {
-    for (const field of [fields.interval, fields.retries, fields.retention]) {
+    for (const field of [fields.interval, fields.retries, fields.alertDelay, fields.retention]) {
       if (!field.checkValidity()) {
-        showError(`Enter a valid value for ${field.previousElementSibling?.textContent || 'this setting'}.`, field);
+        showFieldError(field, `Enter a valid value for ${field.previousElementSibling?.textContent || 'this setting'}.`);
         return false;
       }
     }
-    if (!fields.http.checked && !fields.ping.checked && !fields.tcp.checked) {
+    if (!fields.http.checked && !fields.ping.checked && !fields.tcp.checked && !fields.udp.checked) {
       showError('Enable at least one monitoring check.');
+      fields.http.focus();
       return false;
     }
-    if (fields.tcp.checked && !fields.ports.value.trim()) {
-      showError('Choose at least one TCP port.', fields.extraPorts);
-      return false;
+    for (const [protocol, { input, toggle, label }] of Object.entries(portSummaries)) {
+      if (!toggle.checked) continue;
+      if (!input.value.trim()) {
+        showPortsError(protocol, `Choose at least one ${label} port.`);
+        return false;
+      }
+      if (!validPorts(input.value)) {
+        showPortsError(protocol, `Enter ${label} port numbers from 1 to 65535, separated by commas.`);
+        return false;
+      }
     }
     return true;
   }
@@ -268,8 +321,10 @@
     // Rows of an inactive check are left out instead of showing a placeholder.
     if (values.enable_http_check) addSummaryRow(list, 'Full URL', values.http_url);
     if (values.enable_tcp_connect) addSummaryRow(list, 'TCP ports', values.tcp_ports);
-    const checks = [values.enable_http_check && 'HTTP', values.enable_ping && 'ICMP ping', values.enable_tcp_connect && 'TCP', values.enable_cert_expiration && 'Certificate expiry'].filter(Boolean);
+    if (values.enable_udp_scan) addSummaryRow(list, 'UDP ports', values.udp_ports);
+    const checks = [values.enable_http_check && 'HTTP', values.enable_ping && 'ICMP ping', values.enable_tcp_connect && 'TCP', values.enable_udp_scan && 'UDP', values.enable_cert_expiration && 'Certificate expiry'].filter(Boolean);
     addSummaryRow(list, 'Checks', checks.join(', ') || 'None');
+    addSummaryRow(list, 'Down alert delay', `${values.down_alert_delay_minutes} min`);
     addSummaryRow(list, 'Interval / retries / retention', `${values.interval_seconds} s / ${values.max_retries} / ${values.retention_days} days`);
     if (values.enable_http_check) addSummaryRow(list, 'HTTP method / success codes', `${values.http_prefer_head ? 'HEAD' : 'GET'} / ${values.http_success_codes}`);
     addSummaryRow(list, 'Certificate monitoring', values.enable_cert_expiration ? 'On' : 'Off');
@@ -286,7 +341,9 @@
     if (!conflicts.length) return;
     const warning = document.createElement('div');
     warning.className = saveButton.disabled ? 'alert alert-danger' : 'alert alert-warning';
-    warning.textContent = saveButton.disabled ? 'An identical target already exists.' : 'Related targets already exist. Review them before starting another monitor.';
+    const message = saveButton.disabled ? 'An identical target already exists.' : 'Related targets already exist. Review them before starting another monitor.';
+    if (saveButton.disabled) warning.textContent = message;
+    else warning.append(window.JuWarning.create(message));
     const listElement = document.createElement('ul');
     listElement.className = 'mb-0';
     for (const conflict of conflicts) {
@@ -369,8 +426,8 @@
         setStep(step + 1);
       }
     } catch (error) {
-      const field = step === 1 && /port/i.test(error.message) ? fields.ports : null;
-      showError(error.message, field);
+      if (step === 1 && /port/i.test(error.message)) showAddressPortsError(error.message);
+      else showError(error.message);
     } finally {
       nextButton.disabled = false;
     }
@@ -379,11 +436,17 @@
   for (const [key, field] of Object.entries(overrideFields)) {
     field.addEventListener(field.type === 'checkbox' || field.tagName === 'SELECT' ? 'change' : 'input', () => dirty.add(key));
   }
-  for (const toggle of [fields.http, fields.ping, fields.tcp, fields.cert]) {
+  for (const toggle of [fields.http, fields.ping, fields.tcp, fields.udp, fields.cert]) {
     toggle.addEventListener('change', () => updateCheckGroups({ announce: true }));
   }
-  fields.ports.addEventListener('input', () => { fields.extraPorts.value = fields.ports.value; });
-  fields.extraPorts.addEventListener('input', () => { fields.ports.value = fields.extraPorts.value; });
+  // The picker writes the hidden backing fields and reports "change" for them.
+  for (const input of [fields.ports, fields.udpPorts]) {
+    input.addEventListener('input', updatePortSummaries);
+    input.addEventListener('change', updatePortSummaries);
+  }
+  for (const button of form.querySelectorAll('[data-edit-ports]')) {
+    button.addEventListener('click', editPorts);
+  }
   fields.name.addEventListener('input', () => { fields.name.dataset.userEdited = 'true'; });
   fields.address.addEventListener('input', suggestName);
   form.querySelectorAll('input[name="profile"]').forEach(input => input.addEventListener('change', updateKindFields));
@@ -403,7 +466,8 @@
       const recipientIds = [...document.querySelectorAll('#wizard-recipients input:checked')].map(input => Number(input.value));
       const response = await window.apiFetch('/targets', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...reviewedValues, alert_recipient_ids: recipientIds })
+        body: JSON.stringify({ ...reviewedValues, alert_recipient_ids: recipientIds,
+          ...(form.elements.network_scan_id.value ? { network_scan_id: form.elements.network_scan_id.value } : {}) })
       });
       if (!response.ok) {
         let detail;
@@ -412,7 +476,7 @@
           conflicts = detail.conflicts;
           renderReview();
         }
-        throw new Error(errorDetailMessage(detail, `Unable to create target (${response.status}).`));
+        throw new Error(window.JuApiError.message(detail, `Unable to create target (${response.status}).`));
       }
       const target = await response.json();
       window.location.assign(`/ui/targets/${encodeURIComponent(target.id)}`);

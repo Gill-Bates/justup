@@ -23,7 +23,7 @@ for (const viewport of VIEWPORTS) {
 				const notifications = window.JustUpNotifications;
 				notifications.renderPreview(document.getElementById("notif-pop-list"), { items }, document, document.getElementById("notif-bell"));
 			}, FIXTURES);
-			await page.waitForTimeout(80);
+			await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
 
 			const result = await page.evaluate(`(${AUDIT.toString()})(${JSON.stringify(FIXTURES)})`);
 			assert.deepEqual(result.issues, [], `${browserName}/${viewport.name}/${theme} notification dropdown findings`);
@@ -43,7 +43,7 @@ for (const viewport of VIEWPORTS) {
 						detail.textContent = [context?.textContent || "", time?.textContent || ""].filter(Boolean).join(" \u00b7 ");
 					});
 				});
-				await page.waitForTimeout(40);
+				await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
 				await page.screenshot({ path: path.join(shots, `before-${viewport.name}-${theme}.png`) });
 			}
 		});

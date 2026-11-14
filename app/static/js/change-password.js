@@ -30,14 +30,17 @@
 		form.addEventListener('submit', async function (e) {
 			e.preventDefault();
 			errBox.classList.add('d-none');
+			window.JuFieldErrors.clearAll(form);
 			if (submitBtn.disabled) return;
 
-			if (newInput.value.length < 8) {
-				showError(errBox, 'The password must be at least 8 characters long.');
+			// The input's minlength attribute (rendered from the server limit) is the single source.
+			const minLength = newInput.minLength > 0 ? newInput.minLength : 8;
+			if (newInput.value.length < minLength) {
+				window.JuFieldErrors.show(form, [{ id: 'new-password', message: 'The password must be at least ' + minLength + ' characters long.' }]);
 				return;
 			}
 			if (newInput.value !== confirmInput.value) {
-				showError(errBox, 'The passwords do not match.');
+				window.JuFieldErrors.show(form, [{ id: 'confirm-password', message: 'The passwords do not match.' }]);
 				return;
 			}
 
@@ -45,27 +48,24 @@
 			submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span> Saving…';
 
 			try {
-				const resp = await fetch('/me/complete-required-change', {
+				const resp = await fetch('/me/complete-required-change', withCsrf({
 					method: 'POST',
-					credentials: 'same-origin',
-					headers: {
-						'Content-Type': 'application/json',
-						'X-CSRF-Token': getCsrfToken()
-					},
+					headers: { 'Content-Type': 'application/json' },
 					body: JSON.stringify({ new_password: newInput.value })
-				});
+				}));
 				if (!resp.ok) {
 					let detail = 'Password change failed';
 					try {
-						const body = await resp.json();
-						if (typeof body.detail === 'string') detail = body.detail;
+						detail = JuApiError.fromBody(await resp.json(), detail);
 					} catch (parseErr) {
 						// Keep the generic message
 					}
 					throw new Error(detail);
 				}
 				// The server revoked all sessions; sign in again with the new password.
-				window.location.href = '/ui/login';
+				// The login page validates `next` before it follows it.
+				const next = new URLSearchParams(window.location.search).get('next');
+				window.location.href = '/ui/login' + (next ? '?next=' + encodeURIComponent(next) : '');
 			} catch (err) {
 				showError(errBox, err.message);
 				submitBtn.disabled = false;

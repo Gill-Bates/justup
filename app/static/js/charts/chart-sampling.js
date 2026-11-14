@@ -10,8 +10,6 @@
  * @module charts/chart-sampling
  */
 
-// Mobile breakpoint (Bootstrap md)
-const MOBILE_BREAKPOINT = 768;
 
 // Decimation configuration
 var DECIMATION_CONFIG = {
@@ -39,11 +37,11 @@ var DECIMATION_CONFIG = {
 };
 
 /**
- * Check if current viewport is mobile-sized.
+ * Check if the current viewport is compact (DC-BP-1: width <= 576px).
  * @returns {boolean}
  */
 function _isMobile() {
-  return window.innerWidth < MOBILE_BREAKPOINT;
+  return window.innerWidth <= COMPACT_VIEWPORT_MAX;
 }
 
 /**

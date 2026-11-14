@@ -13,13 +13,16 @@ from typing import Literal
 
 from pydantic import BaseModel, EmailStr, Field, model_validator
 
+# Create and update must accept exactly the same numbers.
+_E164_PATTERN = r"^\+[1-9]\d{7,14}$"
 
-class RecipientBase(BaseModel):
-    """Base recipient model."""
+
+class RecipientFields(BaseModel):
+    """Fields every recipient shape shares; a user-bound recipient may have no channel at all."""
 
     name: str = Field(min_length=1, max_length=100, description="Display name for the recipient")
     phone: str | None = Field(
-        default=None, max_length=32, pattern=r"^\+[1-9]\d{7,14}$", description="Phone number in E.164 format"
+        default=None, max_length=32, pattern=_E164_PATTERN, description="Phone number in E.164 format"
     )
     email: EmailStr | None = Field(default=None, description="Email address")
     is_enabled: bool = Field(default=True, description="Whether alerts are sent to this recipient")
@@ -27,6 +30,10 @@ class RecipientBase(BaseModel):
         default=False,
         description="Assigned to every existing target and automatically to every future target",
     )
+
+
+class RecipientBase(RecipientFields):
+    """Standalone recipient: at least one contact channel is required."""
 
     @model_validator(mode="after")
     def at_least_one_channel(self):
@@ -48,7 +55,7 @@ class RecipientUpdate(BaseModel):
     """
 
     name: str | None = Field(default=None, min_length=1, max_length=100)
-    phone: str | None = Field(default=None, max_length=32, pattern=r"^\+[1-9]\d{7,14}$")
+    phone: str | None = Field(default=None, max_length=32, pattern=_E164_PATTERN)
     email: EmailStr | None = Field(default=None)
     is_enabled: bool | None = None
     enable_for_all_targets: bool | None = None
@@ -61,10 +68,15 @@ class TargetBrief(BaseModel):
     name: str
 
 
-class RecipientPublic(RecipientBase):
-    """Public recipient model including assigned targets."""
+class RecipientPublic(RecipientFields):
+    """Public recipient model including assigned targets.
+
+    A recipient of an application user may have no channel, so the channel rule of RecipientBase does not apply.
+    ``is_user_linked`` neither names nor identifies the user: the list is readable by every signed-in user.
+    """
 
     id: int
+    is_user_linked: bool = Field(default=False, description="Bound to an application user; cannot be deleted alone")
     created_at: datetime
     updated_at: datetime
     targets: list[TargetBrief] = Field(default_factory=list, description="Targets assigned to this recipient")

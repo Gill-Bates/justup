@@ -29,9 +29,11 @@ from app.db import tsdb as tsdb_db
 from app.services import pdf_report
 from app.services.pdf_worker import PDFJobRequest, PDFWorker
 from app.utils import crypto
+from app.utils.availability_series import AvailabilitySeries
 from app.utils.deps import get_conn
 from app.utils.metric_limits import choose_points_limit
 from app.utils.rate_limit import RateLimitExceededError, rate_limit_exceeded_handler, reset_all
+from app.utils.report_metrics import fetch_downtime_periods
 from tests import _support  # noqa: F401 - imported for its sys.path side effect
 
 FROM = datetime(2026, 1, 1, tzinfo=UTC)
@@ -55,10 +57,21 @@ class _FakeTsdb:
     def __init__(self, series: dict[str, list[SimpleNamespace]]) -> None:
         self.series = series
         self.queried: list[str] = []
+        self.availability_metrics: tuple[str, ...] = ()
 
     def query_auto_resolution(self, _tsdb_dir, *, metric, **_kwargs):
         self.queried.append(metric)
         return self.series.get(metric, [])
+
+    def query_availability_runs(self, _tsdb_dir, *, metrics, interval_seconds, **_kwargs):
+        """One sample per timestamp across the requested series; down if any of them is down."""
+        self.availability_metrics = tuple(metrics)
+        samples: dict[datetime, int] = {}
+        for metric in metrics:
+            for point in self.series.get(metric, []):
+                samples[point.ts] = min(samples.get(point.ts, 1), int(point.value))
+        points = [{"ts": ts.isoformat(), "value": value} for ts, value in sorted(samples.items())]
+        return AvailabilitySeries.from_points(points, interval_seconds)
 
     def query_display_series(self, _tsdb_dir, **_kwargs):
         return {"points": [], "status_counts": {}}
@@ -69,6 +82,7 @@ def fake_tsdb(monkeypatch: pytest.MonkeyPatch):
     def install(series: dict[str, list[SimpleNamespace]]) -> _FakeTsdb:
         fake = _FakeTsdb(series)
         monkeypatch.setattr(tsdb_db, "query_auto_resolution", fake.query_auto_resolution)
+        monkeypatch.setattr(tsdb_db, "query_availability_runs", fake.query_availability_runs)
         monkeypatch.setattr(tsdb_db, "query_display_series", fake.query_display_series)
         return fake
 
@@ -149,16 +163,18 @@ def collect(request):
     return request.param
 
 
-def test_uptime_comes_from_the_priority_metric_even_when_it_has_no_data(collect, fake_tsdb, tmp_path, monkeypatch):
-    fake_tsdb({"ping_up": _points(5), "ping_ms": _points(5, 12.0)})
+def test_uptime_combines_every_enabled_check_even_when_one_has_no_data(collect, fake_tsdb, tmp_path, monkeypatch):
+    fake = fake_tsdb({"ping_up": _points(5), "ping_ms": _points(5, 12.0)})
     data = collect(tmp_path, monkeypatch, enable_http_check=1, enable_ping=1)
-    assert data.uptime_data == []
+    assert fake.availability_metrics == ("http_up", "ping_up")
+    assert len(data.uptime_data) == 5  # a check without points does not count against the cycle
     assert len(data.ping_data) == 5
 
 
-def test_uptime_falls_to_the_next_enabled_check_when_http_is_off(collect, fake_tsdb, tmp_path, monkeypatch):
-    fake_tsdb({"ping_up": _points(5)})
+def test_uptime_uses_only_the_enabled_checks_when_http_is_off(collect, fake_tsdb, tmp_path, monkeypatch):
+    fake = fake_tsdb({"ping_up": _points(5)})
     data = collect(tmp_path, monkeypatch, enable_http_check=0, enable_ping=1)
+    assert fake.availability_metrics == ("ping_up",)
     assert len(data.uptime_data) == 5
 
 
@@ -195,6 +211,55 @@ def test_status_counts_are_flagged_exact(collect, fake_tsdb, tmp_path, monkeypat
     assert data.status_counts_exact is True
 
 
+def _spy_downtime(monkeypatch, result):
+    """Replace the exact downtime query; ``result`` is returned, or raised when it is an exception."""
+    calls: list[dict] = []
+
+    def query(_tsdb_dir, **kwargs):
+        calls.append(kwargs)
+        if isinstance(result, BaseException):
+            raise result
+        return result
+
+    monkeypatch.setattr(tsdb_db, "query_downtime_periods", query)
+    return calls
+
+
+def test_exact_downtime_periods_reach_the_report_unchanged(collect, fake_tsdb, tmp_path, monkeypatch):
+    fake_tsdb({})
+    sentinel = [SimpleNamespace(marker="exact")]
+    calls = _spy_downtime(monkeypatch, sentinel)
+    data = collect(tmp_path, monkeypatch, enable_http_check=1)
+    assert data.downtime_periods is sentinel
+    assert len(calls) == 1 and calls[0]["limit"] == 2**63 - 1 and calls[0]["check_interval_seconds"] == 60
+
+
+@pytest.mark.parametrize(
+    ("target", "expected"), [({"interval_seconds": 300}, 300), ({"interval_seconds": 0}, 60), ({}, 60)]
+)
+def test_downtime_query_uses_the_target_interval_with_60_as_default(monkeypatch, tmp_path, target, expected):
+    calls = _spy_downtime(monkeypatch, [])
+    assert fetch_downtime_periods(tmp_path, 1, target, FROM, TO) == []
+    assert calls[0]["check_interval_seconds"] == expected
+
+
+def test_failing_downtime_query_falls_back_to_sampled_events(collect, fake_tsdb, tmp_path, monkeypatch):
+    fake_tsdb({})
+    _spy_downtime(monkeypatch, OSError("corrupt series file"))
+    data = collect(tmp_path, monkeypatch, enable_http_check=1)
+    assert data.downtime_periods is None
+
+
+def test_both_report_paths_configure_the_downtime_query_alike(fake_tsdb, tmp_path, monkeypatch):
+    fake_tsdb({})
+    calls = _spy_downtime(monkeypatch, [])
+    _collect_via_endpoint(tmp_path / "a", monkeypatch, enable_http_check=1, enable_ping=1)
+    _collect_via_worker(tmp_path / "b", monkeypatch, enable_http_check=1, enable_ping=1)
+    endpoint, worker = calls
+    assert endpoint.pop("series") == worker.pop("series") != []
+    assert endpoint == worker
+
+
 @pytest.mark.parametrize(
     ("name", "expected"),
     [
@@ -212,3 +277,32 @@ def test_report_filename_is_ascii_bounded_and_deterministic(name, expected):
     from app.utils.report_metrics import report_filename
 
     assert report_filename(name, datetime(2026, 1, 5, 12, tzinfo=UTC)) == expected
+
+
+_PARITY_TARGETS = {
+    "http_only": {"enable_http_check": 1},
+    "ping_multi_tcp": {"enable_ping": 1, "enable_tcp_connect": 1, "tcp_ports": "80,443,8080"},
+    "udp_only": {"enable_udp_scan": 1, "udp_ports": "53"},
+    "cert": {"enable_http_check": 1, "enable_cert_expiration": 1},
+}
+
+
+@pytest.mark.parametrize("flags", _PARITY_TARGETS.values(), ids=_PARITY_TARGETS.keys())
+def test_both_report_paths_pass_identical_report_inputs(flags, fake_tsdb, tmp_path, monkeypatch):
+    metrics = ("http_ms", "http_up", "ping_ms", "ping_up", "tcp_ms", "tcp_up", "udp_up", "cert_days_left")
+    series = {m: _points(3, 7.0) for m in (*metrics, "tcp_ms_80", "tcp_ms_443", "tcp_ms_8080")}
+    fake_tsdb(series)
+
+    def display(_dir, *, metric, **_kwargs):
+        counts = {"200": 3, "Error": 1} if metric == "http_status" else {}
+        return {"points": [{"metric": metric}], "status_counts": counts}
+
+    monkeypatch.setattr(tsdb_db, "query_display_series", display)
+    endpoint = _collect_via_endpoint(tmp_path / "a", monkeypatch, **flags)
+    worker = _collect_via_worker(tmp_path / "b", monkeypatch, **flags)
+    ep, wk = dict(vars(endpoint)), dict(vars(worker))
+    # The endpoint passes None for "no per-port data", the worker an empty dict; both mean the same.
+    assert (ep.pop("tcp_port_data") or {}) == (wk.pop("tcp_port_data") or {})
+    assert ep.pop("target")["id"] == wk.pop("target")["id"]
+    assert ep == wk
+    assert endpoint.status_counts_exact is True

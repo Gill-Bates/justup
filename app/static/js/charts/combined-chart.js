@@ -26,6 +26,7 @@ var COMBINED_PALETTES = {
     down: "#dc3545",
     sla: "#a16207",
     slaText: "#ffffff",
+    peak: "#c62828",
   },
   dark: {
     "2xx": "#4ade80",
@@ -37,6 +38,7 @@ var COMBINED_PALETTES = {
     down: "#f87171",
     sla: "#facc15",
     slaText: "#000000",
+    peak: "#ff6b6b",
   },
 };
 
@@ -45,15 +47,16 @@ function _combinedPalette(theme) {
   var series = [];
   for (var i = 1; i <= CombinedChartData.SERIES_SLOT_COUNT; i++)
     series.push(getCssVar("--ju-dv-" + i, theme.text));
-  return Object.assign(
-    { series: series },
-    COMBINED_PALETTES[theme && theme.mode === "dark" ? "dark" : "light"],
-  );
+  var base = COMBINED_PALETTES[theme && theme.mode === "dark" ? "dark" : "light"];
+  return Object.assign({ series: series }, base, {
+    peak: getCssVar("--ju-peak", base.peak),
+    singleMetric: getCssVar("--ju-st-online", base["2xx"]),
+  });
 }
 
 /** Color of a metric dataset: its stable palette slot, independent of visibility or order. */
 function _seriesColor(palette, dataset) {
-  return palette.series[dataset._slot];
+  return dataset._singleMetric ? palette.singleMetric : palette.series[dataset._slot];
 }
 
 function _prefersReducedMotion() {
@@ -122,13 +125,10 @@ function _el(tag, className, text) {
   return node;
 }
 
-/** Draw a small CSS swatch whose shape or dash pattern mirrors the chart line (not color-only). */
-function _swatch(shape, color, isLine, dash) {
-  var s = _el(
-    "span",
-    "combined-swatch combined-swatch--" + (isLine ? "line" : shape),
-  );
-  if (isLine && dash) s.classList.add("combined-swatch--dash-" + dash);
+/** Draw a small CSS swatch whose shape mirrors the chart marker (not color-only). */
+function _swatch(shape, color) {
+  var s = _el("span", "combined-swatch combined-swatch--" + shape);
+  s.setAttribute("data-marker", shape);
   s.style.setProperty("--swatch-color", color);
   s.setAttribute("aria-hidden", "true");
   return s;
@@ -209,35 +209,56 @@ function _statusStripAnnotations(buckets, palette) {
   return ann;
 }
 
-/** Status classes actually present in the given buckets, in severity order, for the legend key. */
-function _presentStatusClasses(buckets) {
-  return ["2xx", "info", "3xx", "4xx", "5xx", "err"].filter(function (k) {
-    return buckets.some(function (b) {
-      return b.cls === k;
+
+/**
+ * Chart-local plugin: one thin solid stem per peak, from the interval median up to the peak on
+ * the shared response-time axis. Clipped to the plot area; peaks are never joined to each other.
+ */
+var COMBINED_PEAK_STEMS = {
+  id: "combinedPeakStems",
+  beforeDatasetDraw: function (chart, args) {
+    var ds = chart.data.datasets[args.index];
+    if (!ds || ds._kind !== "peak" || !chart.isDatasetVisible(args.index)) return;
+    var xScale = chart.scales.x;
+    var yScale = chart.scales[ds.yAxisID || "y"];
+    var area = chart.chartArea;
+    if (!xScale || !yScale || !area) return;
+    var ctx = chart.ctx;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(area.left, area.top, area.right - area.left, area.bottom - area.top);
+    ctx.clip();
+    ctx.strokeStyle = (chart._palette && chart._palette.peak) || ds.borderColor;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ds.data.forEach(function (p) {
+      if (!p || p.median == null || !isFinite(p.y)) return;
+      var px = Math.round(xScale.getPixelForValue(p.x)) + 0.5;
+      ctx.moveTo(px, yScale.getPixelForValue(p.median));
+      ctx.lineTo(px, yScale.getPixelForValue(p.y));
     });
-  });
-}
-
-var COMBINED_DASHES = [[], [6, 3], [2, 3], [8, 3, 2, 3]];
-
-/** Dash pattern index of a source: its own pattern shifted by the palette lap. */
-function _dashIndex(src, lap) {
-  return ((src.dash || 0) + lap) % COMBINED_DASHES.length;
-}
+    ctx.stroke();
+    ctx.restore();
+  },
+};
 
 /** Re-apply theme colors to datasets, bands and legend swatches (called from applyChartTheme). */
 function _themeCombined(chart, theme) {
   var palette = _combinedPalette(theme);
   chart._palette = palette;
   chart.data.datasets.forEach(function (ds) {
-    if (ds._srcId) {
+    if (ds._kind === "peak") {
+      ds.borderColor = palette.peak;
+      ds.backgroundColor = palette.peak;
+      ds.pointBackgroundColor = palette.peak;
+      ds.pointBorderColor = palette.peak;
+    } else if (ds._srcId) {
       var color = _seriesColor(palette, ds);
       ds.borderColor = color;
       ds.backgroundColor = createAreaGradient(color, 0.18);
-      if (ds._kind === "peak") {
-        ds.pointBackgroundColor = color;
-        ds.pointBorderColor = color;
-      }
+      ds.pointBackgroundColor = color;
+      ds.pointBorderColor = color;
     }
   });
   _styleAnnotations(
@@ -297,8 +318,8 @@ function _statusTooltip(item) {
 }
 
 /**
- * Apply the shared "Show peaks" state: every peak line follows its series' legend state and the
- * right axis is shown only while a peak line is visible. Zoom range and data are untouched.
+ * Apply the shared "Show peaks" state: the peak markers of a series follow its legend state.
+ * Zoom range and data are untouched.
  */
 function _syncPeaks(chart) {
   var datasets = chart.data.datasets;
@@ -321,14 +342,12 @@ function _syncPeaks(chart) {
   peakIndexes.forEach(function (datasetIndex, n) {
     chart.setDatasetVisibility(datasetIndex, state.visible[n]);
   });
-  var peakScale = chart.options.scales && chart.options.scales.yPeak;
-  if (peakScale) peakScale.display = state.axisVisible;
 }
 
 // Re-rendering replaces the buttons; keep keyboard focus on the button at the same position.
-function _rerenderCombinedLegend(chart, legendEl, keyEl, activeBtn) {
+function _rerenderCombinedLegend(chart, legendEl, activeBtn) {
   var index = Array.prototype.indexOf.call(legendEl.children, activeBtn);
-  _renderCombinedLegend(chart, legendEl, keyEl);
+  _renderCombinedLegend(chart, legendEl);
   var next = legendEl.children[index];
   if (next) next.focus();
 }
@@ -349,10 +368,10 @@ function _combinedLegendLabel(dataset) {
 }
 
 /**
- * Render legend toggle buttons + status-class key.
+ * Render the legend toggle buttons.
  * Buttons use aria-pressed so state is exposed without relying on color.
  */
-function _renderCombinedLegend(chart, legendEl, keyEl) {
+function _renderCombinedLegend(chart, legendEl) {
   var palette = chart._palette;
   legendEl.textContent = "";
   chart.data.datasets.forEach(function (ds, i) {
@@ -367,21 +386,17 @@ function _renderCombinedLegend(chart, legendEl, keyEl) {
       chart.isDatasetVisible(i) ? "true" : "false",
     );
     var color = ds._srcId ? _seriesColor(palette, ds) : palette["2xx"];
-    btn.appendChild(
-      _swatch(
-        ds._kind === "status" ? "circle" : "line",
-        color,
-        ds._kind !== "status",
-        ds._dash,
-      ),
-    );
+    // A metric series shows its own marker shape (DC-CHART-5); the status entry keeps a circle.
+    var keySwatch = _swatch(ds._kind === "status" ? "circle" : ds.pointStyle || "circle", color);
+    if (ds._kind === "ms") keySwatch.setAttribute("data-series", "true");
+    btn.appendChild(keySwatch);
     btn.appendChild(_el("span", "", label));
     btn.addEventListener("click", function () {
       chart.setDatasetVisibility(i, !chart.isDatasetVisible(i));
       _syncPeaks(chart);
       chart.update("none");
       if (chart._renderText) chart._renderText();
-      _rerenderCombinedLegend(chart, legendEl, keyEl, btn);
+      _rerenderCombinedLegend(chart, legendEl, btn);
     });
     legendEl.appendChild(btn);
   });
@@ -395,7 +410,7 @@ function _renderCombinedLegend(chart, legendEl, keyEl) {
       "aria-pressed",
       chart._bandsVisible ? "true" : "false",
     );
-    var sw = _swatch("band", palette.down, false);
+    var sw = _swatch("band", palette.down);
     bandBtn.appendChild(sw);
     bandBtn.appendChild(_el("span", "", bandLabel));
     bandBtn.addEventListener("click", function () {
@@ -406,19 +421,11 @@ function _renderCombinedLegend(chart, legendEl, keyEl) {
       });
       chart.update("none");
       if (chart._renderText) chart._renderText();
-      _rerenderCombinedLegend(chart, legendEl, keyEl, bandBtn);
+      _rerenderCombinedLegend(chart, legendEl, bandBtn);
     });
     legendEl.appendChild(bandBtn);
   }
 
-  keyEl.textContent = "";
-  (chart._presentClasses || []).forEach(function (key) {
-    var cls = CombinedChartData.STATUS_CLASSES[key];
-    var item = _el("span", "combined-key-item");
-    item.appendChild(_swatch(cls.shape, palette[key], false));
-    item.appendChild(_el("span", "", cls.label));
-    keyEl.appendChild(item);
-  });
 }
 
 function _summarizeSource(series, points) {
@@ -480,10 +487,12 @@ function _renderCombinedText(canvas, input, view, chart) {
       return d._kind === "peak";
     })
   )
-    text += "; peak lines hidden";
+    text += "; peaks hidden";
+  var rawDays =
+    (typeof pageConfig !== "undefined" && pageConfig.rawRetentionDays) || 30;
   var rollupNote =
-    input.range.from.getTime() < Date.now() - 30 * 86400000
-      ? " Data older than 30 days uses stored rollups; raw latency extremes and individual status codes are unavailable there."
+    input.range.from.getTime() < Date.now() - rawDays * 86400000
+      ? " Data older than " + rawDays + " days uses stored rollups; raw latency extremes and individual status codes are unavailable there."
       : "";
   if (input.statusRawOnly)
     rollupNote += " Status markers cover retained raw checks only.";
@@ -565,7 +574,6 @@ function _createCombinedZoomLoader(
     chart.config.options.plugins.annotation.annotations,
   );
   var originalBandCount = chart._bandCount;
-  var originalPresentClasses = chart._presentClasses;
   var generation =
     buildGeneration === undefined ? chart._buildGeneration : buildGeneration;
   var serial = 0;
@@ -578,32 +586,35 @@ function _createCombinedZoomLoader(
     controller = null;
   }
   chart._cancelZoomLoader = cancelPending;
+  function restoreLoadView() {
+    chart.data.datasets.forEach(function (d, i) {
+      d.data = original[i];
+    });
+    var annotations = chart.config.options.plugins.annotation.annotations;
+    Object.keys(annotations).forEach(function (key) {
+      delete annotations[key];
+    });
+    Object.assign(annotations, originalAnnotations);
+    _styleAnnotations(annotations, chart._palette);
+    _syncDownVisibility(
+      annotations,
+      chart._bandsVisible,
+    );
+    chart._bandCount = originalBandCount;
+    _syncPeaks(chart);
+    chart.update("none");
+    chart._renderLegend();
+    _setCombinedZoomNote(chart, "");
+    if (onView) onView(null);
+  }
+  chart._restoreLoadView = restoreLoadView;
   return function () {
     cancelPending();
     var current = serial;
     var start = Math.max(fromMs, chart.scales.x.min);
     var end = Math.min(toMs, chart.scales.x.max);
     if (end <= start || end - start >= (toMs - fromMs) * 0.95) {
-      chart.data.datasets.forEach(function (d, i) {
-        d.data = original[i];
-      });
-      var annotations = chart.config.options.plugins.annotation.annotations;
-      Object.keys(annotations).forEach(function (key) {
-        delete annotations[key];
-      });
-      Object.assign(annotations, originalAnnotations);
-      _styleAnnotations(annotations, chart._palette);
-      _syncDownVisibility(
-        annotations,
-        chart._bandsVisible,
-      );
-      chart._bandCount = originalBandCount;
-      chart._presentClasses = originalPresentClasses;
-      _syncPeaks(chart);
-      chart.update("none");
-      chart._renderLegend();
-      _setCombinedZoomNote(chart, "");
-      if (onView) onView(null);
+      restoreLoadView();
       return;
     }
     chart._zoomTimer = setTimeout(async function () {
@@ -628,6 +639,7 @@ function _createCombinedZoomLoader(
           controller.signal,
         );
       });
+      if (input.statusEnabled) {
         requests.push(
           fetchDisplayMetricRange(
             pageConfig.targetId,
@@ -638,6 +650,7 @@ function _createCombinedZoomLoader(
             controller.signal,
           ),
         );
+      }
       requests.push(
         fetchDisplayMetricRange(
           pageConfig.targetId,
@@ -678,41 +691,42 @@ function _createCombinedZoomLoader(
             if (d._srcKey !== src.key) return;
             if (d._kind === "ms") d.data = series;
             if (d._kind === "peak")
-              d.data = CombinedChartData.toPeakSeries(result.points, minGapMs);
+              d.data = CombinedChartData.toPeakSeries(result.points);
           });
         });
         var ann = chart.options.plugins.annotation.annotations;
         var statusIndex = input.sources.length;
         if (input.statusEnabled) {
-          var status = results[statusIndex];
-          var buckets = CombinedChartData.bucketStatus(
-            status.points,
-            start,
-            end,
-            1,
-          );
-          view.statusBuckets = buckets;
-          chart._presentClasses = _presentStatusClasses(buckets);
-          var statusDataset = chart.data.datasets.find(function (d) {
-            return d._kind === "status";
-          });
-          if (statusDataset)
-            statusDataset.data = buckets.map(function (b) {
-              return {
-                x: b.x,
-                y: 0.5,
-                end: b.end,
-                code: b.code,
-                cls: b.cls,
-                count: b.count,
-                codeCounts: b.codeCounts,
-                rollup: false,
-              };
+          if (chart.options.scales.yStatus) {
+            var status = results[statusIndex];
+            var buckets = CombinedChartData.bucketStatus(
+              status.points,
+              start,
+              end,
+              1,
+            );
+            view.statusBuckets = buckets;
+            var statusDataset = chart.data.datasets.find(function (d) {
+              return d._kind === "status";
             });
-          Object.keys(ann).forEach(function (key) {
-            if (key.indexOf("status") === 0) delete ann[key];
-          });
-          Object.assign(ann, _statusStripAnnotations(buckets, chart._palette));
+            if (statusDataset)
+              statusDataset.data = buckets.map(function (b) {
+                return {
+                  x: b.x,
+                  y: 0.5,
+                  end: b.end,
+                  code: b.code,
+                  cls: b.cls,
+                  count: b.count,
+                  codeCounts: b.codeCounts,
+                  rollup: false,
+                };
+              });
+            Object.keys(ann).forEach(function (key) {
+              if (key.indexOf("status") === 0) delete ann[key];
+            });
+            Object.assign(ann, _statusStripAnnotations(buckets, chart._palette));
+          }
           statusIndex += 1;
         }
         var upResult = results[statusIndex];
@@ -762,13 +776,75 @@ function _configureCombinedAxes(options, width) {
   options.scales.y.ticks.font.size = compact ? 10 : 12;
   options.scales.y.ticks.padding = compact ? 3 : 8;
   options.scales.y.title.display = !compact;
-  if (options.scales.yPeak) {
-    options.scales.yPeak.ticks.maxTicksLimit = compact ? 4 : undefined;
-    options.scales.yPeak.ticks.font = { size: compact ? 10 : 12 };
-    options.scales.yPeak.ticks.padding = compact ? 3 : 8;
-    options.scales.yPeak.title.display = !compact;
-  }
   if (options.scales.yStatus) options.scales.yStatus.title.display = !compact;
+}
+
+function _bindCombinedPointKeys(canvas) {
+  if (canvas._combinedPointKeysBound) return;
+  canvas._combinedPointKeysBound = true;
+  canvas.tabIndex = 0;
+  var announcement = document.createElement("span");
+  announcement.id = canvas.id + "-point-announcement";
+  announcement.className = "visually-hidden";
+  announcement.setAttribute("role", "status");
+  announcement.textContent = "Use left and right arrow keys to inspect response-time points.";
+  canvas.parentNode.appendChild(announcement);
+  canvas.setAttribute("aria-describedby", announcement.id);
+  canvas.addEventListener("click", function (event) {
+    if (event.pointerType !== "touch" &&
+      !(window.matchMedia && window.matchMedia("(pointer: coarse)").matches)) return;
+    var chart = Chart.getChart(canvas);
+    if (!chart) return;
+    var hit = chart.getElementsAtEventForMode(event, "point", { intersect: true }, false)
+      .find(function (item) {
+        return chart.data.datasets[item.datasetIndex]._kind === "ms";
+      });
+    if (!hit) return;
+    var active = [{ datasetIndex: hit.datasetIndex, index: hit.index }];
+    var element = chart.getDatasetMeta(hit.datasetIndex).data[hit.index];
+    chart.setActiveElements(active);
+    chart.tooltip.setActiveElements(active, { x: element.x, y: element.y });
+    chart.update("none");
+  });
+  canvas.addEventListener("keydown", function (event) {
+    if (event.isComposing || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    var chart = Chart.getChart(canvas);
+    if (!chart) return;
+    var points = [];
+    chart.data.datasets.forEach(function (ds, datasetIndex) {
+      if (ds._kind !== "ms" || !chart.isDatasetVisible(datasetIndex)) return;
+      ds.data.forEach(function (point, index) {
+        if (point.y == null || !isFinite(point.x) || !isFinite(point.y)) return;
+        if (point.x < chart.scales.x.min || point.x > chart.scales.x.max) return;
+        points.push({ datasetIndex: datasetIndex, index: index, point: point });
+      });
+    });
+    if (!points.length) return;
+    event.preventDefault();
+    points.sort(function (a, b) {
+      return a.point.x - b.point.x || a.datasetIndex - b.datasetIndex;
+    });
+    // Hiding a series shrinks points without a rebuild, so clamp the stored index.
+    var current = canvas._combinedPointIndex == null ? -1
+      : Math.min(canvas._combinedPointIndex, points.length - 1);
+    var next = event.key === "Home" ? 0 : event.key === "End" ? points.length - 1
+      : event.key === "ArrowLeft" ? (current < 0 ? points.length - 1 : Math.max(0, current - 1))
+        : Math.min(points.length - 1, current + 1);
+    canvas._combinedPointIndex = next;
+    var selected = points[next];
+    var active = [{ datasetIndex: selected.datasetIndex, index: selected.index }];
+    var element = chart.getDatasetMeta(selected.datasetIndex).data[selected.index];
+    chart.setActiveElements(active);
+    if (chart.tooltip && element)
+      chart.tooltip.setActiveElements(active, { x: element.x, y: element.y });
+    chart.update("none");
+    var label = chart.data.datasets[selected.datasetIndex].label;
+    announcement.textContent = label + ", " +
+      new Date(selected.point.x).toLocaleString(navigator.language || undefined) + ": " +
+      formatChartValue("ms", Math.round(selected.point.y)) +
+      ". Point " + (next + 1) + " of " + points.length + ".";
+  });
 }
 
 /**
@@ -789,7 +865,6 @@ function buildCombinedChart(canvasId, input) {
   var plotEl = document.getElementById("combined-plot");
   var peaksEl = document.getElementById("combined-peaks");
   var legendEl = document.getElementById("combined-legend");
-  var keyEl = document.getElementById("combined-status-key");
   var summaryEl = document.getElementById("combined-summary");
 
   var fromMs = input.range.from.getTime();
@@ -813,25 +888,29 @@ function buildCombinedChart(canvasId, input) {
   var fullSeries = {};
   var firstWithData = true;
   var slaLines = [];
-  // Only plotted series take a slot, so ports without data never cause color collisions.
-  var slots = D.seriesSlots(
-    input.sources
-      .filter(function (src) {
-        return src.points && src.points.length;
-      })
-      .map(function (src) {
-        return src.key;
-      }),
-  );
-  input.sources.forEach(function (src) {
+  var plotted = input.sources.map(function (src) {
     var minGapMs = src.bucketSeconds ? src.bucketSeconds * 3000 : undefined;
     var series = D.toGappedSeries(src.points, minGapMs);
     summaries[src.key] = _summarizeSource(series, src.points);
     fullSeries[src.key] = series;
+    return { src: src, series: series };
+  });
+  // Only plotted series take a slot, so ports without data never cause color collisions.
+  var plottedKeys = plotted.filter(function (row) {
+    return row.series.length;
+  }).map(function (row) {
+    return row.src.key;
+  });
+  var slots = D.seriesSlots(plottedKeys);
+  var singleMetric = plottedKeys.length === 1;
+  plotted.forEach(function (row) {
+    var src = row.src;
+    var series = row.series;
     if (!series.length) return;
     if (src.sla) slaLines.push({ index: datasets.length, sla: src.sla });
     var slot = slots[src.key];
-    var seriesInfo = { _slot: slot.slot, _dash: _dashIndex(src, slot.lap) };
+    var seriesInfo = { _slot: slot.slot, _singleMetric: singleMetric };
+    var marker = D.markerStyle(slot.slot, slot.lap);
     var color = _seriesColor(palette, seriesInfo);
     datasets.push({
       label: src.label,
@@ -840,45 +919,46 @@ function buildCombinedChart(canvasId, input) {
       _srcId: src.id,
       _srcKey: src.key,
       _slot: seriesInfo._slot,
-      _dash: seriesInfo._dash,
+      _singleMetric: singleMetric,
       yAxisID: "y",
-      borderDash: COMBINED_DASHES[seriesInfo._dash],
       borderColor: color,
       backgroundColor: createAreaGradient(color, 0.18),
       fill: true,
       spanGaps: false,
       tension: 0,
+      clip: 0,
       borderWidth: 2,
-      pointRadius: 0,
-      pointHitRadius: 3,
+      // Second cue besides colour (DC-CHART-5): a marker shape of at least 3 px radius.
+      pointStyle: marker,
+      pointRadius: 3,
+      pointBackgroundColor: color,
+      pointBorderColor: color,
+      pointHoverRadius: 5,
+      pointHitRadius: 12,
       hidden: !firstWithData,
     });
-    var peaks = D.toPeakSeries(src.points, minGapMs);
+    // Peaks are single events on the response-time axis: markers plus stems, never a curve.
     datasets.push({
       label: src.label + " peak response time",
-      data: peaks,
+      data: D.toPeakSeries(src.points),
       _kind: "peak",
       _srcId: src.id,
       _srcKey: src.key,
       _slot: seriesInfo._slot,
-      yAxisID: "yPeak",
+      yAxisID: "y",
       type: "line",
-      showLine: true,
-      spanGaps: false,
-      tension: 0,
-      borderColor: color,
-      borderDash: [1, 4],
-      borderCapStyle: "round",
-      borderWidth: 1.5,
-      fill: false,
+      showLine: false,
+      clip: 0,
+      borderColor: palette.peak,
+      backgroundColor: palette.peak,
+      borderWidth: 1,
       pointStyle: "triangle",
-      pointRadius: function (context) {
-        return context.raw && context.raw.outlier ? 4 : 0;
-      },
-      pointHoverRadius: 6,
-      pointHitRadius: 4,
-      pointBackgroundColor: color,
-      pointBorderColor: color,
+      pointRotation: 0,
+      pointRadius: 4,
+      pointHoverRadius: 5,
+      pointHitRadius: 6,
+      pointBackgroundColor: palette.peak,
+      pointBorderColor: palette.peak,
       hidden: !firstWithData,
     });
     firstWithData = false;
@@ -889,6 +969,7 @@ function buildCombinedChart(canvasId, input) {
     datasets.push({
       label: "HTTP status",
       _kind: "status",
+      clip: 0,
       yAxisID: "yStatus",
       type: "line",
       showLine: false,
@@ -926,7 +1007,6 @@ function buildCombinedChart(canvasId, input) {
     if (plotEl) plotEl.hidden = true;
     if (legendEl) legendEl.textContent = "";
     if (peaksEl) peaksEl.hidden = true;
-    if (keyEl) keyEl.textContent = "";
     if (emptyEl) {
       emptyEl.hidden = false;
       emptyEl.querySelector('[data-role="message"]').textContent = allFailed
@@ -950,6 +1030,7 @@ function buildCombinedChart(canvasId, input) {
   });
   var config = createLineConfig(theme, zoomOpts, _getVisibleRangeMs);
   config.data = { datasets: datasets };
+  config.plugins = (config.plugins || []).concat([COMBINED_PEAK_STEMS]);
   var o = config.options;
   o.animation = _prefersReducedMotion() ? false : { duration: 250 };
   // ms/peak points keep direct point+intersect hover; the custom mode adds whole-width
@@ -959,14 +1040,18 @@ function buildCombinedChart(canvasId, input) {
   o.scales.x.min = fromMs;
   o.scales.x.max = toMs;
   o.scales.y.stack = "combined";
+  // Headroom keeps a capped peak triangle inside the plot area.
+  o.scales.y.grace = "6%";
   o.scales.y.stackWeight = 11;
   o.scales.y.title = {
     display: true,
-    text: "Response time (ms)",
+    text: CHART_UNITS.ms.axisTitle,
     color: theme.muted,
   };
   o.scales.y.ticks.callback = function (v) {
-    return Number.isInteger(v) ? formatCompactAxisValue(v) : "";
+    if (!Number.isInteger(v)) return "";
+    var titleShown = !!(this && this.options && this.options.title && this.options.title.display);
+    return formatChartTick("ms", v, !titleShown);
   };
   // Keep a visible SLA line in view even when every measurement is far below it.
   o.scales.y.afterDataLimits = function (scale) {
@@ -976,32 +1061,6 @@ function buildCombinedChart(canvasId, input) {
       if (top > scale.max) scale.max = top;
     });
   };
-  if (
-    datasets.some(function (d) {
-      return d._kind === "peak";
-    })
-  ) {
-    o.scales.yPeak = {
-      type: "linear",
-      position: "right",
-      display: datasets.some(function (d) {
-        return (
-          d._kind === "peak" &&
-          d.data.some(function (point) {
-            return point.y !== null;
-          })
-        );
-      }),
-      beginAtZero: true,
-      grid: { drawOnChartArea: false },
-      ticks: { color: theme.muted, callback: formatCompactAxisValue },
-      title: {
-        display: true,
-        text: "Max response time (ms)",
-        color: theme.muted,
-      },
-    };
-  }
   if (statusBuckets.length) {
     o.scales.yStatus = {
       type: "linear",
@@ -1025,22 +1084,19 @@ function buildCombinedChart(canvasId, input) {
     if (item.dataset._kind === "status") return _statusTooltip(item);
     if (item.dataset._kind === "peak") {
       var peakLabel =
-        " " +
-        item.dataset.label +
-        ": " +
-        Math.round(item.parsed.y) +
-        " ms";
+        " " + item.dataset.label + ": " + formatChartValue("ms", Math.round(item.raw.max));
       if (item.raw.median !== null)
-        peakLabel += " (median " + Math.round(item.raw.median) + " ms)";
-      return (
-        peakLabel +
+        peakLabel += " (median " + formatChartValue("ms", Math.round(item.raw.median)) + ")";
+      peakLabel +=
         " across " +
         item.raw.count +
         " stored value" +
-        (item.raw.count === 1 ? "" : "s")
-      );
+        (item.raw.count === 1 ? "" : "s");
+      return item.raw.capped
+        ? peakLabel + "; drawn at the axis limit"
+        : peakLabel;
     }
-    return " " + item.dataset.label + ": " + Math.round(item.parsed.y) + " ms";
+    return " " + item.dataset.label + ": " + formatChartValue("ms", Math.round(item.parsed.y));
   };
 
   var annotations = _downAnnotations(bands, palette, true);
@@ -1055,7 +1111,9 @@ function buildCombinedChart(canvasId, input) {
   if (statusBuckets.length)
     Object.assign(annotations, _statusStripAnnotations(statusBuckets, palette));
   _styleAnnotations(annotations, palette);
-  o.plugins.annotation = { annotations: annotations };
+  // The shared line config sets the root `clip: false`, which the annotation plugin inherits unless
+  // it is set here; without it bands and the status strip run over the axes.
+  o.plugins.annotation = { clip: true, annotations: annotations };
 
   var chart = _createOrUpdateChart(canvasId, canvas, config);
   chart._buildGeneration = buildGeneration;
@@ -1064,9 +1122,13 @@ function buildCombinedChart(canvasId, input) {
   chart._bandCount = bands.length;
   chart._bandsVisible = true;
   chart._bandSourceLabel = input.upSourceLabel || "primary check";
-  chart._presentClasses = _presentStatusClasses(statusBuckets);
   chart._renderLegend = function () {
-    _renderCombinedLegend(chart, legendEl, keyEl);
+    var active =
+      legendEl && legendEl.contains(document.activeElement)
+        ? document.activeElement
+        : null;
+    if (active) _rerenderCombinedLegend(chart, legendEl, active);
+    else _renderCombinedLegend(chart, legendEl);
   };
   chart._themeHook = function (t) {
     _themeCombined(chart, t);
@@ -1096,6 +1158,8 @@ function buildCombinedChart(canvasId, input) {
     buildGeneration,
   );
   _registerChart(canvasId, chart, canvas, true);
+  canvas._combinedPointIndex = null;
+  _bindCombinedPointKeys(canvas);
   // An updated chart keeps the user's choice across rebuilds; a new one starts with peaks shown.
   chart._showPeaks = chart._showPeaks !== false;
   _syncPeaks(chart);
@@ -1106,17 +1170,23 @@ function buildCombinedChart(canvasId, input) {
   chart._renderText();
   var noteEl = document.getElementById("combined-status-note");
   if (noteEl) {
-    noteEl.textContent = !input.statusEnabled
-      ? "No HTTP status codes: the HTTP check is not enabled."
-      : input.statusError
-        ? "HTTP status codes could not be loaded."
-        : !statusBuckets.length
-          ? "No HTTP status codes recorded in this range."
-          : "";
-    if (input.upError)
-      noteEl.textContent += " Downtime bands could not be loaded.";
+    noteEl.textContent = _statusNoteText(input, statusBuckets);
     chart._statusNoteBase = noteEl.textContent;
   }
+}
+
+// Note under the chart. A target without an HTTP check says nothing (the missing series is no news);
+// the empty note is hidden by CSS (.combined-note:empty), so it takes no space.
+function _statusNoteText(input, statusBuckets) {
+  var text = !input.statusEnabled
+    ? ""
+    : input.statusError
+      ? "HTTP status codes could not be loaded."
+      : !statusBuckets.length
+        ? "No HTTP status codes recorded in this range."
+        : "";
+  if (input.upError) text += " Downtime bands could not be loaded.";
+  return text;
 }
 
 window.buildCombinedChart = buildCombinedChart;

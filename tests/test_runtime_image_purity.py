@@ -32,9 +32,18 @@ def touch(root: Path, relative: str, content: bytes = b"x") -> None:
 
 
 def make_image_root(root: Path) -> Path:
-    """A minimal clean runtime tree: Python, native libs, signal-cli, a libsignal jar."""
+    """A minimal clean runtime tree with the required scanner and native tools."""
     touch(root, "opt/signal-cli/bin/signal-cli")
     touch(root, "opt/java/bin/java")
+    for path in (
+        "usr/bin/nmap",
+        "usr/share/nmap/nmap-services",
+        "usr/share/nmap/nmap-service-probes",
+        "usr/share/doc/nmap/LICENSE",
+        "usr/share/doc/nmap/PROVENANCE.txt",
+        "usr/share/doc/nmap/NOTICE.txt",
+    ):
+        touch(root, path)
     touch(root, "usr/local/bin/python3")
     touch(root, "usr/lib/x86_64-linux-gnu/libz.so.1")
     touch(root, "usr/local/lib/python3.13/site-packages/numpy/_core/lib/libnpymath.a")
@@ -85,6 +94,19 @@ def test_clean_image_passes_and_required_native_libraries_are_not_flagged(tmp_pa
         "usr/lib/libfoo.a",
         "root/.docker/config.json",
         "root/.netrc",
+        "usr/bin/autoconf",
+        "usr/bin/automake",
+        "usr/bin/libtoolize",
+        "usr/bin/rpm2cpio",
+        "usr/bin/gpg",
+        "usr/lib/libpcap.la",
+        "opt/nmap-7.993.tar.bz2",
+        "var/lib/nmap-7.993-1.x86_64.rpm",
+        "usr/share/nmap/nmap-7.993.tar.bz2.asc",
+        "opt/nmap_gpgkeys.txt",
+        "opt/provenance.txt",
+        "opt/nmap-7.993/configure/config.log.o",
+        "home/justup/.gnupg/pubring.kbx",
     ],
 )
 def test_build_tool_cache_source_and_object_artifacts_fail(tmp_path, relative):
@@ -108,7 +130,10 @@ def test_tool_names_outside_bin_directories_are_not_flagged(tmp_path):
     assert problems(root) == []
 
 
-@pytest.mark.parametrize("missing", ["opt/signal-cli/bin/signal-cli", "opt/java/bin/java"])
+@pytest.mark.parametrize(
+    "missing",
+    ["opt/signal-cli/bin/signal-cli", "opt/java/bin/java", "usr/bin/nmap", "usr/share/nmap/nmap-service-probes"],
+)
 def test_missing_required_file_fails(tmp_path, missing):
     root = make_image_root(tmp_path)
     (root / missing).unlink()
@@ -152,6 +177,30 @@ def build_image_archive(path: Path, layers: list[dict[str, bytes | None]]) -> No
         image.addfile(info, io.BytesIO(manifest))
 
 
+@pytest.mark.parametrize(
+    "relative",
+    [
+        "usr/local/lib/python3.13/site-packages/pip/__init__.py",
+        "usr/local/lib/python3.13/site-packages/setuptools/__init__.py",
+        "usr/local/lib/python3.13/site-packages/wheel/__init__.py",
+        "usr/local/lib/python3.13/site-packages/pkg_resources/__init__.py",
+        "usr/local/lib/python3.13/site-packages/pip-25.0.dist-info/METADATA",
+        "usr/local/bin/pip3.13",
+        "usr/local/bin/wheel",
+    ],
+)
+def test_visible_python_package_tooling_fails_the_file_system_check(tmp_path, relative):
+    root = make_image_root(tmp_path)
+    touch(root, relative)
+    assert any("package tooling" in line for line in problems(root))
+
+
+def test_package_tooling_in_a_base_layer_is_not_a_layer_violation(tmp_path):
+    archive = tmp_path / "image.tar"
+    build_image_archive(archive, [{"usr/local/lib/python3.13/site-packages/pip/__init__.py": b"x"}, {}])
+    assert tool.layer_violations(archive) == []
+
+
 def test_layer_scan_finds_artifact_that_a_later_layer_deleted(tmp_path):
     archive = tmp_path / "image.tar"
     build_image_archive(
@@ -185,3 +234,46 @@ def test_main_exit_codes(tmp_path, capsys):
     assert "/usr/bin/gcc" in capsys.readouterr().err
     assert tool.main(["x", "layers", str(tmp_path / "missing.tar")]) == 2
     assert tool.main(["x"]) == 2
+
+
+def test_layer_scan_finds_nmap_build_leftovers_that_a_later_layer_deleted(tmp_path):
+    archive = tmp_path / "image.tar"
+    build_image_archive(
+        archive,
+        [
+            {"opt/nmap-7.993.tar.bz2": b"x", "opt/nmap-7.993.tar.bz2.asc": b"x", "usr/lib/libssh2.la": b"x"},
+            {"opt/nmap-7.993/main.o": b"x", "usr/bin/gcc": b"x"},
+            {"opt/nmap-7.993.tar.bz2": None, "opt/nmap-7.993/main.o": None, "usr/bin/gcc": None},
+        ],
+    )
+    found = " ".join(tool.layer_violations(archive))
+    for expected in ("nmap-7.993.tar.bz2", ".asc", "libssh2.la", "main.o", "/usr/bin/gcc"):
+        assert expected in found, found
+
+
+@pytest.mark.parametrize(
+    "relative", ["usr/bin/mtr", "usr/bin/mtr-packet", "usr/sbin/mtr", "usr/sbin/mtr-packet", "bin/mtr"]
+)
+def test_mtr_binaries_fail_the_file_system_check(tmp_path, relative):
+    root = make_image_root(tmp_path)
+    touch(root, relative)
+    assert any("mtr" in line for line in problems(root))
+
+
+@pytest.mark.parametrize(
+    ("relative", "content"),
+    [
+        ("var/lib/dpkg/status", b"Package: mtr-tiny\nStatus: install ok installed\n"),
+        ("var/lib/dpkg/info/mtr-tiny.list", b"/usr/bin/mtr\n"),
+    ],
+)
+def test_mtr_tiny_package_entry_fails_the_file_system_check(tmp_path, relative, content):
+    root = make_image_root(tmp_path)
+    touch(root, relative, content)
+    assert any("mtr-tiny" in line for line in problems(root))
+
+
+def test_dpkg_status_without_mtr_passes(tmp_path):
+    root = make_image_root(tmp_path)
+    touch(root, "var/lib/dpkg/status", b"Package: iputils-ping\nStatus: install ok installed\n")
+    assert problems(root) == []

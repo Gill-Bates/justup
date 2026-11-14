@@ -4,14 +4,13 @@
 # Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 #
 
-"""Country flag loader: fixed host, validation, limits, caches and fail-soft behavior (no real network)."""
+"""Country flag loader: fixed host, validation, limits, no caching and fail-soft behavior (no real network)."""
 
 from __future__ import annotations
 
 import io
 import threading
 import time
-from pathlib import Path
 from types import SimpleNamespace
 
 import httpx
@@ -50,11 +49,10 @@ def _ok(_request):
 
 
 @pytest.fixture(autouse=True)
-def _clean_cache(tmp_path, monkeypatch):
+def _data_dir(tmp_path, monkeypatch):
     monkeypatch.setenv("JUSTUP_DATA_DIR", str(tmp_path / "data"))
-    flag_images.clear_cache()
-    yield
-    flag_images.clear_cache()
+    monkeypatch.setenv("TMPDIR", str(tmp_path / "tmp"))
+    (tmp_path / "tmp").mkdir()
 
 
 def test_success_returns_png_and_url_contains_only_allowlisted_host_and_code(monkeypatch):
@@ -76,13 +74,6 @@ def test_invalid_codes_make_no_request(monkeypatch, bad):
     assert net.urls == []
 
 
-def test_cache_hit_needs_no_second_request(monkeypatch):
-    net = _Net(monkeypatch, _ok)
-    flag_images.load_flags(["DE"])
-    assert set(flag_images.load_flags(["de", "DE"])) == {"DE"}
-    assert len(net.urls) == 1
-
-
 @pytest.mark.parametrize(
     "handler",
     [
@@ -96,20 +87,12 @@ def test_cache_hit_needs_no_second_request(monkeypatch):
     ],
     ids=["timeout", "http-error", "redirect", "bad-image", "wrong-type", "too-large", "too-many-pixels"],
 )
-def test_failures_fall_back_without_raising_and_are_negatively_cached(monkeypatch, handler):
+def test_failures_fall_back_without_raising_and_are_retried_next_time(monkeypatch, handler):
     net = _Net(monkeypatch, handler)
     assert flag_images.load_flags(["DE"]) == {}
-    assert flag_images.load_flags(["DE"]) == {}  # negative cache: no retry within the TTL
-    assert len(net.urls) == 1
-    assert all(u.host == "flagcdn.com" for u in net.urls)  # a redirect is never followed
-
-
-def test_negative_cache_expires(monkeypatch):
-    net = _Net(monkeypatch, lambda _r: httpx.Response(500))
-    flag_images.load_flags(["DE"])
-    flag_images._failed["DE"] = time.monotonic() - 1  # noqa: SLF001
-    flag_images.load_flags(["DE"])
+    assert flag_images.load_flags(["DE"]) == {}  # no negative cache: every call tries again
     assert len(net.urls) == 2
+    assert all(u.host == "flagcdn.com" for u in net.urls)  # a redirect is never followed
 
 
 def test_codes_per_report_are_capped_and_deduplicated(monkeypatch):
@@ -124,15 +107,6 @@ def test_time_budget_stops_further_requests(monkeypatch):
     monkeypatch.setattr(flag_images, "REPORT_BUDGET_S", 0.0)
     assert flag_images.load_flags(["DE", "GB"]) == {}
     assert net.urls == []
-
-
-def test_memory_cache_is_bounded(monkeypatch):
-    _Net(monkeypatch, _ok)
-    monkeypatch.setattr(flag_images, "CACHE_SIZE", 2)
-    monkeypatch.setattr(flag_images, "MAX_CODES_PER_REPORT", 5)
-    flag_images.load_flags(["AA", "BB", "CC"])
-    assert len(flag_images._cache) == 2  # noqa: SLF001
-    assert "AA" not in flag_images._cache  # noqa: SLF001
 
 
 def test_client_construction_failure_never_raises(monkeypatch):
@@ -153,84 +127,70 @@ class _SlowStream(httpx.SyncByteStream):
 
     def __init__(self, clock):
         self.clock = clock
+        self.chunks = 0
 
     def __iter__(self):
         for _ in range(100):
             self.clock[0] += 1.0
+            self.chunks += 1
             yield b"\x89PNG"
 
 
 def test_slowly_streaming_server_is_cut_off_within_the_budget(monkeypatch):
     clock = [1000.0]
     monkeypatch.setattr(flag_images, "time", SimpleNamespace(monotonic=lambda: clock[0]))
-    chunks = []
     stream = _SlowStream(clock)
-    original = stream.__iter__
-
-    def counting():
-        for chunk in original():
-            chunks.append(chunk)
-            yield chunk
-
-    stream.__iter__ = counting
     _Net(monkeypatch, lambda _r: httpx.Response(200, headers={"content-type": "image/png"}, stream=stream))
     assert flag_images.load_flags(["DE"]) == {}
     assert clock[0] - 1000.0 <= flag_images.REPORT_BUDGET_S + 1.0
-    assert len(chunks) < 10
+    assert 0 < stream.chunks < 10
 
 
-def test_parallel_loads_of_one_code_download_once(monkeypatch):
+def test_each_code_is_downloaded_once_per_call_and_again_on_the_next(monkeypatch):
+    net = _Net(monkeypatch, _ok)
+    assert set(flag_images.load_flags(["de", "DE", " De "])) == {"DE"}
+    assert len(net.urls) == 1
+    assert set(flag_images.load_flags(["DE"])) == {"DE"}
+    assert len(net.urls) == 2  # nothing was kept between the calls
+
+
+def test_no_cache_files_or_directories_are_created(monkeypatch, tmp_path):
+    _Net(monkeypatch, _ok)
+    before = sorted(p for p in tmp_path.rglob("*"))
+    assert set(flag_images.load_flags(["DE", "GB"])) == {"DE", "GB"}
+    assert sorted(p for p in tmp_path.rglob("*")) == before
+    assert not (tmp_path / "data" / "flags").exists()
+    assert not any(tmp_path.rglob("*.png"))
+
+
+def test_module_keeps_no_cache_state():
+    for name in ("_cache", "_failed", "_inflight", "clear_cache", "_file_cache_dir", "CACHE_SIZE", "NEGATIVE_TTL_S"):
+        assert not hasattr(flag_images, name)
+
+
+def test_concurrent_downloads_are_limited(monkeypatch):
+    active = [0]
+    peak = [0]
+    guard = threading.Lock()
+
     def slow_ok(request):
-        time.sleep(0.3)
+        with guard:
+            active[0] += 1
+            peak[0] = max(peak[0], active[0])
+        time.sleep(0.05)
+        with guard:
+            active[0] -= 1
         return _ok(request)
 
-    net = _Net(monkeypatch, slow_ok)
+    _Net(monkeypatch, slow_ok)
     results = []
-    threads = [threading.Thread(target=lambda: results.append(flag_images.load_flags(["DE"]))) for _ in range(3)]
+    threads = [threading.Thread(target=lambda: results.append(flag_images.load_flags(["DE"]))) for _ in range(6)]
     for t in threads:
         t.start()
     for t in threads:
         t.join()
-    assert len(net.urls) == 1
+    assert peak[0] <= flag_images.MAX_CONCURRENT_DOWNLOADS
     assert all(set(r) == {"DE"} for r in results)
-
-
-def test_file_cache_survives_restart_without_network(monkeypatch):
-    _Net(monkeypatch, _ok)
-    flag_images.load_flags(["DE"])
-    assert (Path(flag_images._file_cache_dir()) / "de.png").is_file()  # noqa: SLF001
-    flag_images.clear_cache()  # simulates a new process
-    net = _Net(monkeypatch, lambda _r: httpx.Response(500))
-    assert set(flag_images.load_flags(["DE"])) == {"DE"}
-    assert net.urls == []
-
-
-def test_broken_file_cache_entry_is_discarded_and_reloaded(monkeypatch):
-    directory = Path(flag_images._file_cache_dir())  # noqa: SLF001
-    directory.mkdir(parents=True)
-    (directory / "de.png").write_bytes(b"garbage")
-    net = _Net(monkeypatch, _ok)
-    assert set(flag_images.load_flags(["DE"])) == {"DE"}
-    assert len(net.urls) == 1
-    assert (directory / "de.png").read_bytes().startswith(b"\x89PNG")
-
-
-def test_file_cache_is_bounded_and_leaves_no_temp_files(monkeypatch):
-    _Net(monkeypatch, _ok)
-    monkeypatch.setattr(flag_images, "FILE_CACHE_MAX_FILES", 2)
-    for code in ("AA", "BB", "CC"):
-        flag_images.load_flags([code])
-        time.sleep(0.02)
-    names = sorted(p.name for p in Path(flag_images._file_cache_dir()).iterdir())  # noqa: SLF001
-    assert names == ["bb.png", "cc.png"]
-
-
-def test_unwritable_file_cache_does_not_affect_loading(monkeypatch, tmp_path):
-    blocker = tmp_path / "blocker"
-    blocker.write_text("a file, not a directory")
-    monkeypatch.setenv("JUSTUP_DATA_DIR", str(blocker))
-    _Net(monkeypatch, _ok)
-    assert set(flag_images.load_flags(["DE"])) == {"DE"}
 
 
 def test_a_failing_input_iterable_never_raises(monkeypatch):

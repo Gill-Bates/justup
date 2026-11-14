@@ -73,9 +73,7 @@
 			}
 			return;
 		}
-		var collapsed = root.classList.toggle('ju-nav-sm');
-		try { localStorage.setItem(STORAGE_KEY, collapsed ? 'collapsed' : 'expanded'); } catch (e) { /* storage blocked */ }
-		sync();
+		toggleRail();
 	});
 
 	if (backdrop) backdrop.addEventListener('click', function () { closeDrawer(true); });

@@ -12,6 +12,7 @@
 	}
 
 	const LOOKBACK_WINDOW_MS = 24 * 60 * 60 * 1000; // 24h — time window for downtime stats
+	const LOOKBACK_RANGE_PRESET = '24h'; // Target-detail preset equal to LOOKBACK_WINDOW_MS
 	const POLL_INTERVAL_MS = 30 * 1000;         // 30s — polling interval when tab is visible
 
 
@@ -54,8 +55,12 @@
 	}
 
 
+	const REQUEST_TIMEOUT_MS = 10000;
+	const DOWNTIME_PAGE_SIZE = 5;
 	let downtimeLoading = false;
 	let downtimeRefreshPending = false;
+	let downtimeTargets = [];
+	let downtimePage = 0;
 
 	function byId(id) {
 		return document.getElementById(id);
@@ -69,6 +74,8 @@
 		});
 		const badge = byId('downtime-count-badge');
 		if (badge && name !== 'table-container') badge.classList.add('d-none');
+		const pagination = byId('downtime-pagination');
+		if (pagination) pagination.classList.toggle('d-none', name !== 'table-container' || downtimeTargets.length <= DOWNTIME_PAGE_SIZE);
 	}
 
 	async function hasAnyUptimeData(since) {
@@ -90,7 +97,7 @@
 	function renderRows(targets) {
 		const tableBody = byId('downtime-table-body');
 		if (!tableBody) return;
-		tableBody.innerHTML = '';
+		tableBody.replaceChildren();
 		targets.forEach(function (target) {
 			const services = target.services || {};
 			const tr = document.createElement('tr');
@@ -101,12 +108,13 @@
 			tdName.dataset.label = 'Target';
 			tdName.headers = 'downtime-heading-target';
 			const a = document.createElement('a');
-			a.href = '/ui/targets/' + encodeURIComponent(target.target_id);
-			a.className = 'text-decoration-none text-reset fw-semibold';
-			const icon = document.createElement('span');
-			icon.className = 'material-icons text-danger me-1';
-			icon.textContent = 'error';
-			a.appendChild(icon);
+			// The preset (not fixed timestamps) keeps the link correct however long the page stays open.
+			a.href = '/ui/targets/' + encodeURIComponent(target.target_id) + '?range=' + LOOKBACK_RANGE_PRESET;
+			a.className = 'text-decoration-none text-reset fw-semibold stretched-link';
+			const dot = document.createElement('span');
+			dot.className = window.JuStatusDot.classes('danger') + ' me-1';
+			dot.setAttribute('aria-hidden', 'true');
+			a.appendChild(dot);
 			a.appendChild(document.createTextNode(target.name));
 			tdName.appendChild(a);
 			tr.appendChild(tdName);
@@ -117,6 +125,24 @@
 			});
 			tableBody.appendChild(tr);
 		});
+	}
+
+	function latestStart(target) {
+		return Math.max(0, ...Object.values(target.services || {}).map(function (service) {
+			return Date.parse(service.latest_start) || 0;
+		}));
+	}
+
+	function renderPage() {
+		const pages = Math.ceil(downtimeTargets.length / DOWNTIME_PAGE_SIZE);
+		downtimePage = Math.min(downtimePage, Math.max(0, pages - 1));
+		renderRows(downtimeTargets.slice(downtimePage * DOWNTIME_PAGE_SIZE, (downtimePage + 1) * DOWNTIME_PAGE_SIZE));
+		const status = byId('downtime-page-status');
+		if (status) status.textContent = 'Page ' + (downtimePage + 1) + ' of ' + pages;
+		const prev = byId('downtime-prev');
+		const next = byId('downtime-next');
+		if (prev) prev.disabled = downtimePage === 0;
+		if (next) next.disabled = downtimePage >= pages - 1;
 	}
 
 	async function loadDowntimeOverview() {
@@ -130,19 +156,25 @@
 
 		try {
 			// The server aggregates the incidents, so the result does not depend on the raw point count.
-			const resp = await window.apiFetch('/dashboard/downtime?since=' + encodeURIComponent(since));
+			const resp = await window.apiFetch('/dashboard/downtime?since=' + encodeURIComponent(since), {
+				// A hung request would block every later refresh behind downtimeLoading.
+				signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+			});
 			if (!resp.ok) throw new Error('HTTP ' + resp.status);
 			const data = await resp.json();
 			const targets = data.targets || [];
 
 			if (targets.length === 0) {
+				downtimeTargets = [];
+				downtimePage = 0;
 				showState((await hasAnyUptimeData(since)) ? 'success' : 'empty');
 				return;
 			}
 
-			renderRows(targets.slice().sort(function (a, b) {
-				return worstSeconds(b) - worstSeconds(a);
-			}));
+			downtimeTargets = targets.slice().sort(function (a, b) {
+				return latestStart(b) - latestStart(a) || Number(a.target_id) - Number(b.target_id);
+			});
+			renderPage();
 			const badge = byId('downtime-count-badge');
 			if (badge) badge.textContent = targets.length + ' affected';
 			showState('table-container');
@@ -159,13 +191,19 @@
 		}
 	}
 
-	function worstSeconds(target) {
-		return Math.max.apply(null, Object.values(target.services || {}).map(function (s) {
-			return s.downtime_seconds;
-		}).concat(0));
-	}
-
 	document.addEventListener('DOMContentLoaded', function () {
+		byId('downtime-prev')?.addEventListener('click', function () {
+			if (downtimePage > 0) {
+				downtimePage--;
+				renderPage();
+			}
+		});
+		byId('downtime-next')?.addEventListener('click', function () {
+			if ((downtimePage + 1) * DOWNTIME_PAGE_SIZE < downtimeTargets.length) {
+				downtimePage++;
+				renderPage();
+			}
+		});
 		loadDowntimeOverview();
 
 		// Push-driven while the live channel is healthy; the interval only runs as fallback.

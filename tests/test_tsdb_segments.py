@@ -332,6 +332,35 @@ def test_binary_availability_keeps_an_outage_in_every_rollup_and_in_segments(tmp
     assert dict(_all(tmp_path, "tcp_up_443@5m_median")) == rolled
 
 
+@pytest.mark.parametrize(
+    ("metric", "expected"),
+    [("udp_up_53", 0.0), ("udp_unknown_53", 1.0), ("ping_ms", 1.0)],
+)
+def test_bucket_aggregation_is_min_for_binary_max_for_flags_and_median_otherwise(tmp_path, metric, expected):
+    # One rule for rollups, chart resampling and display buckets: they must never disagree.
+    values = (1, 0, 1, 1, 1)
+    start = (NOW - timedelta(days=40)).replace(minute=0, second=0, microsecond=0)
+    _write_legacy(
+        tmp_path, metric, start, start + timedelta(minutes=5), timedelta(minutes=1), value=lambda i, t: values[i]
+    )
+    tsdb.run_rollups(tmp_path, 1, 3650)
+    assert dict(_all(tmp_path, f"{metric}@5m_median")) == {start.isoformat(): expected}
+    points = [tsdb.MetricPoint(ts=start + timedelta(minutes=i), value=v) for i, v in enumerate(values)]
+    resampled = tsdb._resample_points(
+        points, metric=metric, since=start, until=start + timedelta(minutes=5), max_points=1
+    )
+    assert [p.value for p in resampled if p.ts == start] == [expected]
+    recent = NOW.replace(minute=0, second=0, microsecond=0) - timedelta(hours=1)
+    for i, v in enumerate(values):
+        tsdb.append_point(
+            tmp_path, target_id=2, metric=metric, value=v, retention_days=365, at=recent + timedelta(minutes=i)
+        )
+    shown = tsdb.query_display_series(
+        tmp_path, target_id=2, metric=metric, since=recent, until=recent + timedelta(minutes=5), bucket_seconds=300
+    )
+    assert [p["value"] for p in shown["points"]] == [expected]
+
+
 def test_http_status_is_never_rolled_up_and_its_distribution_survives_compression(tmp_path):
     start = NOW - timedelta(days=29, hours=12)
     codes = [200, 200, 503, 404, 200]
@@ -529,7 +558,7 @@ def test_pdf_report_is_built_from_compressed_history(tmp_path, monkeypatch):
     builder = PDFReportBuilder(data, "a4")
     monkeypatch.setattr(builder, "_get_whatweb_data", lambda: None)
     monkeypatch.setattr(builder, "_get_ssl_data", lambda: None)
-    monkeypatch.setattr(builder, "_get_mtr_data", lambda **_k: ([], [], False))
+    monkeypatch.setattr(builder, "_get_route_data", lambda **_k: ([], [], False))
     assert builder.build().startswith(b"%PDF")
 
 
@@ -815,10 +844,11 @@ def _damaged_newest_segment(tmp_path):
     tsdb.compact_target(tmp_path, 1, throttle=False)
     victim = _segments(tmp_path)[-1].path
     intact = victim.read_bytes()
-    before = len(full) - seg.segment_info(victim)[0]  # points held by the older segments
+    intact_count = seg.segment_info(victim)[0]
+    before = len(full) - intact_count  # points held by the older segments
     _damage(victim, victim.stat().st_size - 20)
     readable = len(seg.read_lines_safely(victim)[0])
-    assert 5 <= readable < seg.segment_info(victim)[0] + 1_000_000  # a real, non-empty prefix
+    assert 5 <= readable < intact_count  # a real, non-empty, strictly shorter prefix
     tsdb._tail_cache.clear()
     return victim, intact, full, before + readable
 
@@ -893,3 +923,118 @@ def test_a_segment_changing_during_the_quarantine_copy_drops_the_attempt_cleanly
     tsdb.compact_target(tmp_path, 1, throttle=False)
     assert victim.read_bytes() == changed + b"\0"
     assert not list(tmp_path.rglob("*.tmp")) and not list(tmp_path.rglob("*.corrupt-*"))
+
+
+def _batch(tmp_path, lock_lost, metrics=(("http_up", 1), ("http_ms", 12.5), ("http_status", 200))):
+    return tsdb.append_points(
+        tmp_path, target_id=1, points=list(metrics), retention_days=30, at=NOW, lock_lost=lock_lost
+    )
+
+
+def _series_files(tmp_path) -> dict[str, bytes]:
+    return {p.name: p.read_bytes() for p in sorted((tmp_path / "target_1").glob("*.jsonl"))}
+
+
+def test_append_points_writes_every_series_of_the_cycle(tmp_path):
+    assert _batch(tmp_path, lambda: False) is True
+    assert set(_series_files(tmp_path)) == {"http_up.jsonl", "http_ms.jsonl", "http_status.jsonl"}
+    assert [p.value for p in tsdb.query(tmp_path, target_id=1, metric="http_ms")] == [12.5]
+
+
+def test_append_points_rolls_back_the_whole_cycle_when_the_lock_is_lost_after_an_append(tmp_path):
+    tsdb.append_point(
+        tmp_path, target_id=1, metric="http_up", value=0, retention_days=30, at=NOW - timedelta(minutes=1)
+    )
+    before = _series_files(tmp_path)
+    real_append = tsdb._append_batch_line
+    lost = threading.Event()
+
+    def append_then_lose_lock(path, line):
+        real_append(path, line)
+        lost.set()  # the lock is gone after the first successful append
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(tsdb, "_append_batch_line", append_then_lose_lock)
+        assert _batch(tmp_path, lost.is_set) is False
+
+    assert _series_files(tmp_path) == before  # pre-existing line kept, new series removed, no prefix left
+
+
+def test_append_points_rolls_back_and_raises_when_a_later_write_fails(tmp_path):
+    tsdb.append_point(
+        tmp_path, target_id=1, metric="http_up", value=0, retention_days=30, at=NOW - timedelta(minutes=1)
+    )
+    before = _series_files(tmp_path)
+    real_append = tsdb._append_batch_line
+    calls: list[str] = []
+
+    def fail_on_second(path, line):
+        calls.append(path.name)
+        if len(calls) == 2:
+            raise OSError("disk full")
+        real_append(path, line)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(tsdb, "_append_batch_line", fail_on_second)
+        with pytest.raises(OSError, match="disk full"):
+            _batch(tmp_path, lambda: False)
+
+    assert _series_files(tmp_path) == before
+
+
+def test_availability_samples_never_show_half_of_a_concurrent_batch(tmp_path):
+    cycle = (("http_up", 1), ("ping_up", 0))
+    real_append = tsdb._append_batch_line
+    first_line_written = threading.Event()
+    reader_done = threading.Event()
+    appended: list[str] = []
+
+    def pause_after_first_line(path, line):
+        real_append(path, line)
+        appended.append(path.name)
+        if len(appended) == 1:
+            first_line_written.set()
+            # A snapshot-consistent reader is blocked by the batch lock and cannot finish here.
+            reader_done.wait(timeout=1.0)
+
+    result: list[tsdb.AvailabilitySeries] = []
+
+    def read_report_samples():
+        first_line_written.wait(timeout=5)
+        result.append(
+            tsdb.query_availability_runs(tmp_path, target_id=1, metrics=("http_up", "ping_up"), interval_seconds=30)
+        )
+        reader_done.set()
+
+    reader = threading.Thread(target=read_report_samples)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(tsdb, "_append_batch_line", pause_after_first_line)
+        reader.start()
+        assert _batch(tmp_path, lambda: False, metrics=cycle) is True
+    reader.join(timeout=10)
+    assert not reader.is_alive()
+    # Either nothing yet or the complete cycle (ping down makes the sample 0); never http alone (1).
+    (series,) = result
+    assert [(run.value, run.first) for run in series.runs] in ([], [(0, NOW)])
+
+
+def test_a_restore_invalidates_cached_segment_counts_even_for_identical_size_and_mtime(tmp_path):
+    first = gzip.compress(b"a\nb\nc\nd\n", mtime=0)
+    seg_file = tmp_path / "target_1" / "ping_ms.2026W41.jsonl.gz"
+    seg_file.parent.mkdir()
+    seg_file.write_bytes(first)
+    stamp = seg_file.stat().st_mtime_ns
+    assert compute_storage_stats(tmp_path / "x.db", tmp_path)["total_points"] == 4
+
+    # Restored segment: other content, same path, same size (gzip ignores trailing zero padding), same mtime.
+    replacement = gzip.compress(b"a\n", mtime=0)
+    seg_file.write_bytes(replacement + b"\0" * (len(first) - len(replacement)))
+    os.utime(seg_file, ns=(stamp, stamp))
+    assert compute_storage_stats(tmp_path / "x.db", tmp_path)["total_points"] == 4  # the key cannot tell them apart
+
+    assert maintenance.begin_maintenance(timeout=1.0)
+    try:
+        maintenance.confirm_data_replaced()
+    finally:
+        maintenance.end_maintenance()
+    assert compute_storage_stats(tmp_path / "x.db", tmp_path)["total_points"] == 1

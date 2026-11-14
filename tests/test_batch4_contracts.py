@@ -412,6 +412,11 @@ class _FakeProc:
 def _backend_with(proc):
     be = object.__new__(cli_mod.SignalCliBackend)
     be._state_lock = threading.RLock()
+    be._status_condition = threading.Condition()
+    be._status_value = None
+    be._status_expires_at = 0.0
+    be._status_generation = 0
+    be._status_fetching = False
     be._link_process = proc
     be._link_session_id = "sid"
     be._link_drain_threads = cli_mod._start_pipe_drain(proc)
@@ -497,3 +502,12 @@ def test_spooler_now_is_timezone_aware_utc():
     now = spooler_mod._utcnow()
     assert now.tzinfo is not None
     assert now.utcoffset().total_seconds() == 0
+
+
+def test_debug_header_detection_ignores_only_the_trace_header():
+    analyze = whatweb_parser._analyze_security
+    assert analyze({"HTTP-Header": "X-Trace-ID: abc123"}, "http://h")["debug_headers"] is False
+    mixed = {"HTTP-Header": "X-Trace-ID: abc123; X-Debug-Token: 9f"}
+    assert analyze(mixed, "http://h")["debug_headers"] is True
+    nested = {"HTTP-Header": ["X-Request-ID: 1", "traceparent: 00-aa-bb-01 xdebug"]}
+    assert analyze(nested, "http://h")["debug_headers"] is True

@@ -6,7 +6,7 @@ justUp! does not terminate TLS. Run it behind a reverse proxy for HTTPS.
 
 justUp! reads the client IP from `X-Forwarded-For` or `X-Real-IP`, and the scheme
 from `X-Forwarded-Proto`, only when the direct sender is listed in
-`UPMON_TRUSTED_PROXIES`. This matters for rate limiting, lockout, the audit log,
+`TRUSTED_PROXIES`. This matters for rate limiting, lockout, the audit log,
 and the `Secure` cookie flag.
 
 !!! danger "List only your proxy"
@@ -16,8 +16,8 @@ and the `Secure` cookie flag.
     UPMON_TRUSTED_PROXIES=10.0.0.2
     ```
 
-The shipped `docker/docker-compose.yml` passes `UPMON_TRUSTED_PROXIES` through from
-your shell or `.env` file. The default is empty, so no proxy is trusted until you set
+The shipped `docker/docker-compose.yml` reads `UPMON_TRUSTED_PROXIES` from
+your shell or `.env` file and passes it to the container as `TRUSTED_PROXIES`. The default is empty, so no proxy is trusted until you set
 it. There is no built-in trusted address or Docker subnet.
 
 With the variable unset, `X-Forwarded-For`, `X-Real-IP`, `Forwarded`, and
@@ -27,7 +27,7 @@ direct connection. A peer outside the list cannot spoof these values either. For
 `X-Forwarded-For`, justUp! walks the chain from the right and stops at the first
 address that is not trusted. `X-Forwarded-Proto` uses the rightmost value, the one
 set by the closest proxy. IPv4-mapped IPv6 addresses (`::ffff:10.0.0.2`) match
-IPv4 entries of `UPMON_TRUSTED_PROXIES`.
+IPv4 entries of `TRUSTED_PROXIES`.
 
 !!! warning "Overwrite client-supplied headers"
     Configure the proxy to replace or append to `X-Forwarded-For` and to set
@@ -65,6 +65,21 @@ another origin is therefore not possible.
 minute per client, and only writes a `CSP_VIOLATION` log line without query strings.
 It stores nothing. Allow `POST /csp-report` through the proxy.
 
+## Request body limit
+
+justUp! rejects a `POST /settings/restore` body above the backup size limit (10 GiB plus
+1 MiB framing) with `413` while the body streams in, before authentication, also without
+`Content-Length`. Set the proxy limit as well so oversized uploads never reach the app.
+Allow the backup size for the restore path only and keep the proxy default elsewhere:
+
+```nginx
+location = /settings/restore {
+    client_max_body_size 10g;
+    proxy_request_buffering off;
+    proxy_pass http://127.0.0.1:8000;
+}
+```
+
 ## Examples
 
 === "Nginx"
@@ -83,7 +98,7 @@ It stores nothing. Allow `POST /csp-report` through the proxy.
     }
     ```
 
-    Set `UPMON_TRUSTED_PROXIES=127.0.0.1` in the justUp! environment.
+    Set `TRUSTED_PROXIES=127.0.0.1` in the justUp! environment.
 
 === "Traefik (labels)"
 

@@ -18,6 +18,7 @@ import {
     DOM, 
     withSpinner, 
     getErrorMessage, 
+    getErrorInfo,
     notify,
     setSuccess, 
     setError, 
@@ -51,7 +52,7 @@ let _loadSignalStatus = loadSignalStatus;
 let _linkAbort = null;
 
 /**
- * Set the status loader function (called from signal-actions.js init)
+ * Set the status loader function (no production caller; tests inject a loader through it)
  * @param {Function} fn
  */
 export function setStatusLoader(fn) {
@@ -63,7 +64,7 @@ export function setStatusLoader(fn) {
  */
 function refreshStatus() {
     if (_loadSignalStatus) {
-        _loadSignalStatus();
+        _loadSignalStatus({ forceRefresh: true });
     }
 }
 
@@ -82,7 +83,7 @@ export function signalSelectMode(mode) {
     
     if (!modeSelection) return;
     
-    modeSelection.classList.add('d-none');
+    modeSelection.hidden = true;
     
     if (mode === 'link') {
         flowLink?.classList.remove('d-none');
@@ -101,13 +102,13 @@ export function signalBackToModeSelection() {
     
     flowLink?.classList.add('d-none');
     flowRegister?.classList.add('d-none');
-    modeSelection?.classList.remove('d-none');
+    if (modeSelection) modeSelection.hidden = false;
     
     // Reset link flow UI
     const stepNumber = document.getElementById('signal-link-step-number');
     const stepQr = document.getElementById('signal-link-step-qr');
     if (stepNumber) stepNumber.style.display = 'block';
-    if (stepQr) stepQr.style.display = 'none';
+    if (stepQr) stepQr.hidden = true;
     
     // Cleanup QR resources
     const qrContainer = DOM.signalQrContainerLink();
@@ -151,7 +152,7 @@ export async function signalGenerateQrCode() {
     
     // Hide number input, show QR step
     if (stepNumber) stepNumber.style.display = 'none';
-    if (stepQr) stepQr.style.display = 'block';
+    if (stepQr) stepQr.hidden = false;
     
     // Load QR code (number is optional)
     await signalLoadQrCode(number || null);
@@ -186,7 +187,7 @@ export async function signalLoadQrCode(number) {
             const stepQr = document.getElementById('signal-link-step-qr');
             const statusEl = DOM.signalLinkStatus();
             
-            if (stepQr) stepQr.style.display = 'none';
+            if (stepQr) stepQr.hidden = true;
             if (stepNumber) stepNumber.style.display = 'block';
             if (statusEl) setError(statusEl, errorMessage);
             container.innerHTML = '';
@@ -265,7 +266,7 @@ export async function signalConfirmLink() {
                     if (numberStatus) setError(numberStatus, 'Linking timed out. Generate a new QR code to try again.');
                     const stepNumber = document.getElementById('signal-link-step-number');
                     const stepQr = document.getElementById('signal-link-step-qr');
-                    if (stepQr) stepQr.style.display = 'none';
+                    if (stepQr) stepQr.hidden = true;
                     if (stepNumber) stepNumber.style.display = 'block';
                     revokeCurrentQrBlobUrl();
                 } else {
@@ -316,7 +317,7 @@ export async function signalConfirmLink() {
             notify('success', 'Signal account linked');
             
             const stepQr = document.getElementById('signal-link-step-qr');
-            if (stepQr) stepQr.style.display = 'none';
+            if (stepQr) stepQr.hidden = true;
             
             // Clear QR code container and cleanup blob URL
             const qrContainer = DOM.signalQrContainerLink();
@@ -496,43 +497,23 @@ async function checkAndSubmitCode(boxes) {
 }
 
 /**
- * Clear all verification code boxes (called on error)
+ * Reset the verification code boxes after a failed verification and focus the first one.
+ * @param {string|null} message Persistent group error (null: reset only)
  */
-function clearVerificationCodeBoxes() {
+function resetVerificationCodeBoxes(message) {
     const container = DOM.signalVerifyBoxes();
     if (!container) return;
-    
     const boxes = container.querySelectorAll('.signal-code-box');
     boxes.forEach(box => {
         box.value = '';
         box.disabled = false;
-        box.classList.remove('is-invalid');
-        box.removeAttribute('aria-invalid');
     });
-    
-    if (boxes[0]) {
-        setTimeout(() => boxes[0].focus(), 100);
+    if (message && window.JuFieldErrors) {
+        window.JuFieldErrors.show(container.closest('#signal-reg-step-2') || container, [{ id: container.id, message }]);
+    } else if (boxes[0]) {
+        boxes[0].focus();
     }
 }
-
-/**
- * Show error state on verification code boxes
- */
-function showVerificationCodeError() {
-    const container = DOM.signalVerifyBoxes();
-    if (!container) return;
-    
-    const boxes = container.querySelectorAll('.signal-code-box');
-    boxes.forEach(box => {
-        box.classList.add('is-invalid');
-        box.setAttribute('aria-invalid', 'true');
-    });
-    
-    setTimeout(() => {
-        clearVerificationCodeBoxes();
-    }, 600);
-}
-
 /**
  * Register a new phone number with Signal
  */
@@ -589,29 +570,16 @@ export async function signalRegister() {
                 
                 signalAdvanceToStep('signal-reg-step-1', 'signal-reg-step-2');
             } else {
-                const error = await getErrorMessage(resp);
-                
-                const needsCaptcha = error && (
-                    error.toLowerCase().includes('captcha') ||
-                    error.toLowerCase().includes('challenge')
-                );
-                
-                if (needsCaptcha && captchaSection) {
+                const { message: error, code } = await getErrorInfo(resp);
+
+                if (code === 'captcha_required' && captchaSection) {
                     captchaSection.classList.remove('d-none');
                     setWarning(statusEl, 'Captcha required - solve it and paste the token below, then try again');
+                } else if (code === 'already_registered') {
+                    notify('info', 'This number is already registered');
+                    refreshStatus();
                 } else {
-                    const alreadyRegistered = error && (
-                        error.toLowerCase().includes('already registered') ||
-                        error.toLowerCase().includes('existing account') ||
-                        error.toLowerCase().includes('already linked')
-                    );
-                    
-                    if (alreadyRegistered) {
-                        notify('info', 'This number is already registered');
-                        refreshStatus();
-                    } else {
-                        setError(statusEl, error);
-                    }
+                    setError(statusEl, error);
                 }
             }
         });
@@ -650,6 +618,7 @@ export async function signalVerify() {
 
     const normalizedNumber = normalizeE164(number);
 
+    let verified = false;
     try {
         await withSpinner(btn, async () => {
             const resp = await apiFetch(SIGNAL_API.verify, {
@@ -659,6 +628,7 @@ export async function signalVerify() {
             });
 
             if (resp.ok) {
+                verified = true;
                 setSuccess(statusEl, 'Verified! Number registered successfully');
                 notify('success', 'Phone number verified');
                 
@@ -684,15 +654,16 @@ export async function signalVerify() {
             } else {
                 const error = await getErrorMessage(resp);
                 setError(statusEl, error);
-                showVerificationCodeError();
+                resetVerificationCodeBoxes('The code was not accepted. Enter all 6 digits again.');
             }
         });
     } catch (e) {
         console.warn('Signal verify error:', e);
         setError(statusEl, 'Network error');
-        showVerificationCodeError();
+        resetVerificationCodeBoxes(null);
     } finally {
         setSignalBusy(false);
+        if (verified) refreshStatus();
     }
 }
 

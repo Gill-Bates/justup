@@ -11,13 +11,14 @@ from __future__ import annotations
 from urllib.parse import urlsplit
 
 from ..models.targets import TargetCreate, validate_host
+from ..utils.constants import DEFAULT_TARGET_DOWN_ALERT_DELAY_MINUTES
 from .target_identity import normalize_host
 
 PROFILE_LABELS = {
     "website": "Website",
     "api": "API / health endpoint",
     "server": "Server / host",
-    "tcp": "TCP service",
+    "tcp": "TCP/UDP service",
     "custom": "Custom",
 }
 
@@ -29,6 +30,7 @@ def build_profile(
     name: str | None = None,
     group: str | None = None,
     tcp_ports: str | None = None,
+    udp_ports: str | None = None,
     overrides: dict | None = None,
 ) -> tuple[TargetCreate, bool]:
     if profile not in PROFILE_LABELS:
@@ -37,13 +39,13 @@ def build_profile(
     if not address:
         raise ValueError("Address is required")
     is_http = profile in {"website", "api"} or (profile == "custom" and "://" in address)
-    suggested_https = is_http and "://" not in address
     values: dict = {
         "name": name or address,
         "group": group,
         "interval_seconds": 60,
         "retention_days": 365,
         "max_retries": 2,
+        "down_alert_delay_minutes": DEFAULT_TARGET_DOWN_ALERT_DELAY_MINUTES,
         "auto_close_alert": True,
         "http_prefer_head": False,
     }
@@ -67,9 +69,12 @@ def build_profile(
             raise ValueError("Host is required")
         values["host"] = host
         if profile == "tcp":
-            if not tcp_ports or not tcp_ports.strip():
-                raise ValueError("TCP ports must be selected explicitly")
-            values.update(enable_tcp_connect=True, tcp_ports=tcp_ports)
+            if not (tcp_ports and tcp_ports.strip()) and not (udp_ports and udp_ports.strip()):
+                raise ValueError("TCP or UDP ports must be selected explicitly")
+            if tcp_ports and tcp_ports.strip():
+                values.update(enable_tcp_connect=True, tcp_ports=tcp_ports)
+            if udp_ports and udp_ports.strip():
+                values.update(enable_udp_scan=True, udp_ports=udp_ports)
         else:
             values["enable_ping"] = True
     if overrides:
@@ -81,6 +86,13 @@ def build_profile(
         if unknown:
             raise ValueError(f"Unknown settings: {', '.join(sorted(unknown))}")
         values.update(overrides)
+    # The address carried no scheme and the effective settings check HTTPS: the UI offers to confirm it.
+    # Derived after the overrides, so a profile or override that ends up without HTTP or with http:// differs.
+    suggested_https = (
+        "://" not in address
+        and bool(values.get("enable_http_check"))
+        and urlsplit(str(values.get("http_url") or "")).scheme.lower() == "https"
+    )
     if values.get("enable_tcp_connect"):
         selected_ports = values.get("tcp_ports") or tcp_ports
         if not selected_ports or not str(selected_ports).strip():
@@ -89,4 +101,9 @@ def build_profile(
         if not values.get("tcp_host"):
             values["tcp_host"] = values["host"]
         values["tcp_ports"] = selected_ports
+    if values.get("enable_udp_scan"):
+        selected_udp_ports = values.get("udp_ports") or udp_ports
+        if not selected_udp_ports or not str(selected_udp_ports).strip():
+            raise ValueError("UDP ports must be selected explicitly")
+        values["udp_ports"] = selected_udp_ports
     return TargetCreate.model_validate(values), suggested_https

@@ -1,4 +1,7 @@
 # Reports (PDF)
+An administrator can switch PDF reports off with **Enable PDF Export** (Settings > General > PDF).
+While it is off, the report button is not shown and the report API refuses every request with
+`403`; see [Settings](../configuration/settings.md).
 
 justUp! creates a print-friendly PDF report per target (A4 or Letter; set under
 Settings > General). On the target page, select the **Range** first (custom dates
@@ -17,25 +20,6 @@ the automatic download, use the notification row. After the report expires, the 
 files are removed after they expire; the Compose file keeps them in a volatile `tmpfs`.
 
 ## Content
-
-## PDF typography contract
-
-ReportLab PDF text uses the embedded IBM Plex Sans Regular, Bold, Italic, and Bold Italic
-fonts. HarfBuzz shaping is mandatory for paragraphs, tables, and direct canvas text; PDF
-generation fails with a clear error if the selected font cannot be shaped. Text-width and
-wrapping calculations use the same shaped glyph advances as canvas rendering, including
-centering and right alignment. Do not use `pdfmetrics.stringWidth()` for report layout.
-
-`uharfbuzz` is pinned in `pyproject.toml` and the hash-checked, wheel-only
-`docker/requirements.lock`; production installs do not download fonts or shaping data at
-runtime. IBM Plex Sans is checked for missing glyphs before shaping. Material Icons are a
-deliberate exception: they are symbol glyphs rather than prose and remain unshaped.
-
-Charts are rasterized separately by Matplotlib's Agg/FreeType text renderer. The PDF's
-ReportLab shaping settings do not apply to chart images; the chart configuration selects
-the same local IBM Plex Sans family. Changes to PDF typography must keep shaping contract
-tests and full-report rendering checks passing, including searchable/extractable text,
-font embedding, and layout at the supported paper sizes.
 
 | No. | Chapter | Content |
 | --- | --- | --- |
@@ -72,16 +56,39 @@ The interactive map is described in [Traceroute & maps](traceroute.md).
   95 %, Critical below 95 %. It does not depend on the SLA.
 - The cover shows the start page title of the website as a subheadline under the
   name, only if the page has one. It comes from the report's WhatWeb scan of the
-  configured HTTP check URL; nothing is stored.
+  configured HTTP check URL; nothing is stored. WhatWeb refuses an `https://` URL with a host
+  name (it cannot pin the validated address and still send the name for TLS), so such a report
+  has no subheadline and no technology data; an `http://` URL or an IP address works.
 - The cover shows how much of the period the availability checks cover. Below
   80 % coverage the availability is shown as an approximation with a note.
-- Downtime is an estimate (failed checks x interval; event spans in the log), not an
-  exact outage time.
+- Downtime and the downtime log use the same recorded downtime periods as the dashboard. Time
+  without measurements is never counted as downtime. Only if the periods cannot be read does the
+  report fall back to the sampled data (failed checks x interval), which is an estimate.
 - The SLA table shows only configured targets. Charts without a latency SLA draw a
   default reference line (500 ms response, 100 ms ping), labelled as not an SLA.
-- The traceroute queries at most 20 hops. If the destination was not reached, the
-  report says so; a destination that did not answer is marked **NO REPLY**.
+- The traceroute (Nmap, the same measurement as the web view) queries at most 30 hops and
+  shows one round-trip time per hop, without loss or average columns. If the destination was
+  not reached, the report says so; a destination that did not answer is marked **NO REPLY**.
 - TLS checks show text labels (PASS / FAIL), **NOT TESTED**, or **INCOMPLETE**, not
   only colors.
 - The HTTP status chart counts stored samples; older data may be aggregated.
 - Timestamps use the time zone named in the report.
+
+## PDF typography contract
+
+ReportLab PDF text uses the embedded IBM Plex Sans Regular, Bold, Italic, and Bold Italic
+fonts. HarfBuzz shaping is mandatory for paragraphs, tables, and direct canvas text; PDF
+generation fails with a clear error if the selected font cannot be shaped. Text-width and
+wrapping calculations use the same shaped glyph advances as canvas rendering, including
+centering and right alignment. Do not use `pdfmetrics.stringWidth()` for report layout.
+
+`uharfbuzz` is declared in `pyproject.toml` and installed from a wheel at build time;
+production installs do not download fonts or shaping data at
+runtime. IBM Plex Sans is checked for missing glyphs before shaping. Material Icons are a
+deliberate exception: they are symbol glyphs rather than prose and remain unshaped.
+
+Charts are rasterized separately by Matplotlib's Agg/FreeType text renderer. The PDF's
+ReportLab shaping settings do not apply to chart images; the chart configuration selects
+the same local IBM Plex Sans family. Changes to PDF typography must keep shaping contract
+tests and full-report rendering checks passing, including searchable/extractable text,
+font embedding, and layout at the supported paper sizes.

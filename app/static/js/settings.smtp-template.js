@@ -27,11 +27,21 @@
   let currentMode = 'preview';
   let wysiwygInitialized = false;
 
+  // A toggle button of a button group: `.active` is the look, `aria-pressed` the state for assistive technology.
+  function setPressed(button, pressed) {
+    if (!button) return;
+    button.classList.toggle('active', pressed);
+    button.setAttribute('aria-pressed', String(pressed));
+  }
   function setStatus(text, kind) {
     const status = document.getElementById('template-status');
     if (!status) return;
 
     status.classList.remove('text-success', 'text-danger', 'text-warning', 'text-info');
+    if (kind === 'text-warning') {
+      status.replaceChildren(window.JuWarning.create(text));
+      return;
+    }
     if (kind) status.classList.add(kind);
     status.textContent = text || '';
   }
@@ -109,8 +119,74 @@
 
     // Bind toolbar buttons
     bindToolbar();
+    bindLinkRow();
 
     wysiwygInitialized = true;
+  }
+
+  // Link address row (replaces the native prompt): a blocked or empty address is a field error, nothing is inserted.
+  let linkSelection = null;
+
+  function closeLinkRow(returnFocus) {
+    const row = document.getElementById('wysiwyg-link-row');
+    const input = document.getElementById('wysiwyg-link-url');
+    if (!row) return;
+    if (window.JuFieldErrors && input) window.JuFieldErrors.clear(input);
+    row.hidden = true;
+    linkSelection = null;
+    if (returnFocus) document.querySelector('.wysiwyg-toolbar [data-cmd="createLink"]')?.focus();
+  }
+
+  function openLinkRow(doc) {
+    const row = document.getElementById('wysiwyg-link-row');
+    const input = document.getElementById('wysiwyg-link-url');
+    if (!row || !input) return;
+    // The editor selection survives in its own document; keep a copy to restore it when inserting.
+    const selection = doc.getSelection && doc.getSelection();
+    linkSelection = selection && selection.rangeCount ? selection.getRangeAt(0).cloneRange() : null;
+    input.value = 'https://';
+    if (window.JuFieldErrors) window.JuFieldErrors.clear(input);
+    row.hidden = false;
+    input.focus();
+    input.select();
+  }
+
+  function applyLink() {
+    const input = document.getElementById('wysiwyg-link-url');
+    const doc = getWysiwygDocument();
+    if (!input || !doc) return;
+    const result = window.JuLinkUrl.validateLinkUrl(input.value);
+    if (!result.ok) {
+      window.JuFieldErrors.show(document.getElementById('wysiwyg-link-row'), [{ id: 'wysiwyg-link-url', message: result.error }]);
+      return;
+    }
+    doc.body?.focus();
+    const selection = doc.getSelection && doc.getSelection();
+    if (selection && linkSelection) {
+      selection.removeAllRanges();
+      selection.addRange(linkSelection);
+    }
+    doc.execCommand('createLink', false, result.url);
+    closeLinkRow(false);
+    doc.body?.focus();
+  }
+
+  function bindLinkRow() {
+    const input = document.getElementById('wysiwyg-link-url');
+    if (!input || input.dataset.bound) return;
+    input.dataset.bound = '1';
+    document.getElementById('wysiwyg-link-apply')?.addEventListener('click', applyLink);
+    document.getElementById('wysiwyg-link-cancel')?.addEventListener('click', () => closeLinkRow(true));
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        applyLink();
+      } else if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        closeLinkRow(true);
+      }
+    });
   }
 
   function bindToolbar() {
@@ -126,18 +202,8 @@
         if (!doc) return;
 
         if (cmd === 'createLink') {
-          var url = prompt('Enter URL:', 'https://');
-          if (url) {
-            // Block javascript: and data: URLs to prevent XSS
-            // Browsers ignore whitespace/control chars inside URL schemes
-            // eslint-disable-next-line no-control-regex
-            var normalized = url.replace(/[\s\u0000-\u001f]/g, '').toLowerCase();
-            if (normalized.startsWith('javascript:') || normalized.startsWith('data:')) {
-              alert('Invalid URL protocol');
-              return;
-            }
-            doc.execCommand(cmd, false, url);
-          }
+          openLinkRow(doc);
+          return;
         } else {
           doc.execCommand(cmd, false, null);
         }
@@ -234,11 +300,8 @@
     // Remove event handler attributes (onclick, onerror, etc.) and javascript: URLs
     doc.querySelectorAll('*').forEach(function (el) {
       Array.from(el.attributes).forEach(function (attr) {
-        // Browsers ignore whitespace/control chars inside URL schemes
-        // eslint-disable-next-line no-control-regex
-        var value = attr.value.replace(/[\s\u0000-\u001f]/g, '').toLowerCase();
         if (attr.name.startsWith('on') ||
-            (/^(href|src|xlink:href|action|formaction)$/.test(attr.name) && value.startsWith('javascript:'))) {
+            (/^(href|src|xlink:href|action|formaction)$/.test(attr.name) && window.JuLinkUrl.isBlockedUrlAttribute(el.tagName, attr.name, attr.value))) {
           el.removeAttribute(attr.name);
         }
       });
@@ -303,8 +366,8 @@
     previewVariant = variant === 'resolved' ? 'resolved' : 'down';
     const btnDown = document.getElementById('btn-preview-down');
     const btnResolved = document.getElementById('btn-preview-resolved');
-    btnDown?.classList.toggle('active', previewVariant === 'down');
-    btnResolved?.classList.toggle('active', previewVariant === 'resolved');
+    setPressed(btnDown, previewVariant === 'down');
+    setPressed(btnResolved, previewVariant === 'resolved');
     if (currentMode === 'preview') updatePreview();
   }
 
@@ -325,20 +388,20 @@
       syncWysiwygToSource();
     }
 
-    if (wysiwygContainer) wysiwygContainer.style.display = 'none';
-    if (htmlContainer) htmlContainer.style.display = 'none';
-    if (previewContainer) previewContainer.style.display = 'none';
+    if (wysiwygContainer) wysiwygContainer.hidden = true;
+    if (htmlContainer) htmlContainer.hidden = true;
+    if (previewContainer) previewContainer.hidden = true;
 
-    btnEdit?.classList.remove('active');
-    btnHtml?.classList.remove('active');
-    btnPreview?.classList.remove('active');
+    setPressed(btnEdit, false);
+    setPressed(btnHtml, false);
+    setPressed(btnPreview, false);
 
     currentMode = mode;
 
     if (mode === 'edit') {
       // WYSIWYG editor
-      if (wysiwygContainer) wysiwygContainer.style.display = '';
-      btnEdit?.classList.add('active');
+      if (wysiwygContainer) wysiwygContainer.hidden = false;
+      setPressed(btnEdit, true);
       
       // Initialize WYSIWYG on first use
       if (!wysiwygInitialized) {
@@ -349,13 +412,13 @@
       }
     } else if (mode === 'html') {
       // Source mode
-      if (htmlContainer) htmlContainer.style.display = '';
-      btnHtml?.classList.add('active');
+      if (htmlContainer) htmlContainer.hidden = false;
+      setPressed(btnHtml, true);
       document.getElementById('email_html_source')?.focus();
     } else {
       // Preview mode (default)
-      if (previewContainer) previewContainer.style.display = '';
-      btnPreview?.classList.add('active');
+      if (previewContainer) previewContainer.hidden = false;
+      setPressed(btnPreview, true);
       updatePreview();
     }
   }

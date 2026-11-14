@@ -35,7 +35,7 @@ VIOLATION = {"csp-report": {"violated-directive": "script-src", "blocked-uri": "
 def _env(monkeypatch):
     monkeypatch.setenv("SECRET_KEY", Fernet.generate_key().decode("ascii"))
     monkeypatch.setattr(crypto, "_primary_key", None)
-    monkeypatch.delenv("UPMON_TRUSTED_PROXIES", raising=False)
+    monkeypatch.delenv("TRUSTED_PROXIES", raising=False)
     reset_all()
 
 
@@ -174,7 +174,7 @@ def test_report_sink_is_rate_limited_per_untrusted_peer_even_with_forged_xff(app
 
 
 def test_report_sink_rate_limit_uses_forwarded_client_behind_trusted_proxy(app, monkeypatch):
-    monkeypatch.setenv("UPMON_TRUSTED_PROXIES", PROXY)
+    monkeypatch.setenv("TRUSTED_PROXIES", PROXY)
     client = TestClient(app, client=(PROXY, 1))
     codes = [
         client.post(
@@ -230,7 +230,7 @@ def test_without_configuration_only_the_direct_peer_counts(login_env):
 
 def test_trusted_proxy_controls_cookie_flag_lockout_and_audit_ip(login_env, monkeypatch):
     application, connection = login_env
-    monkeypatch.setenv("UPMON_TRUSTED_PROXIES", PROXY)
+    monkeypatch.setenv("TRUSTED_PROXIES", PROXY)
     client = TestClient(application, client=(PROXY, 1))
     headers = {"X-Forwarded-For": "198.51.100.7", "X-Forwarded-Proto": "https"}
     assert "secure" in _login(client, headers).headers["set-cookie"].lower()
@@ -241,7 +241,7 @@ def test_trusted_proxy_controls_cookie_flag_lockout_and_audit_ip(login_env, monk
 
 def test_untrusted_peer_cannot_spoof_when_a_different_proxy_is_trusted(login_env, monkeypatch):
     application, connection = login_env
-    monkeypatch.setenv("UPMON_TRUSTED_PROXIES", PROXY)
+    monkeypatch.setenv("TRUSTED_PROXIES", PROXY)
     client = TestClient(application, client=("203.0.113.9", 1))
     headers = {"X-Forwarded-For": "198.51.100.7", "X-Forwarded-Proto": "https"}
     assert "secure" not in _login(client, headers).headers["set-cookie"].lower()
@@ -252,7 +252,7 @@ def test_untrusted_peer_cannot_spoof_when_a_different_proxy_is_trusted(login_env
 
 def test_compose_passes_trusted_proxies_as_optional_empty_default():
     text = (_support.ROOT / "docker" / "docker-compose.yml").read_text(encoding="utf-8")
-    assert "UPMON_TRUSTED_PROXIES: ${UPMON_TRUSTED_PROXIES:-}\n" in text
+    assert "TRUSTED_PROXIES: ${UPMON_TRUSTED_PROXIES:-}\n" in text
 
 
 def test_report_sink_understands_the_reporting_api_format(app, caplog):

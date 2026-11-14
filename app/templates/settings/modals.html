@@ -310,14 +310,17 @@
 						</div>
 					</fieldset>
 
-					<div class="ju-switch form-check form-switch">
-						<input type="checkbox" role="switch" class="form-check-input" id="recipient-enabled" checked>
-						<label class="form-check-label" for="recipient-enabled">Recipient Enabled</label>
-					</div>
-					<div class="ju-switch form-check form-switch">
-						<input type="checkbox" role="switch" class="form-check-input" id="recipient-all-targets">
-						<label class="form-check-label" for="recipient-all-targets">Enable for all Targets</label>
-					</div>
+					<fieldset class="ju-fieldset ju-recipient-settings">
+						<legend class="ju-legend">Recipient Settings</legend>
+						<div class="ju-switch form-check form-switch">
+							<input type="checkbox" role="switch" class="form-check-input" id="recipient-enabled" checked>
+							<label class="form-check-label" for="recipient-enabled">Recipient Enabled</label>
+						</div>
+						<div class="ju-switch form-check form-switch">
+							<input type="checkbox" role="switch" class="form-check-input" id="recipient-all-targets">
+							<label class="form-check-label" for="recipient-all-targets">Enable for all Targets</label>
+						</div>
+					</fieldset>
 				</form>
 				<div id="add-recipient-error" class="ju-modal-error d-none" role="alert"></div>
 			</div>
@@ -345,6 +348,8 @@
 				<form id="edit-recipient-form" class="ju-modal-form">
 					<input type="hidden" id="edit-recipient-id">
 					<p class="ju-modal-note">Fields marked * are required.</p>
+					<p class="ju-modal-note" id="edit-recipient-user-note" hidden>This recipient belongs to an application
+						user. It can be edited here and in the user dialog, and it is deleted together with the user.</p>
 					<div class="ju-field">
 						<label for="edit-recipient-name" class="form-label">Name <span class="ju-required"
 								aria-hidden="true">*</span></label>
@@ -404,22 +409,24 @@
 								</div>
 							</div>
 						</div>
+						<div class="ju-field" data-channel-hint>
+							<p class="form-text" id="edit-recipient-test-hint">Tests use the saved channels. Save changes first to
+								test new values.</p>
+							<div id="edit-recipient-test-result" class="ju-test-result" role="status" aria-live="polite"></div>
+						</div>
 					</fieldset>
 
-					<div class="ju-field" data-channel-hint>
-						<p class="form-text" id="edit-recipient-test-hint">Tests use the saved channels. Save changes first to
-							test new values.</p>
-						<div id="edit-recipient-test-result" class="ju-test-result" role="status" aria-live="polite"></div>
-					</div>
-
-					<div class="ju-switch form-check form-switch">
-						<input type="checkbox" role="switch" class="form-check-input" id="edit-recipient-enabled">
-						<label class="form-check-label" for="edit-recipient-enabled">Recipient Enabled</label>
-					</div>
-					<div class="ju-switch form-check form-switch">
-						<input type="checkbox" role="switch" class="form-check-input" id="edit-recipient-all-targets">
-						<label class="form-check-label" for="edit-recipient-all-targets">Enable for all Targets</label>
-					</div>
+					<fieldset class="ju-fieldset ju-recipient-settings">
+						<legend class="ju-legend">Recipient Settings</legend>
+						<div class="ju-switch form-check form-switch">
+							<input type="checkbox" role="switch" class="form-check-input" id="edit-recipient-enabled">
+							<label class="form-check-label" for="edit-recipient-enabled">Recipient Enabled</label>
+						</div>
+						<div class="ju-switch form-check form-switch">
+							<input type="checkbox" role="switch" class="form-check-input" id="edit-recipient-all-targets">
+							<label class="form-check-label" for="edit-recipient-all-targets">Enable for all Targets</label>
+						</div>
+					</fieldset>
 				</form>
 				<div id="edit-recipient-error" class="ju-modal-error d-none" role="alert"></div>
 			</div>
@@ -449,14 +456,14 @@
 					<div class="ju-field">
 						<label for="new-user-username" class="form-label">Username <span class="ju-required"
 								aria-hidden="true">*</span></label>
-						<input type="text" class="form-control" id="new-user-username" required minlength="1"
+						<input type="text" class="form-control" id="new-user-username" required minlength="1" autocapitalize="none" spellcheck="false"
 							maxlength="64" autocomplete="off">
 					</div>
 					<div class="ju-field">
 						<label for="new-user-password" class="form-label">Password <span class="ju-required"
 								aria-hidden="true">*</span></label>
-						<input type="password" class="form-control" id="new-user-password" required minlength="8"
-							maxlength="256" autocomplete="new-password" aria-describedby="new-user-password-help">
+						<input type="password" class="form-control" id="new-user-password" required minlength="{{ password_min_length }}"
+							maxlength="{{ password_max_length }}" autocomplete="new-password" aria-describedby="new-user-password-help">
 						<div class="form-text" id="new-user-password-help">At least 8 characters</div>
 					</div>
 					<div class="ju-switch form-check form-switch">
@@ -469,6 +476,58 @@
 						<label class="form-check-label" for="new-user-can-close-alerts">Can close alerts</label>
 						<div class="form-text" id="new-user-can-close-alerts-help">Allow user to close/acknowledge alerts</div>
 					</div>
+					<fieldset class="ju-fieldset" aria-describedby="new-user-channels-help">
+						<legend class="ju-legend">Notification Channels</legend>
+						<p class="form-text" id="new-user-channels-help">Optional. The account is also a notification recipient and is
+							shared with Settings &gt; Recipients.</p>
+
+						{# Signal Channel #}
+						<div class="ju-channel">
+							<div class="ju-switch form-check form-switch">
+								<input type="checkbox" role="switch" class="form-check-input"
+									id="new-user-signal-enabled" aria-controls="new-user-phone-container">
+								<label class="form-check-label" for="new-user-signal-enabled"><span
+										class="material-icons ju-icon-inline" aria-hidden="true">sms</span>Signal</label>
+							</div>
+							<div class="ju-channel-body" id="new-user-phone-container">
+								<label for="new-user-phone" class="visually-hidden">Signal phone number</label>
+								<input type="tel" inputmode="tel" class="form-control" id="new-user-phone"
+									autocomplete="off" aria-describedby="new-user-phone-help">
+								<div class="form-text" id="new-user-phone-help">International format with country code, e.g.
+									+49123456789</div>
+							</div>
+						</div>
+
+						{# Email Channel #}
+						<div class="ju-channel">
+							<div class="ju-switch form-check form-switch">
+								<input type="checkbox" role="switch" class="form-check-input"
+									id="new-user-email-enabled" aria-controls="new-user-email-container">
+								<label class="form-check-label" for="new-user-email-enabled"><span
+										class="material-icons ju-icon-inline" aria-hidden="true">email</span>Email</label>
+							</div>
+							<div class="ju-channel-body" id="new-user-email-container">
+								<label for="new-user-email" class="visually-hidden">Email address</label>
+								<input type="email" inputmode="email" class="form-control" id="new-user-email"
+									autocomplete="off" aria-describedby="new-user-email-help">
+								<div class="form-text" id="new-user-email-help">Alert emails are sent to this address.</div>
+							</div>
+						</div>
+					</fieldset>
+
+					<fieldset class="ju-fieldset ju-recipient-settings">
+						<legend class="ju-legend">Recipient Settings</legend>
+						<div class="ju-switch form-check form-switch">
+							<input type="checkbox" role="switch" class="form-check-input" id="new-user-recipient-enabled" checked
+								aria-describedby="new-user-recipient-enabled-help">
+							<label class="form-check-label" for="new-user-recipient-enabled">Recipient Enabled</label>
+							<div class="form-text" id="new-user-recipient-enabled-help">Needs at least one channel.</div>
+						</div>
+						<div class="ju-switch form-check form-switch">
+							<input type="checkbox" role="switch" class="form-check-input" id="new-user-all-targets">
+							<label class="form-check-label" for="new-user-all-targets">Enable for all Targets</label>
+						</div>
+					</fieldset>
 				</form>
 				<div id="create-user-error" class="ju-modal-error d-none" role="alert"></div>
 			</div>
@@ -499,7 +558,7 @@
 					<div class="ju-field">
 						<label for="edit-user-username" class="form-label">Username <span class="ju-required"
 								aria-hidden="true">*</span></label>
-						<input type="text" class="form-control" id="edit-user-username" required minlength="1"
+						<input type="text" class="form-control" id="edit-user-username" required minlength="1" autocapitalize="none" spellcheck="false"
 							maxlength="64" autocomplete="off">
 					</div>
 					<div class="ju-field">
@@ -521,13 +580,66 @@
 						<p class="form-text" id="edit-user-password-help">Leave blank to keep the current password.</p>
 						<div class="ju-field">
 							<label for="edit-user-password" class="form-label">New Password</label>
-							<input type="password" class="form-control" id="edit-user-password" minlength="8"
-								maxlength="256" autocomplete="new-password">
+							<input type="password" class="form-control" id="edit-user-password" minlength="{{ password_min_length }}"
+								maxlength="{{ password_max_length }}" autocomplete="new-password">
 						</div>
 						<div class="ju-field">
 							<label for="edit-user-password-confirm" class="form-label">Confirm New Password</label>
-							<input type="password" class="form-control" id="edit-user-password-confirm" minlength="8"
-								maxlength="256" autocomplete="new-password">
+							<input type="password" class="form-control" id="edit-user-password-confirm" minlength="{{ password_min_length }}"
+								maxlength="{{ password_max_length }}" autocomplete="new-password">
+						</div>
+					</fieldset>
+
+					<fieldset class="ju-fieldset" aria-describedby="edit-user-channels-help">
+						<legend class="ju-legend">Notification Channels</legend>
+						<p class="form-text" id="edit-user-channels-help">Optional. The account is also a notification recipient and is
+							shared with Settings &gt; Recipients.</p>
+
+						{# Signal Channel #}
+						<div class="ju-channel">
+							<div class="ju-switch form-check form-switch">
+								<input type="checkbox" role="switch" class="form-check-input"
+									id="edit-user-signal-enabled" aria-controls="edit-user-phone-container">
+								<label class="form-check-label" for="edit-user-signal-enabled"><span
+										class="material-icons ju-icon-inline" aria-hidden="true">sms</span>Signal</label>
+							</div>
+							<div class="ju-channel-body" id="edit-user-phone-container">
+								<label for="edit-user-phone" class="visually-hidden">Signal phone number</label>
+								<input type="tel" inputmode="tel" class="form-control" id="edit-user-phone"
+									autocomplete="off" aria-describedby="edit-user-phone-help">
+								<div class="form-text" id="edit-user-phone-help">International format with country code, e.g.
+									+49123456789</div>
+							</div>
+						</div>
+
+						{# Email Channel #}
+						<div class="ju-channel">
+							<div class="ju-switch form-check form-switch">
+								<input type="checkbox" role="switch" class="form-check-input"
+									id="edit-user-email-enabled" aria-controls="edit-user-email-container">
+								<label class="form-check-label" for="edit-user-email-enabled"><span
+										class="material-icons ju-icon-inline" aria-hidden="true">email</span>Email</label>
+							</div>
+							<div class="ju-channel-body" id="edit-user-email-container">
+								<label for="edit-user-email" class="visually-hidden">Email address</label>
+								<input type="email" inputmode="email" class="form-control" id="edit-user-email"
+									autocomplete="off" aria-describedby="edit-user-email-help">
+								<div class="form-text" id="edit-user-email-help">Alert emails are sent to this address.</div>
+							</div>
+						</div>
+					</fieldset>
+
+					<fieldset class="ju-fieldset ju-recipient-settings">
+						<legend class="ju-legend">Recipient Settings</legend>
+						<div class="ju-switch form-check form-switch">
+							<input type="checkbox" role="switch" class="form-check-input" id="edit-user-recipient-enabled"
+								aria-describedby="edit-user-recipient-enabled-help">
+							<label class="form-check-label" for="edit-user-recipient-enabled">Recipient Enabled</label>
+							<div class="form-text" id="edit-user-recipient-enabled-help">Needs at least one channel.</div>
+						</div>
+						<div class="ju-switch form-check form-switch">
+							<input type="checkbox" role="switch" class="form-check-input" id="edit-user-all-targets">
+							<label class="form-check-label" for="edit-user-all-targets">Enable for all Targets</label>
 						</div>
 					</fieldset>
 				</form>
@@ -555,7 +667,7 @@
 			</div>
 			<div class="modal-body">
 				<p class="ju-modal-lead" id="deleteUserModalDesc">Delete user <strong id="delete-user-name"></strong>?</p>
-				<p class="ju-modal-consequence"><span class="material-icons ju-icon-inline" aria-hidden="true">warning</span><span>The user account is permanently removed.</span></p>
+				<p class="ju-modal-consequence"><span class="material-icons ju-icon-inline" aria-hidden="true">warning</span><span>The user account and its notification recipient, including the target assignments, are permanently removed.</span></p>
 			</div>
 			<div class="modal-footer">
 				<button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>

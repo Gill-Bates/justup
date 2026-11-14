@@ -31,31 +31,17 @@ from ..db.dashboard_layouts import (
     get_dashboard_layout,
     set_dashboard_layout,
 )
+from ..utils.availability_rules import gap_threshold_seconds
 from ..utils.deps import get_conn, get_tsdb_dir
 from ..utils.rate_limit import RATE_LIMIT_DEFAULT, rate_limit
 from ..utils.time import parse_utc, utcnow
-from ..utils.uptime_metric import select_uptime_metric
+from ..utils.uptime_metric import enabled_availability_metrics
 from .auth import get_current_user
+from .metrics import dashboard_query_semaphore
 
-# Server-side allowlist of widget ids; kept in sync with the registry in
-# app/static/js/dashboard-widgets.js by tests/test_dashboard_layout.py.
-DASHBOARD_WIDGETS = frozenset(
-    {
-        "status-online",
-        "status-offline",
-        "status-disabled",
-        "status-total",
-        "quality",
-        "downtime",
-        "alerts-open",
-        "delivery-queue",
-        "uptime-day",
-        "cert-expiry",
-        "slowest-monitors",
-        "quality-trend",
-        "stale-checks",
-    }
-)
+# Server-side allowlist of widget ids, derived from the minimum-size table; kept in sync with the
+# registry in app/static/js/dashboard-widgets.js by tests/test_dashboard_layout.py.
+DASHBOARD_WIDGETS = frozenset(DASHBOARD_WIDGET_MIN_SIZES)
 
 
 class DashboardWidgetLayout(BaseModel):
@@ -110,13 +96,9 @@ def _availability_seconds(points: list[dict], since: datetime, until: datetime, 
         start = parse_utc(point["ts"])
         if start is None or point["up"] not in (0, 1):
             continue
-        end = (
-            parse_utc(points[index + 1]["ts"])
-            if index + 1 < len(points)
-            else min(until, start + timedelta(seconds=stale_after))
-        )
-        if end is None:
-            continue
+        # A sample only vouches for stale_after seconds, however late the next one arrives.
+        next_ts = parse_utc(points[index + 1]["ts"]) if index + 1 < len(points) else None
+        end = min(next_ts or until, start + timedelta(seconds=stale_after))
         duration = max(0.0, (min(until, end) - max(since, start)).total_seconds())
         known += duration
         up += duration * point["up"]
@@ -130,25 +112,27 @@ async def get_uptime_widget(request: Request, conn=Depends(get_conn), _user=Depe
     since = until - timedelta(days=1)
     tsdb_dir = get_tsdb_dir(request)
     targets = [
-        target for target in sqlite_db.list_targets(conn) if target["is_enabled"] and select_uptime_metric(target)
+        target
+        for target in await run_in_threadpool(sqlite_db.list_targets, conn)
+        if target["is_enabled"] and enabled_availability_metrics(target)
     ]
     semaphore = asyncio.Semaphore(4)
 
     async def summarize(target):
-        metric = select_uptime_metric(target)
-        service = {"http_up": "HTTP", "ping_up": "PING", "tcp_up": "TCP"}[metric]
-        async with semaphore:
-            series = await run_in_threadpool(
-                tsdb_db.query_availability_series,
+        # One combined series per target (all enabled checks, same rule as status, scheduler and PDF).
+        interval = target["interval_seconds"]
+        async with semaphore, dashboard_query_semaphore():
+            runs = await run_in_threadpool(
+                tsdb_db.query_availability_runs,
                 tsdb_dir,
                 target_id=target["id"],
+                metrics=enabled_availability_metrics(target),
+                interval_seconds=interval,
                 since=since,
                 until=until,
-                limit=100_000,
-                enabled_services={service},
-                check_interval_seconds=target["interval_seconds"],
             )
-        return _availability_seconds(series.get(service, []), since, until, max(60, target["interval_seconds"] * 3))
+        points = [{"ts": ts.isoformat(), "up": value} for ts, value in runs.outage_points()]
+        return _availability_seconds(points, since, until, max(60, gap_threshold_seconds(interval)))
 
     results = await asyncio.gather(*(summarize(target) for target in targets))
     up = sum(result[0] for result in results)

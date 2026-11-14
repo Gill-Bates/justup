@@ -6,6 +6,14 @@
 // User Management and SMTP Functions for Settings Page
 
 // Constants for error messages (prevent backend leakage)
+// The password limit is the inputs' minlength attribute (rendered from the server constant).
+function passwordMinLength(inputId) {
+	const length = document.getElementById(inputId)?.minLength;
+	return length > 0 ? length : 8;
+}
+function passwordTooShort(inputId) {
+	return 'Password must be at least ' + passwordMinLength(inputId) + ' characters';
+}
 const ERROR_MESSAGES = {
 	SMTP_TEST_FAILED: 'SMTP test failed. Please check your configuration.',
 	LOAD_USERS_FAILED: 'Failed to load users',
@@ -16,11 +24,96 @@ const ERROR_MESSAGES = {
 	REVOKE_SESSIONS_FAILED: 'Failed to revoke sessions',
 	NETWORK_ERROR: 'Network error. Please check your connection.',
 	REQUIRED_FIELDS: 'Please fill in all required fields',
-	PASSWORD_TOO_SHORT: 'Password must be at least 8 characters',
 	PASSWORDS_DONT_MATCH: 'Passwords do not match',
 };
 
 let _usersCache = [];
+
+// ─── Notification channels of the user's recipient (create and edit dialogs) ─────────────────
+// Field ids are `<prefix>-signal-enabled|phone|email-enabled|email|recipient-enabled|all-targets`.
+// The channel switches reuse the recipient dialog's behaviour (window.SettingsPage.Recipients.syncChannelFields).
+
+function channelValues(prefix) {
+	const byId = (suffix) => document.getElementById(`${prefix}-${suffix}`);
+	return {
+		signalEnabled: Boolean(byId('signal-enabled')?.checked),
+		emailEnabled: Boolean(byId('email-enabled')?.checked),
+		phone: byId('phone')?.value?.trim() ?? '',
+		email: byId('email')?.value?.trim() ?? '',
+		recipientEnabled: Boolean(byId('recipient-enabled')?.checked),
+		allTargets: Boolean(byId('all-targets')?.checked),
+	};
+}
+
+// Request part sent in the same call as the user; a switched-off channel is null, and a recipient without any
+// channel is sent as disabled (the server refuses "enabled" without a channel).
+function recipientConfig(prefix) {
+	const v = channelValues(prefix);
+	const phone = v.signalEnabled ? v.phone : null;
+	const email = v.emailEnabled ? v.email : null;
+	return {
+		phone,
+		email,
+		is_enabled: Boolean(phone || email) && v.recipientEnabled,
+		enable_for_all_targets: v.allTargets,
+	};
+}
+
+function channelFieldErrors(prefix) {
+	const v = channelValues(prefix);
+	const errors = [];
+	if (v.signalEnabled && !v.phone) errors.push({ id: `${prefix}-phone`, message: 'Please enter a Signal phone number' });
+	if (v.emailEnabled && !v.email) errors.push({ id: `${prefix}-email`, message: 'Please enter an email address' });
+	return errors;
+}
+
+// Show/hide the channel fields and keep "Recipient Enabled" consistent: without an active channel it is off and
+// disabled; it comes back on when a channel is switched on, but only if this code had switched it off.
+function syncUserChannels(modalEl, prefix) {
+	if (!modalEl) return;
+	window.SettingsPage?.Recipients?.syncChannelFields?.(modalEl);
+	const enabled = document.getElementById(`${prefix}-recipient-enabled`);
+	if (!enabled) return;
+	const anyChannel = channelValues(prefix).signalEnabled || channelValues(prefix).emailEnabled;
+	if (!anyChannel) {
+		if (enabled.checked) enabled.dataset.autoOff = '1';
+		enabled.checked = false;
+		enabled.disabled = true;
+	} else {
+		enabled.disabled = false;
+		if (enabled.dataset.autoOff === '1') enabled.checked = true;
+		delete enabled.dataset.autoOff;
+	}
+}
+
+function fillChannels(prefix, recipient) {
+	const set = (suffix, apply) => {
+		const el = document.getElementById(`${prefix}-${suffix}`);
+		if (el) apply(el);
+	};
+	const r = recipient || {};
+	set('signal-enabled', (el) => { el.checked = Boolean(r.phone); });
+	set('phone', (el) => { el.value = r.phone || ''; });
+	set('email-enabled', (el) => { el.checked = Boolean(r.email); });
+	set('email', (el) => { el.value = r.email || ''; });
+	set('recipient-enabled', (el) => { el.checked = Boolean(r.is_enabled); delete el.dataset.autoOff; });
+	set('all-targets', (el) => { el.checked = Boolean(r.enable_for_all_targets); });
+}
+
+// A phone conflict from the server belongs to the phone field, everything else to the banner.
+function showUserSaveError(modalId, prefix, errorDiv, message) {
+	if (/phone/i.test(message) && document.getElementById(`${prefix}-phone`)) {
+		const shown = window.JuFieldErrors.show(document.getElementById(modalId), [{ id: `${prefix}-phone`, message }]);
+		if (shown) return;
+	}
+	if (errorDiv) {
+		errorDiv.textContent = message;
+		errorDiv.classList.remove('d-none');
+	}
+}
+
+// Saved state of the edit dialog; switching "Enable for all Targets" off removes every assignment.
+let _editUserSaved = { allTargets: false };
 
 // Required SMTP fields for test validation
 const SMTP_REQUIRED_FIELDS = ['smtp_host', 'smtp_from'];
@@ -37,15 +130,11 @@ function validateSmtpFields() {
 	for (const fieldId of SMTP_REQUIRED_FIELDS) {
 		const input = document.getElementById(fieldId);
 		if (input) {
-			input.classList.remove('is-invalid');
-			input.removeAttribute('aria-invalid');
+			window.JuFieldErrors.clear(input);
 			// Remove validation on input
 			if (!input.dataset.smtpValidation) {
 				input.dataset.smtpValidation = '1';
-				input.addEventListener('input', () => {
-					input.classList.remove('is-invalid');
-					input.removeAttribute('aria-invalid');
-				});
+				input.addEventListener('input', () => window.JuFieldErrors.clear(input));
 			}
 		}
 	}
@@ -54,8 +143,7 @@ function validateSmtpFields() {
 		const input = document.getElementById(fieldId);
 		if (!input?.value?.trim()) {
 			missing.push(fieldId);
-			input?.classList.add('is-invalid');
-			input?.setAttribute('aria-invalid', 'true');
+			if (input) window.JuFieldErrors.set(input, 'This field is required.');
 		}
 	}
 
@@ -72,7 +160,6 @@ async function testSmtp() {
 	// Validate required SMTP config fields first
 	const missingFields = validateSmtpFields();
 	if (missingFields.length > 0) {
-		window.justUpToast?.warning?.('Please fill in the required SMTP fields (Host, From Address)');
 		document.getElementById(missingFields[0])?.focus();
 		return;
 	}
@@ -115,7 +202,7 @@ async function testSmtp() {
 		if (response.ok && result.ok !== false) {
 			window.justUpToast?.success?.(result.message || 'Test email queued');
 		} else {
-			const errorMsg = result.detail || result.error || ERROR_MESSAGES.SMTP_TEST_FAILED;
+			const errorMsg = window.JuApiError.fromBody(result, ERROR_MESSAGES.SMTP_TEST_FAILED);
 			window.justUpToast?.error?.(errorMsg);
 		}
 	} catch (error) {
@@ -141,15 +228,15 @@ function initSmtpTestHandlers(root) {
 	const recipientInput = scope.querySelector('#smtp_test_recipient');
 	if (recipientInput && !recipientInput.dataset.smtpValidation) {
 		recipientInput.dataset.smtpValidation = '1';
-		recipientInput.addEventListener('input', () => {
-			recipientInput.classList.remove('is-invalid');
-			recipientInput.removeAttribute('aria-invalid');
-		});
+		recipientInput.addEventListener('input', () => window.JuFieldErrors.clear(recipientInput));
 	}
 }
 
-// Load Users List
+// Load Users List; a newer call supersedes the responses of older ones
+let usersGeneration = 0;
+
 async function loadUsers() {
+	const generation = ++usersGeneration;
 	const container = document.getElementById('users-list');
 
 	// Guard: container might not exist on page
@@ -163,6 +250,7 @@ async function loadUsers() {
 		if (!response.ok) throw new Error('HTTP ' + response.status);
 
 		const users = await response.json();
+		if (generation !== usersGeneration) return;
 		_usersCache = Array.isArray(users) ? users : [];
 
 		if (_usersCache.length === 0) {
@@ -191,21 +279,21 @@ async function loadUsers() {
 		`;
 
 		for (const user of _usersCache) {
-			// Role badge - use warning color for Admin (better dark mode visibility)
+			// Role badge (DC-BADGE-5: neutral count-style badge)
 			const roleBadge = user.is_admin
-				? '<span class="badge bg-warning text-dark">Admin</span>'
+				? '<span class="badge bg-secondary">Admin</span>'
 				: '<span class="badge bg-secondary">User</span>';
 
 			// Can close alerts indicator
 			const canCloseAlerts = user.is_admin || user.can_close_alerts;
 			const closeAlertsIcon = canCloseAlerts
-				? '<span class="material-icons text-success" role="img" aria-label="Can close alerts" title="Can close alerts">check_circle</span>'
+				? '<span class="material-icons text-body-secondary" role="img" aria-label="Can close alerts" title="Can close alerts">check_circle</span>'
 				: '<span class="material-icons text-body-secondary" role="img" aria-label="Cannot close alerts" title="Cannot close alerts">remove_circle_outline</span>';
 
 			const isActive = user.is_active !== false;
 			const statusBadge = isActive
-				? '<span class="badge ju-status-badge--success">Enabled</span>'
-				: '<span class="badge ju-status-badge--neutral">Disabled</span>';
+				? JuStatusDot.html('success', 'Enabled')
+				: JuStatusDot.html('neutral', 'Disabled');
 
 			const disableToggle = !!user.is_admin;
 			const disableDelete = !!user.is_admin;
@@ -273,18 +361,11 @@ async function loadUsers() {
 		html += '</tbody></table>';
 		container.innerHTML = html;
 
-		// Convert local-time elements
-		container.querySelectorAll('.local-time').forEach(el => {
-			const utc = el.dataset.utc;
-			if (utc) {
-				try {
-					const d = new Date(utc);
-					el.textContent = d.toLocaleString();
-				} catch (e) { }
-			}
-		});
+		// Format timestamps with the shared rule (honours the UTC display setting)
+		window.JuLocalTime?.init(container);
 
 	} catch (error) {
+		if (generation !== usersGeneration) return;
 		console.error('Load users error:', error);
 		container.innerHTML = '<div class="text-center text-danger py-4">' + ERROR_MESSAGES.LOAD_USERS_FAILED + '</div>';
 	}
@@ -345,6 +426,8 @@ function openEditUserModal(userId) {
 	document.getElementById('edit-user-can-close-alerts').checked = user.is_admin || user.can_close_alerts;
 	document.getElementById('edit-user-password').value = '';
 	document.getElementById('edit-user-password-confirm').value = '';
+	fillChannels('edit-user', user.recipient);
+	_editUserSaved = { allTargets: Boolean(user.recipient?.enable_for_all_targets) };
 
 	// Show/disable can_close_alerts toggle based on admin status
 	const closeAlertsContainer = document.getElementById('edit-user-close-alerts-container');
@@ -361,6 +444,7 @@ function openEditUserModal(userId) {
 	const errorDiv = document.getElementById('edit-user-error');
 	if (errorDiv) errorDiv.classList.add('d-none');
 
+	syncUserChannels(modalEl, 'edit-user');
 	const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
 	modal.show();
 }
@@ -380,22 +464,34 @@ async function saveEditedUser() {
 	const fieldErrors = [];
 	if (!username) fieldErrors.push({ id: 'edit-user-username', message: 'Please enter a username' });
 	if (newPassword || confirmPassword) {
-		if ((newPassword || '').length < 8) {
-			fieldErrors.push({ id: 'edit-user-password', message: ERROR_MESSAGES.PASSWORD_TOO_SHORT });
+		if ((newPassword || '').length < passwordMinLength('edit-user-password')) {
+			fieldErrors.push({ id: 'edit-user-password', message: passwordTooShort('edit-user-password') });
 		} else if (newPassword !== confirmPassword) {
 			fieldErrors.push({ id: 'edit-user-password-confirm', message: ERROR_MESSAGES.PASSWORDS_DONT_MATCH });
 		}
 	}
+	fieldErrors.push(...channelFieldErrors('edit-user'));
 	if (window.JuFieldErrors.show(document.getElementById('editUserModal'), fieldErrors)) return;
 
 	if (btn) btn.disabled = true;
 	if (errorDiv) errorDiv.classList.add('d-none');
 
 	try {
+		const recipient = recipientConfig('edit-user');
+		if (_editUserSaved.allTargets && !recipient.enable_for_all_targets) {
+			// Same rule and wording as the recipient dialog: the server removes every assignment of the recipient.
+			const confirmed = await window.confirmAction({
+				title: 'Remove recipient from all targets?',
+				message: 'Saving with "Enable for all Targets" off removes this user\'s recipient from all targets, including manually assigned targets.',
+				confirmLabel: 'Remove from all targets',
+			});
+			if (!confirmed) return;
+		}
 		const body = {
 			username,
 			is_admin: role === 'admin',
 			can_close_alerts: canCloseAlerts || false,
+			recipient,
 		};
 		if (newPassword) body.new_password = newPassword;
 
@@ -406,23 +502,12 @@ async function saveEditedUser() {
 		});
 
 		if (response.ok) {
-			const modalEl = document.getElementById('editUserModal');
-			if (modalEl) {
-				const modal = bootstrap.Modal.getInstance(modalEl);
-				if (modal) modal.hide();
-			}
+			bootstrap.Modal.getInstance(document.getElementById('editUserModal'))?.hide();
 			await loadUsers();
-			showToast('User updated', 'success');
+			window.justUpToast.show('User updated', 'success');
 		} else {
-			let errorMsg = ERROR_MESSAGES.UPDATE_USER_FAILED;
-			try {
-				const data = await response.json();
-				errorMsg = data.detail || data.error || errorMsg;
-			} catch (e) { }
-			if (errorDiv) {
-				errorDiv.textContent = errorMsg;
-				errorDiv.classList.remove('d-none');
-			}
+			const errorMsg = await window.JuApiError.fromResponse(response, ERROR_MESSAGES.UPDATE_USER_FAILED);
+			showUserSaveError('editUserModal', 'edit-user', errorDiv, errorMsg);
 		}
 	} catch (error) {
 		console.error('Update user error:', error);
@@ -455,18 +540,14 @@ async function toggleUserActive(userId, isActive, toggleBtn = null) {
 		});
 		if (response.ok) {
 			await loadUsers();
-			showToast(isActive ? 'User activated' : 'User deactivated', 'success');
+			window.justUpToast.show(isActive ? 'User activated' : 'User deactivated', 'success');
 		} else {
-			let msg = ERROR_MESSAGES.TOGGLE_USER_FAILED;
-			try {
-				const data = await response.json();
-				msg = data.detail || data.error || msg;
-			} catch (e) { }
-			showToast(msg, 'danger');
+			const msg = await window.JuApiError.fromResponse(response, ERROR_MESSAGES.TOGGLE_USER_FAILED);
+			window.justUpToast.show(msg, 'danger');
 		}
 	} catch (error) {
 		console.error('Toggle user error:', error);
-		showToast(ERROR_MESSAGES.NETWORK_ERROR, 'danger');
+		window.justUpToast.show(ERROR_MESSAGES.NETWORK_ERROR, 'danger');
 	} finally {
 		// Re-enable button (loadUsers will rebuild the DOM anyway)
 		if (toggleBtn) toggleBtn.disabled = false;
@@ -480,6 +561,7 @@ async function createUser() {
 	const form = document.getElementById('create-user-form');
 
 	if (!btn || !errorDiv || !form) return;
+	if (btn.disabled) return;
 
 	const username = document.getElementById('new-user-username').value.trim();
 	const password = document.getElementById('new-user-password').value;
@@ -490,7 +572,8 @@ async function createUser() {
 	const fieldErrors = [];
 	if (!username) fieldErrors.push({ id: 'new-user-username', message: 'Please enter a username' });
 	if (!password) fieldErrors.push({ id: 'new-user-password', message: 'Please enter a password' });
-	else if (password.length < 8) fieldErrors.push({ id: 'new-user-password', message: ERROR_MESSAGES.PASSWORD_TOO_SHORT });
+	else if (password.length < passwordMinLength('new-user-password')) fieldErrors.push({ id: 'new-user-password', message: passwordTooShort('new-user-password') });
+	fieldErrors.push(...channelFieldErrors('new-user'));
 	if (window.JuFieldErrors.show(form, fieldErrors)) return;
 
 	btn.disabled = true;
@@ -500,31 +583,24 @@ async function createUser() {
 		const response = await window.apiFetch('/users', {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ username, password, is_admin: isAdmin, can_close_alerts: canCloseAlerts }),
+			body: JSON.stringify({
+				username,
+				password,
+				is_admin: isAdmin,
+				can_close_alerts: canCloseAlerts,
+				recipient: recipientConfig('new-user'),
+			}),
 		});
 
 		if (response.ok) {
-			const modal = document.getElementById('createUserModal');
-			if (modal) {
-				const bsModal = bootstrap.Modal.getInstance(modal);
-				if (bsModal) bsModal.hide();
-			}
+			bootstrap.Modal.getInstance(document.getElementById('createUserModal'))?.hide();
 			form.reset();
 			loadUsers();
-			showToast('User created successfully', 'success');
+			window.justUpToast.show('User created successfully', 'success');
 		} else {
 			// Map backend errors to user-friendly messages
-			let errorMsg = ERROR_MESSAGES.CREATE_USER_FAILED;
-			try {
-				const error = await response.json();
-				if (error.detail && error.detail.includes('already exists')) {
-					errorMsg = 'Username already exists';
-				}
-			} catch (parseError) {
-				console.warn('Failed to parse error response');
-			}
-			errorDiv.textContent = errorMsg;
-			errorDiv.classList.remove('d-none');
+			const errorMsg = await window.JuApiError.fromResponse(response, ERROR_MESSAGES.CREATE_USER_FAILED);
+			showUserSaveError('createUserModal', 'new-user', errorDiv, errorMsg);
 		}
 	} catch (error) {
 		console.error('Create user error:', error);
@@ -537,46 +613,12 @@ async function createUser() {
 
 // Ask for confirmation in a Bootstrap modal; resolves true only on explicit confirm.
 function confirmDeleteUser(username) {
-	const modalEl = document.getElementById('deleteUserModal');
-	const confirmBtn = document.getElementById('confirm-delete-user-btn');
-	if (!modalEl || !confirmBtn || !window.bootstrap?.Modal) return Promise.resolve(false);
-	document.getElementById('delete-user-name').textContent = `"${username}"`;
-	const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
-	return new Promise((resolve) => {
-		let confirmed = false;
-		const onConfirm = () => {
-			confirmed = true;
-			modal.hide();
-		};
-		confirmBtn.addEventListener('click', onConfirm, { once: true });
-		modalEl.addEventListener('hidden.bs.modal', () => {
-			confirmBtn.removeEventListener('click', onConfirm);
-			resolve(confirmed);
-		}, { once: true });
-		modal.show();
-	});
+	return window.confirmViaModal({ modalId: 'deleteUserModal', confirmId: 'confirm-delete-user-btn', nameId: 'delete-user-name', name: username });
 }
 
 // Ask for confirmation before ending all sessions of a user; resolves true only on explicit confirm.
 function confirmRevokeSessions(username) {
-	const modalEl = document.getElementById('revokeSessionsModal');
-	const confirmBtn = document.getElementById('confirm-revoke-sessions-btn');
-	if (!modalEl || !confirmBtn || !window.bootstrap?.Modal) return Promise.resolve(false);
-	document.getElementById('revoke-sessions-user-name').textContent = `"${username}"`;
-	const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
-	return new Promise((resolve) => {
-		let confirmed = false;
-		const onConfirm = () => {
-			confirmed = true;
-			modal.hide();
-		};
-		confirmBtn.addEventListener('click', onConfirm, { once: true });
-		modalEl.addEventListener('hidden.bs.modal', () => {
-			confirmBtn.removeEventListener('click', onConfirm);
-			resolve(confirmed);
-		}, { once: true });
-		modal.show();
-	});
+	return window.confirmViaModal({ modalId: 'revokeSessionsModal', confirmId: 'confirm-revoke-sessions-btn', nameId: 'revoke-sessions-user-name', name: username });
 }
 
 async function revokeUserSessions(userId, username) {
@@ -587,14 +629,13 @@ async function revokeUserSessions(userId, username) {
 		const response = await window.apiFetch(`/users/${userId}/revoke-sessions`, { method: 'POST' });
 		if (response.ok) {
 			const { revoked } = await response.json();
-			showToast(`Revoked ${revoked} session(s)`, 'success');
+			window.justUpToast.show(`Revoked ${revoked} session(s)`, 'success');
 		} else {
-			const detail = (await response.json().catch(() => ({}))).detail;
-			showToast(typeof detail === 'string' ? detail : ERROR_MESSAGES.REVOKE_SESSIONS_FAILED, 'danger');
+			window.justUpToast.show(await window.JuApiError.fromResponse(response, ERROR_MESSAGES.REVOKE_SESSIONS_FAILED), 'danger');
 		}
 	} catch (error) {
 		console.error('Revoke sessions error:', error);
-		showToast(ERROR_MESSAGES.NETWORK_ERROR, 'danger');
+		window.justUpToast.show(ERROR_MESSAGES.NETWORK_ERROR, 'danger');
 	}
 }
 
@@ -609,44 +650,14 @@ async function deleteUser(userId, username) {
 
 		if (response.ok) {
 			loadUsers();
-			showToast('User deleted', 'success');
+			window.justUpToast.show('User deleted', 'success');
 		} else {
-			showToast(ERROR_MESSAGES.DELETE_USER_FAILED, 'danger');
+			window.justUpToast.show(ERROR_MESSAGES.DELETE_USER_FAILED, 'danger');
 		}
 	} catch (error) {
 		console.error('Delete user error:', error);
-		showToast(ERROR_MESSAGES.NETWORK_ERROR, 'danger');
+		window.justUpToast.show(ERROR_MESSAGES.NETWORK_ERROR, 'danger');
 	}
-}
-
-// Utility: Show Toast with appropriate icon
-// Uses DOM APIs to prevent XSS from backend messages
-function showToast(message, type = 'success') {
-	const toastEl = document.getElementById('settings-toast');
-	if (!toastEl) return;
-
-	const toastBody = toastEl.querySelector('.toast-body');
-	if (!toastBody) return;
-
-	const iconName = type === 'success' ? 'check_circle' : 'error';
-
-	// Normalize: info -> success (no cyan toasts)
-	const normalizedType = (type === 'info') ? 'success' : type;
-	toastEl.className = `toast align-items-center text-bg-${normalizedType} border-0`;
-
-	// Build content safely using DOM APIs (prevents XSS)
-	toastBody.innerHTML = '';
-	const iconEl = document.createElement('span');
-	iconEl.className = 'material-icons me-2';
-	iconEl.textContent = iconName;
-
-	const textEl = document.createElement('span');
-	textEl.textContent = message;
-
-	toastBody.append(iconEl, textEl);
-
-	const toast = new bootstrap.Toast(toastEl);
-	toast.show();
 }
 
 // Event Listeners
@@ -657,13 +668,7 @@ document.addEventListener('DOMContentLoaded', () => {
 		loadUsers();
 	}
 
-	// Create user button
-	const createUserBtn = document.getElementById('create-user-btn');
-	if (createUserBtn) {
-		createUserBtn.addEventListener('click', createUser);
-	}
-
-	// Form submit prevention
+	// The submit button is type="submit" form=..., so the form submit is the only entry point
 	const createUserForm = document.getElementById('create-user-form');
 	if (createUserForm) {
 		createUserForm.addEventListener('submit', (e) => {
@@ -699,6 +704,18 @@ document.addEventListener('DOMContentLoaded', () => {
 			if (closeAlertsCheckbox) {
 				closeAlertsCheckbox.checked = false;
 			}
+			delete document.getElementById('new-user-recipient-enabled')?.dataset.autoOff;
+			syncUserChannels(createUserModalEl, 'new-user');
+		});
+	}
+
+	// Channel switches of both dialogs: show/hide the fields and keep "Recipient Enabled" consistent.
+	for (const [modalId, prefix] of [['createUserModal', 'new-user'], ['editUserModal', 'edit-user']]) {
+		const dialog = document.getElementById(modalId);
+		if (!dialog) continue;
+		dialog.addEventListener('show.bs.modal', () => syncUserChannels(dialog, prefix));
+		dialog.addEventListener('change', (e) => {
+			if (e.target.matches('.ju-channel input[role="switch"]')) syncUserChannels(dialog, prefix);
 		});
 	}
 
@@ -739,4 +756,7 @@ window.SettingsPage.Users = {
 	deleteUser,
 	toggleUserActive,
 	openEditUserModal,
+	saveEditedUser,
+	recipientConfig,
+	syncUserChannels,
 };

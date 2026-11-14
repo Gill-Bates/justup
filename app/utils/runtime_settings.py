@@ -167,3 +167,21 @@ def get_ip_api_key() -> str:
     except Exception:  # noqa: BLE001 - never log secret material
         _log.warning("Stored ip-api key could not be decrypted; ignoring it")
         return ""
+
+
+def store_runtime_setting(key: str | SettingKeys, value: Any) -> bool:
+    """Persist ``value`` for background code without a request connection; False when the store is unusable."""
+    try:
+        db_path = _resolve_db_path()
+        if not db_path.exists():
+            return False
+        conn = sqlite_db.connect(db_path)
+        try:
+            sqlite_db.set_setting(conn, key, value)
+        finally:
+            sqlite_db.close_connection(conn)
+    except Exception as exc:  # noqa: BLE001 - best-effort persistence must never break the caller
+        _log.debug("Runtime setting %s not stored: %s", key, type(exc).__name__)
+        return False
+    clear_runtime_cache()
+    return True

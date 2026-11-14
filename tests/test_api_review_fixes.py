@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import importlib.util
+import sqlite3
 import threading
 import time
 from datetime import UTC, datetime, timedelta
@@ -108,6 +109,15 @@ def test_set_user_active_rejects_string_and_missing_value(conn):
     assert sqlite_db.get_user(conn, target["id"])["is_active"] == 0
 
 
+def test_self_targeted_active_change_is_forbidden_for_both_values(conn):
+    admin = _mk_user(conn, "root", admin=True)
+    client = _client(conn, users.router, user=admin)
+    for value in (True, False):
+        resp = client.post(f"/users/{admin['id']}/active", json={"is_active": value})
+        assert resp.status_code == 403
+        assert "own active state" in resp.json()["detail"]
+
+
 def test_change_password_conflicts_when_hash_changed_concurrently(conn, monkeypatch):
     user = _mk_user(conn, "alice", admin=False)
     monkeypatch.setattr(users, "verify_password", lambda plain, hashed: True)
@@ -124,7 +134,7 @@ def test_change_password_conflicts_when_hash_changed_concurrently(conn, monkeypa
 
 def test_verify_signal_requires_admin_and_deduplicates(conn, monkeypatch):
     calls: list[str] = []
-    monkeypatch.setattr(recipients, "_is_phone_probably_registered", lambda p: calls.append(p) or True)
+    monkeypatch.setattr(recipients, "_signal_registration_status", lambda p: calls.append(p) or True)
     nonadmin = _client(conn, recipients.router, user=_mk_user(conn, "v", admin=False))
     assert nonadmin.post("/recipients/verify-signal", json=["+4915112345678"]).status_code == 403
     admin = _client(conn, recipients.router, user=_mk_user(conn, "a", admin=True))
@@ -177,6 +187,35 @@ def test_pdf_request_marks_job_failed_when_queue_rejects(conn, monkeypatch, tmp_
     with pytest.raises(RuntimeError):
         client.post(f"/reports/targets/{tid}/pdf/request")
     assert conn.execute("SELECT status FROM report_jobs").fetchone()["status"] == "failed"
+
+
+@pytest.mark.parametrize(("handed_over", "expected"), [(False, "failed"), (True, "pending")])
+def test_pdf_request_cancellation_marks_only_unsubmitted_job(conn, monkeypatch, tmp_path, handed_over, expected):
+    from types import SimpleNamespace
+
+    reports = importlib.import_module("app.api.reports")
+    tid = _target(conn, "cancel")
+    user = _mk_user(conn, "u", admin=False)
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(db_path=tmp_path / "x.db", tsdb_dir=tmp_path)))
+
+    async def _submit(_req):
+        if handed_over:
+            return  # queued; cancellation arrives only after the handover
+        raise asyncio.CancelledError
+
+    async def _run():
+        task = asyncio.ensure_future(
+            reports.request_pdf_report(tid, request, conn=conn, user=user, since=None, until=None, page_size="a4")
+        )
+        if handed_over:
+            await task
+            return
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    monkeypatch.setattr(reports, "submit_pdf_job", _submit)
+    asyncio.run(_run())
+    assert conn.execute("SELECT status FROM report_jobs").fetchone()["status"] == expected
 
 
 def test_pdf_job_keeps_selected_custom_range(conn, monkeypatch, tmp_path):
@@ -233,7 +272,7 @@ def test_report_pdf_tsdb_access_runs_off_event_loop(conn, monkeypatch):
         time.sleep(0.01)
         return []
 
-    monkeypatch.setattr(reports.tsdb_db, "query_auto_resolution", fake_query)
+    monkeypatch.setattr(report_metrics.tsdb_db, "query_auto_resolution", fake_query)
     monkeypatch.setattr(reports, "generate_pdf_report", lambda *_a, **_k: b"%PDF-1.4")
     client = _client(conn, reports.router, user=_mk_user(conn, "u", admin=False))
     resp = client.get(
@@ -390,6 +429,87 @@ def test_alert_users_without_new_recipients_is_not_limited(conn, monkeypatch):
     assert client.put(f"/targets/{tid}/alert-users", json=[first]).status_code == 200
 
 
+def test_alert_recipient_slots_are_reserved_atomically_under_concurrency(conn, monkeypatch, tmp_path):
+    from app.api import targets
+
+    cap = targets.MAX_ACTIVE_NOTIFICATION_TASKS
+    monkeypatch.setattr(targets, "_background_tasks", set())
+    monkeypatch.setattr(targets, "_reserved_slots", 0)
+    db_path = tmp_path / "db" / "justup.db"
+    tids, rids = [], []
+    for i in range(12):
+        tid = _target(conn, f"T{i}")
+        tids.append(tid)
+        rids.append(sqlite_db.create_recipient(conn, name=f"R{i}", email=f"r{i}@example.com"))
+    conn.commit()
+
+    barrier = threading.Barrier(len(tids))
+    ok: list[int] = []
+    rejected: list[int] = []
+
+    def worker(i: int) -> None:
+        c = sqlite_db.connect(db_path)
+        try:
+            barrier.wait()
+            try:
+                targets._replace_alert_recipients(c, tids[i], [rids[i]])
+                ok.append(i)
+            except targets.HTTPException as exc:
+                assert exc.status_code == 429
+                rejected.append(i)
+            assert targets._reserved_slots <= cap
+        finally:
+            sqlite_db.close_connection(c)
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(len(tids))]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+
+    assert len(ok) == cap
+    assert len(rejected) == len(tids) - cap
+    assert targets._reserved_slots == cap
+    for i in rejected:
+        assert sqlite_db.get_target_recipient_ids(conn, tids[i]) == []
+    for _ in ok:
+        targets._release_notification_slot()
+    assert targets._reserved_slots == 0
+
+
+def test_alert_users_releases_reservation_after_scheduling(conn, monkeypatch):
+    from app.api import targets
+
+    tid = _target(conn, "T")
+    first, second = _two_recipients(conn, tid)
+    monkeypatch.setattr(targets, "_reserved_slots", 0)
+
+    async def _noop(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(targets, "_safe_notify_recipients_background", _noop)
+    client = _client(conn, targets.router, user=_mk_user(conn, "root", admin=True))
+    client.app.state.db_path = Path("unused.db")
+    assert client.put(f"/targets/{tid}/alert-users", json=[first, second]).status_code == 200
+    assert targets._reserved_slots == 0
+
+
+def test_delete_target_survives_scheduler_and_event_bus_failure(conn, monkeypatch):
+    from app.api import targets
+
+    tid = _target(conn, "T")
+
+    class _Scheduler:
+        def forget_target(self, _tid):
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(targets.event_bus, "publish", lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("bus")))
+    client = _client(conn, targets.router, user=_mk_user(conn, "root", admin=True))
+    client.app.state.scheduler = _Scheduler()
+    assert client.delete(f"/targets/{tid}").status_code == 204
+    assert sqlite_db.get_target(conn, tid) is None
+
+
 def _run_notify_sync_bounded(targets, task_id: str, *, timeout: float = 5.0) -> dict:
     """Run the welcome-task wait loop in a thread and fail if it does not terminate (no hang)."""
     target_id = 1
@@ -536,6 +656,19 @@ def test_pop_refresh_entry_points_share_one_lock(conn, monkeypatch):
         release.set()
         holder.join(5)
     reset_all()
+
+
+def test_unlocode_refresh_reports_not_implemented_instead_of_success(conn):
+    from app.api import pop
+
+    client = _client(conn, pop.router, user=_mk_user(conn, "root", admin=True))
+    client.app.state.db_path = Path(conn.execute("PRAGMA database_list").fetchone()[2])
+    reset_all()
+    resp = client.post("/api/admin/pop/refresh", params={"source": "unlocode"})
+    assert resp.status_code == 501
+    body = resp.json()
+    assert body["results"][0]["error"] == "not_implemented" and not body["results"][0]["success"]
+    assert conn.execute("SELECT COUNT(*) FROM pop_import_runs").fetchone()[0] == 0
 
 
 # --- session lifetime (cookie vs. server-side expiry) -----------------------------------------
@@ -736,37 +869,73 @@ def test_smtp_template_reset_returns_the_new_default(conn):
     assert sqlite_db.get_setting(conn, "smtp_mail_template_html", None) is None
 
 
-def test_test_mail_enqueues_a_non_empty_text_body(conn, monkeypatch):
+def _queue_test_mail(conn, monkeypatch, *, public_hostname=None, alert_html=None):
+    """POST /settings/smtp/test-mail with a fake spooler; returns (response, enqueue kwargs)."""
     from app.services.notifications import spooler as spooler_module
     from app.utils.constants import SettingKeys
 
-    for key, value in (
+    settings_to_set = [
         (SettingKeys.SMTP_ENABLED, True),
         (SettingKeys.SMTP_HOST, "smtp.example.com"),
         (SettingKeys.SMTP_FROM, "alerts@example.com"),
-    ):
+    ]
+    if public_hostname:
+        settings_to_set.append((SettingKeys.PUBLIC_HOSTNAME, public_hostname))
+    for key, value in settings_to_set:
         sqlite_db.set_setting(conn, key, value)
-
-    queued: list[tuple[tuple, dict]] = []
+    if alert_html is not None:
+        sqlite_db.set_setting(conn, "smtp_mail_template_html", alert_html)
+        sqlite_db.set_setting(conn, "smtp_mail_template_subject", "{{status.emoji}} {{status.text}}")
+    queued: list[dict] = []
 
     class FakeSpooler:
-        def enqueue(self, *args, **kwargs):
-            queued.append((args, kwargs))
+        def enqueue(self, **kwargs):
+            queued.append(kwargs)
             return 1
 
     monkeypatch.setattr(spooler_module, "get_spooler", lambda _factory: FakeSpooler())
     client = _client(conn, settings.router, user=_mk_user(conn, "adm", admin=True))
     client.app.state.db_path = Path(conn.execute("PRAGMA database_list").fetchone()[2])
-
     resp = client.post("/settings/smtp/test-mail", json={"recipient": "you@example.com"})
-    assert resp.status_code == 200, resp.text
+    return resp, queued
 
-    payload = queued[0][1]["payload"]
+
+def test_test_mail_enqueues_the_welcome_message_not_an_alert(conn, monkeypatch):
+    from app.services.notifications.spooler import ChannelType, NotificationType
+
+    resp, queued = _queue_test_mail(conn, monkeypatch)
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"ok": True, "message": "Test email queued."}
+    assert len(queued) == 1
+    kw = queued[0]
+    assert kw["notification_type"] is NotificationType.TEST
+    assert kw["channel_type"] is ChannelType.EMAIL
+    assert kw["recipient_address"] == "you@example.com"
+    payload = kw["payload"]
+    assert set(payload) == {"subject", "text_body", "html_body"}
+    assert payload["subject"] == "[justUp] Welcome \u2013 Email test"
     assert payload["text_body"].strip(), "test mail must carry a non-empty plain-text part"
-    assert "Service DOWN" in payload["text_body"]
-    # Realistic sample data, not the old hard-coded 2026-01-29 outage.
-    assert "2026-01-29" not in payload["html_body"]
+    assert "Welcome to justUp!" in payload["text_body"]
+    for part in (payload["text_body"], payload["html_body"]):
+        assert "Service DOWN" not in part
+        assert "503" not in part
     assert payload["html_body"].count("{{") == 0
+    # Without a public hostname there is no button and no placeholder host.
+    assert "Open in justUp!" not in payload["html_body"]
+    assert "justup.example.com" not in payload["html_body"]
+
+
+def test_test_mail_ignores_a_custom_alert_template_and_links_the_public_host(conn, monkeypatch):
+    resp, queued = _queue_test_mail(
+        conn, monkeypatch, public_hostname="up.example.org", alert_html="<p>{{status.text}} {{target.name}}</p>"
+    )
+    assert resp.status_code == 200, resp.text
+    payload = queued[0]["payload"]
+    assert payload["html_body"].startswith("<!DOCTYPE html>")
+    assert "Service DOWN" not in payload["html_body"]
+    assert "Test Target" not in payload["html_body"]
+    assert 'href="https://up.example.org/"' in payload["html_body"]
+    assert "Open in justUp!: https://up.example.org/" in payload["text_body"]
 
 
 def test_smtp_fragment_shows_preview_url_instead_of_placeholder(conn, monkeypatch):
@@ -860,6 +1029,27 @@ def test_signal_removal_prechecks_are_shared_by_unlink_and_unregister(conn, sign
     assert sqlite_db.get_setting(conn, env.key) is None
 
 
+@pytest.mark.parametrize("path", ["/settings/signal/unregister", "/settings/signal/unlink"])
+@pytest.mark.parametrize("accounts", [[], ["+4915112345678"]])
+def test_signal_removal_settings_access_runs_off_event_loop(conn, signal_env, monkeypatch, path, accounts):
+    # A write waits up to busy_timeout for the writer lock; on the loop it would stall every request.
+    real_get, real_set = sqlite_db.get_setting, sqlite_db.set_setting
+
+    def checked(real):
+        def wrapper(*args, **kwargs):
+            _assert_off_event_loop()
+            return real(*args, **kwargs)
+
+        return wrapper
+
+    monkeypatch.setattr(sqlite_db, "get_setting", checked(real_get))
+    monkeypatch.setattr(sqlite_db, "set_setting", checked(real_set))
+    signal_env.accounts = accounts
+    resp = _post(signal_env, path, {"password": "pw"})
+    assert resp.status_code == 200, resp.text
+    assert real_get(conn, signal_env.key) is None
+
+
 # --- metrics: downtime detection over long windows ---------------------------------------------
 def _seed_http_up(tsdb_dir: Path, target_id: int, values: list[int], start: datetime) -> None:
     from app.db import tsdb
@@ -897,6 +1087,7 @@ def test_downtime_finds_outage_older_than_the_newest_points(conn, extra_targets)
     assert summary["downtime_seconds"] == 120
     assert summary["incidents"] == 1
     assert summary["ongoing"] is False
+    assert summary["latest_start"] == start.isoformat()
 
 
 def test_downtime_ignores_incidents_below_threshold(conn):
@@ -929,7 +1120,8 @@ def test_downtime_of_fresh_series_is_ongoing(conn):
 
 # --- CR-02: per-hop geolocation must not block the event loop ------------------------------------
 def test_traceroute_hop_geolocation_runs_off_event_loop(monkeypatch):
-    from app.services import mtr_run, route_interpolator, traceroute_geo
+    from app.services import route_interpolator, traceroute_geo, traceroute_service
+    from tests.traceroute_helpers import patch_trace
 
     hop = {"hop": 1, "ip": "203.0.113.7", "hostname": "h.example", "status": "ok", "latency_ms": {"avg": 1.0}}
     threads: list[int] = []
@@ -939,16 +1131,15 @@ def test_traceroute_hop_geolocation_runs_off_event_loop(monkeypatch):
             threads.append(threading.get_ident())
             raise RuntimeError("stop")
 
-    monkeypatch.setattr(mtr_run, "resolve_target_ip", lambda host: "198.51.100.1")
-    monkeypatch.setattr(mtr_run, "run_mtr", lambda *a, **k: [hop])
+    patch_trace(monkeypatch, [hop], resolved="198.51.100.1")
     monkeypatch.setattr(
-        mtr_run, "analyze_route", lambda hops, ip: {"last_responding_hop": 0, "destination_reached": True}
+        traceroute_service, "analyze_route", lambda hops, ip: {"last_responding_hop": 0, "destination_reached": True}
     )
     monkeypatch.setattr(route_interpolator, "interpolate_route", lambda hops, **k: hops)
     monkeypatch.setattr(route_interpolator, "collapse_interpolated_hops", lambda hops, *a, **k: hops)
     monkeypatch.setattr(route_interpolator, "ensure_destination_hop", lambda hops, **k: hops)
     monkeypatch.setattr(traceroute_geo, "geolocate_with_hostname_hint", fake_geo)
-    monkeypatch.setattr(traceroute_geo, "mtr_hops_to_geo_points", lambda *a, **k: [])
+    monkeypatch.setattr(traceroute_geo, "route_hops_to_geo_points", lambda *a, **k: [])
     loop_thread = threading.get_ident()
     with pytest.raises(RuntimeError, match="stop"):
         asyncio.run(frontend._run_traceroute_fragment(SimpleNamespace(), 1, "h.example", "ns"))
@@ -1017,11 +1208,8 @@ def test_reset_metrics_rolls_back_sqlite_when_tsdb_delete_fails(conn, monkeypatc
 
     monkeypatch.setattr(tsdb, "delete_target", boom)
     client = _client(conn, targets.router, user=_mk_user(conn, "root", admin=True))
-    try:
-        resp = client.post(f"/targets/{tid}/reset")
-        assert resp.status_code >= 500
-    except OSError:
-        pass  # the unhandled error surfaces through the test client; state is asserted below
+    with pytest.raises(OSError, match="disk"):  # the unhandled error surfaces through the test client
+        client.post(f"/targets/{tid}/reset")
     assert conn.execute("SELECT COUNT(*) FROM alerts WHERE target_id = ?", (tid,)).fetchone()[0] == 1
     assert sqlite_db.get_target_status(conn, tid) is not None
 
@@ -1069,8 +1257,8 @@ def _downtime_fragment(conn, monkeypatch, tid: int, since: datetime) -> str:
 def test_downtime_history_empty_state_without_measurements(conn, monkeypatch):
     tid = _target(conn, "nodata")
     html = _downtime_fragment(conn, monkeypatch, tid, datetime.now(UTC) - timedelta(days=1))
-    assert "No measurement data in selected range" in html
-    assert "stayed up" not in html
+    assert "No measurement data" in html
+    assert "No outages" not in html
 
 
 def test_downtime_history_empty_state_all_up(conn, monkeypatch):
@@ -1080,17 +1268,20 @@ def test_downtime_history_empty_state_all_up(conn, monkeypatch):
     start = datetime.now(UTC) - timedelta(hours=2)
     _seed_http_up(Path(conn.execute("PRAGMA database_list").fetchone()[2]).parent, tid, [1] * 5, start)
     html = _downtime_fragment(conn, monkeypatch, tid, start - timedelta(hours=1))
-    assert "No downtimes in selected range" in html
+    assert "No outages in selected range" in html
     assert "No measurement data" not in html
 
 
 def test_downtime_history_lists_periods_when_down(conn, monkeypatch):
     tid = _target(conn, "down")
+    conn.execute("UPDATE targets SET enable_http_check = 1 WHERE id = ?", (tid,))  # only enabled checks count
+    conn.commit()
     start = datetime.now(UTC) - timedelta(hours=2)
     _seed_http_up(Path(conn.execute("PRAGMA database_list").fetchone()[2]).parent, tid, [1, 0] + [0] * 200 + [1], start)
     html = _downtime_fragment(conn, monkeypatch, tid, start - timedelta(hours=1))
-    assert "No downtimes in selected range" not in html
+    assert "No outages in selected range" not in html
     assert "No measurement data" not in html
+    assert "downtime-item--down" in html
 
 
 # --- reports: _cap_points keeps first/last and never divides by zero ----------------------------
@@ -1488,6 +1679,143 @@ def test_verify_signal_answers_cached_numbers_without_backend(conn, monkeypatch)
     assert resp.json()["results"] == {phone: True}
 
 
+# --- recipients: explicit Signal re-check (force_refresh) -------------------------------------
+
+_RECHECK_PHONE = "+4915112345678"
+
+
+def _recheck_setup(conn, monkeypatch, *, admin: bool = True):
+    """Admin client, one recipient with a number and a counting fake signal-cli backend."""
+    from app.services.notifications import signal_backend
+
+    calls: list[str] = []
+    release = threading.Event()
+    release.set()
+
+    def lookup(phone, sender=None):  # noqa: ARG001
+        calls.append(phone)
+        release.wait(5)
+        return False
+
+    backend = SimpleNamespace(list_accounts=lambda: ["+490000"], check_user_registered=lookup)
+    monkeypatch.setattr(signal_backend, "get_signal_backend", lambda: backend)
+    monkeypatch.setattr(recipients, "_SIGNAL_REGISTRATION_CACHE", {})
+    monkeypatch.setattr(recipients, "_SIGNAL_FLIGHTS", {})
+    monkeypatch.setattr(recipients, "_SIGNAL_FORCE_MIN_INTERVAL", 0.0)
+    reset_all()
+    rid = sqlite_db.create_recipient(conn, name="R", phone=_RECHECK_PHONE)
+    client = _client(conn, recipients.router, user=_mk_user(conn, "u", admin=admin))
+    return client, rid, calls, release
+
+
+def test_recheck_signal_bypasses_cache_and_replaces_entry(conn, monkeypatch):
+    client, rid, calls, _ = _recheck_setup(conn, monkeypatch)
+    recipients._SIGNAL_REGISTRATION_CACHE[_RECHECK_PHONE] = (True, time.monotonic())
+    # Normal path: cache hit, no backend call.
+    assert client.post("/recipients/verify-signal", json=[_RECHECK_PHONE]).json()["results"] == {_RECHECK_PHONE: True}
+    assert calls == []
+    resp = client.post(f"/recipients/{rid}/recheck-signal")
+    assert resp.status_code == 200
+    assert resp.json() == {"registered": False}
+    assert calls == [_RECHECK_PHONE]
+    assert recipients._SIGNAL_REGISTRATION_CACHE[_RECHECK_PHONE][0] is False
+    assert client.post("/recipients/verify-signal", json=[_RECHECK_PHONE]).json()["results"] == {_RECHECK_PHONE: False}
+    assert calls == [_RECHECK_PHONE]
+
+
+def test_recheck_signal_requires_admin_and_known_number(conn, monkeypatch):
+    client, rid, calls, _ = _recheck_setup(conn, monkeypatch, admin=False)
+    assert client.post(f"/recipients/{rid}/recheck-signal").status_code == 403
+    assert calls == []
+    admin = _client(conn, recipients.router, user=_mk_user(conn, "adm", admin=True))
+    assert admin.post("/recipients/9999/recheck-signal").status_code == 404
+    mail_only = sqlite_db.create_recipient(conn, name="M", email="m@example.com")
+    assert admin.post(f"/recipients/{mail_only}/recheck-signal").status_code == 400
+    assert calls == []
+
+
+def test_recheck_signal_has_its_own_rate_limit(conn, monkeypatch):
+    client, rid, calls, _ = _recheck_setup(conn, monkeypatch)
+    codes = [client.post(f"/recipients/{rid}/recheck-signal").status_code for _ in range(7)]
+    assert codes[:5] == [200] * 5
+    assert codes[5:] == [429, 429]
+    assert len(calls) == 5
+
+
+def test_recheck_signal_parallel_calls_share_one_lookup(conn, monkeypatch):
+    client, rid, calls, release = _recheck_setup(conn, monkeypatch)
+    # Production opens one connection per request; a shared one is not safe across the parallel threads.
+    db_path = conn.execute("PRAGMA database_list").fetchone()[2]
+
+    def per_request_conn():
+        request_conn = sqlite_db.connect(Path(db_path))
+        try:
+            yield request_conn
+        finally:
+            sqlite_db.close_connection(request_conn)
+
+    client.app.dependency_overrides[get_conn] = per_request_conn
+    release.clear()
+    results: list[tuple[int, dict]] = []
+
+    def run():
+        r = client.post(f"/recipients/{rid}/recheck-signal")
+        results.append((r.status_code, r.json()))
+
+    threads = [threading.Thread(target=run) for _ in range(3)]
+    threads[0].start()
+    for _ in range(200):
+        if calls:
+            break
+        time.sleep(0.01)
+    for t in threads[1:]:
+        t.start()
+    time.sleep(0.2)
+    release.set()
+    for t in threads:
+        t.join(10)
+    assert results == [(200, {"registered": False})] * 3
+    assert calls == [_RECHECK_PHONE]
+    assert recipients._SIGNAL_FLIGHTS == {}
+
+
+def test_recheck_signal_global_cap_rejects_with_429(conn, monkeypatch):
+    client, rid, calls, _ = _recheck_setup(conn, monkeypatch)
+    monkeypatch.setattr(recipients, "_SIGNAL_FORCE_SLOTS", threading.BoundedSemaphore(1))
+    assert recipients._SIGNAL_FORCE_SLOTS.acquire(blocking=False)
+    resp = client.post(f"/recipients/{rid}/recheck-signal")
+    assert resp.status_code == 429
+    assert resp.headers["Retry-After"] == "5"
+    assert calls == []
+    assert recipients._SIGNAL_FLIGHTS == {}
+
+
+def test_recheck_signal_recent_refresh_is_answered_from_cache(conn, monkeypatch):
+    client, rid, calls, _ = _recheck_setup(conn, monkeypatch)
+    monkeypatch.setattr(recipients, "_SIGNAL_FORCE_MIN_INTERVAL", 60.0)
+    assert client.post(f"/recipients/{rid}/recheck-signal").json() == {"registered": False}
+    assert client.post(f"/recipients/{rid}/recheck-signal").json() == {"registered": False}
+    assert calls == [_RECHECK_PHONE]
+
+
+def test_recheck_signal_errors_are_sanitized(conn, monkeypatch, caplog):
+    from app.services.notifications import signal_backend
+
+    client, rid, _calls, _ = _recheck_setup(conn, monkeypatch)
+
+    def boom():
+        raise RuntimeError(f"lookup failed for {_RECHECK_PHONE}")
+
+    monkeypatch.setattr(signal_backend, "get_signal_backend", boom)
+    with caplog.at_level("DEBUG"):
+        resp = client.post(f"/recipients/{rid}/recheck-signal")
+    assert resp.status_code == 200
+    assert resp.json() == {"registered": None}
+    assert _RECHECK_PHONE not in resp.text
+    assert _RECHECK_PHONE not in caplog.text
+    assert recipients._SIGNAL_FLIGHTS == {}
+
+
 # --- recipients: the unique phone index is the authority --------------------------------------
 
 
@@ -1501,7 +1829,7 @@ def test_duplicate_phone_create_race_maps_to_409(conn, monkeypatch):
     resp = client.post("/recipients", json={**body, "name": "B"})
     assert resp.status_code == 409
     assert resp.json()["detail"] == "Phone number already exists"
-    assert conn.execute("SELECT COUNT(*) FROM recipients").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM recipients WHERE user_id IS NULL").fetchone()[0] == 1
 
 
 def test_duplicate_phone_update_race_maps_to_409(conn, monkeypatch):
@@ -1599,17 +1927,20 @@ def test_about_page_probes_signal_cli_once_and_caches_failure(conn, monkeypatch)
     calls = []
 
     def boom(*_a, **_k):
-        calls.append(1)
+        calls.append(_a[0])
         raise FileNotFoundError("signal-cli")
 
     monkeypatch.setattr(subprocess, "run", boom)
     monkeypatch.setattr(frontend, "_signal_cli_cache", None)
+    monkeypatch.setattr(frontend, "_nmap_cache", None)
     monkeypatch.setattr(frontend, "require_ui_user", lambda *_a, **_k: {"id": 1})
     monkeypatch.setattr(frontend, "templates", SimpleNamespace(TemplateResponse=lambda _r, _n, ctx: ctx))
     for _ in range(3):
         ctx = frontend.about_page(SimpleNamespace(), conn)
-    assert len(calls) == 1
+    assert calls.count(["signal-cli", "--version"]) == 1
+    assert calls.count(["nmap", "--version"]) == 1
     assert ("signal-cli", "not available") in ctx["dependencies"]
+    assert ctx["nmap_version"] == "not available"
 
 
 def test_about_page_reprobes_signal_cli_after_ttl(monkeypatch):
@@ -1629,6 +1960,31 @@ def test_about_page_reprobes_signal_cli_after_ttl(monkeypatch):
     monkeypatch.setattr(frontend, "_signal_cli_cache", (0.0, "old"))
     assert frontend._signal_cli_version() == "0.13.23"
     assert len(calls) == 2
+
+
+def test_about_page_displays_installed_nmap_version(conn, monkeypatch):
+    import subprocess
+
+    calls = []
+
+    def nmap_version(command, **kwargs):
+        calls.append((command, kwargs))
+        return SimpleNamespace(returncode=0, stdout="Nmap version 7.993 ( https://nmap.org )\nCompiled with: libpcre2")
+
+    monkeypatch.setattr(subprocess, "run", nmap_version)
+    monkeypatch.setattr(frontend, "_nmap_cache", None)
+    monkeypatch.setattr(frontend, "_signal_cli_version", lambda: "unavailable")
+    monkeypatch.setattr(frontend, "require_ui_user", lambda *_a, **_k: {"id": 1})
+    monkeypatch.setattr(frontend, "templates", SimpleNamespace(TemplateResponse=lambda _r, _n, ctx: ctx))
+    for _ in range(2):
+        ctx = frontend.about_page(SimpleNamespace(), conn)
+    assert ctx["nmap_version"] == "7.993"
+    assert len(calls) == 1
+    assert calls[0][0] == ["nmap", "--version"]
+    assert calls[0][1]["timeout"] == 5
+    assert "{{ nmap_version }}" in (Path(__file__).resolve().parent.parent / "app/templates/about.html").read_text(
+        encoding="utf-8"
+    )
 
 
 def test_alerts_day_filter_includes_last_microsecond_of_day(conn):
@@ -1657,7 +2013,7 @@ def test_downtime_history_ignores_data_of_disabled_checks(conn, monkeypatch):
     start = datetime.now(UTC) - timedelta(hours=2)
     _seed_http_up(Path(conn.execute("PRAGMA database_list").fetchone()[2]).parent, tid, [1] * 5, start)
     html = _downtime_fragment(conn, monkeypatch, tid, datetime.now(UTC) - timedelta(days=1))
-    assert "No measurement data in selected range" in html
+    assert "No measurement data" in html
 
 
 def test_downtime_has_data_false_without_enabled_checks(tmp_path):
@@ -1678,3 +2034,223 @@ def test_signal_qr_fragment_is_not_cacheable(conn, monkeypatch):
     assert resp.status_code == 200
     assert "data:image/png;base64" in resp.text
     assert resp.headers["Cache-Control"] == "private, no-store"
+
+
+# --- template handlers: validate everything first, then save atomically ------------------------
+
+
+_TEMPLATE_KEYS = {
+    "smtp": ("smtp_mail_template_subject", "smtp_mail_template_html"),
+    "signal": ("signal_message_template_down", "signal_message_template_up"),
+}
+
+
+def _fail_on_second_set_setting(monkeypatch):
+    real = sqlite_db.set_setting
+    calls = {"n": 0}
+
+    def flaky(conn, key, value, **kwargs):
+        calls["n"] += 1
+        real(conn, key, value, **kwargs)
+        if calls["n"] == 2:
+            raise sqlite3.OperationalError("injected write failure")
+
+    monkeypatch.setattr(sqlite_db, "set_setting", flaky)
+
+
+@pytest.mark.parametrize(
+    ("path", "valid", "invalid", "keys"),
+    [
+        ("/settings/signal/template", "down", "up", _TEMPLATE_KEYS["signal"]),
+        ("/settings/smtp/template", "subject", "html", _TEMPLATE_KEYS["smtp"]),
+    ],
+)
+def test_template_update_with_one_invalid_field_saves_nothing(conn, path, valid, invalid, keys):
+    from app.utils.constants import SettingKeys
+
+    keys = tuple(getattr(SettingKeys, k.upper(), k) for k in keys)
+    client = _client(conn, settings.router, user=_mk_user(conn, "adm", admin=True))
+    resp = client.post(path, json={valid: "valid text", invalid: "   "})
+    assert resp.status_code == 400
+    assert [sqlite_db.get_setting(conn, k, None) for k in keys] == [None, None]
+
+
+@pytest.mark.parametrize(
+    ("path", "body", "keys"),
+    [
+        (
+            "/settings/signal/template",
+            {"down": "d", "up": "u"},
+            _TEMPLATE_KEYS["signal"],
+        ),
+        (
+            "/settings/smtp/template",
+            {"subject": "s", "html": "<p>h</p>"},
+            _TEMPLATE_KEYS["smtp"],
+        ),
+    ],
+)
+def test_template_update_write_failure_rolls_back_first_field(conn, monkeypatch, path, body, keys):
+    from app.utils.constants import SettingKeys
+
+    keys = tuple(getattr(SettingKeys, k.upper(), k) for k in keys)
+    _fail_on_second_set_setting(monkeypatch)
+    client = TestClient(
+        _client(conn, settings.router, user=_mk_user(conn, "adm", admin=True)).app, raise_server_exceptions=False
+    )
+    assert client.post(path, json=body).status_code == 500
+    assert [sqlite_db.get_setting(conn, k, None) for k in keys] == [None, None]
+
+
+@pytest.mark.parametrize(
+    ("path", "keys"),
+    [
+        ("/settings/signal/template/reset", _TEMPLATE_KEYS["signal"]),
+        ("/settings/smtp/template/reset", _TEMPLATE_KEYS["smtp"]),
+    ],
+)
+def test_template_reset_write_failure_rolls_back_first_field(conn, monkeypatch, path, keys):
+    from app.utils.constants import SettingKeys
+
+    keys = tuple(getattr(SettingKeys, k.upper(), k) for k in keys)
+    for k in keys:
+        sqlite_db.set_setting(conn, k, "custom")
+    _fail_on_second_set_setting(monkeypatch)
+    client = TestClient(
+        _client(conn, settings.router, user=_mk_user(conn, "adm", admin=True)).app, raise_server_exceptions=False
+    )
+    assert client.post(path).status_code == 500
+    assert [sqlite_db.get_setting(conn, k, None) for k in keys] == ["custom", "custom"]
+
+
+# --- Notification templates: validate everything, then save in one transaction ---------------
+
+_TEMPLATE_CASES = {
+    "smtp": ("/settings/smtp/template", {"subject": "S", "html": "H"}, {"subject": "New", "html": "  "}),
+    "signal": ("/settings/signal/template", {"down": "D", "up": "U"}, {"down": "New", "up": "  "}),
+}
+
+
+def _template_state(conn, kind: str) -> list:
+    return [sqlite_db.get_setting(conn, key, "<unset>") for key in _TEMPLATE_KEYS[kind]]
+
+
+@pytest.mark.parametrize("kind", ["smtp", "signal"])
+def test_template_update_with_one_invalid_field_changes_nothing(conn, kind):
+    url, saved, mixed = _TEMPLATE_CASES[kind]
+    client = _client(conn, settings.router, user=_mk_user(conn, "adm", admin=True))
+    assert client.post(url, json=saved).status_code == 200
+    before = _template_state(conn, kind)
+    resp = client.post(url, json=mixed)  # first field valid, second empty
+    assert resp.status_code == 400
+    assert _template_state(conn, kind) == before
+
+
+@pytest.mark.parametrize("kind", ["smtp", "signal"])
+def test_template_update_is_all_or_nothing_when_a_write_fails(conn, kind, monkeypatch):
+    url, saved, _ = _TEMPLATE_CASES[kind]
+    client = _client(conn, settings.router, user=_mk_user(conn, "adm", admin=True))
+    assert client.post(url, json=saved).status_code == 200
+    before = _template_state(conn, kind)
+    real = sqlite_db.set_setting
+    _fail_on_second_set_setting(monkeypatch)
+    update = {k: f"changed-{k}" for k in saved}
+    with pytest.raises(sqlite3.OperationalError):
+        client.post(url, json=update)
+    monkeypatch.setattr(sqlite_db, "set_setting", real)
+    assert _template_state(conn, kind) == before
+
+
+@pytest.mark.parametrize("kind", ["smtp", "signal"])
+def test_template_reset_is_all_or_nothing_when_a_write_fails(conn, kind, monkeypatch):
+    url, saved, _ = _TEMPLATE_CASES[kind]
+    client = _client(conn, settings.router, user=_mk_user(conn, "adm", admin=True))
+    assert client.post(url, json=saved).status_code == 200
+    before = _template_state(conn, kind)
+    real = sqlite_db.set_setting
+    _fail_on_second_set_setting(monkeypatch)
+    with pytest.raises(sqlite3.OperationalError):
+        client.post(url + "/reset")
+    monkeypatch.setattr(sqlite_db, "set_setting", real)
+    assert _template_state(conn, kind) == before
+
+
+@pytest.mark.asyncio
+async def test_settings_spooler_init_runs_off_the_event_loop(monkeypatch):
+    import threading
+    from types import SimpleNamespace
+
+    from app.api import settings as settings_api
+    from app.services.notifications import spooler as spooler_module
+
+    init_threads: list[int] = []
+
+    class _FakeSpooler:
+        def flush_queue(self):
+            return 0
+
+    def _fake_get_spooler(_factory):
+        init_threads.append(threading.get_ident())
+        return _FakeSpooler()
+
+    monkeypatch.setattr(spooler_module, "get_spooler", _fake_get_spooler)
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(db_path="unused.db")))
+    await settings_api.flush_notification_queue(request, _admin=None)
+    assert init_threads
+    assert init_threads[0] != threading.get_ident()
+
+
+# --- recipients: rows without a usable contact channel cannot exist any more --------------------
+@pytest.mark.parametrize("phone", ["", "   "])
+def test_database_refuses_standalone_row_without_contact_channel_and_the_list_stays_intact(conn, phone):
+    # Version 1 accepted a blank string as a channel (the migration normalises such rows). The stricter CHECK of
+    # version 2 refuses them, so the list can no longer meet one.
+    sqlite_db.create_recipient(conn, name="Good", email="g@example.com")
+    with pytest.raises(sqlite3.IntegrityError, match="CHECK"):
+        conn.execute(
+            "INSERT INTO recipients(name, phone, email, created_at, updated_at) VALUES ('Bad', ?, NULL, 'x', 'x')",
+            (phone,),
+        )
+    conn.rollback()
+    admin = _client(conn, recipients.router, user=_mk_user(conn, "a", admin=True))
+    resp = admin.get("/recipients")
+    assert resp.status_code == 200
+    assert [r["name"] for r in resp.json() if not r["is_user_linked"]] == ["Good"]
+
+
+@pytest.mark.parametrize("payload", [{"phone": ""}, {"email": ""}, {"phone": "   "}, {}])
+def test_recipient_create_rejects_empty_contact_values(conn, payload):
+    admin = _client(conn, recipients.router, user=_mk_user(conn, "a", admin=True))
+    assert admin.post("/recipients", json={"name": "X", **payload}).status_code in (400, 422)
+    assert [r for r in sqlite_db.list_recipients(conn) if r["user_id"] is None] == []  # only the admin's own remains
+
+
+# --- metrics: /dashboard/uptime chart endpoint (D2) ----------------------------------------------
+def test_dashboard_uptime_returns_cycle_series_per_target_with_a_check(conn):
+    start = datetime.now(UTC) - timedelta(hours=1)
+    with_check = _target(conn, "withcheck")
+    without_check = _target(conn, "nocheck")
+    conn.execute("UPDATE targets SET enable_http_check = 1 WHERE id = ?", (with_check,))
+    conn.execute(
+        "UPDATE targets SET enable_http_check = 0, enable_ping = 0, enable_tcp_connect = 0 WHERE id = ?",
+        (without_check,),
+    )
+    conn.commit()
+    _seed_http_up(Path(conn.execute("PRAGMA database_list").fetchone()[2]).parent, with_check, [1, 0, 1], start)
+    client = _client(conn, metrics.router, user=_mk_user(conn, "u", admin=False))
+    resp = client.get("/dashboard/uptime", params={"since": (start - timedelta(minutes=1)).isoformat()})
+    assert resp.status_code == 200, resp.text
+    targets = resp.json()["targets"]
+    # A target without any enabled check has no chart series; the other one lists its cycles oldest first.
+    assert [t["target_id"] for t in targets] == [with_check]
+    assert targets[0]["name"] == "withcheck"
+    assert [p["value"] for p in targets[0]["points"]] == [1, 0, 1]
+    limited = client.get("/dashboard/uptime", params={"since": (start - timedelta(minutes=1)).isoformat(), "limit": 2})
+    assert [p["value"] for p in limited.json()["targets"][0]["points"]] == [0, 1]
+
+
+def test_dashboard_uptime_without_checks_is_an_empty_list(conn):
+    client = _client(conn, metrics.router, user=_mk_user(conn, "u", admin=False))
+    resp = client.get("/dashboard/uptime")
+    assert resp.status_code == 200
+    assert resp.json() == {"targets": []}

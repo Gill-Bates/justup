@@ -57,8 +57,8 @@ JITTER_FACTOR = 0.25
 # outage, short enough that nobody reads a day-old "target down" as current.
 MESSAGE_VALIDITY_SECONDS = 24 * 3600
 
-# Failures that more waiting cannot fix (configuration, unknown errors): retries after the first.
-# With the backoff above this leaves an administrator about 30 minutes to repair the setting.
+# Fixed policy constant (not configurable): retries after the first for failures that more waiting
+# cannot fix. With the backoff above this leaves an administrator about 30 minutes to repair them.
 MAX_RETRIES = 5
 
 # ─── Pacing and cooldown ────────────────────────────────────────────────────────
@@ -108,6 +108,8 @@ def backoff_delay_seconds(attempt: int) -> float:
 
 # ─── Failure classification ─────────────────────────────────────────────────────
 
+IDENTITY_FAILURE_CODE = "signal_identity_changed"
+
 
 class FailureKind(StrEnum):
     TRANSIENT = "transient"
@@ -149,9 +151,13 @@ def classify_failure(exc: BaseException) -> Failure:
     if isinstance(exc, SignalRateLimited):
         seconds = exc.retry_after_seconds if exc.retry_after_seconds > 0 else SIGNAL_RATE_LIMIT_FALLBACK_SECONDS
         return Failure(FailureKind.RATE_LIMITED, reason, min(seconds, MAX_COOLDOWN_SECONDS))
-    if isinstance(exc, SignalRecipientInvalid | SignalNotRegistered):
+    if isinstance(exc, SignalRecipientInvalid):
         return Failure(FailureKind.PERMANENT, reason)
-    if isinstance(exc, SignalNotInstalled):
+    # The sender account is missing locally, not a verdict on the message: bounded repair window.
+    if isinstance(exc, SignalNotRegistered | SignalNotInstalled):
+        return Failure(FailureKind.LIMITED, reason)
+    # Changed recipient identity needs a manual check; never auto-accepted, so retrying is bounded.
+    if isinstance(exc, SignalSendFailed) and exc.code == IDENTITY_FAILURE_CODE:
         return Failure(FailureKind.LIMITED, reason)
     if isinstance(exc, SignalTimeout):
         return Failure(FailureKind.TRANSIENT, reason, uncertain=True)

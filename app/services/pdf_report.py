@@ -19,8 +19,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, tzinfo
 from pathlib import Path
-from typing import Any
-from urllib.parse import urlparse, urlunparse
+from typing import TYPE_CHECKING, Any, cast
+from urllib.parse import urlparse
 from xml.sax.saxutils import escape as _xml_escape
 
 import matplotlib as mpl
@@ -57,7 +57,6 @@ from reportlab.rl_config import defaultPageSize  # noqa: F401 - ensure config is
 
 from app.services import geo_resolver as gr
 from app.services.flag_images import load_flags, normalize_country_code
-from app.services.mtr_run import analyze_route, resolve_target_ip, run_mtr
 from app.services.pdf_logo import LogoFlowable, draw_logo, logo_aspect
 from app.services.pdf_route_map import (
     DESTINATION_COLOR,
@@ -82,17 +81,31 @@ from app.services.route_timeline import (
 from app.services.traceroute_geo import (
     geolocate_with_hostname_hint,
     location_view,
-    mtr_hops_to_geo_points,
+    route_hop_locations,
+    route_hops_to_geo_points,
 )
+from app.services.traceroute_service import (
+    NO_IP_MARKERS,
+    TRACE_HOP_LIMIT,
+    analyze_route,
+    trace_sync,
+)
+from app.utils.availability_rules import MIN_DOWNTIME_SECONDS, measured_outages
+from app.utils.availability_series import AvailabilitySeries
+from app.utils.cert_target import resolve_cert_target
+from app.utils.downtime_view import display_seconds
 from app.utils.ssrf import redact_url
 from app.utils.status_palette import STATUS_PALETTE
 from app.utils.tls_model import Check, ScanStatus, TlsScanResult, Verdict
 from app.utils.tls_scanner import scan_tls
-from app.utils.uptime_metric import uptime_level
+from app.utils.uptime_metric import availability_check_enabled, uptime_level
 from app.utils.version import BUILD_INFO, VERSION
 from app.utils.whatweb_parser import run_whatweb
 
 _log = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from app.db.tsdb import DowntimePeriod
 
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 
@@ -124,14 +137,10 @@ def _clean_site_title(raw: Any, font_name: str) -> str:
     return text
 
 
-# ─── PDF Generation Lock ──────────────────────────────────────────────────
-# matplotlib is not thread-safe for parallel plot generation.
-# Serialize all PDF generation to prevent chart/font corruption.
+# matplotlib is not thread-safe for parallel plot generation: serialize all PDF generation.
 _PDF_LOCK = threading.Lock()
 
-# ---------------------------------------------------------------------------
 # Constants
-# ---------------------------------------------------------------------------
 
 FONT_DIR = Path(__file__).parent.parent / "static" / "fonts"
 STATIC_DIR = Path(__file__).parent.parent / "static"
@@ -190,50 +199,34 @@ TCP_PORT_COLORS = [
     "#0dcaf0",  # info cyan
 ]
 
-# ---------------------------------------------------------------------------
 # Spacing Design Tokens (consistent layout rhythm)
-# ---------------------------------------------------------------------------
 SPACE_XS = 1 * mm  # Minimal: dividers, tight padding
 SPACE_SM = 2 * mm  # Small: inner cell padding
 SPACE_MD = 4 * mm  # Medium: between elements
 SPACE_LG = 8 * mm  # Large: section spacing
 SPACE_XL = 12 * mm  # Extra large: page breaks, major sections
 
-# Table cell padding presets
-TABLE_PADDING_COMPACT = (SPACE_XS, SPACE_SM, SPACE_XS, SPACE_SM)  # top, right, bottom, left
-TABLE_PADDING_NORMAL = (SPACE_SM, SPACE_MD, SPACE_SM, SPACE_MD)
-TABLE_PADDING_BANNER = (SPACE_MD, SPACE_LG, SPACE_MD, SPACE_LG)
-
 # DPI for all images embedded into PDFs (charts, maps, etc.)
 PDF_DPI = 600
 
 
-# ---------------------------------------------------------------------------
-# MTR route data
-# ---------------------------------------------------------------------------
+# Traceroute route data
 
 
-def _run_mtr_with_interpolation(
+def _run_traceroute_with_interpolation(
     host: str,
-    max_hops: int = 20,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], bool]:
-    """Run MTR with route interpolation for ICMP-blocked segments.
+    """Trace through the shared service and interpolate silent segments.
 
     Returns:
         Tuple of (display_hops, geo_points, has_interpolation)
     """
-    # Resolve target IP for destination matching
-    target_ip = resolve_target_ip(host)
-
-    force_ipv6 = None
-    if target_ip:
-        force_ipv6 = ":" in target_ip
-    elif host and ":" in host:
-        force_ipv6 = True
-    # Measure the resolved address, as the web UI does, so both judge the same path.
-    hops = run_mtr(target_ip or host, count=3, max_hops=max_hops, force_ipv6=force_ipv6)
-    if not hops:
+    # The shared service resolves and traces ONE address; a failure is a controlled empty route.
+    outcome = trace_sync(host)
+    if not outcome.ok:
         return [], [], False
+    target_ip = outcome.target_ip
+    hops = outcome.hops
 
     # Analyze route for ICMP blocking patterns
     route_analysis = analyze_route(hops, target_ip)
@@ -259,9 +252,7 @@ def _run_mtr_with_interpolation(
         if route_analysis["last_responding_hop"] > 0:
             for h in hops:
                 if h.get("hop") == route_analysis["last_responding_hop"]:
-                    lat = h.get("latency_ms")
-                    if lat and isinstance(lat, dict):
-                        final_latency = lat.get("avg")
+                    final_latency = h.get("rtt_ms")
                     break
 
         interpolated_hops = ensure_destination_hop(
@@ -269,13 +260,15 @@ def _run_mtr_with_interpolation(
             destination_ip=target_ip,
             destination_hostname=host,
             destination_geo=destination_geo,
-            final_latency_ms=final_latency,
+            final_rtt_hint_ms=final_latency,
         )
 
-    geo_points = mtr_hops_to_geo_points(
+    route_locations = route_hop_locations(interpolated_hops, target_ip, destination_geo)
+    geo_points = route_hops_to_geo_points(
         interpolated_hops,
         destination_ip=target_ip,
         destination_geo=destination_geo,
+        locations=route_locations,
     )
 
     geo_by_ip: dict[str, dict] = {}
@@ -290,13 +283,15 @@ def _run_mtr_with_interpolation(
         ip = h.get("ip")
         if (
             ip
-            and ip not in ("*", "-", "???", "—")
+            and ip not in NO_IP_MARKERS
             and h.get("status") not in ("timeout", "interpolated")
             and not h.get("_interpolated")
         ):
             if ip not in view_by_ip:
                 geo = destination_geo if target_ip and ip == target_ip else geo_by_ip.get(ip)
-                if not geo:
+                if not geo and ip in route_locations:
+                    geo = route_locations[ip]
+                elif not geo:
                     geo = geolocate_with_hostname_hint(ip, h.get("hostname"))
                 view_by_ip[ip] = location_view(geo)
             view = view_by_ip[ip]
@@ -320,9 +315,11 @@ def _run_mtr_with_interpolation(
     return display_hops, geo_points, has_interpolation
 
 
-# ---------------------------------------------------------------------------
 # Data Structures
-# ---------------------------------------------------------------------------
+
+
+def _target_interval_seconds(target: dict[str, Any]) -> float:
+    return target.get("interval_seconds") or 60
 
 
 @dataclass
@@ -333,7 +330,7 @@ class ReportData:
     from_date: datetime
     to_date: datetime
     http_data: list[dict]
-    uptime_data: list[dict]
+    uptime_data: AvailabilitySeries | list[dict]  # a point list is folded into runs on construction
     ping_data: list[dict]
     tcp_data: list[dict]
     cert_data: list[dict]
@@ -341,6 +338,10 @@ class ReportData:
     tcp_port_data: dict[int, list[dict]] | None = None  # Per-port TCP data: {port: [points]}
     display_data: dict[str, list[dict]] | None = None
     status_counts_exact: bool = False
+    downtime_periods: list[DowntimePeriod] | None = None
+
+    def __post_init__(self) -> None:
+        self.uptime_data = _as_series(self.uptime_data, _target_interval_seconds(self.target))
 
 
 @dataclass
@@ -381,9 +382,7 @@ class DowntimeEvent:
     duration_minutes: int | None
 
 
-# ---------------------------------------------------------------------------
 # Font Registration
-# ---------------------------------------------------------------------------
 
 _fonts_registered = False
 _fonts_lock = threading.Lock()
@@ -411,11 +410,15 @@ def _shaped_text(text: str, font_name: str, font_size: float) -> ShapedStr:
     return shaped
 
 
+def _shaped_width(shaped, font_size: float) -> float:
+    return sum(glyph.x_advance for glyph in shaped.__shapeData__) * font_size / 1000
+
+
 def _text_width(text: str, font_name: str, font_size: float) -> float:
     if not text:
         return 0.0
     shaped = _shaped_text(text, font_name, font_size)
-    return sum(glyph.x_advance for glyph in shaped.__shapeData__) * font_size / 1000
+    return _shaped_width(shaped, font_size)
 
 
 def _draw_text(canvas, x: float, y: float, text: str, *, align: str = "left") -> None:
@@ -424,7 +427,7 @@ def _draw_text(canvas, x: float, y: float, text: str, *, align: str = "left") ->
     font_name = canvas._fontname  # noqa: SLF001
     font_size = canvas._fontsize  # noqa: SLF001
     shaped = _shaped_text(text, font_name, font_size)
-    width = sum(glyph.x_advance for glyph in shaped.__shapeData__) * font_size / 1000
+    width = _shaped_width(shaped, font_size)
     if align == "center":
         x -= width / 2
     elif align == "right":
@@ -517,9 +520,7 @@ def _get_font_bold() -> str:
     return "IBMPlexSans-Bold"
 
 
-# ---------------------------------------------------------------------------
 # Matplotlib Chart Generation
-# ---------------------------------------------------------------------------
 
 # Guard to prevent repeated matplotlib style setup (global state)
 _mpl_initialized = False
@@ -550,16 +551,14 @@ def _setup_matplotlib_style() -> None:
         font_manager.fontManager.addfont(str(FONT_DIR / "IBMPlexSans-Regular.ttf"))
         font_manager.fontManager.addfont(str(FONT_DIR / "IBMPlexSans-Bold.ttf"))
 
-        # 2. Apply base style (with fallback for matplotlib version changes)
+        # Base style, with a fallback for matplotlib versions that renamed it.
         try:
             plt.style.use("seaborn-v0_8-whitegrid")
         except OSError:
             _log.debug("seaborn-v0_8-whitegrid not available, using default style")
             plt.style.use("default")
 
-        # IMPORTANT: seaborn resets rcParams → force IBM Plex Sans AFTER style
-
-        # 3. Set rcParams AFTER style (style resets rcParams!)
+        # The style resets rcParams, so set them (incl. IBM Plex Sans) afterwards.
         font_config = {
             "font.family": "sans-serif",
             "font.sans-serif": ["IBM Plex Sans"],
@@ -689,28 +688,34 @@ def _plot_series(
         bv = [min(v, ymax) for v in bv]
     ax.fill_between(bt, bv, alpha=0.14, color=color, linewidth=0)
     (line,) = ax.plot(bt, bv, color=color, linewidth=1.1, label=label)
-    iso_t = [
-        bt[i]
+    iso = [
+        i
         for i in range(len(bt))
         if not math.isnan(bv[i]) and (i == 0 or math.isnan(bv[i - 1])) and (i == len(bt) - 1 or math.isnan(bv[i + 1]))
     ]
-    if iso_t:
-        ax.plot(iso_t, [bv[bt.index(t)] for t in iso_t], linestyle="none", marker="o", markersize=2.5, color=color)
+    if iso:
+        ax.plot([bt[i] for i in iso], [bv[i] for i in iso], linestyle="none", marker="o", markersize=2.5, color=color)
     return line
 
 
-def _style_axes(ax, *, from_date: datetime, to_date: datetime) -> None:
+def _apply_axis_style(ax, *, grid_x: bool = False, grid_y: bool = True) -> None:
+    """Shared spines, grid and ticks of every report chart; grids are always set explicitly."""
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
-    ax.grid(True, axis="y", alpha=0.6)
-    ax.grid(False, axis="x")
+    for axis, enabled in (("y", grid_y), ("x", grid_x)):
+        if enabled:
+            ax.grid(True, axis=axis, alpha=0.6)
+        else:
+            ax.grid(False, axis=axis)
     ax.tick_params(axis="both", length=2.5, width=0.5, labelsize=8, colors="#495057")
+
+
+def _style_axes(ax, *, from_date: datetime, to_date: datetime) -> None:
+    _apply_axis_style(ax)
     _format_time_axis(ax, from_date=from_date, to_date=to_date)
 
 
-# ---------------------------------------------------------------------------
 # Latency scale and peaks
-# ---------------------------------------------------------------------------
 
 PEAK_COLOR = "#b02a5b"  # solid interval bars; the SLA line stays orange and dashed
 _MAX_PEAK_MARKS = 6
@@ -884,18 +889,22 @@ def _draw_latency(
             clip_on=False,
         )
         handles.append(Line2D([], [], linestyle="none", marker="^", markersize=4, color="#343a40", label=_ABOVE_LABEL))
-    # Label the highest marks first and skip any that would sit on an already labelled one.
-    labelled: list[datetime] = []
+    # Above-scale marks are always labelled (the legend promises it); close neighbours are stacked
+    # downwards instead of dropped. Other peaks stay capped and skip crowded spots.
+    placed: list[tuple[datetime, bool]] = []  # x, is above scale
     for x, y, real in sorted([*marks, *median_over], key=lambda m: -m[2]):
-        if len(labelled) >= max_labels or any(abs(x - other) < span * 0.12 for other in labelled):
+        over = real > top
+        near = [o for o, o_over in placed if abs(x - o) < span * 0.12 and (o_over or not over)]
+        if not over and (sum(1 for _, o in placed if not o) >= max_labels or near):
             continue
-        labelled.append(x)
+        stack = len(near) if over else 0
+        placed.append((x, over))
         frac = (x - from_date) / span if span else 0.5
         high = y >= top * 0.88
         ax.annotate(
             _fmt_ms_value(real),
             (x, y),
-            xytext=(-4 if frac > 0.5 else 4, -4 if high else 4),
+            xytext=(-4 if frac > 0.5 else 4, (-4 if high else 4) - (9 * stack if high else -9 * stack)),
             textcoords="offset points",
             ha="right" if frac > 0.5 else "left",  # beside the peak stem, never across it
             va="top" if high else "bottom",
@@ -906,10 +915,14 @@ def _draw_latency(
     return handles
 
 
+def _tick_step(ticks: list[float]) -> float:
+    return ticks[1] - ticks[0] if len(ticks) > 1 else 1.0
+
+
 def _y_axis(ax, ticks: list[float], top: float, *, label: str | None = None) -> None:
     ax.set_ylim(0, top)
     ax.set_yticks(ticks)
-    step = ticks[1] - ticks[0] if len(ticks) > 1 else 1.0
+    step = _tick_step(ticks)
     ax.yaxis.set_major_formatter(mticker.FuncFormatter(_fmt_tick(step)))
     if label:
         ax.set_ylabel(label, fontsize=8, color="#495057")
@@ -917,9 +930,18 @@ def _y_axis(ax, ticks: list[float], top: float, *, label: str | None = None) -> 
 
 def _left_margin(ticks: list[float], width: float, has_label: bool = True) -> float:
     """Figure fraction for the Y tick labels and optional side title, derived from the widest tick label."""
-    step = ticks[1] - ticks[0] if len(ticks) > 1 else 1.0
+    step = _tick_step(ticks)
     chars = max(len(_fmt_tick(step)(t, 0)) for t in ticks)
     return min(0.25, (0.14 + 0.075 * chars + (0.22 if has_label else 0)) / width)
+
+
+def _latency_plot_left_in(data: list[dict], from_date: datetime, sla_threshold_ms: int | None, width: float) -> float:
+    """Inches a latency chart reserves left of its plot area for the Y tick labels (0 without data)."""
+    tz = _report_tz(from_date)
+    if not data or all(math.isnan(v) for v in _parse_series(data, tz)[1]):
+        return 0.0
+    ticks = _axis_scale([_build_view(data, tz)], sla_threshold_ms)[1]
+    return _left_margin(ticks, width, has_label=False) * width
 
 
 def _keep_tick_labels_inside(fig) -> None:
@@ -957,8 +979,12 @@ def _create_line_chart(
     sla_threshold_ms: int | None = None,
     threshold_label: str | None = None,
     legend_below: bool = False,
+    plot_left_in: float | None = None,
 ) -> bytes | None:
-    """Create a latency time-series chart; measurements and the SLA threshold are drawn distinctly."""
+    """Create a latency time-series chart; measurements and the SLA threshold are drawn distinctly.
+
+    plot_left_in fixes the plot's left edge so the chapter's time axes line up.
+    """
     if not data:
         return None
     tz = _report_tz(from_date)
@@ -1033,7 +1059,7 @@ def _create_line_chart(
             borderaxespad=0.2,
         )
         top_edge = 0.98 if legend_below else 0.88 if len(handles) <= 3 else 0.82
-        left = _left_margin(ticks, width, has_label=False)
+        left = _left_margin(ticks, width, has_label=False) if plot_left_in is None else plot_left_in / width
         fig.subplots_adjust(left=left, right=1.0, top=top_edge, bottom=0.31)
         # Put the unit above the plot so the axis needs space only for its tick labels.
         ax.yaxis.set_label_coords(0.0, 1.02)
@@ -1048,6 +1074,7 @@ def _create_response_time_chart(
     height: float = 2.5,
     sla_threshold_ms: int | None = None,
     threshold_label: str | None = None,
+    plot_left_in: float | None = None,
 ) -> bytes | None:
     """Create a response time chart as PNG bytes."""
     return _create_line_chart(
@@ -1061,6 +1088,7 @@ def _create_response_time_chart(
         sla_threshold_ms=sla_threshold_ms,
         threshold_label=threshold_label,
         legend_below=True,
+        plot_left_in=plot_left_in,
     )
 
 
@@ -1072,6 +1100,7 @@ def _create_ping_chart(
     height: float = 2.5,
     sla_threshold_ms: int | None = None,
     threshold_label: str | None = None,
+    plot_left_in: float | None = None,
 ) -> bytes | None:
     """Create a ping latency chart as PNG bytes."""
     return _create_line_chart(
@@ -1084,11 +1113,17 @@ def _create_ping_chart(
         height=height,
         sla_threshold_ms=sla_threshold_ms,
         threshold_label=threshold_label,
+        plot_left_in=plot_left_in,
     )
 
 
 def _create_tcp_chart(
-    data: list[dict], from_date: datetime, to_date: datetime, width: float = 6.7, height: float = 2.5
+    data: list[dict],
+    from_date: datetime,
+    to_date: datetime,
+    width: float = 6.7,
+    height: float = 2.5,
+    plot_left_in: float | None = None,
 ) -> bytes | None:
     """Create a TCP latency chart as PNG bytes."""
     return _create_line_chart(
@@ -1099,40 +1134,70 @@ def _create_tcp_chart(
         ylabel="TCP latency (ms)",
         width=width,
         height=height,
+        plot_left_in=plot_left_in,
     )
 
 
+def _as_series(data: AvailabilitySeries | list[dict] | None, interval_seconds: float) -> AvailabilitySeries:
+    """The run form of availability data; a point list is folded with the given check interval."""
+    if isinstance(data, AvailabilitySeries):
+        return data
+    return AvailabilitySeries.from_points(data or [], interval_seconds)
+
+
+def _uptime_blocks(
+    series: AvailabilitySeries, from_date: datetime, to_date: datetime, tz: tzinfo
+) -> dict[str, list[tuple[float, float]]]:
+    """Up and down blocks of the status strip, one per run; a gap between runs stays empty.
+
+    A run reaches up to the next run when that is within three median sample spacings, otherwise one
+    spacing past its last sample. Short outages get a minimum visible width.
+    """
+    runs = series.measured_runs
+    step = series.median_step or timedelta(minutes=1)
+    limit = step * 3
+    min_width = (to_date - from_date) * 0.004  # keep short outages visible in print
+    blocks: dict[str, list[tuple[float, float]]] = {"up": [], "down": []}
+    for i, run in enumerate(runs):
+        first, last = _to_tz(run.first, tz), _to_tz(run.last, tz)
+        nxt = _to_tz(runs[i + 1].first, tz) if i + 1 < len(runs) else None
+        tail = nxt if nxt is not None and nxt - last <= limit else last + step
+        end = min(tail, to_date)
+        start = max(first, from_date)
+        if end <= start:
+            continue
+        key = "up" if run.value == 1 else "down"
+        if key == "down":
+            last_start, last_end = max(last, from_date), end
+            if end - start < min_width:
+                end = start + min_width
+            # The last sample's own block is widened too and may reach past the end of the run.
+            if last_end > last_start and last_end - last_start < min_width:
+                end = max(end, last_start + min_width)
+        blocks[key].append((mdates.date2num(start), mdates.date2num(end) - mdates.date2num(start)))
+    return blocks
+
+
 def _create_uptime_chart(
-    data: list[dict], from_date: datetime, to_date: datetime, width: float = 6.7, height: float = 1.45
+    data: AvailabilitySeries | list[dict],
+    from_date: datetime,
+    to_date: datetime,
+    width: float = 6.7,
+    height: float = 1.45,
+    plot_left_in: float = 0.0,
 ) -> bytes | None:
     """Create an availability status strip as PNG bytes.
 
     Up and Down intervals are drawn as blocks; periods without samples stay empty.
+    plot_left_in leaves the Y-axis gutter of the latency charts empty so the time axes align.
     """
     tz = _report_tz(from_date)
-    points = [(t, v) for t, v in zip(*_parse_series(data, tz), strict=True) if not math.isnan(v)] if data else []
-    if not points:
+    series = _as_series(data, 0)  # a plain point list: every point is its own run
+    if not series.measured_runs:
         return None
+    blocks = _uptime_blocks(series, from_date, to_date, tz)
 
     _setup_matplotlib_style()
-    ts = [t for t, _ in points]
-    step = _median_step(ts) or timedelta(minutes=1)
-    limit = step * 3
-    span = to_date - from_date
-    min_width = span * 0.004  # keep short outages visible in print
-    blocks: dict[str, list[tuple[float, float]]] = {"up": [], "down": []}
-    for i, (t, v) in enumerate(points):
-        nxt = ts[i + 1] if i + 1 < len(ts) else None
-        end = nxt if nxt is not None and nxt - t <= limit else t + step
-        end = min(end, to_date)
-        start = max(t, from_date)
-        if end <= start:
-            continue
-        key = "up" if v == 1 else "down"
-        if key == "down" and end - start < min_width:
-            end = start + min_width
-        blocks[key].append((mdates.date2num(start), mdates.date2num(end) - mdates.date2num(start)))
-
     with _safe_figure(figsize=(width, height)) as (fig, ax):
         ax.broken_barh(blocks["up"], (0, 1), facecolors=CHART_COLORS["uptime_up"], linewidth=0)
         ax.broken_barh(blocks["down"], (0, 1), facecolors=CHART_COLORS["uptime_down"], linewidth=0)
@@ -1154,7 +1219,7 @@ def _create_uptime_chart(
             fontsize=8,
             borderaxespad=0.2,
         )
-        fig.subplots_adjust(left=0.0, right=1.0, top=0.80, bottom=0.42)
+        fig.subplots_adjust(left=plot_left_in / width, right=1.0, top=0.80, bottom=0.42)
         return _fig_png(fig)
 
 
@@ -1162,32 +1227,43 @@ def _coverage_blocks(
     stamps: list[datetime], interval: timedelta, from_date: datetime, to_date: datetime
 ) -> list[tuple[float, float]]:
     """Observed spans: each check covers one configured interval, so the sum matches coverage_pct."""
+    return _coverage_span_blocks([(t, t) for t in sorted(stamps)], interval, from_date, to_date)
+
+
+def _coverage_span_blocks(
+    spans: list[tuple[datetime, datetime]], interval: timedelta, from_date: datetime, to_date: datetime
+) -> list[tuple[float, float]]:
+    """Like ``_coverage_blocks`` for runs: checks from the first to the last sample of a span are contiguous."""
     blocks: list[tuple[datetime, datetime]] = []
-    for t in sorted(stamps):
-        end = min(t + interval, to_date)
-        if blocks and t <= blocks[-1][1]:
+    for first, last in spans:
+        end = min(last + interval, to_date)
+        if blocks and first <= blocks[-1][1]:
             blocks[-1] = (blocks[-1][0], max(blocks[-1][1], end))
-        elif end > t:
-            blocks.append((t, end))
+        elif end > first:
+            blocks.append((first, end))
     return [(mdates.date2num(a), mdates.date2num(b) - mdates.date2num(a)) for a, b in blocks if b > from_date]
 
 
 def _create_coverage_bar(
-    data: list[dict],
+    data: AvailabilitySeries | list[dict],
     from_date: datetime,
     to_date: datetime,
     width: float = 6.7,
     height: float = 0.7,
     interval_seconds: float = 60,
+    plot_left_in: float = 0.0,
 ) -> bytes | None:
     """Compact bar over the whole reporting period: where checks exist and where the period is empty."""
     tz = _report_tz(from_date)
-    ts, vals = _parse_series(data, tz)
-    stamps = [t for t, v in zip(ts, vals, strict=True) if not math.isnan(v)]
-    if not stamps:
+    if isinstance(data, AvailabilitySeries):
+        spans = [(_to_tz(run.first, tz), _to_tz(run.last, tz)) for run in data.measured_runs]
+    else:
+        ts, vals = _parse_series(data, tz)
+        spans = [(t, t) for t, v in zip(ts, vals, strict=True) if not math.isnan(v)]
+    if not spans:
         return None
     _setup_matplotlib_style()
-    blocks = _coverage_blocks(stamps, timedelta(seconds=interval_seconds), from_date, to_date)
+    blocks = _coverage_span_blocks(spans, timedelta(seconds=interval_seconds), from_date, to_date)
     with _safe_figure(figsize=(width, height)) as (fig, ax):
         ax.broken_barh(
             [(mdates.date2num(from_date), mdates.date2num(to_date) - mdates.date2num(from_date))],
@@ -1222,8 +1298,17 @@ def _create_coverage_bar(
             fontsize=8,
             borderaxespad=0.2,
         )
-        fig.subplots_adjust(left=0.0, right=1.0, top=0.62, bottom=0.42)
+        fig.subplots_adjust(left=plot_left_in / width, right=1.0, top=0.62, bottom=0.42)
         return _fig_png(fig)
+
+
+def _port_scales(port_data: dict[int, list[dict]], tz) -> tuple[dict, dict, list[float]]:
+    """Per-port views and Y scales plus the tick list with the widest labels."""
+    views = {port: _build_view(data, tz) for port, data in sorted(port_data.items())}
+    shared = _ports_share_scale(list(views.values()))
+    scales = {port: _axis_scale(list(views.values()) if shared else [views[port]], target=3) for port in views}
+    widest = max((s[1] for s in scales.values()), key=lambda t: len(_fmt_tick(_tick_step(t))(t[-1], 0)))
+    return views, scales, widest
 
 
 def _create_multi_port_tcp_chart(
@@ -1232,10 +1317,12 @@ def _create_multi_port_tcp_chart(
     to_date: datetime,
     width: float = 6.7,
     height: float | None = None,  # Auto-calculated based on number of ports
+    plot_left_in: float | None = None,
 ) -> bytes | None:
     """Create a small-multiples TCP latency chart with one panel per port.
 
-    All panels share the time axis and the Y scale, so ports are directly comparable.
+    Panels share the time axis; they share the Y scale only when the ports are comparable (see
+    _ports_share_scale), otherwise each panel gets its own scale.
     """
     port_data = {port: data for port, data in (port_data or {}).items() if data}
     if not port_data:
@@ -1252,12 +1339,7 @@ def _create_multi_port_tcp_chart(
     if height is None:
         height = min(7.5, max(1.9, num_ports * 1.0 + 0.6))
 
-    views = {port: _build_view(port_data[port], tz) for port in sorted_ports}
-    shared = _ports_share_scale(list(views.values()))
-    scales = {port: _axis_scale(list(views.values()) if shared else [views[port]], target=3) for port in sorted_ports}
-    widest = max(
-        (s[1] for s in scales.values()), key=lambda t: len(_fmt_tick(1 if len(t) < 2 else t[1] - t[0])(t[-1], 0))
-    )
+    views, scales, widest = _port_scales(port_data, tz)
 
     with _safe_figure(nrows=num_ports, ncols=1, figsize=(width, height), sharex=True, squeeze=False) as (fig, axes):
         flat_axes = axes.flatten()
@@ -1279,10 +1361,7 @@ def _create_multi_port_tcp_chart(
                 va="bottom",
             )
             _y_axis(ax, ticks, top)
-            ax.spines["top"].set_visible(False)
-            ax.spines["right"].set_visible(False)
-            ax.grid(True, axis="y", alpha=0.6)
-            ax.tick_params(axis="both", length=2.5, width=0.5, labelsize=8, colors="#495057")
+            _apply_axis_style(ax, grid_x=False)  # the x grid of the TCP panels stays off
 
         # Median entries differ in colour per port; the legend only explains peaks and overflow markers.
         legend_handles = [h for k, h in handles.items() if k in (_PEAK_LABEL, _ABOVE_LABEL)]
@@ -1297,7 +1376,7 @@ def _create_multi_port_tcp_chart(
                 borderaxespad=0.2,
             )
         _format_time_axis(flat_axes[-1], from_date=from_date, to_date=to_date)
-        left = _left_margin(widest, width, has_label=False)
+        left = _left_margin(widest, width, has_label=False) if plot_left_in is None else plot_left_in / width
         fig.text(0.0, 0.99, "TCP latency (ms)", ha="left", va="top", fontsize=8, color="#495057")
         fig.subplots_adjust(left=left, right=1.0, top=1 - 0.3 / height, bottom=min(0.34, 0.65 / height), hspace=0.6)
         return _fig_png(fig)
@@ -1327,7 +1406,8 @@ def _status_counts(data: list[dict]) -> dict[int, int]:
             continue
         code = int(number)
         if code == 0 or 100 <= code <= 599:
-            counts[code] = counts.get(code, 0) + int(p.get("count", 1))
+            n = _num(p.get("count"))
+            counts[code] = counts.get(code, 0) + (int(n) if n is not None else 1)
     return counts
 
 
@@ -1424,9 +1504,7 @@ def _format_time_axis(ax, *, from_date: datetime, to_date: datetime) -> None:
     )
 
 
-# ---------------------------------------------------------------------------
 # KPI Calculation
-# ---------------------------------------------------------------------------
 
 
 def _valid_values(points: list[dict]) -> list[float]:
@@ -1434,17 +1512,33 @@ def _valid_values(points: list[dict]) -> list[float]:
 
 
 def _availability_pct(up: int, total: int) -> float | None:
-    """Availability in percent; anything below a perfect run never rounds up to 100."""
+    """Availability in percent; anything below a perfect run never rounds up to 100.
+
+    The web UI (``format_availability``) applies the same 99.99 ceiling to imperfect runs, so web and
+    printed report never show 100 % for an incomplete series.
+    """
     if not total:
         return None
     pct = round(up / total * 100, 2)
-    return pct if up == total else min(pct, 99.99)
+    return pct if up == total else min(pct, _IMPERFECT_CEILING_PCT)
 
+
+# Printed ceiling for any period that had at least one failed check (never rounds up to 100 %).
+_IMPERFECT_CEILING_PCT = 99.99
 
 # Below this share of the period covered by checks, a green availability result is not credible:
 # the status turns neutral ("Insufficient data"). 80 % leaves room for gaps (restarts, maintenance)
 # without letting a short burst of checks stand for a whole reporting period.
 LOW_COVERAGE_PCT = 80.0
+
+
+def _availability(report_data: ReportData) -> AvailabilitySeries:
+    # __post_init__ folds a point list into a series, so the union never survives construction.
+    return cast("AvailabilitySeries", report_data.uptime_data)
+
+
+def _interval_seconds(report_data: ReportData) -> float:
+    return _target_interval_seconds(report_data.target)
 
 
 def _coverage_pct(report_data: ReportData, total_checks: int, interval_seconds: float) -> float | None:
@@ -1454,25 +1548,64 @@ def _coverage_pct(report_data: ReportData, total_checks: int, interval_seconds: 
     return round(min(100.0, total_checks * interval_seconds / window * 100), 1)
 
 
-def _compute_kpis(report_data: ReportData) -> KPIMetrics:
+def _latest_uptime_sample(
+    uptime_data: AvailabilitySeries | list[dict], tz: tzinfo, fallback: datetime | None = None
+) -> datetime | None:
+    last = _as_series(uptime_data, 0).last_sample
+    if last is not None:
+        return _to_tz(last, tz)
+    return _to_tz(fallback, tz) if fallback is not None else None
+
+
+def _downtime_minutes(
+    uptime_data: AvailabilitySeries | list[dict],
+    interval_seconds: float,
+    events: list[DowntimeEvent] | None = None,
+    *,
+    tz: tzinfo = UTC,
+    fallback: datetime | None = None,
+) -> int:
+    """Whole minutes of the downtime table; an ongoing outage counts up to its last sample.
+
+    The newest real sample always wins; ``fallback`` (the report end) is used only when the series has no
+    sample at all, so an ongoing outage is not stretched to the report end. Without samples and without a
+    fallback an ongoing outage adds nothing (``last is None``).
+    """
+    last = _latest_uptime_sample(uptime_data, tz, fallback)
+    total = 0
+    for event in events if events is not None else _extract_downtime_events(uptime_data, interval_seconds):
+        if event.end is not None:
+            total += event.duration_minutes or 0
+        elif last is not None:
+            total += int(max(0.0, (last - _to_tz(event.start, tz)).total_seconds()) / 60)
+    return total
+
+
+def _compute_kpis(report_data: ReportData, events: list[DowntimeEvent] | None = None) -> KPIMetrics:
     """Compute KPI metrics; a metric without measurements stays None (never 0).
 
-    downtime_minutes is an estimate: failed checks times the check interval.
+    downtime_minutes sums the measured outages of the downtime table (shared rule, gaps excluded).
     """
-    interval_seconds = report_data.target.get("interval_seconds") or 60
+    interval_seconds = _interval_seconds(report_data)
 
     response = _valid_values(report_data.http_data)
     ping = _valid_values(report_data.ping_data)
-    checks = _valid_values(report_data.uptime_data)
+    availability = _availability(report_data)
 
-    up_count = sum(1 for v in checks if v == 1)
-    total_checks = len(checks)
+    up_count = availability.up
+    total_checks = availability.total
     down_count = total_checks - up_count
     return KPIMetrics(
         uptime_percent=_availability_pct(up_count, total_checks),
         avg_response_ms=round(sum(response) / len(response)) if response else None,
         max_response_ms=round(max(response)) if response else None,
-        downtime_minutes=int(down_count * interval_seconds / 60),
+        downtime_minutes=_downtime_minutes(
+            report_data.uptime_data,
+            interval_seconds,
+            events if events is not None else _report_downtime_events(report_data),
+            tz=_report_tz(report_data.from_date),
+            fallback=report_data.to_date,
+        ),
         total_checks=total_checks,
         up_count=up_count,
         down_count=down_count,
@@ -1482,47 +1615,34 @@ def _compute_kpis(report_data: ReportData) -> KPIMetrics:
     )
 
 
-def _extract_downtime_events(uptime_data: list[dict]) -> list[DowntimeEvent]:
-    """Extract downtime periods from uptime data (points without a value are ignored)."""
-    events: list[DowntimeEvent] = []
-    in_downtime = False
-    downtime_start: datetime | None = None
-    skipped_count = 0
-
-    for p in sorted(uptime_data or [], key=lambda p: p.get("ts", "")):
-        ts_raw = p.get("ts")
-        if not ts_raw:
-            skipped_count += 1
-            continue
-        try:
-            ts = datetime.fromisoformat(ts_raw)
-        except (ValueError, AttributeError):
-            skipped_count += 1
-            continue
-
-        value = p.get("value")
-        if value == 0 and not in_downtime:
-            in_downtime = True
-            downtime_start = ts
-        elif value == 1 and in_downtime:
-            in_downtime = False
-            if downtime_start:
-                duration = int((ts - downtime_start).total_seconds() / 60)
-                events.append(DowntimeEvent(start=downtime_start, end=ts, duration_minutes=duration))
-            downtime_start = None
-
-    if in_downtime and downtime_start:
-        events.append(DowntimeEvent(start=downtime_start, end=None, duration_minutes=None))
-
-    if skipped_count > 0:
-        _log.warning("Downtime extraction: skipped %d datapoints with invalid/missing timestamps", skipped_count)
-
-    return events
+def _downtime_event(start: datetime, end: datetime | None) -> DowntimeEvent:
+    return DowntimeEvent(
+        start=start, end=end, duration_minutes=None if end is None else display_seconds(start, end) // 60
+    )
 
 
-# ---------------------------------------------------------------------------
+def _extract_downtime_events(
+    uptime_data: AvailabilitySeries | list[dict], interval_seconds: float = 60, now: datetime | None = None
+) -> list[DowntimeEvent]:
+    """Extract downtime periods from uptime data by the shared rule in ``availability_rules``.
+
+    Points without a value are UNKNOWN, and a gap between two points is neither downtime nor uptime.
+    """
+    series = _as_series(uptime_data, interval_seconds)
+    return [
+        _downtime_event(o.start, o.end)
+        for o in measured_outages(series.outage_points(), interval_seconds=interval_seconds, now=now)
+        if o.end is None or (o.seconds() or 0) >= MIN_DOWNTIME_SECONDS
+    ]
+
+
+def _report_downtime_events(report_data: ReportData) -> list[DowntimeEvent]:
+    if report_data.downtime_periods is not None:
+        return [_downtime_event(period.start, period.end) for period in reversed(report_data.downtime_periods)]
+    return _extract_downtime_events(report_data.uptime_data, _interval_seconds(report_data))
+
+
 # Custom Flowables
-# ---------------------------------------------------------------------------
 
 
 class RoundedKPICard(Flowable):
@@ -1744,9 +1864,7 @@ class SuccessCheckCircle(Flowable):
         canvas.restoreState()
 
 
-# ---------------------------------------------------------------------------
 # Formatting helpers
-# ---------------------------------------------------------------------------
 
 
 def _fmt_pct(value: float | None) -> str:
@@ -1755,7 +1873,7 @@ def _fmt_pct(value: float | None) -> str:
         return "n/a"
     if value >= 100:
         return "100%"
-    return f"{min(value, 99.99):.2f}%"
+    return f"{min(value, _IMPERFECT_CEILING_PCT):.2f}%"
 
 
 def _fmt_ms(value: float | None) -> str:
@@ -1817,15 +1935,15 @@ def _pdf_status_badge_colors(kind: str):
     return colors.HexColor(palette.background), colors.HexColor(palette.foreground)
 
 
-# Highest hop count requested from MTR; a route reaching it may be cut off.
-_MTR_MAX_HOPS = 20
+# Highest TTL the worker probes; a route reaching it may be cut off.
+_ROUTE_MAX_HOPS = TRACE_HOP_LIMIT
 
 # Chart reference lines when SLA is enabled without an own threshold (not an agreed SLA)
 _DEFAULT_RESPONSE_MS = 500
 _DEFAULT_PING_MS = 100
 
 
-ROUTE_INCOMPLETE = f"Route incomplete – {_MTR_MAX_HOPS}-hop limit reached"
+ROUTE_INCOMPLETE = f"Route incomplete – {_ROUTE_MAX_HOPS}-hop limit reached"
 
 
 _ROUTE_FONT_BODY = 8.5  # pt; smallest text in the route diagram, readable on a printed A4 page
@@ -1852,8 +1970,8 @@ def _hop_number(hop: dict[str, Any]) -> int | None:
 
 
 def _hop_latency(hop: dict[str, Any] | None) -> float | None:
-    latency = (hop or {}).get("latency_ms")
-    value = latency.get("avg") if isinstance(latency, dict) else None
+    """The single measured RTT of an answering hop, or None."""
+    value = (hop or {}).get("rtt_ms")
     return float(value) if isinstance(value, int | float) and value else None
 
 
@@ -2038,7 +2156,7 @@ class RouteDiagram(Flowable):
         return self.width, self.height
 
     def split(self, availWidth, availHeight):  # noqa: N803, ARG002 - reportlab callback signature
-        """Break between hops when the route does not fit; a part needs at least three entries to stand alone."""
+        """Break between hops when the route does not fit; the first part keeps at least three entries."""
         if self.height <= availHeight:
             return []
         budget = availHeight - self._head_h - self._legend_h - 1  # 1 pt tolerance against float rounding
@@ -2223,9 +2341,7 @@ class _ReportDocTemplate(SimpleDocTemplate):
             self.chapter_pages.setdefault(name, self.page)
 
 
-# ---------------------------------------------------------------------------
 # PDF Document Generation
-# ---------------------------------------------------------------------------
 
 
 class PDFReportBuilder:
@@ -2249,15 +2365,15 @@ class PDFReportBuilder:
         self.font_bold = _get_font_bold()
         self.styles = self._create_styles()
         self.elements: list = []
-        self.kpis = _compute_kpis(report_data)
-        self.downtime_events = _extract_downtime_events(report_data.uptime_data)
+        self.downtime_events = _report_downtime_events(report_data)
+        self.kpis = _compute_kpis(report_data, self.downtime_events)
         self.chapter_pages: dict[str, int] = {}
         self.page_count = 0
         self.content_pages: set[int] = set()
-        # MTR cache: stores (display_hops, geo_points, has_interpolation)
-        self._mtr_cache: dict[tuple[str, int], tuple[list, list, bool]] = {}
+        # Route cache: stores (display_hops, geo_points, has_interpolation)
+        self._route_cache: dict[tuple[str, int], tuple[list, list, bool]] = {}
         # True when the trace ended in silent hops at the hop limit (destination never confirmed)
-        self._mtr_silent_at_limit = False
+        self._route_silent_at_limit = False
         # WhatWeb cache: stores the tech stack dict
         self._whatweb_cache: dict | None = None
         self._whatweb_fetched: bool = False
@@ -2265,18 +2381,20 @@ class PDFReportBuilder:
         self._ssl_cache: TlsScanResult | None = None
         self._ssl_fetched: bool = False
         self._ssl_scanned_at: datetime | None = None
+        self._provider_fetched = False
+        self._provider_cache: dict[str, Any] | None = None
         # Decorative flag images by ISO code; filled by prefetch_external_data, empty means text only
         self._flags: dict[str, ImageReader] = {}
 
     def prefetch_external_data(self) -> None:
-        """Fetch WhatWeb, TLS scan, MTR and provider data (blocking I/O, call before build).
+        """Fetch WhatWeb, TLS scan, traceroute and provider data (blocking I/O, call before build).
 
         This method should be called before acquiring the PDF generation lock
         to avoid blocking other PDF requests on slow external scans.
         """
         self._get_whatweb_data()
         self._get_ssl_data()
-        display_hops, _geo, _interp = self._get_mtr_data()
+        display_hops, _geo, _interp = self._get_route_data()
         self._provider_info()
         self._prefetch_flags(display_hops)
 
@@ -2505,7 +2623,7 @@ class PDFReportBuilder:
 
         canvas.restoreState()
 
-    # ─── Shared building blocks ──────────────────────────────────────────────
+    # Shared building blocks
 
     def _chapter_header(self, title: str, subtitle: str = "", *, chapter: str | None = None) -> None:
         """Chapter title, optional subtitle and a navy rule."""
@@ -2522,15 +2640,19 @@ class PDFReportBuilder:
         """Small result badge. Unknown (not tested) is deliberately neutral, never green."""
         labels = {"pass": "PASS", "fail": "FAIL", "warn": "WARNING", "unknown": "NOT TESTED", "info": "INFO"}
         bg, fg = _pdf_status_badge_colors(kind)
+        return self._small_badge(text or labels.get(kind, "UNKNOWN"), bg, fg)
+
+    def _small_badge(self, text: str, bg_color, text_color=None) -> Badge:
+        """The one compact badge style of the report tables."""
         return Badge(
-            text=text or labels.get(kind, "UNKNOWN"),
+            text=text,
             font=self.font,
             font_size=8,
             padding_x=2.2 * mm,
             padding_y=0.9 * mm,
             corner_radius=1.6 * mm,
-            bg_color=bg,
-            text_color=fg,
+            bg_color=bg_color,
+            text_color=text_color,
             shadow=False,
         )
 
@@ -2568,7 +2690,7 @@ class PDFReportBuilder:
         para.keepWithNext = 1
         self.elements.append(para)
 
-    # ─── Cover ───────────────────────────────────────────────────────────────
+    # Cover
 
     def _is_low_coverage(self) -> bool:
         cov = self.kpis.coverage_pct
@@ -2630,8 +2752,14 @@ class PDFReportBuilder:
     def _cover_name(self) -> tuple[str, str]:
         """Return (title, secondary line): the target name, plus its host when it differs."""
         target = self.report_data.target
-        host = target.get("ping_host") or target.get("host") or target.get("http_url", "")
-        host = str(host).replace("https://", "").replace("http://", "").split("/")[0] if host else ""
+        host = target.get("ping_host") or target.get("host") or ""
+        if not host and target.get("http_url"):
+            # Only the host name of the URL: userinfo, query and fragment may carry secrets.
+            try:
+                host = urlparse(str(target["http_url"])).hostname or ""
+            except ValueError:
+                host = ""
+        host = str(host)
         name = str(target.get("name") or host or "Unknown target")
         return name, ("" if host.lower() == name.lower() else host)
 
@@ -2818,11 +2946,11 @@ class PDFReportBuilder:
             ),
             (
                 "ESTIMATED DOWNTIME",
-                "None detected" if quiet_low_coverage else f"≈ {kpis.downtime_minutes:,} min" if has_checks else "n/a",
+                "n/a" if quiet_low_coverage or not has_checks else f"≈ {kpis.downtime_minutes:,} min",
                 COLORS["muted"] if quiet_low_coverage or not has_checks else down_color,
                 "in observed checks"
                 if quiet_low_coverage
-                else f"{kpis.down_count:,} failed check{'s' if kpis.down_count != 1 else ''} × interval"
+                else "sum of measured outages"
                 if has_checks
                 else "no measurements",
             ),
@@ -2874,18 +3002,14 @@ class PDFReportBuilder:
                     "Availability", sla_availability, actual, deviation, deviation, actual >= sla_availability, "%"
                 )
             )
-        if sla_response is not None and kpis.avg_response_ms is not None:
-            actual = kpis.avg_response_ms
-            deviation = actual - sla_response
-            pct = (deviation / sla_response * 100) if sla_response > 0 else 0
-            deviations.append(
-                SLADeviation("Response Time", sla_response, actual, deviation, pct, actual <= sla_response, "ms")
-            )
-        if sla_ping is not None and kpis.avg_ping_ms is not None:
-            actual = kpis.avg_ping_ms
-            deviation = actual - sla_ping
-            pct = (deviation / sla_ping * 100) if sla_ping > 0 else 0
-            deviations.append(SLADeviation("Ping Latency", sla_ping, actual, deviation, pct, actual <= sla_ping, "ms"))
+        for name, sla, actual in (
+            ("Response Time", sla_response, kpis.avg_response_ms),
+            ("Ping Latency", sla_ping, kpis.avg_ping_ms),
+        ):
+            if sla is not None and actual is not None:
+                deviation = actual - sla
+                pct = (deviation / sla * 100) if sla > 0 else 0
+                deviations.append(SLADeviation(name, sla, actual, deviation, pct, actual <= sla, "ms"))
 
         if not deviations:
             return
@@ -2939,7 +3063,7 @@ class PDFReportBuilder:
         self.elements.append(Paragraph("SLA Compliance", self.styles["group"]))
         self.elements.append(table)
 
-    # ─── Technical Summary ───────────────────────────────────────────────────
+    # Technical Summary
 
     def _add_technical_summary(self):
         """Technical Summary: Target Information, Certificate, TLS & Security, technology stack."""
@@ -2951,13 +3075,9 @@ class PDFReportBuilder:
 
         self._add_ssl_summary()
         if self._get_ssl_data() is None:
-            self._group_title("Certificate & TLS")
-            self.elements.append(
-                Paragraph(
-                    "Not applicable: the target is not served over HTTPS, so no certificate or TLS scan was run.",
-                    self.styles["note"],
-                )
-            )
+            # No TLS section for a target without a scanned HTTPS endpoint; plain HTTP is stated, not rated.
+            transport = "HTTP, no TLS scan" if self._http_scheme() == "http" else "No TLS scan"
+            self.elements.append(self._kv_table([("Transport", Paragraph(transport, self.styles["value"]), None)]))
 
         self._add_detected_stack()
 
@@ -2976,6 +3096,7 @@ class PDFReportBuilder:
             ("PING", target.get("enable_ping"), COLORS["neutral"]),
             ("Cert", target.get("enable_cert_expiration"), COLORS["neutral"]),
             ("TCP", target.get("enable_tcp_connect"), COLORS["neutral"]),
+            ("UDP", availability_check_enabled(target, "udp", "enable_udp_scan"), COLORS["neutral"]),
         ]
         enabled = [
             Badge(text=name, font=self.font, bg_color=color, padding_y=1 * mm, shadow=False)
@@ -3059,11 +3180,26 @@ class PDFReportBuilder:
         self._group_title("Detected Technology Stack")
         self.elements.append(self._kv_table(rows))
 
-    def _get_ssl_data(self) -> TlsScanResult | None:
-        """Fetch and cache the normalized TLS scan for the target.
+    @staticmethod
+    def _url_scheme(url: str) -> str:
+        """Lower-case URL scheme, or "" when the URL cannot be parsed."""
+        try:
+            return urlparse(url).scheme.lower()
+        except ValueError:
+            return ""
 
-        Returns cached result on subsequent calls.
-        Respects custom cert_host/cert_port or port in http_url.
+    def _http_scheme(self) -> str:
+        """Scheme of the configured HTTP URL ("http", "https" or "" when none or unusable)."""
+        return self._url_scheme(str(self.report_data.target.get("http_url") or "").strip())
+
+    def _get_ssl_data(self) -> TlsScanResult | None:
+        """Run the TLS scan once per report and cache the outcome (also when it is None).
+
+        The scan target comes from ``resolve_cert_target`` (cert_host/cert_port, else http_url, else
+        http_port), like the live certificate check; without an http_url the target host is used over https.
+        Returns None when nothing was scanned: the URL is not https and no cert_host is set, the target
+        cannot be resolved, or there is no host. A scan that raised yields a ``FAILED`` result with the
+        generic error "scan error" instead of None.
         """
         if self._ssl_fetched:
             return self._ssl_cache
@@ -3072,39 +3208,28 @@ class PDFReportBuilder:
 
         target = self.report_data.target
 
-        # Priority 1: Explicit cert_host and cert_port
         cert_host = target.get("cert_host")
-        cert_port = target.get("cert_port")
-        http_port = target.get("http_port")
-
-        if cert_host:
-            port = cert_port or http_port or 443
-            ssl_target = f"https://{cert_host}:{port}"
-            _log.debug("TLS scan using explicit cert_host: %s", ssl_target)
-        else:
-            # Priority 2: Extract from http_url (may contain custom port)
-            http_url = target.get("http_url") or target.get("url") or ""
-
-            if not http_url:
-                host = target.get("host", "")
-                if host:
-                    http_url = f"https://{host}"
-
-            if not http_url.startswith("https://"):
+        http_url = str(target.get("http_url") or target.get("url") or "").strip()
+        if not http_url and target.get("host"):
+            http_url = f"https://{target['host']}"
+        if self._url_scheme(http_url) != "https":
+            # Never upgrade a configured http:// to https://: only an explicit cert_host asks for a scan.
+            if not cert_host:
                 _log.debug("Skipping SSL scan for non-HTTPS target: %s", redact_url(http_url))
                 return None
+            http_url = ""  # an explicit cert_host is scanned even when the site itself is plain HTTP
 
-            # Respect request-port override if URL has no explicit port.
-            ssl_target = http_url
-            try:
-                parsed = urlparse(http_url)
-                if http_port and parsed.hostname and parsed.port is None:
-                    host = parsed.hostname
-                    if ":" in host and not host.startswith("["):
-                        host = f"[{host}]"
-                    ssl_target = urlunparse(parsed._replace(netloc=f"{host}:{int(http_port)}"))
-            except ValueError:
-                ssl_target = http_url
+        try:
+            host, port = resolve_cert_target({**target, "http_url": http_url or None})
+        except ValueError as exc:
+            _log.warning("Skipping SSL scan: %s", exc)
+            return None
+        if not host:
+            return None
+        if ":" in host and not host.startswith("["):
+            host = f"[{host}]"
+        ssl_target = f"https://{host}" if port == 443 else f"https://{host}:{port}"
+        _log.debug("TLS scan target resolved: %s", redact_url(ssl_target))
 
         _log.debug("Running TLS scan for %s", redact_url(ssl_target))
         try:
@@ -3247,7 +3372,7 @@ class PDFReportBuilder:
             rows.append(
                 ("Scan Status", Paragraph("All configured checks returned a result", token), ("info", "COMPLETE"))
             )
-        scanned = getattr(self, "_ssl_scanned_at", None)
+        scanned = self._ssl_scanned_at
         when = (
             f"{_fmt_dt(_to_tz(scanned, self.tz), self.tz)} {_tz_label(self.report_data.from_date)}"
             if scanned
@@ -3353,7 +3478,7 @@ class PDFReportBuilder:
             self._group_title("Cipher Suites by Protocol (technical detail)")
             self.elements.append(self._kv_table(detail))
 
-    # ─── Network Path ────────────────────────────────────────────────────────
+    # Network Path
 
     @staticmethod
     def _route_summary(display_hops: list[dict[str, Any]]) -> dict[str, Any]:
@@ -3385,12 +3510,12 @@ class PDFReportBuilder:
     def _route_incomplete(self, info: dict[str, Any]) -> bool:
         """True when the destination was not confirmed and the trace stopped at the hop limit."""
         if info["synthetic"]:
-            return info["last_hop_num"] >= _MTR_MAX_HOPS
-        return self._mtr_silent_at_limit
+            return info["last_hop_num"] >= _ROUTE_MAX_HOPS
+        return self._route_silent_at_limit
 
     def _build_network_path_page(self):
         """Build the Network Path chapter with the hop table."""
-        display_hops, geo_points, _has_interpolation = self._get_mtr_data(max_hops=_MTR_MAX_HOPS)
+        display_hops, geo_points, _has_interpolation = self._get_route_data(max_hops=_ROUTE_MAX_HOPS)
         host = self._get_traceroute_host()
         if not display_hops:
             self._chapter_header("Network Path", "No traceroute data is available for this report.")
@@ -3407,9 +3532,9 @@ class PDFReportBuilder:
             parts.append(ROUTE_INCOMPLETE)
         parts.append(f"{info['responding']} responding")
         reply = info["last_reply"]
-        latency = ((reply or {}).get("latency_ms") or {}).get("avg")
+        latency = _hop_latency(reply)
         if reply and latency:
-            parts.append(f"latency at last responding hop {latency:.1f} ms")
+            parts.append(f"RTT at last responding hop {latency:.1f} ms")
         self._chapter_header("Network Path", " · ".join(parts))
         self._add_route_map(display_hops, geo_points)
         self._add_route_schematic(display_hops)
@@ -3417,7 +3542,8 @@ class PDFReportBuilder:
 
     def _provider_info(self) -> dict[str, Any] | None:
         """Provider lookup of the target host, fetched once per report."""
-        if not hasattr(self, "_provider_cache"):
+        if not self._provider_fetched:
+            self._provider_fetched = True
             host = self._get_traceroute_host()
             self._provider_cache = lookup_provider_info(host) if host else None
         return self._provider_cache
@@ -3459,20 +3585,6 @@ class PDFReportBuilder:
         # No KeepTogether: a long route splits between hops and marks the continuation
         self.elements.extend([diagram, Spacer(1, 3 * mm)])
 
-    def _status_badge(self, text: str, kind: str) -> Badge:
-        bg, fg = _pdf_status_badge_colors(kind)
-        return Badge(
-            text=text,
-            font=self.font,
-            font_size=8,
-            padding_x=2.2 * mm,
-            padding_y=0.9 * mm,
-            corner_radius=1.6 * mm,
-            bg_color=bg,
-            text_color=fg,
-            shadow=False,
-        )
-
     def _add_traceroute(
         self,
         display_hops: list[dict[str, Any]] | None = None,
@@ -3480,7 +3592,7 @@ class PDFReportBuilder:
     ):
         """Add the hop table; the header repeats on every page."""
         if display_hops is None:
-            display_hops, _geo, _interp = self._get_mtr_data(max_hops=_MTR_MAX_HOPS)
+            display_hops, _geo, _interp = self._get_route_data(max_hops=_ROUTE_MAX_HOPS)
         if not display_hops:
             return
         info = info or self._route_summary(display_hops)
@@ -3493,8 +3605,7 @@ class PDFReportBuilder:
                 Paragraph("Hop", st["th"]),
                 Paragraph("Host / Address", st["th"]),
                 Paragraph("Location", st["th"]),
-                Paragraph("Latency", st["th_right"]),
-                Paragraph("Loss", st["th_right"]),
+                Paragraph("RTT", st["th_right"]),
                 Paragraph("Status", st["th"]),
             ]
         ]
@@ -3512,7 +3623,7 @@ class PDFReportBuilder:
 
             hop_num = str(hop.get("hop", "?"))
             ip_raw = hop.get("ip_display") or hop.get("ip")
-            ip = str(ip_raw) if ip_raw and ip_raw not in ("-", "*", "???") else "—"
+            ip = str(ip_raw) if ip_raw and ip_raw not in NO_IP_MARKERS else "—"
             hostname = hop.get("hostname_display") or hop.get("hostname")
             hostname = str(hostname) if hostname and hostname not in ("-", "—") and hostname != ip else ""
             if index == 0:
@@ -3523,8 +3634,8 @@ class PDFReportBuilder:
             if hostname:
                 # A short address and name share one line, which keeps a 13-hop table on one page.
                 sep = " · " if len(ip) + len(hostname) <= _HOP_ONE_LINE_MAX else "<br/>"
-                muted = COLORS["muted"].hexval()
-                path_html = f'{path_html}{sep}<font size="8" color="{muted}">{_esc(hostname)}</font>'
+                host_color = COLORS["muted"].hexval()
+                path_html = f'{path_html}{sep}<font size="8" color="{host_color}">{_esc(hostname)}</font>'
             path = Paragraph(path_html, st["hop_ip_muted"] if muted else st["hop_ip"])
 
             city, country = hop.get("city") or "", hop.get("country") or ""
@@ -3532,7 +3643,7 @@ class PDFReportBuilder:
             if approx_destination:
                 location = dest_place.split(" · ")[0] + " (approx.)"
             elif silent:
-                location = "—"  # no reply: nothing to locate, same dash as host and loss
+                location = "—"  # no reply: nothing to locate, same dash as host
             elif not (city or country):
                 location = LOCATION_UNKNOWN
             else:
@@ -3540,17 +3651,15 @@ class PDFReportBuilder:
 
             lat = _hop_latency(hop)
             latency = f"{lat:.1f} ms" if lat and not silent else "—"  # interpolated values are not measurements
-            loss_pct = hop.get("loss_pct")
-            loss = f"{loss_pct:.0f}%" if loss_pct is not None and not silent else "—"
 
             if synthetic:
-                badge = self._status_badge(STATE_NOT_REACHED, "blocked")
+                badge = self._state_badge("blocked", STATE_NOT_REACHED)
             elif silent:
-                badge = self._status_badge(STATE_NO_REPLY, "blocked")
+                badge = self._state_badge("blocked", STATE_NO_REPLY)
             elif status in ("ok", "partial"):
-                badge = self._status_badge(status.upper(), status)
+                badge = self._state_badge(status, status.upper())
             else:
-                badge = self._status_badge(status.upper()[:10], "blocked")
+                badge = self._state_badge("blocked", status.upper()[:10])
 
             muted_location = location in (LOCATION_UNKNOWN, "—") or not (city or approx_destination)
             location_cell = Paragraph(_esc(location), td_muted_loc if muted_location else td)
@@ -3563,20 +3672,19 @@ class PDFReportBuilder:
                     path,
                     location_cell,
                     Paragraph(latency, td_right),
-                    Paragraph(loss, td_right),
                     badge,
                 ]
             )
 
         note = GEOIP_FOOTNOTE
         if any(timeline_measurement(h) != "measured" for h in hops):
-            note += f" {STATE_NO_REPLY}: no answer to the probes, so latency, loss and location are not available."
+            note += f" {STATE_NO_REPLY}: no answer to the probes, so RTT and location are not available."
         last_hop_row = len(rows) - 1
         # The note is a table row bound to the last hop row, so it never ends up alone on a page.
-        rows.append([Paragraph(_esc(note), st["note"]), *[""] * 5])
+        rows.append([Paragraph(_esc(note), st["note"]), *[""] * 4])
 
         w = self.content_width
-        fixed = [11 * mm, 38 * mm, 17 * mm, 13 * mm, 25 * mm]
+        fixed = [11 * mm, 38 * mm, 17 * mm, 25 * mm]
         col_widths = [fixed[0], w - sum(fixed), *fixed[1:]]
         table = LongTable(rows, colWidths=col_widths, repeatRows=1, splitByRow=1)
         style = [
@@ -3606,7 +3714,7 @@ class PDFReportBuilder:
         if self._route_incomplete(info):
             self.elements.append(
                 Paragraph(
-                    f"<b>{ROUTE_INCOMPLETE}.</b> The destination was not reached within {_MTR_MAX_HOPS} hops; "
+                    f"<b>{ROUTE_INCOMPLETE}.</b> The destination was not reached within {_ROUTE_MAX_HOPS} hops; "
                     "the route may continue beyond this limit and is not shown completely.",
                     _paragraph_style(
                         "RouteIncomplete",
@@ -3633,8 +3741,8 @@ class PDFReportBuilder:
 
         return target.get("ping_host") or target.get("host") or target.get("cert_host")
 
-    def _get_mtr_data(self, *, max_hops: int = _MTR_MAX_HOPS) -> tuple[list[dict[str, Any]], list[dict], bool]:
-        """Run MTR once per report build and cache the result.
+    def _get_route_data(self, *, max_hops: int = _ROUTE_MAX_HOPS) -> tuple[list[dict[str, Any]], list[dict], bool]:
+        """Trace once per report build and cache the result.
 
         Returns:
             Tuple of (display_hops, geo_points, has_interpolation)
@@ -3644,24 +3752,24 @@ class PDFReportBuilder:
             return [], [], False
 
         cache_key = (host, max_hops)
-        if cache_key in self._mtr_cache:
-            return self._mtr_cache[cache_key]
+        if cache_key in self._route_cache:
+            return self._route_cache[cache_key]
 
-        display_hops, geo_points, has_interpolation = _run_mtr_with_interpolation(host, max_hops=max_hops)
+        display_hops, geo_points, has_interpolation = _run_traceroute_with_interpolation(host)
 
         tail = display_hops[-1] if display_hops else {}
-        self._mtr_silent_at_limit = (
+        self._route_silent_at_limit = (
             tail.get("status") == "timeout"
             and not tail.get("_interpolated")
             and self._route_summary(display_hops)["last_hop_num"] >= max_hops
         )
 
-        # An empty route is cached too, so a silent target does not rerun MTR under the PDF lock.
+        # An empty route is cached too, so a silent target does not rerun the trace under the PDF lock.
         result = (display_hops, geo_points, has_interpolation) if display_hops else ([], [], False)
-        self._mtr_cache[cache_key] = result
+        self._route_cache[cache_key] = result
         return result
 
-    # ─── Availability & Performance ──────────────────────────────────────────
+    # Availability & Performance
 
     def _chart_width_in(self) -> float:
         return self.content_width / 72.0
@@ -3681,15 +3789,22 @@ class PDFReportBuilder:
             sla_ping_ms = target.get("sla_ping_latency_ms")
             # Unconfigured thresholds fall back to reference defaults that are not an agreed SLA
             if sla_response_ms is None:
-                sla_response_ms, response_label = _DEFAULT_RESPONSE_MS, "Default threshold (500 ms, no SLA set)"
+                sla_response_ms, response_label = (
+                    _DEFAULT_RESPONSE_MS,
+                    f"Default threshold ({_DEFAULT_RESPONSE_MS} ms, no SLA set)",
+                )
             if sla_ping_ms is None:
-                sla_ping_ms, ping_label = _DEFAULT_PING_MS, "Default threshold (100 ms, no SLA set)"
+                sla_ping_ms, ping_label = _DEFAULT_PING_MS, f"Default threshold ({_DEFAULT_PING_MS} ms, no SLA set)"
         else:
             sla_response_ms = sla_ping_ms = None
 
         width = self._chart_width_in()
         kpis = self.kpis
         added = 0
+        display = data.display_data or {}
+        left_in = self._shared_plot_left_in(
+            width, display, c_from_default=data.from_date, sla=(sla_response_ms, sla_ping_ms)
+        )
 
         # Few samples in a long period: show the gap once on a coverage bar, then zoom into the measured window.
         window = self._detail_window()
@@ -3701,7 +3816,8 @@ class PDFReportBuilder:
                 data.from_date,
                 data.to_date,
                 width=width,
-                interval_seconds=data.target.get("interval_seconds") or 60,
+                interval_seconds=_interval_seconds(data),
+                plot_left_in=left_in,
             )
             if bar:
                 self._add_chart_section(
@@ -3714,7 +3830,12 @@ class PDFReportBuilder:
                 added += 1
 
         uptime_chart = _create_uptime_chart(
-            data.uptime_data, from_date=c_from, to_date=c_to, width=width, height=1.0 if window else 1.45
+            data.uptime_data,
+            from_date=c_from,
+            to_date=c_to,
+            width=width,
+            height=1.0 if window else 1.45,
+            plot_left_in=left_in,
         )
         if uptime_chart:
             rate = _fmt_pct(kpis.uptime_percent)
@@ -3729,7 +3850,6 @@ class PDFReportBuilder:
             )
             added += 1
 
-        display = data.display_data or {}
         line_height = 1.4 if window else 2.5
         response_chart = _create_response_time_chart(
             display.get("http_ms", data.http_data),
@@ -3739,6 +3859,7 @@ class PDFReportBuilder:
             height=line_height,
             sla_threshold_ms=int(sla_response_ms) if sla_response_ms else None,
             threshold_label=response_label,
+            plot_left_in=left_in,
         )
         if response_chart:
             self._add_chart_section(
@@ -3759,6 +3880,7 @@ class PDFReportBuilder:
                 height=line_height,
                 sla_threshold_ms=int(sla_ping_ms) if sla_ping_ms else None,
                 threshold_label=ping_label,
+                plot_left_in=left_in,
             )
             if ping_chart:
                 self._add_chart_section(
@@ -3775,11 +3897,17 @@ class PDFReportBuilder:
                 display_ports = {
                     port: display.get(f"tcp_ms_{port}", points) for port, points in data.tcp_port_data.items()
                 }
-                tcp_chart = _create_multi_port_tcp_chart(display_ports, from_date=c_from, to_date=c_to, width=width)
+                tcp_chart = _create_multi_port_tcp_chart(
+                    display_ports, from_date=c_from, to_date=c_to, width=width, plot_left_in=left_in
+                )
                 note = self._multi_port_note(display_ports, self.tz)
             if not tcp_chart and data.tcp_data:
                 tcp_chart = _create_tcp_chart(
-                    display.get("tcp_ms", data.tcp_data), from_date=c_from, to_date=c_to, width=width
+                    display.get("tcp_ms", data.tcp_data),
+                    from_date=c_from,
+                    to_date=c_to,
+                    width=width,
+                    plot_left_in=left_in,
                 )
                 note = self._latency_note(data.tcp_data, display.get("tcp_ms"), self.tz)
             if tcp_chart:
@@ -3794,13 +3922,44 @@ class PDFReportBuilder:
         if page_break:
             self.elements.append(PageBreak())
 
+    def _shared_plot_left_in(
+        self, width: float, display: dict, *, c_from_default: datetime, sla: tuple[float | None, float | None]
+    ) -> float:
+        """Widest Y-axis gutter among the chapter's charts, so every chart's plot area starts at the same x."""
+        data = self.report_data
+        window = self._detail_window()
+        from_date = window[0] if window else c_from_default
+        gutters = [
+            _latency_plot_left_in(
+                display.get("http_ms", data.http_data), from_date, int(sla[0]) if sla[0] else None, width
+            )
+        ]
+        if data.target.get("enable_ping") and data.ping_data:
+            gutters.append(
+                _latency_plot_left_in(
+                    display.get("ping_ms", data.ping_data), from_date, int(sla[1]) if sla[1] else None, width
+                )
+            )
+        if data.target.get("enable_tcp_connect"):
+            if data.tcp_port_data:
+                ports = {port: display.get(f"tcp_ms_{port}", pts) for port, pts in data.tcp_port_data.items()}
+                ports = {port: pts for port, pts in ports.items() if pts}
+                if ports:
+                    gutters.append(_left_margin(_port_scales(ports, _report_tz(from_date))[2], width, False) * width)
+            if data.tcp_data:
+                gutters.append(_latency_plot_left_in(display.get("tcp_ms", data.tcp_data), from_date, None, width))
+        return max(gutters)
+
     def _detail_window(self) -> tuple[datetime, datetime] | None:
         """Time span of the recorded samples when low coverage leaves most of the period empty."""
         data = self.report_data
         if not self._is_low_coverage():
             return None
         stamps: list[datetime] = []
-        series = [data.uptime_data, data.http_data, data.ping_data, data.tcp_data, *(data.tcp_port_data or {}).values()]
+        availability = _availability(data)
+        if availability.measured_runs:
+            stamps.extend(_to_tz(t, self.tz) for t in (availability.measured_first, availability.measured_last))
+        series = [data.http_data, data.ping_data, data.tcp_data, *(data.tcp_port_data or {}).values()]
         for points in series:
             ts, vals = _parse_series(points, self.tz)
             stamps.extend(t for t, v in zip(ts, vals, strict=True) if not math.isnan(v))
@@ -3929,7 +4088,7 @@ class PDFReportBuilder:
         block.append(Paragraph(_esc(note) if note else "", self.styles["chart_note"]))
         self.elements.append(KeepTogether(block))
 
-    # ─── Downtime Log ────────────────────────────────────────────────────────
+    # Downtime Log
 
     def _build_downtime_page(self):
         """Build the stand-alone Downtime Log chapter."""
@@ -3967,29 +4126,11 @@ class PDFReportBuilder:
                 end_text = "—"
                 minutes = int((last_sample - _to_tz(event.start, self.tz)).total_seconds() / 60)
                 duration = f"≥ {_fmt_duration(max(minutes, 0))}"
-                badge = Badge(
-                    text="ONGOING",
-                    font=self.font,
-                    font_size=8,
-                    padding_x=2.2 * mm,
-                    padding_y=0.9 * mm,
-                    corner_radius=1.6 * mm,
-                    bg_color=COLORS["danger"],
-                    shadow=False,
-                )
+                badge = self._small_badge("ONGOING", COLORS["danger"])
             else:
                 end_text = _fmt_dt(event.end, self.tz)
                 duration = _fmt_duration(event.duration_minutes)
-                badge = Badge(
-                    text="RESOLVED",
-                    font=self.font,
-                    font_size=8,
-                    padding_x=2.2 * mm,
-                    padding_y=0.9 * mm,
-                    corner_radius=1.6 * mm,
-                    bg_color=COLORS["success"],
-                    shadow=False,
-                )
+                badge = self._small_badge("RESOLVED", COLORS["success"])
             rows.append(
                 [
                     Paragraph(str(i), st["td_muted"]),
@@ -4006,8 +4147,8 @@ class PDFReportBuilder:
             [
                 Paragraph(
                     "Estimated downtime: durations run from the first failed check to the next successful check "
-                    "and are not exact measured outage durations. An ongoing outage is shown as at least the time "
-                    "up to the last sample.",
+                    "and are not exact measured outage durations. Periods without measurements are not counted "
+                    "as downtime. An ongoing outage is shown as at least the time up to the last sample.",
                     st["note"],
                 ),
                 *[""] * 4,
@@ -4044,14 +4185,12 @@ class PDFReportBuilder:
         self.elements.append(table)
 
     def _last_uptime_sample(self) -> datetime:
-        """Time of the newest availability sample: the proven end of an ongoing outage."""
-        stamps = []
-        for p in self.report_data.uptime_data:
-            try:
-                stamps.append(_to_tz(datetime.fromisoformat(p["ts"]), self.tz))
-            except (KeyError, TypeError, ValueError):
-                continue
-        return max(stamps) if stamps else _to_tz(self.report_data.to_date, self.tz)
+        """Time of the newest availability sample: the proven end of an ongoing outage.
+
+        The report end only stands in when there is no sample at all; ``_latest_uptime_sample`` then returns
+        it, so the result is never None here.
+        """
+        return cast("datetime", _latest_uptime_sample(self.report_data.uptime_data, self.tz, self.report_data.to_date))
 
     def _add_downtime_summary(self) -> None:
         """Compact downtime summary at the end of the performance page (no incidents recorded)."""
@@ -4115,9 +4254,7 @@ class PDFReportBuilder:
         self.elements.append(table)
 
 
-# ---------------------------------------------------------------------------
 # Public API
-# ---------------------------------------------------------------------------
 
 
 def generate_pdf_report(report_data: ReportData, page_size: str = "a4") -> bytes:

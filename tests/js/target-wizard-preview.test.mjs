@@ -10,6 +10,7 @@ import vm from 'node:vm';
 const source = readFileSync(new URL('../../app/static/js/target-wizard.js', import.meta.url), 'utf8');
 const optionalGroupsSource = readFileSync(new URL('../../app/static/js/utils/optional-groups.js', import.meta.url), 'utf8');
 const groupsSource = readFileSync(new URL('../../app/static/js/utils/check-groups.js', import.meta.url), 'utf8');
+const portScanSource = readFileSync(new URL('../../app/static/js/utils/port-scan-core.js', import.meta.url), 'utf8');
 function el(extra = {}) {
   const listeners = {};
   return {
@@ -22,20 +23,24 @@ function el(extra = {}) {
     ...extra,
   };
 }
-function setup() {
+function setup(profileValue = 'website') {
   const ids = {};
   const get = (id) => (ids[id] ||= el());
   const sections = [0, 1, 2, 3, 4].map(() => el({ querySelector: () => el() }));
   const form = el({
     querySelectorAll: (sel) => (sel === '.target-wizard-step' ? sections : []),
-    querySelector: () => ({ value: 'website' }),
+    querySelector: () => ({ value: profileValue, focus() {} }),
   });
   ids['target-wizard-form'] = form;
   ids['wizard-address'] = el({ value: 'example.org' });
   ids['wizard-ports'] = el();
+  ids['wizard-manual-ports'] = el({ id: 'wizard-manual-ports' });
   const pending = [];
+  const fieldErrors = [];
   const sandbox = {
     window: {
+      // Records field errors; the real module is covered by the markup and layout specs.
+      JuFieldErrors: { show: (_scope, errors) => { fieldErrors.push(...errors); return errors.length > 0; }, clearAll() {} },
       apiFetch: (url) => (url === '/recipients'
         ? Promise.resolve({ ok: true, status: 200, json: async () => [] })
         : new Promise((resolve) => pending.push(resolve))),
@@ -51,12 +56,13 @@ function setup() {
   sandbox.window.window = sandbox.window;
   vm.runInNewContext(optionalGroupsSource, sandbox.window);
   vm.runInNewContext(groupsSource, sandbox.window);
+  vm.runInNewContext(portScanSource, sandbox.window);
   vm.runInNewContext(source, sandbox);
   const answer = (index, values) => pending[index]({
     ok: true, status: 200,
     json: async () => ({ values, conflicts: [], suggested_https: false }),
   });
-  return { get, sections, pending, answer };
+  return { get, sections, pending, answer, fieldErrors };
 }
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 const visible = (sections) => sections.findIndex((section) => !section.hidden);
@@ -96,4 +102,56 @@ test('a preview answer is discarded when the address changed meanwhile', async (
   t.answer(0, {});
   await second;
   assert.equal(visible(t.sections), 1);
+});
+test('the checks step mirrors the address-step ports and blocks a TCP check without one', async () => {
+  const t = setup();
+  const next = t.get('wizard-next');
+  await next.fire('click');
+  t.get('wizard-ports').value = '25,587';
+  await t.get('wizard-ports').fire('input');
+  assert.equal(t.get('wizard-tcp-summary-value').textContent, '25, 587');
+  t.get('wizard-ports').value = '';
+  await t.get('wizard-ports').fire('input');
+  assert.equal(t.get('wizard-tcp-summary-value').textContent, 'None chosen yet');
+  // Step 2 -> 3 with the TCP switch on and no port stays on the checks step.
+  const second = next.fire('click');
+  await tick();
+  t.answer(0, {});
+  await second;
+  assert.equal(visible(t.sections), 2);
+  t.get('wizard-tcp').checked = true;
+  t.get('wizard-interval').checkValidity = () => true;
+  await next.fire('click');
+  assert.equal(visible(t.sections), 2);
+  assert.equal(t.get('wizard-tcp-summary-error').textContent, 'Choose at least one TCP port.');
+  assert.equal(t.get('wizard-checks-status').textContent, 'Choose at least one TCP port.', 'polite echo of the summary error');
+  assert.equal(t.pending.length, 1, 'no preview request was sent');
+});
+
+async function tcpProfileValidation(ports, udpPorts) {
+  const t = setup('tcp');
+  await t.get('wizard-next').fire('click'); // step 0 -> 1
+  t.get('wizard-ports').value = ports;
+  t.get('wizard-udp-ports').value = udpPorts;
+  const second = t.get('wizard-next').fire('click');
+  await tick();
+  return { requested: t.pending.length, message: t.fieldErrors.at(-1)?.message, id: t.fieldErrors.at(-1)?.id, alert: t.get('wizard-error').textContent, second };
+}
+test('the TCP profile accepts UDP-only ports on the address step', async () => {
+  assert.equal((await tcpProfileValidation('', '53')).requested, 1);
+});
+test('the TCP profile accepts TCP-only ports on the address step', async () => {
+  assert.equal((await tcpProfileValidation('443', '')).requested, 1);
+});
+test('the TCP profile rejects an address step with neither TCP nor UDP ports', async () => {
+  const r = await tcpProfileValidation('', '');
+  assert.equal(r.requested, 0);
+  assert.equal(r.message, 'Choose at least one TCP or UDP port.');
+  assert.equal(r.id, 'wizard-manual-ports', 'the error sits at the visible manual input');
+  assert.equal(r.alert, '', 'a field error is not repeated in the request-level alert');
+});
+test('the TCP profile rejects an invalid UDP port even without TCP ports', async () => {
+  const r = await tcpProfileValidation('', '70000');
+  assert.equal(r.requested, 0);
+  assert.match(r.message, /UDP port numbers/);
 });

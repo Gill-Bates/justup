@@ -24,6 +24,9 @@ from pydantic import (
 )
 
 from ..utils.constants import (
+    DEFAULT_TARGET_DOWN_ALERT_DELAY_MINUTES,
+    TARGET_DOWN_ALERT_DELAY_MINUTES_MAX,
+    TARGET_DOWN_ALERT_DELAY_MINUTES_MIN,
     TARGET_INTERVAL_SECONDS_MAX,
     TARGET_INTERVAL_SECONDS_MIN,
     TARGET_MAX_RETRIES_MAX,
@@ -32,11 +35,10 @@ from ..utils.constants import (
     TARGET_RETENTION_DAYS_MIN,
 )
 from ..utils.http_status import DEFAULT_HTTP_SUCCESS_CODES, parse_status_code_spec
-from ..utils.tcp_ports import parse_port_list
+from ..utils.tcp_ports import DEFAULT_TCP_PORTS, parse_port_list
 
 # ─── Constants ────────────────────────────────────────────────────────────────
-# Default TCP port for new targets (HTTP). Users should explicitly set 443 for HTTPS-only.
-DEFAULT_TCP_PORTS = "80"
+# DEFAULT_TCP_PORTS (port 80) lives in utils/tcp_ports.py; set 443 explicitly for HTTPS-only targets.
 
 
 # ─── Helper Functions ─────────────────────────────────────────────────────────
@@ -60,13 +62,20 @@ def _validate_http_codes(v) -> str | None:
     return s
 
 
+def _normalize_group(v):
+    """Empty or blank group means ungrouped (None); create and update share this rule."""
+    if v is None or (isinstance(v, str) and v.strip() == ""):
+        return None
+    return v
+
+
 _HOST_LABEL_RE = re.compile(r"^(?!-)[A-Za-z0-9-]{1,63}(?<!-)$")
 
 
 def validate_host(value: str | None) -> str | None:
     """Validate a hostname (RFC 1123) or IP literal; return the stripped value.
 
-    Free text is rejected so a host can never be read as an option by ping/mtr.
+    Free text is rejected so a host can never be read as an option by ping or traceroute.
     """
     if value is None:
         return None
@@ -133,6 +142,7 @@ class TargetBase(BaseModel):
     enable_http_check: bool = Field(default=False)
     enable_cert_expiration: bool = False
     enable_tcp_connect: bool = False
+    enable_udp_scan: bool = False
 
     # Check params
     ping_host: str | None = Field(default=None, max_length=255)
@@ -161,11 +171,18 @@ class TargetBase(BaseModel):
     tcp_ports: str = Field(
         default=DEFAULT_TCP_PORTS, max_length=200, description="Comma-separated list of TCP ports (e.g. '80,443,8080')"
     )
+    udp_ports: str = Field(default="", max_length=200, description="Comma-separated list of UDP ports")
     max_retries: int = Field(
         default=5,
         ge=TARGET_MAX_RETRIES_MIN,
         le=TARGET_MAX_RETRIES_MAX,
         description="Max check retries within one check cycle before marking target DOWN",
+    )
+    down_alert_delay_minutes: int = Field(
+        default=DEFAULT_TARGET_DOWN_ALERT_DELAY_MINUTES,
+        ge=TARGET_DOWN_ALERT_DELAY_MINUTES_MIN,
+        le=TARGET_DOWN_ALERT_DELAY_MINUTES_MAX,
+        description="Minutes a service must stay down before a DOWN alert is raised",
     )
 
     # Alert behavior
@@ -181,15 +198,18 @@ class TargetBase(BaseModel):
     @classmethod
     def normalize_group(cls, v):
         """Normalize empty group to None for consistency with name min_length."""
-        if v is None or (isinstance(v, str) and v.strip() == ""):
-            return None
-        return v
+        return _normalize_group(v)
 
     @field_validator("tcp_ports", mode="before")
     @classmethod
     def normalize_tcp_ports(cls, v):
         """Normalize TCP ports. For Create, empty → DEFAULT_TCP_PORTS (new target needs valid port)."""
         return normalize_ports(v, default=DEFAULT_TCP_PORTS)
+
+    @field_validator("udp_ports", mode="before")
+    @classmethod
+    def normalize_udp_ports(cls, v):
+        return normalize_ports(v, default="")
 
     @field_validator("http_success_codes", mode="before")
     @classmethod
@@ -243,6 +263,9 @@ class TargetBase(BaseModel):
         if self.enable_tcp_connect and not (self.tcp_host or host):
             raise ValueError("TCP check enabled but no tcp_host or host configured")
 
+        if self.enable_udp_scan and not self.udp_ports:
+            raise ValueError("UDP scan enabled but no ports configured")
+
         if self.http_basic_auth_enabled:
             if not self.http_username:
                 raise ValueError("HTTP Basic Auth enabled but username missing")
@@ -265,6 +288,7 @@ class TargetCreate(TargetBase):
     """Request model for creating a target."""
 
     alert_recipient_ids: list[int] = Field(default_factory=list, max_length=200)
+    network_scan_id: str | None = Field(default=None, max_length=36)
 
 
 class TargetWizardPreview(BaseModel):
@@ -275,7 +299,30 @@ class TargetWizardPreview(BaseModel):
     name: str | None = Field(default=None, max_length=200)
     group: str | None = Field(default=None, max_length=100)
     tcp_ports: str | None = Field(default=None, max_length=200)
+    udp_ports: str | None = Field(default=None, max_length=200)
     overrides: dict = Field(default_factory=dict)
+
+
+# NOT NULL target columns: an explicit null in a PATCH is rejected, never passed to SQLite.
+_NON_NULLABLE_UPDATE_FIELDS = (
+    "name",
+    "host",
+    "is_enabled",
+    "interval_seconds",
+    "retention_days",
+    "enable_ping",
+    "enable_http_check",
+    "enable_cert_expiration",
+    "enable_tcp_connect",
+    "enable_udp_scan",
+    "http_prefer_head",
+    "http_basic_auth_enabled",
+    "ignore_cert_errors",
+    "max_retries",
+    "down_alert_delay_minutes",
+    "auto_close_alert",
+    "sla_enabled",
+)
 
 
 class TargetUpdate(BaseModel):
@@ -299,6 +346,7 @@ class TargetUpdate(BaseModel):
     enable_http_check: bool | None = None
     enable_cert_expiration: bool | None = None
     enable_tcp_connect: bool | None = None
+    enable_udp_scan: bool | None = None
 
     ping_host: str | None = Field(default=None, max_length=255)
     http_url: HttpUrl | None = None
@@ -314,7 +362,12 @@ class TargetUpdate(BaseModel):
     ignore_cert_errors: bool | None = None
     tcp_host: str | None = Field(default=None, max_length=255)
     tcp_ports: str | None = Field(default=None, max_length=200, description="Comma-separated list of TCP ports")
+    udp_ports: str | None = Field(default=None, max_length=200, description="Comma-separated list of UDP ports")
+    network_scan_id: str | None = Field(default=None, max_length=36)
     max_retries: int | None = Field(default=None, ge=TARGET_MAX_RETRIES_MIN, le=TARGET_MAX_RETRIES_MAX)
+    down_alert_delay_minutes: int | None = Field(
+        default=None, ge=TARGET_DOWN_ALERT_DELAY_MINUTES_MIN, le=TARGET_DOWN_ALERT_DELAY_MINUTES_MAX
+    )
 
     # Alert behavior
     auto_close_alert: bool | None = None
@@ -329,15 +382,18 @@ class TargetUpdate(BaseModel):
     @classmethod
     def normalize_group(cls, v):
         """Normalize empty group to None for consistency."""
-        if v is None or (isinstance(v, str) and v.strip() == ""):
-            return None
-        return v
+        return _normalize_group(v)
 
     @field_validator("tcp_ports", mode="before")
     @classmethod
     def normalize_tcp_ports(cls, v):
-        """Normalize TCP ports. For Update, empty → None (PATCH semantics: no change)."""
+        """Normalize TCP ports. For Update, null or empty → None; the API treats None as unchanged."""
         return normalize_ports(v, default=None)
+
+    @field_validator("udp_ports", mode="before")
+    @classmethod
+    def normalize_udp_ports(cls, v):
+        return normalize_ports(v, default="")
 
     @field_validator("http_success_codes", mode="before")
     @classmethod
@@ -359,6 +415,10 @@ class TargetUpdate(BaseModel):
         Full consistency (e.g., SLA enabled with targets) is validated server-side
         after merging with existing DB values.
         """
+        nulls = [f for f in _NON_NULLABLE_UPDATE_FIELDS if f in self.model_fields_set and getattr(self, f) is None]
+        if nulls:
+            raise ValueError(f"null is not allowed for: {', '.join(nulls)}")
+
         if self.clear_http_password and self.http_password:
             raise ValueError("Cannot set and clear http_password at the same time")
 
@@ -371,6 +431,26 @@ class Target(TargetBase):
     id: int
     created_at: datetime
     updated_at: datetime
+
+
+class NetworkPortPublic(BaseModel):
+    protocol: Literal["tcp", "udp"]
+    port: int = Field(ge=1, le=65535)
+    source: Literal["manual", "discovered"]
+    service_name: str | None = None
+    service_product: str | None = None
+    service_version: str | None = None
+    method: Literal["probed", "table"] | None = None
+    confidence: int | None = None
+    discovered_at: datetime | None = None
+    status: Literal["up", "down", "unknown"] | None = None
+    checked_at: datetime | None = None
+    last_up_at: datetime | None = None
+    detail: str | None = None
+    raw_state: str | None = None
+    service_identity: Literal["identified", "unknown", "changed"] | None = None
+    identity_changed_at: datetime | None = None
+    latency_ms: float | None = None
 
 
 class TargetPublic(BaseModel):
@@ -387,6 +467,7 @@ class TargetPublic(BaseModel):
     enable_http_check: bool
     enable_cert_expiration: bool
     enable_tcp_connect: bool
+    enable_udp_scan: bool = False
     ping_host: str | None = None
     http_url: HttpUrl | None = None
     http_username: str | None = None
@@ -400,7 +481,10 @@ class TargetPublic(BaseModel):
     ignore_cert_errors: bool = False
     tcp_host: str | None = None
     tcp_ports: str = DEFAULT_TCP_PORTS
+    udp_ports: str = ""
+    network_ports: list[NetworkPortPublic] = Field(default_factory=list)
     max_retries: int = 5
+    down_alert_delay_minutes: int = DEFAULT_TARGET_DOWN_ALERT_DELAY_MINUTES
     # Alert behavior
     auto_close_alert: bool = True
     # SLA Targets
@@ -422,6 +506,7 @@ def target_row_to_dict(row) -> dict:
 
     The HTTP password never leaves the row; only ``has_http_password`` is exposed.
     """
+    columns = set(row.keys())
     return {
         "id": int(row["id"]),
         "name": row["name"],
@@ -434,6 +519,7 @@ def target_row_to_dict(row) -> dict:
         "enable_http_check": bool(row["enable_http_check"]),
         "enable_cert_expiration": bool(row["enable_cert_expiration"]),
         "enable_tcp_connect": bool(row["enable_tcp_connect"]),
+        "enable_udp_scan": bool(row["enable_udp_scan"]) if "enable_udp_scan" in columns else False,
         "ping_host": row["ping_host"],
         "http_url": row["http_url"],
         "http_username": row["http_username"],
@@ -447,7 +533,9 @@ def target_row_to_dict(row) -> dict:
         "ignore_cert_errors": bool(row["ignore_cert_errors"]),
         "tcp_host": row["tcp_host"],
         "tcp_ports": str(row["tcp_ports"] or DEFAULT_TCP_PORTS),
+        "udp_ports": str(row["udp_ports"] or "") if "udp_ports" in columns else "",
         "max_retries": int(row["max_retries"]),
+        "down_alert_delay_minutes": int(row["down_alert_delay_minutes"]),
         "auto_close_alert": bool(row["auto_close_alert"]),
         "sla_enabled": bool(row["sla_enabled"]),
         "sla_availability_pct": float(row["sla_availability_pct"]) if row["sla_availability_pct"] is not None else None,

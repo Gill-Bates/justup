@@ -1,8 +1,9 @@
 {# Settings: Network Tab Content #}
+{% from "fragments/_warning.html" import ju_warning %}
 {% from "settings/_secret_field.html" import secret_field %}
 <form class="ju-settings-grid" id="advanced-settings-form" data-settings-autosave autocomplete="off">
-			<details class="card shadow-sm settings-card settings-details" open>
-				<summary class="card-header"><h2 class="h6 mb-0">Connection Quality</h2></summary>
+			<div class="card shadow-sm settings-card">
+				<div class="card-header"><h2 class="h6 mb-0">Connection Quality</h2></div>
 				<div class="card-body settings-compact">
 					<div>
 						<label for="quality_targets_entry" class="form-label">Probe Targets</label>
@@ -14,10 +15,9 @@
 									<li class="tag-input__item"><span class="tag-input__text">{{ target | trim }}</span></li>
 									{% endfor %}
 								</ul>
-								<input type="text" class="tag-input__entry" id="quality_targets_entry" data-tag-input-entry autocomplete="off" autocapitalize="off" spellcheck="false" inputmode="url" enterkeyhint="done" placeholder="Add host or URL" aria-describedby="quality_targets_hint quality_targets_error">
+								<input type="text" class="tag-input__entry" id="quality_targets_entry" data-tag-input-entry autocomplete="off" autocapitalize="off" spellcheck="false" inputmode="url" enterkeyhint="done" placeholder="Add host or URL" aria-describedby="quality_targets_hint">
 							</div>
 							<input type="hidden" name="quality_targets" id="quality_targets" value="{{ settings.quality_targets }}" data-tag-input-value>
-							<div class="tag-input__error" id="quality_targets_error" data-tag-input-error hidden></div>
 							<div class="visually-hidden" role="status" aria-live="polite" data-tag-input-status></div>
 							<button type="button" class="btn btn-link btn-sm tag-input__reset px-0" data-tag-input-reset>Reset to defaults</button>
 						</div>
@@ -34,20 +34,20 @@
 						</div>
 					</div>
 				</div>
-			</details>
+			</div>
 
-			<details class="card shadow-sm settings-card settings-details" open>
-				<summary class="card-header"><h2 class="h6 mb-0">Provider Lookup</h2></summary>
+			<div class="card shadow-sm settings-card">
+				<div class="card-header"><h2 class="h6 mb-0">Provider Lookup</h2></div>
 				<div class="card-body settings-compact">
-					<div class="form-check form-switch">
-						<input type="checkbox" class="form-check-input" role="switch" name="provider_lookup_enabled" id="provider_lookup_enabled" {% if settings.provider_lookup_enabled %}checked{% endif %}>
+					<div class="form-check form-switch ju-switch">
+						<input type="checkbox" class="form-check-input" role="switch" name="provider_lookup_enabled" id="provider_lookup_enabled" aria-describedby="provider_lookup_enabled_hint" {% if settings.provider_lookup_enabled %}checked{% endif %}>
 						<label class="form-check-label" for="provider_lookup_enabled">Provider Lookup</label>
 					</div>
-					<div class="form-text">Adds ASN/ISP info for public target IPs.</div>
+					<div class="form-text" id="provider_lookup_enabled_hint">Adds ASN/ISP info for public target IPs.</div>
 					<div>
 						<label for="provider_lookup_cache_ttl_seconds" class="form-label">Lookup Cache TTL (seconds)</label>
-						<input type="number" class="form-control" name="provider_lookup_cache_ttl_seconds" id="provider_lookup_cache_ttl_seconds" min="{{ settings_limits.provider_lookup_cache_ttl_seconds.min }}" max="{{ settings_limits.provider_lookup_cache_ttl_seconds.max }}" step="1" value="{{ settings.provider_lookup_cache_ttl_seconds }}" inputmode="numeric" placeholder="{{ settings_limits.provider_lookup_cache_ttl_seconds.min }}&ndash;{{ settings_limits.provider_lookup_cache_ttl_seconds.max }}" data-humanized-output="provider_lookup_cache_ttl_humanized" aria-describedby="provider_lookup_cache_ttl_humanized">
-						<div class="form-text">= <output id="provider_lookup_cache_ttl_humanized" aria-live="polite"></output></div>
+						<input type="number" class="form-control" name="provider_lookup_cache_ttl_seconds" id="provider_lookup_cache_ttl_seconds" min="{{ settings_limits.provider_lookup_cache_ttl_seconds.min }}" max="{{ settings_limits.provider_lookup_cache_ttl_seconds.max }}" step="1" value="{{ settings.provider_lookup_cache_ttl_seconds }}" inputmode="numeric" placeholder="{{ settings_limits.provider_lookup_cache_ttl_seconds.min }}&ndash;{{ settings_limits.provider_lookup_cache_ttl_seconds.max }}" data-humanized-output="provider_lookup_cache_ttl_humanized" aria-describedby="provider_lookup_cache_ttl_hint">
+						<div class="form-text" id="provider_lookup_cache_ttl_hint">= <output id="provider_lookup_cache_ttl_humanized" aria-live="polite"></output></div>
 					</div>
 					<div>
 						{{ secret_field("ip_api_key", "ip_api_key", "ip-api Pro Key", settings.ip_api_key_set,
@@ -56,21 +56,60 @@
 							"clear-ip-api-key", "Remove stored key") }}
 					</div>
 				</div>
-			</details>
+			</div>
 
-			<details class="card shadow-sm settings-card settings-details" open>
-				<summary class="card-header"><h2 class="h6 mb-0">Geolocation</h2></summary>
+			<div class="card shadow-sm settings-card">
+				<div class="card-header"><h2 class="h6 mb-0">Geolocation</h2></div>
 				<div class="card-body settings-compact">
-					<div class="form-check form-switch">
+					<div class="form-check form-switch ju-switch">
 						<input type="checkbox" class="form-check-input" role="switch" name="online_geo_fallback_enabled" id="online_geo_fallback_enabled" aria-describedby="online_geo_privacy_hint" {% if settings.online_geo_fallback_enabled %}checked{% endif %}>
-						<label class="form-check-label" for="online_geo_fallback_enabled">Online fallback</label>
+						<label class="form-check-label" for="online_geo_fallback_enabled">Enhanced Accuracy</label>
 					</div>
-					<p class="form-text text-warning-emphasis mb-0" id="online_geo_privacy_hint"><strong>Privacy:</strong> public IPs are sent to ip-api / ipwho.is only if GeoLite2 is not precise enough.</p>
+					<p class="form-text mb-0" id="online_geo_privacy_hint">{{ ju_warning('Privacy: Enable this feature only if accurate measurement results are important to you and you agree to have public IP addresses shared with third parties.') }}</p>
 					<hr class="my-1">
-					<div class="form-check form-switch">
+					<div class="form-check form-switch ju-switch">
 						<input type="checkbox" class="form-check-input" role="switch" name="geoip_auto_update" id="geoip_auto_update" {% if settings.geoip_auto_update %}checked{% endif %}>
 						<label class="form-check-label" for="geoip_auto_update">GeoLite DB auto-update on start</label>
 					</div>
 				</div>
-			</details>
+			</div>
+
+			<div class="card shadow-sm settings-card egress-card" data-public-egress data-endpoint="/settings/network/public-egress">
+				<div class="card-header"><h2 class="h6 mb-0">Public outbound IPs</h2></div>
+				<div class="card-body settings-compact">
+					{# Hand-written dots in both rows: data-egress-* hooks; same markup as the status_dot macro in fragments/_state_dot.html #}
+					<dl class="egress-list mb-0">
+						<div class="egress-row" data-egress-family="ipv4">
+							<dt class="egress-label">IPv4</dt>
+							<dd class="egress-value">
+								<code class="egress-address" data-egress-address>&mdash;</code>
+								<span class="egress-message" data-egress-message hidden></span>
+								<span class="egress-geo" data-egress-geo hidden></span>
+								<span class="ju-status-item"><span class="ju-status-dot ju-status-dot--neutral ju-status-dot--unknown" data-egress-dot hidden aria-hidden="true"></span><span data-egress-badge>Checking&hellip;</span></span>
+								<button type="button" class="btn btn-sm btn-icon btn-outline-secondary" data-egress-copy aria-label="Copy IPv4 address" title="Copy IPv4 address" disabled><span class="material-icons" aria-hidden="true">content_copy</span></button>
+								<span class="form-text" data-egress-detail></span>
+							</dd>
+						</div>
+						<div class="egress-row" data-egress-family="ipv6">
+							<dt class="egress-label">IPv6</dt>
+							<dd class="egress-value">
+								<code class="egress-address" data-egress-address>&mdash;</code>
+								<span class="egress-message" data-egress-message hidden></span>
+								<span class="egress-geo" data-egress-geo hidden></span>
+								<span class="ju-status-item"><span class="ju-status-dot ju-status-dot--neutral ju-status-dot--unknown" data-egress-dot hidden aria-hidden="true"></span><span data-egress-badge>Checking&hellip;</span></span>
+								<button type="button" class="btn btn-sm btn-icon btn-outline-secondary" data-egress-copy aria-label="Copy IPv6 address" title="Copy IPv6 address" disabled><span class="material-icons" aria-hidden="true">content_copy</span></button>
+								<span class="form-text" data-egress-detail></span>
+							</dd>
+						</div>
+					</dl>
+					<div class="egress-actions">
+						<button type="button" class="btn btn-outline-secondary btn-sm" data-egress-refresh><span class="material-icons" aria-hidden="true">refresh</span> Refresh</button>
+						<span class="form-text mb-0">Last checked <time data-egress-checked>&hellip;</time></span>
+						<span class="form-text mb-0" data-egress-cached hidden>Cached</span>
+						<a class="egress-doc-link" href="https://gill-bates.github.io/justup/features/network-monitoring/#public-outbound-ips" target="_blank" rel="noopener noreferrer">Documentation <span aria-hidden="true">↗</span><span class="visually-hidden"> (opens in a new tab)</span></a>
+					</div>
+					<p class="form-text mb-0" data-egress-proxy hidden>{{ ju_warning('Proxy configured; addresses measured directly.') }}</p>
+					<div class="visually-hidden" role="status" aria-live="polite" data-egress-live></div>
+				</div>
+			</div>
 </form>

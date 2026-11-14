@@ -7,7 +7,7 @@ See [API authentication](../api/authentication.md).
 ## Session
 
 - `POST /login` returns `access_token` and `expires_at` and sets the cookie.
-- The cookie is `SameSite=Lax`, path `/`. Over HTTPS it is named `__Host-token` and `Secure`; over plain HTTP it is named `token` without the prefix, so HTTP installations keep working. HTTPS is detected as for the other cookies (`X-Forwarded-Proto` only from `UPMON_TRUSTED_PROXIES`).
+- The cookie is `SameSite=Lax`, path `/`. Over HTTPS it is named `__Host-token` and `Secure`; over plain HTTP it is named `token` without the prefix, so HTTP installations keep working. HTTPS is detected as for the other cookies (`X-Forwarded-Proto` only from `TRUSTED_PROXIES`).
 - Lifetime: `session_max_days` (1-7, default 1), counted from sign-in; no separate inactivity expiry.
 - Expired, revoked, or inactive sessions are rejected. While a password change is
   pending, API calls answer HTTP 428.

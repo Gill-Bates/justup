@@ -19,7 +19,19 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
-from app.api import csp_report, dashboard_layout, frontend, pop, recipients, reports, settings, signal, targets, users
+from app.api import (
+    csp_report,
+    dashboard_layout,
+    frontend,
+    network_scans,
+    pop,
+    recipients,
+    reports,
+    settings,
+    signal,
+    targets,
+    users,
+)
 from app.api.auth import get_current_user
 from app.api.csp_report import CSP_REPORT_PATH
 from app.db import sqlite as sqlite_db
@@ -48,7 +60,7 @@ GENERIC_429 = {"detail": "Too many requests. Please try again later."}
 def _env(monkeypatch):
     monkeypatch.setenv("SECRET_KEY", Fernet.generate_key().decode("ascii"))
     monkeypatch.setattr(crypto, "_primary_key", None)
-    monkeypatch.delenv("UPMON_TRUSTED_PROXIES", raising=False)
+    monkeypatch.delenv("TRUSTED_PROXIES", raising=False)
 
 
 class FakeClock:
@@ -274,7 +286,7 @@ def test_forged_forwarding_headers_from_untrusted_peers_do_not_create_buckets():
 
 
 def test_trusted_proxy_forwards_the_real_client(monkeypatch):
-    monkeypatch.setenv("UPMON_TRUSTED_PROXIES", PROXY)
+    monkeypatch.setenv("TRUSTED_PROXIES", PROXY)
     chain = [("X-Forwarded-For", "6.6.6.6, 198.51.100.7")]
     assert rate_limit_key(_request(PROXY, chain)) == "198.51.100.7"  # the left side is client-controlled
     assert rate_limit_key(_request("203.0.113.9", chain)) == "203.0.113.9"
@@ -282,7 +294,7 @@ def test_trusted_proxy_forwards_the_real_client(monkeypatch):
 
 
 def test_trusted_proxy_clients_get_separate_counters(monkeypatch):
-    monkeypatch.setenv("UPMON_TRUSTED_PROXIES", PROXY)
+    monkeypatch.setenv("TRUSTED_PROXIES", PROXY)
     app = _app()
 
     @app.get("/a", dependencies=[Depends(rate_limit("1/minute"))])
@@ -322,9 +334,9 @@ def _limited_app(clock: FakeClock) -> FastAPI:
 def test_first_n_allowed_then_429_with_contract_headers():
     clock = FakeClock()
     client = TestClient(_limited_app(clock))
-    client.get("/a")
+    assert client.get("/a").status_code == 200
     clock.now += 20
-    client.get("/a")
+    assert client.get("/a").status_code == 200
     clock.now += 10
     response = client.get("/a")
     assert response.status_code == 429
@@ -338,8 +350,7 @@ def test_first_n_allowed_then_429_with_contract_headers():
 def test_retry_after_is_at_least_one_second():
     clock = FakeClock()
     client = TestClient(_limited_app(clock))
-    client.get("/a")
-    client.get("/a")
+    assert [client.get("/a").status_code for _ in range(2)] == [200, 200]
     clock.now += 59.9999
     assert client.get("/a").headers["Retry-After"] == "1"
 
@@ -587,7 +598,10 @@ def test_signal_budgets_match_the_previous_limits():
         ("POST", "/signal/register"): "3/hour",
         ("POST", "/signal/verify"): "10/hour",
     }
-    assert _route_specs(signal.router) == {k: sorted([rl.RATE_LIMIT_DEFAULT, v]) for k, v in expected.items()}
+    specs = _route_specs(signal.router)
+    # /signal/status carries only its own 30/minute budget (no router-wide default).
+    assert specs.pop(("GET", "/signal/status")) == ["30/minute"]
+    assert specs == {k: sorted([rl.RATE_LIMIT_DEFAULT, v]) for k, v in expected.items()}
 
 
 def test_user_limit_pairs_with_the_given_authentication_dependency():
@@ -618,6 +632,8 @@ RATE_LIMITED_ROUTES = {
     ("GET", "/ui/fragments/target-status/{target_id}"): ["60/minute"],
     ("GET", "/ui/fragments/uptime/{target_id}"): ["300/minute"],
     ("GET", "/ui/fragments/traceroute/{target_id}"): ["10/minute"],
+    ("GET", "/ui/fragments/signal-qr"): ["6/minute"],
+    ("GET", "/settings/db-health"): ["10/minute"],
     ("GET", "/reports/targets/{target_id}/pdf"): ["5/minute"],
     ("POST", "/reports/targets/{target_id}/pdf/request"): ["5/minute"],
     ("POST", "/settings/tsdb/purge"): ["10/minute"],
@@ -625,11 +641,13 @@ RATE_LIMITED_ROUTES = {
     ("POST", "/settings/auth/toggle"): ["5/minute"],
     ("POST", "/settings/signal/test"): ["5/minute"],
     ("GET", "/settings/signal/status"): ["30/minute"],
+    ("GET", "/settings/network/public-egress"): ["12/minute"],
     ("POST", "/settings/signal/unregister"): ["3/minute"],
     ("POST", "/settings/signal/unlink"): ["5/minute"],
     ("POST", "/settings/backup"): ["10/minute"],
     ("POST", "/settings/restore"): ["10/minute"],
     ("POST", "/settings/smtp/test-mail"): ["5/minute"],
+    ("GET", "/signal/status"): ["30/minute"],
     ("POST", "/signal/send"): ["5/minute", "60/minute"],
     ("GET", "/signal/qr"): ["3/hour", "60/minute"],
     ("POST", "/signal/link/confirm"): ["5/hour", "60/minute"],
@@ -637,7 +655,9 @@ RATE_LIMITED_ROUTES = {
     ("POST", "/signal/register"): ["3/hour", "60/minute"],
     ("POST", "/signal/verify"): ["10/hour", "60/minute"],
     ("POST", "/targets/{target_id}/test-alert"): ["5/minute"],
+    ("PUT", "/targets/{target_id}/alert-users"): ["30/minute"],
     ("POST", "/recipients/verify-signal"): ["10/minute"],
+    ("POST", "/recipients/{recipient_id}/recheck-signal"): ["5/minute"],
     ("POST", "/recipients/{recipient_id}/test"): ["10/minute"],
     ("GET", "/recipients/{recipient_id}/test/{queue_id}"): ["60/minute"],
     ("GET", "/me/dashboard-layout"): ["60/minute"],
@@ -647,6 +667,12 @@ RATE_LIMITED_ROUTES = {
     ("DELETE", "/me/dashboard-layout"): ["60/minute"],
     ("POST", "/api/admin/pop/refresh"): ["10/minute"],
     ("POST", CSP_REPORT_PATH): ["30/minute"],
+    ("GET", "/network-scans/status"): ["60/minute"],
+    ("POST", "/network-scans/services/{target_id}/preview"): ["2/minute", "5/minute"],
+    ("POST", "/network-scans/services/{target_id}/confirm"): ["10/minute", "5/minute"],
+    ("POST", "/network-scans"): ["10/minute", "3/minute"],
+    ("GET", "/network-scans/{scan_id}"): ["60/minute"],
+    ("DELETE", "/network-scans/{scan_id}"): ["10/minute"],
 }
 
 
@@ -664,7 +690,7 @@ def _route_specs(router_or_app) -> dict[tuple[str, str], list[str]]:
     return found
 
 
-def test_all_38_rate_limited_routes_keep_their_limit_exactly_once():
+def test_all_rate_limited_routes_keep_their_limit_exactly_once():
     found: dict[tuple[str, str], list[str]] = {}
     for router in (
         users.router,
@@ -678,9 +704,10 @@ def test_all_38_rate_limited_routes_keep_their_limit_exactly_once():
         reports.ui_router,
         pop.router,
         frontend.router,
+        network_scans.router,
     ):
         found |= _route_specs(router)
-    assert len(RATE_LIMITED_ROUTES) == 38
+    assert len(RATE_LIMITED_ROUTES) == 50
     assert found == {k: sorted(v) for k, v in RATE_LIMITED_ROUTES.items()}
 
 

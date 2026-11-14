@@ -35,7 +35,7 @@ import time
 from typing import Any
 
 from ..db import sqlite as sqlite_db
-from .constants import DEFAULT_PDF_PAGE_SIZE, DEFAULT_PURGE_ENABLED, SettingKeys
+from .constants import DEFAULT_PDF_EXPORT_ENABLED, DEFAULT_PDF_PAGE_SIZE, DEFAULT_PURGE_ENABLED, SettingKeys
 
 CACHE_TTL_SECONDS = 30
 CACHE_MAX_SIZE = 64
@@ -171,6 +171,11 @@ def is_auth_disabled(conn: sqlite3.Connection) -> bool:
     return bool(sqlite_db.get_setting(conn, SettingKeys.AUTH_DISABLED, False))
 
 
+def is_auth_required(conn: sqlite3.Connection) -> bool:
+    """Inverse of the stored `auth_disabled` flag; a missing value means authentication is required."""
+    return not is_auth_disabled(conn)
+
+
 def is_purge_enabled(conn: sqlite3.Connection) -> bool:
     """Check if TSDB purge is enabled."""
     return bool(get_setting_cached(conn, SettingKeys.PURGE_ENABLED, DEFAULT_PURGE_ENABLED))
@@ -179,6 +184,11 @@ def is_purge_enabled(conn: sqlite3.Connection) -> bool:
 def use_utc_dashboard(conn: sqlite3.Connection) -> bool:
     """Check if dashboard should use UTC times."""
     return bool(get_setting_cached(conn, SettingKeys.USE_UTC_DASHBOARD, False))
+
+
+def is_pdf_export_enabled(conn: sqlite3.Connection) -> bool:
+    """Check whether PDF export is on; always reads the DB so a toggle applies at once in every worker."""
+    return bool(sqlite_db.get_setting(conn, SettingKeys.PDF_EXPORT_ENABLED, DEFAULT_PDF_EXPORT_ENABLED))
 
 
 def get_pdf_page_size(conn: sqlite3.Connection) -> str:

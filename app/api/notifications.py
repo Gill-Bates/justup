@@ -23,6 +23,7 @@ from ..db import notifications as inbox
 from ..db import sqlite as sqlite_db
 from ..services import event_bus, release_check
 from ..utils.deps import get_conn
+from ..utils.settings_cache import is_pdf_export_enabled
 from ..utils.time import utcnow
 from .auth import get_current_user
 
@@ -54,6 +55,8 @@ def _action(conn: sqlite3.Connection, user: dict, item: dict[str, Any]) -> dict[
             # The request event stays informational even after the job finished.
             return None
         if job["status"] == "completed":
+            if not is_pdf_export_enabled(conn):
+                return {"type": "unavailable", "label": "PDF export is disabled"}
             if expires_at is not None and expires_at <= utcnow():
                 return {"type": "unavailable", "label": "Report expired"}
             return {"type": "download", "label": "Download PDF", "url": f"/ui/reports/jobs/{job['job_id']}/download"}

@@ -240,7 +240,7 @@ def _normalize(source: str, ip: str, data: dict[str, Any]) -> IPInfo | None:
         geo_source=source if lat is not None or lon is not None or country_code else None,
         network_source=source if asn or provider else None,
     )
-    return result if result["geo_source"] or result["network_source"] or result["country_code"] else None
+    return result if result["geo_source"] or result["network_source"] else None
 
 
 def _source_lookup(source: str, ip: str, api_key: str, ttl_seconds: int) -> IPInfo | None:

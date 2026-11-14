@@ -23,6 +23,9 @@ npm-debug.log*
 .env
 .env.*
 !.env.example
+# Bootstrap admin password (plaintext, 0600) and its atomic-write temp files, wherever JUSTUP_DATA_DIR points
+.bootstrap-admin-credentials
+.bootstrap-admin-credentials.*
 *.log
 *.tmp
 *.bak

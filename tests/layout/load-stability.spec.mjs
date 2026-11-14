@@ -13,6 +13,7 @@ import { test } from "./fixtures.mjs";
 const TARGET_PATH = "/ui/targets/4";
 const VIEWPORTS = [{ w: 1280, h: 720 }, { w: 390, h: 844 }];
 const THEMES = ["light", "dark"];
+// Deliberate measurement window: late layout shifts have no completion signal, so the page is observed for a fixed time.
 const WINDOW_MS = 3500;
 // Sum of all layout shifts in a cold load. Measured after the fix: 0 on the shell and header; the
 // budget leaves room for sub-pixel rounding of chart and map content only.
@@ -47,7 +48,8 @@ function recorder(sidebarCollapsed) {
 			const marks = Object.fromEntries(Object.entries(landmarks).map(([key, selector]) => [key, rectOf(selector)]));
 			record.frames.push({
 				t: Math.round(performance.now()), theme: root.getAttribute("data-bs-theme"), sidebarSmall: root.classList.contains("ju-nav-sm"),
-				ready: Object.values(marks).every(Boolean), marks,
+				ready: Object.values(marks).every(Boolean), marks, plex: document.fonts.check('1em "IBM Plex Sans"'),
+				overflowX: root.scrollWidth - root.clientWidth,
 			});
 		}
 		requestAnimationFrame(frame);
@@ -78,17 +80,39 @@ async function measure(page, action) {
 	await action();
 	await page.waitForFunction(() => document.getElementById("target-config") && !document.querySelector('.target-detail-page [aria-busy="true"]'), null, { timeout: 30000 });
 	await page.waitForTimeout(WINDOW_MS);
-	return page.evaluate(() => window.__stability);
+	// document.fonts.ready settles the font question before anything is judged: Plex must really be in use.
+	return page.evaluate(async () => {
+		await document.fonts.ready;
+		const faces = [...document.fonts].filter((face) => face.family.replace(/"/g, "") === "IBM Plex Sans" && face.style === "normal");
+		const heading = document.querySelector(".target-detail-heading h1");
+		window.__stability.font = {
+			check: document.fonts.check('1em "IBM Plex Sans"'), faces: faces.map((face) => face.status), displays: faces.map((face) => face.display),
+			family: getComputedStyle(heading).fontFamily.split(",")[0].replace(/"/g, "").trim(),
+		};
+		return window.__stability;
+	});
 }
 
-function assertStable(record, { theme, sidebarCollapsed, label }) {
-	const ready = record.frames.filter((frame) => frame.ready);
-	assert.ok(ready.length > 5, `${label}: page never rendered all landmarks`);
+function assertStable(record, { theme, sidebarCollapsed, label, engineSwapsFonts }) {
+	const complete = record.frames.filter((frame) => frame.ready);
+	assert.ok(complete.length > 5, `${label}: page never rendered all landmarks`);
+	// Plex is the only font: it is requested, loaded without error and the one the title uses.
+	assert.equal(record.font.family, "IBM Plex Sans", `${label}: the title does not use IBM Plex Sans`);
+	assert.ok(record.font.check && record.font.faces.length > 0 && record.font.faces.every((status) => status === "loaded"), `${label}: IBM Plex Sans did not load (${JSON.stringify(record.font)})`);
+	// DC-TOK-8: every Plex face declares font-display: fallback (FontFace.display mirrors the descriptor).
+	assert.ok(record.font.displays.length > 0 && record.font.displays.every((display) => display === "fallback"), `${label}: font-display is not fallback (${record.font.displays})`);
+	// A frame never scrolls sideways, whichever font is active (every recorded frame, not only complete ones).
+	assert.deepEqual(record.frames.filter((frame) => frame.overflowX > 0).map((frame) => `${frame.t}ms ${frame.overflowX}px`).slice(0, 3), [], `${label}: horizontal page overflow while loading`);
+	// WebKit may paint the fallback until Plex arrives (font-display: fallback, DC-TOK-8); that swap is an
+	// engine behaviour (DC-LIVE-7). Positions are compared from the first Plex frame on,
+	// so a movement after the font is in use still fails. Chromium has to be stable from the first frame.
+	const ready = engineSwapsFonts ? complete.filter((frame) => frame.plex) : complete;
+	assert.ok(ready.length > 5, `${label}: no stable frame with IBM Plex Sans`);
 	const first = ready[0];
 	// Theme: right in the first frame, never rewritten afterwards.
 	assert.ok(record.frames.every((frame) => frame.theme === theme), `${label}: theme attribute left ${theme}: ${JSON.stringify([...new Set(record.frames.map((frame) => frame.theme))])}`);
-	assert.deepEqual(record.themeWrites.filter((write) => write.t > first.t), [], `${label}: data-bs-theme written after first paint`);
-	assert.ok(ready.every((frame) => frame.sidebarSmall === sidebarCollapsed), `${label}: sidebar state differs from the stored one`);
+	assert.deepEqual(record.themeWrites.filter((write) => write.t > complete[0].t), [], `${label}: data-bs-theme written after first paint`);
+	assert.ok(complete.every((frame) => frame.sidebarSmall === sidebarCollapsed), `${label}: sidebar state differs from the stored one`);
 	assert.deepEqual(record.dimmed, [], `${label}: shell opacity dropped below 1 (whole-page flicker)`);
 	assert.deepEqual(record.transitions, [], `${label}: shell elements transition or animate while loading`);
 	assert.deepEqual(record.removed, [], `${label}: page structure was replaced after render`);
@@ -100,7 +124,8 @@ function assertStable(record, { theme, sidebarCollapsed, label }) {
 			if (rect.some((value, index) => Math.abs(value - reference[index]) > LANDMARK_TOLERANCE_PX)) moved.push(`${frame.t}ms ${key} ${reference} -> ${rect}`);
 		}
 	}
-	assert.deepEqual(moved.slice(0, 6), [], `${label}: landmarks moved after first paint (${moved.length} frames)`);
+	const settled = ready.find((frame) => Object.entries(frame.marks).every(([key, rect]) => rect.every((value, index) => Math.abs(value - ready[ready.length - 1].marks[key][index]) <= LANDMARK_TOLERANCE_PX)));
+	assert.deepEqual(moved.slice(0, 6), [], `${label}: landmarks moved after first paint (${moved.length} of ${ready.length} frames; first ready at ${first.t} ms with Plex ${first.plex}, stable from ${settled ? settled.t : "never"} ms with Plex ${settled ? settled.plex : "?"})`);
 }
 
 for (const viewport of VIEWPORTS) {
@@ -115,10 +140,11 @@ for (const viewport of VIEWPORTS) {
 					const url = app.base + TARGET_PATH;
 					const cold = await measure(page, () => page.goto(url, { waitUntil: "load" }));
 					const options = { theme, sidebarCollapsed };
-					assertStable(cold, { ...options, label: `${browserName} cold` });
+					const engineSwapsFonts = browserName === "webkit";
+					assertStable(cold, { ...options, engineSwapsFonts, label: `${browserName} cold` });
 					if (browserName === "chromium") assert.ok(cold.shifts <= CLS_BUDGET, `cold CLS ${cold.shifts.toFixed(4)} exceeds ${CLS_BUDGET}`);
 					const warm = await measure(page, () => page.reload({ waitUntil: "load" }));
-					assertStable(warm, { ...options, label: `${browserName} refresh` });
+					assertStable(warm, { ...options, engineSwapsFonts, label: `${browserName} refresh` });
 					if (browserName === "chromium") assert.ok(warm.shifts <= CLS_BUDGET, `refresh CLS ${warm.shifts.toFixed(4)} exceeds ${CLS_BUDGET}`);
 				} finally {
 					await context.close();

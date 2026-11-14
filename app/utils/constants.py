@@ -33,12 +33,12 @@ class CheckStatus(StrEnum):
     DISABLED = "disabled"  # Target/check explicitly disabled
 
 
-# --- MTR/Traceroute Hop Status (per-hop level) ---
+# --- Traceroute Hop Status (per-hop level) ---
 class HopStatus(StrEnum):
     """
     Status values for individual traceroute hops.
 
-    Use for: MTR hop results, traceroute visualization.
+    Use for: traceroute hop results, traceroute visualization.
     Note: No PARTIAL here - that's an aggregate concept (CheckStatus).
     """
 
@@ -57,6 +57,7 @@ class SegmentType(StrEnum):
 
 # MaxMind GeoLite2 City database, relative to the data directory (own subfolder, not the data root)
 GEOIP_DB_RELPATH = PurePosixPath("geoip") / "GeoLite2-City.mmdb"
+GEOIP_ASN_DB_RELPATH = PurePosixPath("geoip") / "GeoLite2-ASN.mmdb"
 
 
 # --- Geolocation source (how a hop's location was determined) ---
@@ -67,6 +68,7 @@ class GeoSource(StrEnum):
     GEOIP = "geoip"  # MaxMind GeoLite2 with city-level coordinates
     GEOIP_COARSE = "geoip_coarse"  # GeoIP with country/region only, no precise coords
     ONLINE = "online"  # ip-api Pro / ipwho.is candidate (no published accuracy radius)
+    IXP = "ixp"  # PeeringDB IXP prefix: the exchange's evidenced region, not the router's position
     NONE = "none"  # No location could be determined
 
 
@@ -150,7 +152,7 @@ class SettingKeys(StrEnum):
     USE_UTC_DASHBOARD = "use_utc_dashboard"
     THEME = "theme"
     PDF_PAGE_SIZE = "pdf_page_size"
-    METRICS_TIMEOUT_MINUTES = "metrics_timeout_minutes"
+    PDF_EXPORT_ENABLED = "pdf_export_enabled"
 
     # Security
     SESSION_MAX_DAYS = "session_max_days"
@@ -170,7 +172,8 @@ class SettingKeys(StrEnum):
     # System
     LAST_BACKUP_AT = "last_backup_at"
     AUTH_DISABLED = "auth_disabled"
-    SYSTEM_BASE_URL = "system_base_url"
+    PUBLIC_HOSTNAME = "public_hostname"  # bare host/IP; the instance URL https://<host> is derived from it
+    PUBLIC_EGRESS_STATE = "public_egress_state"  # JSON: last confirmed public IPv4/IPv6 address with its geolocation
     RELEASE_CHECK_STATE = "release_check_state"  # JSON: schedule, ETag and failure streak of the release check
 
 
@@ -187,15 +190,16 @@ DEFAULT_PURGE_ENABLED = True
 DEFAULT_GEOIP_AUTO_UPDATE = True
 # SMTP encryption is on unless an administrator explicitly stored `false` (trusted plaintext relay).
 DEFAULT_SMTP_USE_TLS = True
-# Online geolocation fallback default (used while no value is stored); an explicit opt-out is stored durably.
-DEFAULT_ONLINE_GEO_FALLBACK_ENABLED = True
+# Enhanced Accuracy (online geolocation) default while no value is stored; an explicit choice is stored durably.
+DEFAULT_ONLINE_GEO_FALLBACK_ENABLED = False
 DEFAULT_PDF_PAGE_SIZE = "a4"
-DEFAULT_METRICS_TIMEOUT_MINUTES = 5
-METRICS_TIMEOUT_MINUTES_MIN = 1
-METRICS_TIMEOUT_MINUTES_MAX = 10
+# PDF export is on unless an administrator stored false; a missing value (older installs) keeps it on.
+DEFAULT_PDF_EXPORT_ENABLED = True
 
 # --- Runtime setting defaults and bounds (formerly ENV-driven) ---
 RATE_LIMIT_AUTH_DEFAULT = "10/minute"
+# Single source for "N/unit" limits: settings validation and the rate-limit parser.
+RATE_LIMIT_PATTERN = r"^([1-9][0-9]{0,5})/(second|minute|hour|day)$"
 QUALITY_MIN_SCORE_DEFAULT = 70
 QUALITY_RTT_THRESHOLD_MS_DEFAULT = 500
 QUALITY_MIN_TARGETS = 3
@@ -212,8 +216,15 @@ TARGET_MAX_RETRIES_MIN = 0
 TARGET_MAX_RETRIES_MAX = 10
 TARGET_RETENTION_DAYS_MIN = 1
 TARGET_RETENTION_DAYS_MAX = 3650
+TARGET_DOWN_ALERT_DELAY_MINUTES_MIN = 1
+TARGET_DOWN_ALERT_DELAY_MINUTES_MAX = 10
+DEFAULT_TARGET_DOWN_ALERT_DELAY_MINUTES = 5
 MONITORING_LIMITS = {
     "interval_seconds": {"min": TARGET_INTERVAL_SECONDS_MIN, "max": TARGET_INTERVAL_SECONDS_MAX},
     "max_retries": {"min": TARGET_MAX_RETRIES_MIN, "max": TARGET_MAX_RETRIES_MAX},
     "retention_days": {"min": TARGET_RETENTION_DAYS_MIN, "max": TARGET_RETENTION_DAYS_MAX},
+    "down_alert_delay_minutes": {
+        "min": TARGET_DOWN_ALERT_DELAY_MINUTES_MIN,
+        "max": TARGET_DOWN_ALERT_DELAY_MINUTES_MAX,
+    },
 }

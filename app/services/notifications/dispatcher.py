@@ -32,9 +32,12 @@ import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 
 from ...db import sqlite as sqlite_db
 from ...utils.constants import SettingKeys
+from ...utils.public_url import get_public_base_url, target_url
+from ...utils.uptime_metric import AVAILABILITY_CHECKS, availability_check_enabled
 
 _log = logging.getLogger(__name__)
 
@@ -58,32 +61,6 @@ class AlertPayload:
     @property
     def is_resolved(self) -> bool:
         return self.status == "resolved"
-
-    @property
-    def message_subject(self) -> str:
-        """Short subject line for notifications."""
-        if self.is_resolved:
-            return f"✅ {self.target_name} - {self.failed_service} RESOLVED"
-        return f"🚨 {self.target_name} - {self.failed_service} DOWN"
-
-    @property
-    def message_body(self) -> str:
-        """Detailed message body."""
-        lines = [
-            f"Target: {self.target_name}",
-            f"Service: {self.failed_service}",
-            f"Status: {self.status.upper()}",
-            f"Started: {self.started_at.strftime('%Y-%m-%d %H:%M:%S UTC')}",
-        ]
-
-        if self.is_resolved and self.ended_at:
-            lines.append(f"Ended: {self.ended_at.strftime('%Y-%m-%d %H:%M:%S UTC')}")
-            if self.duration_seconds:
-                minutes = self.duration_seconds // 60
-                seconds = self.duration_seconds % 60
-                lines.append(f"Duration: {minutes}m {seconds}s")
-
-        return "\n".join(lines)
 
 
 @dataclass
@@ -115,19 +92,8 @@ class DispatchResult:
     send_results: list[SendResult]
 
     @property
-    def success_rate(self) -> float:
-        """Percentage of successful queue insertions."""
-        if self.channels_attempted == 0:
-            return 0.0
-        return (self.channels_succeeded / self.channels_attempted) * 100
-
-    @property
     def all_succeeded(self) -> bool:
         return self.channels_attempted > 0 and self.channels_succeeded == self.channels_attempted
-
-    @property
-    def any_succeeded(self) -> bool:
-        return self.channels_succeeded > 0
 
 
 @dataclass
@@ -147,6 +113,9 @@ class RecipientInfo:
 # ─── Dispatcher ─────────────────────────────────────────────────────────────────
 
 
+_AlertInputs = tuple[dict[str, Any], dict[str, Any], sqlite3.Row | None]
+
+
 class NotificationDispatcher:
     """
     Central dispatcher for alert notifications.
@@ -155,6 +124,9 @@ class NotificationDispatcher:
     into the spooler. The spooler is the ONLY component that actually sends.
 
     Note: Recipients are NOT users. Users can log in, Recipients receive alerts.
+
+    Not thread-safe: ``_inputs_memo`` is unsynchronized instance state. Create one dispatcher
+    per call and do not share an instance across threads.
     """
 
     def __init__(
@@ -170,6 +142,71 @@ class NotificationDispatcher:
         """
         self.conn = conn
         self._db_conn_factory = db_conn_factory
+        # Only set while dispatch_alert runs, so direct render calls never see stale data.
+        self._inputs_memo: tuple[AlertPayload, _AlertInputs] | tuple[()] | None = None
+
+    def _alert_inputs(self, alert: AlertPayload) -> _AlertInputs:
+        """Template data shared by the Signal and e-mail channels; computed once per dispatch."""
+        if self._inputs_memo is None:
+            return self._build_alert_inputs(alert)
+        if not self._inputs_memo or self._inputs_memo[0] is not alert:
+            self._inputs_memo = (alert, self._build_alert_inputs(alert))
+        return self._inputs_memo[1]
+
+    def _build_alert_inputs(self, alert: AlertPayload) -> _AlertInputs:
+        old_factory = self.conn.row_factory
+        self.conn.row_factory = sqlite3.Row
+        try:
+            target_row = self.conn.execute(
+                """
+                SELECT t.name, t.host, g.name AS group_name, t.sla_enabled, t.sla_availability_pct,
+                       t.enable_ping, t.enable_http_check, t.enable_tcp_connect,
+                       t.enable_udp_scan, t.udp_ports,
+                       ts.uptime_percent
+                FROM targets t
+                LEFT JOIN groups g ON g.id = t.group_id
+                LEFT JOIN target_status ts ON ts.target_id = t.id
+                WHERE t.id = ?
+                """,
+                (alert.target_id,),
+            ).fetchone()
+        finally:
+            self.conn.row_factory = old_factory
+
+        if target_row:
+            if str(alert.failed_service or "").upper().startswith("CERT"):
+                check_type = "CERT"
+            else:
+                # Same rule as availability: UDP only counts once ports are configured.
+                enabled_checks = [
+                    service.upper()
+                    for service, flag, _metric in AVAILABILITY_CHECKS
+                    if availability_check_enabled(target_row, service, flag)
+                ]
+                check_type = " + ".join(enabled_checks) if enabled_checks else "N/A"
+            target_data = {
+                "name": target_row["name"] or alert.target_name,
+                "host": target_row["host"] or "N/A",
+                "group": target_row["group_name"] or "Default",
+                "check_type": check_type,
+            }
+        else:
+            target_data = {"name": alert.target_name, "host": "N/A", "group": "Default", "check_type": "N/A"}
+
+        alert_data: dict[str, Any] = {
+            "status": "RESOLVED" if alert.is_resolved else "OPEN",
+            "started_at": alert.started_at.isoformat() if alert.started_at else None,
+            "resolved_at": alert.ended_at.isoformat() if alert.ended_at else None,
+            "reason": alert.failed_service or "Unknown failure",
+            "downtime_minutes": (alert.duration_seconds // 60) if alert.duration_seconds else 0,
+            "system_url": target_url(
+                get_public_base_url(self.conn),
+                alert.target_id,
+                start=alert.started_at,
+                end=alert.ended_at,
+            ),
+        }
+        return target_data, alert_data, target_row
 
     def _render_signal_message(self, alert: AlertPayload) -> str:
         """Render Signal message from alert using configured template.
@@ -182,32 +219,7 @@ class NotificationDispatcher:
 
         template = load_signal_templates(self.conn)["up" if alert.is_resolved else "down"]
 
-        started_at_str = alert.started_at.isoformat() if alert.started_at else None
-        resolved_at_str = alert.ended_at.isoformat() if alert.ended_at else None
-
-        target_row = self.conn.execute(
-            "SELECT t.name, t.host, g.name AS group_name FROM targets t LEFT JOIN groups g ON g.id = t.group_id "
-            "WHERE t.id = ?",
-            (alert.target_id,),
-        ).fetchone()
-
-        target_data = {
-            "name": target_row["name"] if target_row else alert.target_name,
-            "host": target_row["host"] if target_row else "N/A",
-            "group": target_row["group_name"] if target_row else "Default",
-            "check_type": alert.failed_service or "N/A",
-        }
-
-        system_url = sqlite_db.get_setting(self.conn, SettingKeys.SYSTEM_BASE_URL, None) or "#"
-
-        alert_data = {
-            "status": "RESOLVED" if alert.is_resolved else "OPEN",
-            "started_at": started_at_str,
-            "resolved_at": resolved_at_str,
-            "reason": alert.failed_service or "Unknown",
-            "downtime_minutes": (alert.duration_seconds // 60) if alert.duration_seconds else 0,
-            "system_url": system_url,
-        }
+        target_data, alert_data, _ = self._alert_inputs(alert)
 
         context = build_alert_context(alert_data, target_data)
         return render_template(template, context, mode="plain_text")
@@ -221,6 +233,7 @@ class NotificationDispatcher:
         from .email_template import (
             build_alert_context,
             load_email_templates,
+            render_subject,
             render_template,
             resolve_sla_values,
         )
@@ -228,84 +241,31 @@ class NotificationDispatcher:
         stored = load_email_templates(self.conn)
         subject_template, html_template = stored["subject"], stored["html"]
 
-        started_at_str = alert.started_at.isoformat() if alert.started_at else None
-        resolved_at_str = alert.ended_at.isoformat() if alert.ended_at else None
-
-        old_factory = self.conn.row_factory
-        self.conn.row_factory = sqlite3.Row
-        try:
-            target_row = self.conn.execute(
-                """
-                SELECT t.name, t.host, g.name AS group_name, t.sla_enabled, t.sla_availability_pct,
-                       t.enable_ping, t.enable_http_check, t.enable_tcp_connect,
-                       ts.uptime_percent
-                FROM targets t
-                LEFT JOIN groups g ON g.id = t.group_id
-                LEFT JOIN target_status ts ON ts.target_id = t.id
-                WHERE t.id = ?
-                """,
-                (alert.target_id,),
-            ).fetchone()
-        finally:
-            self.conn.row_factory = old_factory
-
-        if target_row:
-            target_name = target_row["name"] or alert.target_name
-            target_host = target_row["host"] or "N/A"
-            group_name = target_row["group_name"] or "Default"
-            sla_enabled = bool(target_row["sla_enabled"])
-
-            if str(alert.failed_service or "").upper().startswith("CERT"):
-                check_type = "CERT"
-            else:
-                enabled_checks = []
-                if target_row["enable_http_check"]:
-                    enabled_checks.append("HTTP")
-                if target_row["enable_ping"]:
-                    enabled_checks.append("PING")
-                if target_row["enable_tcp_connect"]:
-                    enabled_checks.append("TCP")
-                check_type = " + ".join(enabled_checks) if enabled_checks else "N/A"
-        else:
-            target_name = alert.target_name
-            target_host = "N/A"
-            group_name = "Default"
-            check_type = "N/A"
-            sla_enabled = False
-
-        target_data = {
-            "name": target_name,
-            "host": target_host,
-            "group": group_name,
-            "check_type": check_type,
-        }
+        target_data, alert_data, target_row = self._alert_inputs(alert)
 
         # SLA data (per-target availability goal)
         sla_threshold_float, sla_actual = resolve_sla_values(
-            sla_enabled,
+            bool(target_row["sla_enabled"]) if target_row else False,
             target_row["sla_availability_pct"] if target_row else None,
             target_row["uptime_percent"] if target_row else None,
         )
-
-        system_url = sqlite_db.get_setting(self.conn, SettingKeys.SYSTEM_BASE_URL, None) or "#"
-
-        alert_data = {
-            "status": "RESOLVED" if alert.is_resolved else "OPEN",
-            "started_at": started_at_str,
-            "resolved_at": resolved_at_str,
-            "reason": alert.failed_service or "Unknown failure",
-            "downtime_minutes": (alert.duration_seconds // 60) if alert.duration_seconds else 0,
-            "sla_threshold": sla_threshold_float,
-            "sla_actual": sla_actual,
-            "system_url": system_url,
-        }
+        alert_data["sla_threshold"] = sla_threshold_float
+        alert_data["sla_actual"] = sla_actual
 
         context = build_alert_context(alert_data, target_data)
-        subject = render_template(subject_template, context)
+        subject = render_subject(subject_template, context)
         html_body = render_template(html_template, context)
         return subject, html_body
 
     def dispatch_alert(self, alert: AlertPayload) -> DispatchResult:
+        """Dispatch an alert; the shared template inputs are looked up at most once."""
+        self._inputs_memo = ()
+        try:
+            return self._dispatch_alert(alert)
+        finally:
+            self._inputs_memo = None
+
+    def _dispatch_alert(self, alert: AlertPayload) -> DispatchResult:
         """
         Dispatch an alert by enqueuing notifications for all recipients.
 
@@ -345,7 +305,7 @@ class NotificationDispatcher:
                 name=row["name"],
                 phone=row["phone"],
                 email=row["email"],
-                is_enabled=bool(row["is_enabled"]) if row["is_enabled"] is not None else False,
+                is_enabled=bool(row["is_enabled"]),
             )
             for row in recipient_rows
         ]

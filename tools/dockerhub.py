@@ -12,6 +12,7 @@ DOCKERHUB_REPOSITORY (default: justup); never from argv.
                                 listing is an error, never a partial result.
   delete [--verify] TAG...      delete tags; an absent tag is fine. --verify
                                 polls until Docker Hub stops serving the tag.
+  exists TAG                    print "present" or "absent"; any other answer is an error.
 Which tags to keep is decided by the workflow, not here.
 """
 
@@ -112,6 +113,16 @@ def delete_tag(namespace: str, repository: str, token: str, tag: str) -> bool:
     raise HubError(f"failed to delete '{tag}' (HTTP {status})")
 
 
+def tag_exists(namespace: str, repository: str, token: str, tag: str) -> bool:
+    """True if the tag is served, False on 404; any other status is an error (fail closed)."""
+    status, _ = _get(f"{_tags_url(namespace, repository)}/{tag}", token)
+    if status == 200:
+        return True
+    if status == 404:
+        return False
+    raise HubError(f"failed to look up '{tag}' (HTTP {status})")
+
+
 def wait_for_tag_absent(namespace: str, repository: str, token: str, tag: str) -> None:
     for _ in range(VERIFY_ATTEMPTS):
         status, _ = _request("GET", f"{_tags_url(namespace, repository)}/{tag}", token)
@@ -125,14 +136,19 @@ def wait_for_tag_absent(namespace: str, repository: str, token: str, tag: str) -
 
 def main(argv: list[str]) -> int:
     args = argv[1:]
-    if not args or args[0] not in ("list", "delete"):
+    if not args or args[0] not in ("list", "delete", "exists"):
         print(__doc__, file=sys.stderr)
         return 1
     command = args[0]
     flags = [a for a in args[1:] if a.startswith("--")]
     rest = [a for a in args[1:] if not a.startswith("--")]
-    allowed = {"list": {"--allow-missing-repo"}, "delete": {"--verify"}}[command]
-    if set(flags) - allowed or (command == "list" and rest) or (command == "delete" and not rest):
+    allowed = {"list": {"--allow-missing-repo"}, "delete": {"--verify"}, "exists": set()}[command]
+    if (
+        set(flags) - allowed
+        or (command == "list" and rest)
+        or (command == "delete" and not rest)
+        or (command == "exists" and len(rest) != 1)
+    ):
         print(__doc__, file=sys.stderr)
         return 1
     try:
@@ -144,6 +160,9 @@ def main(argv: list[str]) -> int:
             tags = list_tags(namespace, repository, token, "--allow-missing-repo" in flags)
             for tag in tags:
                 print(tag)
+            return 0
+        if command == "exists":
+            print("present" if tag_exists(namespace, repository, token, rest[0]) else "absent")
             return 0
         for tag in rest:
             if delete_tag(namespace, repository, token, tag):

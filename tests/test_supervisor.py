@@ -423,6 +423,49 @@ def test_repeated_hangs_degrade_and_only_a_long_clean_run_recovers():
     assert recovered["hangs_in_window"] == 0
 
 
+def test_failure_during_the_recovery_window_restarts_it():
+    policy = SupervisionPolicy(
+        jitter=0.0, check_interval=0.01, stable_after=20.0, hang_recovery_after=60.0, degraded_retry=300.0
+    )
+
+    async def scenario():
+        sup, clock, _delays = _make(policy)
+        starts = 0
+
+        async def run():
+            nonlocal starts
+            starts += 1
+            while True:
+                if starts <= 3:
+                    await asyncio.Event().wait()
+                sup.heartbeat("svc")
+                await asyncio.sleep(0.001)
+
+        sup.add(ServiceSpec("svc", run, heartbeat_timeout=10.0))
+        for n in (1, 2, 3):
+            await _until(lambda n=n: starts == n)
+            clock.now += 11
+        await _until(lambda: starts == 4)
+        for _ in range(8):  # 40s into the run, then a failed iteration
+            clock.now += 5
+            await asyncio.sleep(0.03)
+        sup.report_failure("svc", "OSError")
+        for _ in range(8):  # 80s of uptime, but only 40s since the failure
+            clock.now += 5
+            await asyncio.sleep(0.03)
+        early = sup.snapshot()["svc"]
+        for _ in range(8):  # 80s since the failure
+            clock.now += 5
+            await asyncio.sleep(0.03)
+        late = sup.snapshot()["svc"]
+        await sup.stop()
+        return early, late
+
+    early, late = asyncio.run(scenario())
+    assert early["hangs_in_window"] == 3 and early["state"] == ServiceState.DEGRADED.value
+    assert late["hangs_in_window"] == 0 and late["state"] == ServiceState.RUNNING.value
+
+
 def test_heartbeat_keeps_a_busy_service_alive():
     async def scenario():
         sup, clock, _delays = _make()
@@ -599,6 +642,30 @@ def test_scheduler_run_bumps_the_epoch_per_restart(tmp_path: Path):
 
     asyncio.run(scenario())
     assert sched._run_epoch == 2
+
+
+@pytest.mark.parametrize("entrypoint", ["run", "start"])
+def test_scheduler_run_registration_stays_off_the_event_loop(tmp_path: Path, entrypoint: str):
+    sched = _scheduler(tmp_path)
+    loop_thread = threading.get_ident()
+    registration_threads: list[int] = []
+    sched._register_run = lambda: registration_threads.append(threading.get_ident())
+
+    async def scenario():
+        if entrypoint == "run":
+            sched.request_stop()
+            await sched.run()
+        else:
+            sched.start()
+            task = sched._task
+            sched.request_stop()
+            await task
+
+    asyncio.run(scenario())
+    assert len(registration_threads) == 1
+    assert registration_threads[0] != loop_thread
+    assert sched._run_epoch == 1
+    assert sched._task is None
 
 
 def test_abandoned_run_cannot_pass_itself_off_as_the_current_run(tmp_path: Path):

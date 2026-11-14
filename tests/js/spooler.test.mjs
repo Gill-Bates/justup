@@ -9,7 +9,9 @@ import test from "node:test";
 import vm from "node:vm";
 
 const src = readFileSync(new URL("../../app/static/js/settings.spooler.js", import.meta.url), "utf8");
+const statusBadgeSrc = readFileSync(new URL("../../app/static/js/utils/status-badge.js", import.meta.url), "utf8");
 
+const parseUtcTimestamp = (() => { const w = {}; vm.runInNewContext(readFileSync(new URL("../../app/static/js/utils/utc-time.js", import.meta.url), "utf8"), { window: w }); return w.parseUtcTimestamp; })();
 function makeEl(extra = {}) {
   const listeners = {};
   return {
@@ -31,6 +33,7 @@ function build() {
   const ctx = vm.createContext({
     console: { error() {} },
     escapeHtml: (s) => String(s),
+    parseUtcTimestamp,
     URLSearchParams,
     AbortController,
     setInterval: (fn) => { intervals.set(nextTimer, fn); return nextTimer++; },
@@ -43,6 +46,7 @@ function build() {
     confirm: () => true,
   });
   ctx.window = ctx;
+  vm.runInContext(statusBadgeSrc, ctx);
   ctx.document = { getElementById: (id) => dom[id] ?? null, querySelectorAll: () => [] };
   const fragment = () => {
     dom = {};
@@ -128,23 +132,23 @@ test("log timestamps preserve existing UTC and non-UTC offsets", async () => {
 test("failed handoffs with an empty active queue are not shown as healthy", async () => {
   const h = build();
   const dom = h.fragment();
-  for (const id of ["spooler-health", "spooler-health-icon", "spooler-health-text"]) dom[id] = makeEl();
+  for (const id of ["spooler-health", "spooler-health-dot", "spooler-health-text"]) dom[id] = makeEl();
   vm.runInContext(src, h.ctx);
   h.ctx._initSpoolerTab();
   const stats = h.requests.filter((r) => r.url.includes("/stats")).at(-1);
   stats.resolve({ ok: true, json: async () => ({ pending: 0, processing: 0, failed: 3, failed_recent: 3, sent: 5, channels: {}, cooldowns: [] }) });
   await new Promise((resolve) => setImmediate(resolve));
   assert.match(dom["spooler-health-text"].textContent, /3 handoff failure/);
-  assert.equal(dom["spooler-health-icon"].textContent, "error_outline");
-  assert.match(dom["spooler-health"].className, /text-danger/);
+  assert.match(dom["spooler-health-dot"].className, /ju-status-dot--danger/);
+  assert.equal(dom["spooler-health-dot"].textContent, "");
 });
 test("old failures outside the 24 h window do not turn the state red", () => {
   const h = build();
   h.fragment();
   vm.runInContext(src, h.ctx);
   const { healthState } = h.ctx._spoolerInternals;
-  assert.match(healthState({ pending: 0, processing: 0, failed: 3, failed_recent: 0, cooldowns: [] }).tone, /body-secondary/);
-  assert.match(healthState({ failed: 3, cooldowns: [] }).tone, /danger/);
+  assert.match(healthState({ pending: 0, processing: 0, failed: 3, failed_recent: 0, cooldowns: [] }).tone, /neutral/);
+  assert.match(healthState({ failed: 3, cooldowns: [] }).tone, /^danger$/);
   assert.match(healthState({ failed_recent: 0, max_retry_count: 2, cooldowns: [] }).text, /retried/);
 });
 test("status labels say accepted/handoff and never claim delivery", () => {
@@ -152,10 +156,59 @@ test("status labels say accepted/handoff and never claim delivery", () => {
   h.fragment();
   vm.runInContext(src, h.ctx);
   const { statusBadge } = h.ctx._spoolerInternals;
-  assert.match(statusBadge("sent", 0), /Accepted by server/);
-  assert.match(statusBadge("sent", 0), /not verifiable/);
+  for (const status of ["sent", "pending", "failed", "processing", "other"]) assert.doesNotMatch(statusBadge(status, 1), /material-icons|<i\b|<svg/, "a status badge holds no icon");
+  assert.match(statusBadge("sent", 0), />\s*Sent<\/span>$/);
+  assert.doesNotMatch(statusBadge("sent", 0), /title=/);
   assert.match(statusBadge("pending", 0), /Waiting for handoff/);
   assert.match(statusBadge("pending", 2), /Retrying handoff/);
   assert.match(statusBadge("failed", 3), /Handoff failed/);
   for (const status of ["sent", "pending", "failed", "processing"]) assert.doesNotMatch(statusBadge(status, 1), /[Dd]elivered/);
+});
+
+test("channel column is icon-only with an accessible name", () => {
+  const h = build();
+  h.fragment();
+  vm.runInContext(src, h.ctx);
+  const { channelIcon } = h.ctx._spoolerInternals;
+  for (const [type, icon, name] of [["email", "email", "Email"], ["signal", "chat", "Signal"]]) {
+    const html = channelIcon(type);
+    assert.match(html, new RegExp(`title="${name}"`));
+    assert.match(html, new RegExp(`aria-hidden="true">${icon}</span>`));
+    assert.match(html, new RegExp(`<span class="visually-hidden">${name}</span>`));
+    assert.equal(html.replace(/<[^>]*>/g, "").replace(icon, "").replace(name, ""), "", "no further visible text");
+  }
+});
+
+test("status label 'Sent' is used in the template and 'Accepted by server' is gone", () => {
+  const tpl = readFileSync(new URL("../../app/templates/settings/spooler.html", import.meta.url), "utf8");
+  assert.match(tpl, /<option value="sent">Sent<\/option>/);
+  assert.match(tpl, /text-uppercase">Sent<\/div>/);
+  assert.doesNotMatch(tpl + src, /Accepted by server/);
+});
+
+test("a log page beyond the shrunken total reloads the last valid page once", async () => {
+  const h = build();
+  const dom = h.fragment();
+  let onPageClick = null;
+  dom["spooler-pagination"].querySelectorAll = () => [{
+    getAttribute: () => "2",
+    addEventListener: (type, fn) => { onPageClick = fn; },
+  }];
+  vm.runInContext(src, h.ctx);
+  h.ctx._initSpoolerTab();
+  const logs = () => h.requests.filter((r) => r.url.includes("/log"));
+  const tick = () => new Promise((r) => setImmediate(r));
+  const entry = { notification_type: "alert", status: "sent", channel_type: "email", recipient_address: "ops@example", retry_count: 0 };
+  logs().at(-1).resolve({ ok: true, json: async () => ({ total: 150, entries: [entry] }) });
+  await tick();
+  onPageClick.call({ getAttribute: () => "2" }, { preventDefault() {} });
+  assert.match(logs().at(-1).url, /offset=100/);
+  logs().at(-1).resolve({ ok: true, json: async () => ({ total: 10, entries: [] }) });
+  await tick();
+  assert.match(logs().at(-1).url, /offset=0/);
+  const count = logs().length;
+  logs().at(-1).resolve({ ok: true, json: async () => ({ total: 10, entries: [entry] }) });
+  await tick();
+  assert.equal(logs().length, count, "no further reload");
+  assert.match(dom["spooler-log-body"].innerHTML, /ops@example/);
 });

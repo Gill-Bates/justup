@@ -23,6 +23,7 @@ import asyncio
 import ipaddress
 import logging
 import threading
+import time
 import warnings
 from concurrent.futures import Future, ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeout
@@ -421,15 +422,38 @@ def _run_sslyze(host: str, port: int, ip: str, sni: str | None, timeout: int) ->
     return normalize_scan_result(result, host, port, ip, datetime.now(UTC))
 
 
-def _resolve_and_scan(target: str, label: str, timeout: int) -> TlsScanResult:
-    """Worker body: resolve and SSRF-check once, then scan the pinned IP (DNS-pinning kept)."""
+MAX_ADDRESS_ATTEMPTS = 4
+
+
+def _scan_candidates(resolved, timeout: int, deadline_at: float | None = None) -> TlsScanResult:
+    """Scan the validated addresses in resolver order; only a failed connection moves to the next one.
+
+    No DNS lookup happens here. Each attempt keeps the per-connection ``timeout`` but is clamped to the
+    time left until ``deadline_at`` (monotonic), and no attempt starts once that time is used up.
+    """
+    host, port = resolved.hostname, resolved.port
+    result: TlsScanResult | None = None
+    for ip in resolved.addresses[:MAX_ADDRESS_ATTEMPTS]:
+        attempt_timeout = timeout
+        if deadline_at is not None:
+            remaining = deadline_at - time.monotonic()
+            if remaining <= 0:
+                break
+            attempt_timeout = max(1, min(timeout, int(remaining)))
+        result = _run_sslyze(host, port, str(ip), host, attempt_timeout)
+        if result.status is not ScanStatus.FAILED:
+            return result
+    return result or _failed_result(host, port, "scan deadline exhausted before a connection was attempted")
+
+
+def _resolve_and_scan(target: str, label: str, timeout: int, deadline_at: float | None = None) -> TlsScanResult:
+    """Worker body: resolve and SSRF-check once, then scan the pinned, validated addresses."""
     try:
         resolved = resolve_target(target)
     except TlsTargetError as exc:
         _log.warning("TLS scan refused for %s: %s", label, exc)
         return _failed_result(label, 0, str(exc))
-    host, port, ip = resolved.hostname, resolved.port, str(resolved.ip_address)
-    return _run_sslyze(host, port, ip, host, timeout)
+    return _scan_candidates(resolved, timeout, deadline_at)
 
 
 def scan_tls(target: str, timeout: int = 10, deadline: float = DEFAULT_DEADLINE_SECONDS) -> TlsScanResult:
@@ -443,7 +467,9 @@ def scan_tls(target: str, timeout: int = 10, deadline: float = DEFAULT_DEADLINE_
         _log.warning("TLS scan of %s rejected: %d scans already pending", label, MAX_PENDING_SCANS)
         return _failed_result(label, 0, "scanner busy: too many scans pending, try again later")
     try:
-        future: Future[TlsScanResult] = _executor().submit(_resolve_and_scan, target, label, timeout)
+        future: Future[TlsScanResult] = _executor().submit(
+            _resolve_and_scan, target, label, timeout, time.monotonic() + deadline
+        )
     except BaseException:
         _admission.release()
         raise

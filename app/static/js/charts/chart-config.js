@@ -9,6 +9,10 @@
  * @module charts/chart-config
  */
 
+// Compact viewport for chart point density: the 576 px compact-header breakpoint of DC-BP-1 (width <= 576px).
+const COMPACT_VIEWPORT_MAX = 576;
+// Chart width in px (a container measure, not a viewport breakpoint) below which the legend moves to the bottom.
+const LEGEND_BOTTOM_MAX_CHART_WIDTH = 768;
 // SLA annotation styling
 const SLA_LINE_COLOR = "#f0ad4e";
 const SLA_LINE_WIDTH = 2;
@@ -27,6 +31,61 @@ function formatCompactAxisValue(value) {
   );
 }
 
+/**
+ * One place for chart units. Axis ticks, tooltips and descriptions read the unit from here,
+ * so a metric never gets its unit from a per-chart literal.
+ */
+const CHART_UNITS = Object.freeze({
+  ms: Object.freeze({ suffix: "ms", axisTitle: "Response time (ms)" }),
+  percent: Object.freeze({ suffix: "%", axisTitle: "Percent (%)" }),
+  checks: Object.freeze({ suffix: "checks", axisTitle: "Checks" }),
+  score: Object.freeze({ suffix: "pts", axisTitle: "Quality score (0-100)" }),
+});
+/** "123 ms": value plus the unit suffix of the metric. */
+function formatChartValue(unit, value) {
+  const def = CHART_UNITS[unit];
+  return def ? value + " " + def.suffix : String(value);
+}
+/** Axis tick: compact number; carries the unit itself when the axis title is hidden. */
+function formatChartTick(unit, value, withUnit) {
+  const text = formatCompactAxisValue(value);
+  const def = CHART_UNITS[unit];
+  return withUnit && def && text !== "" ? text + " " + def.suffix : text;
+}
+/** Locale number formatter shared by chart counts and shares (same locale as the axis ticks). */
+function formatChartCount(value) {
+  return new Intl.NumberFormat(navigator.language || "en").format(value);
+}
+/**
+ * Shares of a total in 0.1 % steps whose sum is exactly 100 % (largest-remainder rounding).
+ * @param {number[]} counts
+ * @returns {number[]} fractions (0..1) in the order of the input
+ */
+function chartShares(counts) {
+  const total = counts.reduce((sum, c) => sum + c, 0);
+  if (!(total > 0)) return counts.map(() => 0);
+  const exact = counts.map((c) => (c / total) * 1000);
+  const tenths = exact.map(Math.floor);
+  let rest = 1000 - tenths.reduce((sum, t) => sum + t, 0);
+  exact
+    .map((value, index) => ({ index, frac: value - Math.floor(value) }))
+    .sort((a, b) => b.frac - a.frac || a.index - b.index)
+    .forEach((item) => {
+      if (rest > 0) {
+        tenths[item.index] += 1;
+        rest -= 1;
+      }
+    });
+  return tenths.map((t) => t / 1000);
+}
+/** "97,5 %" / "97.5%" in the page locale, one decimal. */
+function formatChartShare(fraction) {
+  return new Intl.NumberFormat(navigator.language || "en", {
+    style: "percent",
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1,
+  }).format(fraction);
+}
 /**
  * Scriptable fill: vertical gradient from the line color down to transparent.
  * Resolved lazily because chartArea is unavailable until the first layout pass.
@@ -61,8 +120,8 @@ function createZoomOptions(onComplete) {
     zoom: {
       drag: {
         enabled: true,
-        backgroundColor: "rgba(13, 110, 253, 0.2)",
-        borderColor: "rgba(13, 110, 253, 0.8)",
+        backgroundColor: withAlpha(getCssVar("--bs-primary", "#0d6efd"), 0.2),
+        borderColor: withAlpha(getCssVar("--bs-primary", "#0d6efd"), 0.8),
         borderWidth: 1,
       },
       mode: "x",
@@ -126,7 +185,7 @@ function createSlaAnnotation(slaConfig, value, label) {
  */
 function createLineConfig(theme, zoomOpts, getVisibleRangeMs) {
   // Locale-aware axis formatters
-  const userLocale = navigator.language || "de-DE";
+  const userLocale = navigator.language || "en";
 
   // Read lazily: pageConfig is filled after this module loads (UTC display setting).
   function tzOptions() {
@@ -252,3 +311,9 @@ window.createAreaGradient = createAreaGradient;
 window.createZoomOptions = createZoomOptions;
 window.createSlaAnnotation = createSlaAnnotation;
 window.formatCompactAxisValue = formatCompactAxisValue;
+window.CHART_UNITS = CHART_UNITS;
+window.formatChartValue = formatChartValue;
+window.formatChartTick = formatChartTick;
+window.formatChartCount = formatChartCount;
+window.chartShares = chartShares;
+window.formatChartShare = formatChartShare;

@@ -23,6 +23,7 @@ services:
       LOG_LEVEL: INFO
       SECRET_KEY: ${SECRET_KEY:?Set a persistent key for justUp}
       SECRET_KEYS: ${SECRET_KEYS:-}
+      TRUSTED_PROXIES: ${UPMON_TRUSTED_PROXIES:-}
     volumes:
       - ./:/app/data
     tmpfs:
@@ -51,9 +52,9 @@ docker compose --env-file .env -f docker/docker-compose.yml up -d
     cannot be decrypted and all sessions end, because the session-token hashes
     are keyed with it. Mount the data volume persistently as well.
 
-!!! warning "Behind a reverse proxy, set UPMON_TRUSTED_PROXIES"
-    Add `UPMON_TRUSTED_PROXIES` with the proxy address as the container sees it.
-    Without it, the login rate limit and audit log record the proxy IP for every
+!!! warning "Behind a reverse proxy, set TRUSTED_PROXIES"
+    Set `UPMON_TRUSTED_PROXIES` (the Compose file passes it on as `TRUSTED_PROXIES`)
+    to the proxy address as the container sees it. Without it, the login rate limit and audit log record the proxy IP for every
     client. See [Reverse proxy](../configuration/reverse-proxy.md).
 
 ## Shutdown
@@ -64,8 +65,15 @@ after 10 s. After a hard kill, SQLite recovers its WAL on the next start.
 
 ## Ping and traceroute
 
-`ping` and `mtr` need `cap_net_raw`. The image sets it on the binaries, and the
-Compose file adds `NET_RAW` back to the capability set.
+`ping` needs `cap_net_raw`; the image sets it on the binary. Traceroute runs in the
+Nmap worker with `--privileged` and raw sockets, which also need `NET_RAW`. The Compose
+file adds `NET_RAW` back to the capability set.
+
+## UDP scans and the Nmap worker
+
+UDP monitoring and port discovery use Nmap, which is built into the image. A separate worker
+process holds `NET_RAW` for it; the web process does not. See
+[Network monitoring with Nmap](../features/network-monitoring.md#linux-capabilities).
 
 ## Container hardening
 
@@ -92,3 +100,25 @@ docker logs -f justup
 
 Uvicorn access lines appear only at `LOG_LEVEL=DEBUG`. The initial admin password
 is printed to the container output, so restrict access to the Docker logs.
+
+## IPv4 and IPv6
+
+- **Incoming**: the container listens on one address family, set by `JUSTUP_HOST`
+  (`0.0.0.0` = IPv4, the default; `::` = IPv6 only). See
+  [Environment variables](../configuration/environment.md#server-and-network). The supplied
+  Compose file publishes no port and enables no IPv6 on the Docker network; both are your choice.
+- **Outgoing**: monitors use the address families the container can route. Docker's default
+  bridge network has no IPv6 route unless you enable IPv6 on the network. Without a global
+  IPv6 route, IPv6 targets fail with `network unreachable` (TCP, certificate), `unreachable`
+  (ping) or `All connection attempts failed` (HTTP), as observed without a global IPv6 route
+  on the test host.
+- **Which address a monitor uses** for a host name with both A and AAAA records: the public-DNS
+  lookup (1.1.1.1, 9.9.9.9) asks A before AAAA, then the system resolver's addresses follow.
+  Ping and TCP checks try up to four validated addresses in order; HTTP checks try their
+  validated candidates in order. TLS scans try up to four validated addresses within the
+  whole-scan deadline.
+  An IPv6 literal target is used as given.
+- **Seen by others**: the container's address on the Docker bridge (for example 172.x) is not
+  what remote services see. Settings > Network > *Public outbound IPs* shows the address
+  that external services observe; see
+  [Public outbound IPs](../features/network-monitoring.md#public-outbound-ips).

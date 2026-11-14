@@ -15,6 +15,7 @@ from collections.abc import Iterable
 from typing import Any, NamedTuple
 
 from .schema import SCHEMA_DRIFT, SCHEMA_VERSION, IncompatibleSchemaError, _create_baseline_schema
+from .schema_v1 import V1_DDL
 
 
 class _TableShape(NamedTuple):
@@ -37,10 +38,9 @@ _Layout = tuple[dict[str, _TableShape], dict[str, _IndexShape]]
 
 
 # Documented historical variants that stay accepted although they differ from the baseline DDL:
-# - alerts.active_incident: ALTER TABLE in migration 3 cannot change a default later, so upgraded
-#   databases carry DEFAULT 0 while new ones carry DEFAULT 1. Every writer sets the column
-#   explicitly (create_alert inserts 1, resolve/acknowledge/deactivate set 0), so it never applies.
-# - idx_recipients_phone: a v1 database may keep the non-unique/non-partial index while duplicate
+# - alerts.active_incident: former version-10 databases may carry DEFAULT 0 while the new baseline
+#   carries DEFAULT 1. Every writer sets the column explicitly, so the default never applies.
+# - idx_recipients_phone: a former-current database may keep the non-unique/non-partial index while duplicate
 #   phone numbers exist (_ensure_unique_recipient_phone); only its table and columns are compared.
 _TOLERATED_COLUMN_DEFAULTS: dict[tuple[str, str], frozenset[str]] = {
     ("alerts", "active_incident"): frozenset({"0", "1"}),
@@ -48,6 +48,10 @@ _TOLERATED_COLUMN_DEFAULTS: dict[tuple[str, str], frozenset[str]] = {
 
 
 _TOLERATED_INDEX_VARIANTS = frozenset({"idx_recipients_phone"})
+
+
+# Stored versions whose layout is the frozen version-1 layout (1 itself and the former-current stamp 10).
+_VERSION1_LAYOUT_STAMPS = frozenset({1, 10})
 
 
 _SQLITE_CORRUPT_CODES = frozenset({11, 26})  # SQLITE_CORRUPT, SQLITE_NOTADB
@@ -189,6 +193,48 @@ def _expected_layout() -> _Layout:
         reference.close()
 
 
+@functools.cache
+def _version1_layout() -> _Layout:
+    """Table and index structure of schema version 1 (also the former version-10 stamp), from its frozen DDL."""
+    reference = sqlite3.connect(":memory:")
+    try:
+        for statement in V1_DDL:
+            reference.execute(statement)
+        return _layout(reference)
+    finally:
+        reference.close()
+
+
+def normalise_trigger_sql(sql: str | None) -> str:
+    """Comparable form of a stored trigger definition (case, spacing and ``IF NOT EXISTS`` are irrelevant)."""
+    return _normalise_sql(re.sub(r"\bIF\s+NOT\s+EXISTS\b", "", sql or "", flags=re.IGNORECASE))
+
+
+@functools.cache
+def _expected_triggers() -> dict[str, str]:
+    reference = sqlite3.connect(":memory:")
+    try:
+        _create_baseline_schema(reference)
+        return {
+            name: normalise_trigger_sql(sql)
+            for name, sql in reference.execute("SELECT name, sql FROM sqlite_schema WHERE type = 'trigger'")
+        }
+    finally:
+        reference.close()
+
+
+def expected_triggers() -> dict[str, str]:
+    """Triggers the current schema defines (name -> normalised definition); anything else is foreign."""
+    return dict(_expected_triggers())
+
+
+def _layout_for_version(version: int) -> _Layout:
+    """Expected layout of a stored schema version: the frozen version-1 layout for 1 and 10, else the current."""
+    if version != SCHEMA_VERSION and version in _VERSION1_LAYOUT_STAMPS:
+        return _version1_layout()
+    return _expected_layout()
+
+
 def _describe_column(column: tuple[str, int, str | None, int]) -> str:
     type_, notnull, default, pk = column
     return " ".join(
@@ -277,12 +323,14 @@ def _layout_problems(conn: sqlite3.Connection) -> list[str]:
     return _diff_layout(_layout(conn), _expected_layout())
 
 
-def _drift_error(conn: sqlite3.Connection, version: int, diffs: list[str]) -> IncompatibleSchemaError:
+def _drift_error(
+    conn: sqlite3.Connection, version: int, diffs: list[str], *, expected_version: int = SCHEMA_VERSION
+) -> IncompatibleSchemaError:
     shown = "; ".join(diffs[:_MAX_REPORTED_DIFFS]) + (
         f"; ... (+{len(diffs) - _MAX_REPORTED_DIFFS} more)" if len(diffs) > _MAX_REPORTED_DIFFS else ""
     )
     return IncompatibleSchemaError(
-        f"Cannot use database {_database_file(conn)}: its layout differs from schema version {SCHEMA_VERSION} "
+        f"Cannot use database {_database_file(conn)}: its layout differs from schema version {expected_version} "
         f"(stored version {version}): {shown}. Column order is not compared. {_SAFE_HINT}",
         kind=SCHEMA_DRIFT,
         version=version,

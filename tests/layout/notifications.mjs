@@ -40,7 +40,7 @@ const VIEWPORTS = [
 	{ name: "1280x720", w: 1280, h: 720, dsf: 1 },
 	{ name: "390x844", w: 390, h: 844, dsf: 1 },
 	{ name: "320x640", w: 320, h: 640, dsf: 1 },
-	{ name: "1280x720@200%", w: 640, h: 360, dsf: 2 },
+	{ name: "1280x720-effective-zoom-200pct", w: 640, h: 360, dsf: 2 }, // viewport proxy for zoom: 640x360 CSS px at DPR 2
 ];
 const THEMES = ["light", "dark"];
 // Rows whose hover surface is measured: unread button row, download link and (error) link row.
@@ -157,7 +157,7 @@ function measureRows(hoverBackgroundProbe) {
 				unread: item.classList.contains("is-unread"),
 				actionable: content.classList.contains("is-actionable"),
 				item: rect(item), content: rect(content), title: rect(title), titleText: rect(titleText),
-				badge: rect(q(".ju-notif-title .badge")), body: rect(q(".ju-notif-body")), context: rect(context),
+				badge: rect(q(".ju-notif-title .ju-notif-status")), body: rect(q(".ju-notif-body")), context: rect(context),
 				unavailable: rect(unavailable), icon: rect(unavailable && unavailable.querySelector(".material-icons")),
 				label: rect(labelRange), time: rect(q(".ju-notif-time")), dismiss: rect(q(".ju-notif-dismiss-action")),
 				dismissButtonVisible: (() => {
@@ -168,8 +168,12 @@ function measureRows(hoverBackgroundProbe) {
 				})(),
 				itemScrollOverflow: item.scrollWidth - item.clientWidth,
 				contentBg: bg, backgroundImage: style(content, "backgroundImage"),
-				badgeBg: q(".ju-notif-title .badge") ? rgba(style(q(".ju-notif-title .badge"), "backgroundColor")) : null,
+				severityBadge: Boolean(q(".ju-notif-title .badge")),
+				severityDot: Boolean(q(".ju-notif-title .ju-status-item .ju-status-dot")),
+				severityDotBg: q(".ju-notif-title .ju-status-dot") ? rgba(style(q(".ju-notif-title .ju-status-dot"), "backgroundColor")) : null,
 				borderLeft: style(item, "borderLeftColor"), outlineStyle: style(content, "outlineStyle"), outlineWidth: style(content, "outlineWidth"),
+				outlineColor: style(content, "outlineColor"), outlineOffset: style(content, "outlineOffset"),
+				focusRing: (() => { const probe = document.createElement("i"); probe.style.color = "var(--ju-focus-ring)"; document.body.append(probe); const colour = getComputedStyle(probe).color; probe.remove(); return colour; })(),
 				titleContrast: textColor(titleText), contextContrast: textColor(context || unavailable),
 				contextTitleAttr: context ? context.getAttribute("title") === context.textContent : null,
 				contextClipped: context ? context.scrollWidth > context.clientWidth + 1 : null,
@@ -236,6 +240,8 @@ function geometryFindings(snapshot, narrow, revealed) {
 		}
 		if (spec.expect === "unavailable" && !row.unavailable) add("unavailable-missing", index, "no status line");
 		if (spec.expect !== "unavailable" && row.unavailable) add("unavailable-unexpected", index, row.unavailableText);
+		if (spec.expect === "link" && row.kind !== "link") add("target-link-missing", index, row.kind);
+		if (spec.expect === "none" && (row.kind === "link" || row.kind === "download")) add("unexpected-link", index, row.kind);
 		if (spec.expect === "download" && row.kind !== "download") add("download-link-missing", index, row.kind);
 		if (spec.expect === "unavailable" && (row.kind === "download" || row.kind === "link")) add("dead-link", index, row.kind);
 		if (row.time) { timeRights.push(row.time.right); timeTops.push(row.time.top - row.item.top); }
@@ -254,8 +260,10 @@ function geometryFindings(snapshot, narrow, revealed) {
 
 function stateFindings(snapshot, hovered) {
 	const findings = [];
-	const same = (a, b) => a.r === b.r && a.g === b.g && a.b === b.b;
+	const same = (a, b) => a === b || (a !== null && b !== null && a.r === b.r && a.g === b.g && a.b === b.b);
 	snapshot.rows.forEach((row, index) => {
+		// DC-STATE-1 / DC-NOTIF-3: event severity (S4) is a status dot with its word, never a badge.
+		if (row.severityBadge || !row.severityDot) findings.push({ type: "severity-not-a-dot", row: index, detail: `badge=${row.severityBadge} dot=${row.severityDot}` });
 		for (const [name, value] of [["title", row.titleContrast], ["secondary", row.contextContrast]]) {
 			if (value !== null && value < MIN_TEXT_CONTRAST) findings.push({ type: "text-contrast", row: index, detail: `${name} ${value.toFixed(2)}` });
 		}
@@ -267,7 +275,7 @@ function stateFindings(snapshot, hovered) {
 		if (same(row.contentBg, rest.rows[index].contentBg)) findings.push({ type: "hover-unchanged", row: index, detail: "no visible hover surface" });
 		if (row.hue.s > 0.1 && row.hue.h >= 15 && row.hue.h <= 75) findings.push({ type: "hover-warm-colour", row: index, detail: JSON.stringify(row.hue) });
 		const before = rest.rows[index];
-		if (!same(row.badgeBg, before.badgeBg)) findings.push({ type: "hover-changed-badge", row: index, detail: "severity badge colour" });
+		if (!same(row.severityDotBg, before.severityDotBg)) findings.push({ type: "hover-changed-severity-dot", row: index, detail: "severity dot colour" });
 		if (row.borderLeft !== before.borderLeft) findings.push({ type: "hover-changed-indicator", row: index, detail: `${before.borderLeft} -> ${row.borderLeft}` });
 		if (row.backgroundImage !== before.backgroundImage) findings.push({ type: "hover-changed-severity-tint", row: index, detail: "background-image" });
 		if (before.unread !== row.unread) findings.push({ type: "hover-changed-unread", row: index, detail: "unread" });
@@ -320,6 +328,8 @@ async function auditNotificationRows(page, app, browserName, viewport) {
 			const focused = await snapshotRows(page);
 			const focusedRow = focused.rows[0];
 			if (focusedRow.outlineStyle === "none" || parseFloat(focusedRow.outlineWidth) < 2) findings.push(...tag([{ type: "focus-indicator-missing", row: 0, detail: `${focusedRow.outlineStyle} ${focusedRow.outlineWidth}` }], `${theme}/focus`));
+			// DC-FOCUS-6 variant V3: the shared neutral ring, drawn inside the clipping row (negative offset).
+			if (focusedRow.outlineStyle !== "none" && (focusedRow.outlineColor !== focusedRow.focusRing || parseFloat(focusedRow.outlineOffset) >= 0)) findings.push(...tag([{ type: "focus-indicator-variant", row: 0, detail: `colour ${focusedRow.outlineColor} (ring ${focusedRow.focusRing}), offset ${focusedRow.outlineOffset}` }], `${theme}/focus`));
 			// Swipe reveal (touch pointer events) on a row; the content narrows and delete stays reachable.
 			await page.mouse.move(0, 0);
 			await page.evaluate(() => {
@@ -380,7 +390,9 @@ async function auditNotificationBehaviour(page, app, browserName) {
 		const button = second.locator(".ju-notif-dismiss-button");
 		assert.ok(await button.evaluate((el) => el === document.activeElement), `${browserName}: Tab reaches the delete button`);
 		assert.ok(await second.evaluate((el) => el.classList.contains("is-dismiss-revealed")), `${browserName}: focus reveals the delete action`);
-		const title = await second.locator(".ju-notif-title").innerText();
+		// Same property before and after the reload: innerText vs textContent would never be equal.
+		const title = (await second.locator(".ju-notif-title-text").textContent()).trim();
+		assert.ok(title, `${browserName}: the dismissed row has a title`);
 		assert.match(await button.getAttribute("aria-label"), /^Delete notification: /);
 		const dismissal = page.waitForResponse((response) =>
 			response.url().includes("/ui/notifications/")
@@ -391,7 +403,7 @@ async function auditNotificationBehaviour(page, app, browserName) {
 		assert.equal((await dismissal).status(), 200, `${browserName}: keyboard dismissal response`);
 		await page.waitForSelector("#np-list > .ju-notif-item");
 		await reload;
-		const titles = await rows.locator(".ju-notif-title").allTextContents();
+		const titles = (await rows.locator(".ju-notif-title-text").allTextContents()).map((text) => text.trim());
 		assert.ok(!titles.includes(title), `${browserName}: keyboard dismissal must persist after reload`);
 }
 

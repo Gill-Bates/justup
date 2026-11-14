@@ -26,6 +26,7 @@ from .api import frontend as frontend_ui
 from .api import groups as groups_api
 from .api import health as health_api
 from .api import metrics as metrics_api
+from .api import network_scans as network_scans_api
 from .api import notifications as notifications_api
 from .api import pop as pop_api
 from .api import quality as quality_api
@@ -36,11 +37,14 @@ from .api import signal as signal_api
 from .api import targets as targets_api
 from .api import users as users_api
 from .db import sqlite as sqlite_db
+from .middleware.body_limit import RestoreBodyLimitMiddleware
 from .middleware.csrf import CSRFMiddleware
 from .middleware.maintenance import MaintenanceWriteMiddleware, maintenance_unavailable_response
 from .middleware.security_headers import SecurityHeadersMiddleware
 from .monitor.scheduler import MonitorScheduler
 from .services import event_bus, pdf_worker
+from .services.nmap_jobs import shutdown_jobs
+from .services.nmap_local import start_local_worker, stop_local_worker
 from .services.notifications.signal_backend import (
     get_signal_backend,
     reset_signal_backend,
@@ -384,6 +388,11 @@ async def _lifespan(app: FastAPI):
         )
     )
 
+    try:
+        await start_local_worker()
+    except Exception as e:  # noqa: BLE001 - lifespan boundary: a missing scanner never blocks monitoring
+        _log.warning("Nmap worker could not be started: %s", e)
+
     _log.info("Application started")
 
     try:
@@ -413,6 +422,8 @@ async def _lifespan(app: FastAPI):
 
         # 2. Stop background tasks (stop events are already set)
         await _bounded_stop(supervisor.stop(), label="service_supervisor")
+        await _bounded_stop(shutdown_jobs(), label="nmap_discovery_jobs")
+        await _bounded_stop(stop_local_worker(), label="nmap_local_worker")
         await _bounded_stop(alert_sink.aclose(), label="service_alert_sink")
         # to_thread jobs cannot be cancelled; shutdown() joins the PDF thread pool, so keep it off the loop
         await _bounded_stop(asyncio.to_thread(pdf_worker.shutdown_pdf_worker), label="pdf_worker_pool")
@@ -466,13 +477,8 @@ def create_app() -> FastAPI:
         raise SystemExit(1) from e
     _setup_logging(cfg.log_level)
 
-    # Validate runtime configuration (non-blocking warnings)
-    try:
-        validate_runtime_config()
-    except ConfigValidationError as e:
-        # ConfigValidationError indicates issues that don't prevent startup
-        # but should be addressed (e.g., deprecated settings, suboptimal config)
-        _log.warning("Configuration validation warnings: %s", e)
+    # Raises only MissingEncryptionKeyError, which validate_encryption_key() above already ruled out.
+    validate_runtime_config()
 
     app = FastAPI(title="justUp", version=get_version(), lifespan=_lifespan)
     app.state.cfg = cfg
@@ -489,6 +495,8 @@ def create_app() -> FastAPI:
     app.add_middleware(CSRFMiddleware)
     # Request ID middleware (outside CSRF so CSRF errors are traced; bootstrap_gate below is outermost)
     app.add_middleware(RequestIDMiddleware)
+    # Outside auth and multipart parsing: caps the restore upload while the body streams in.
+    app.add_middleware(RestoreBodyLimitMiddleware)
 
     app.add_exception_handler(RateLimitExceededError, rate_limit_exceeded_handler)
 
@@ -529,6 +537,7 @@ def create_app() -> FastAPI:
     app.include_router(alerts_api.router)
     app.include_router(notifications_api.router)
     app.include_router(metrics_api.router)
+    app.include_router(network_scans_api.router)
     app.include_router(settings_api.router)
     app.include_router(signal_api.router)
     app.include_router(recipients_api.router)

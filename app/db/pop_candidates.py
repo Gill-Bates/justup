@@ -10,16 +10,19 @@ from __future__ import annotations
 
 import hashlib
 import ipaddress
-import math
 import re
 import sqlite3
 
 from app.db import sqlite as sqlite_db
+from app.db.pop_locations import CURATED_ANCHOR_KM, valid_coordinates
+from app.services.ixp_import import great_circle_km
 from app.utils.time import utcnow
 
 MAX_CANDIDATES = 5000
 MAX_OBSERVATIONS_PER_CANDIDATE = 20
-_CODE = re.compile(r"^[a-z][a-z0-9]{1,4}$")
+# Observed and proposed/reviewed positions farther apart than this conflict.
+LOCATION_CONFLICT_KM = 250
+CANDIDATE_CODE_RE = re.compile(r"^[a-z][a-z0-9]{1,4}$")
 _HOST = re.compile(r"^[a-z0-9.-]{1,253}$")
 
 
@@ -36,7 +39,11 @@ def observe(
     """Record one route observation; return whether it was new, never a lookup result."""
     code = code.strip().lower()
     hostname = hostname.strip().lower().rstrip(".")
-    if not _CODE.fullmatch(code) or not _HOST.fullmatch(hostname) or not re.fullmatch(r"[a-z0-9_-]{1,40}", provider):
+    if (
+        not CANDIDATE_CODE_RE.fullmatch(code)
+        or not _HOST.fullmatch(hostname)
+        or not re.fullmatch(r"[a-z0-9_-]{1,40}", provider)
+    ):
         return False
     try:
         address = ipaddress.ip_address(public_ip)
@@ -54,18 +61,11 @@ def observe(
     if not city.isprintable():
         city = ""
     lat, lon = guess.get("lat"), guess.get("lon")
-    if (
-        isinstance(lat, bool)
-        or isinstance(lon, bool)
-        or not isinstance(lat, (int, float))
-        or not isinstance(lon, (int, float))
-        or not (math.isfinite(lat) and math.isfinite(lon))
-        or not (-90 <= lat <= 90 and -180 <= lon <= 180)
-    ):
+    if not valid_coordinates(lat, lon):
         lat = lon = None
     source = "geolite2-coarse" if city and country and lat is not None else None
     canonical_guess = guess.get("canonical_guess") if source else None
-    if not isinstance(canonical_guess, str) or not _CODE.fullmatch(canonical_guess):
+    if not isinstance(canonical_guess, str) or not CANDIDATE_CODE_RE.fullmatch(canonical_guess):
         canonical_guess = None
     if canonical_guess:
         source = "geolite2-city+curated-code"
@@ -106,9 +106,7 @@ def observe(
             candidate_id, prior_country, prior_lat, prior_lon, prior_source = row
             conflict = int(bool(country and prior_country and country != prior_country))
             if lat is not None and prior_lat is not None and prior_lon is not None:
-                from app.services.pop_refresh import _facility_distance_km
-
-                conflict |= int(_facility_distance_km((lat, lon), (prior_lat, prior_lon)) > 250)
+                conflict |= int(great_circle_km((lat, lon), (prior_lat, prior_lon)) > LOCATION_CONFLICT_KM)
         count = conn.execute(
             "SELECT COUNT(*) FROM pop_candidate_observations WHERE candidate_id = ?", (candidate_id,)
         ).fetchone()[0]
@@ -178,7 +176,7 @@ def review(
     code = code.strip().lower()
     actor, evidence = actor.strip(), evidence.strip()
     if (
-        not _CODE.fullmatch(code)
+        not CANDIDATE_CODE_RE.fullmatch(code)
         or not (1 <= len(actor) <= 80 and 1 <= len(evidence) <= 500)
         or not actor.isprintable()
         or not evidence.isprintable()
@@ -219,23 +217,19 @@ def review(
                 country != guess_country
                 or not re.fullmatch(r"[A-Z]{2}", country)
                 or not (1 <= len(city) <= 64 and city.isprintable())
-                or isinstance(lat, bool)
-                or isinstance(lon, bool)
-                or not isinstance(lat, (int, float))
-                or not isinstance(lon, (int, float))
-                or not (math.isfinite(lat) and math.isfinite(lon))
-                or not (-90 <= lat <= 90 and -180 <= lon <= 180)
+                or not valid_coordinates(lat, lon)
             ):
                 raise ValueError("Reviewed location conflicts with the observed country or coordinates")
-            if guess_lat is not None and guess_lon is not None:
-                from app.services.pop_refresh import _facility_distance_km
-
-                if _facility_distance_km((lat, lon), (guess_lat, guess_lon)) > 250:
-                    raise ValueError("Reviewed coordinates conflict with the observed location")
+            if (
+                guess_lat is not None
+                and guess_lon is not None
+                and great_circle_km((lat, lon), (guess_lat, guess_lon)) > LOCATION_CONFLICT_KM
+            ):
+                raise ValueError("Reviewed coordinates conflict with the observed location")
             if conn.execute("SELECT 1 FROM pop_locations WHERE alias_code = ? AND retired = 0", (code,)).fetchone():
                 raise ValueError("An active location already owns this alias")
             chosen_code = (canonical or code).strip().lower()
-            if not _CODE.fullmatch(chosen_code):
+            if not CANDIDATE_CODE_RE.fullmatch(chosen_code):
                 raise ValueError("Reviewed canonical code is invalid")
             if chosen_code != code:
                 if chosen_code != guess_code:
@@ -245,9 +239,7 @@ def review(
                     "AND source IN ('manual', 'seed') AND retired = 0",
                     (chosen_code, country),
                 ).fetchall()
-                from app.services.pop_refresh import _facility_distance_km
-
-                if not anchors or any(_facility_distance_km((lat, lon), (a[0], a[1])) > 50 for a in anchors):
+                if not anchors or any(great_circle_km((lat, lon), (a[0], a[1])) > CURATED_ANCHOR_KM for a in anchors):
                     raise ValueError("Reviewed canonical location lacks a nearby curated anchor")
             cur = conn.execute(
                 """INSERT INTO pop_locations (canonical_code, alias_code, city, country, lat, lon, source,

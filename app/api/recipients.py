@@ -12,13 +12,12 @@ import logging
 import sqlite3
 import time
 from collections.abc import Mapping, Sequence
-from datetime import UTC, datetime, timedelta
 from html import escape
-from threading import Lock
+from threading import BoundedSemaphore, Event, Lock
 from typing import Annotated, Any, NoReturn
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from pydantic import Field, StringConstraints
+from pydantic import Field, StringConstraints, ValidationError
 
 from ..db import sqlite as sqlite_db
 from ..models.recipients import (
@@ -43,12 +42,35 @@ _log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/recipients", tags=["recipients"])
 
+
+class _SignalFlight:
+    """One in-progress forced lookup; concurrent callers for the same number wait for its result."""
+
+    __slots__ = ("done", "error", "result")
+
+    def __init__(self) -> None:
+        self.done = Event()
+        self.result: bool | None = None
+        self.error: HTTPException | None = None
+
+
 # Cache for Signal registration status: phone -> (is_registered, timestamp_monotonic)
-# Protected by _SIGNAL_CACHE_LOCK for thread-safety across FastAPI workers and ThreadPoolExecutor
+# _SIGNAL_CACHE_LOCK makes access thread-safe within one worker process (request threads and the thread
+# pool). It is not shared between processes: every worker process keeps its own cache.
 _SIGNAL_REGISTRATION_CACHE: dict[str, tuple[bool, float]] = {}
 _SIGNAL_CACHE_LOCK = Lock()
 _SIGNAL_CACHE_TTL = 86400.0
 _SIGNAL_CACHE_MAX_SIZE = 1000
+
+# Explicit "re-check" (force_refresh) bypasses the cache once. Like the cache, the flight table and the
+# slot limit live per worker process: the guarantees below hold within one process only.
+_SIGNAL_FORCE_RATE_LIMIT = "5/minute"
+_SIGNAL_FORCE_MAX_CONCURRENT = 2  # signal-cli lookups running at once across all recipients
+_SIGNAL_FORCE_MIN_INTERVAL = 10.0  # a number refreshed this recently is answered from the cache
+_SIGNAL_FLIGHT_WAIT = 30.0
+_SIGNAL_FORCE_SLOTS = BoundedSemaphore(_SIGNAL_FORCE_MAX_CONCURRENT)
+_SIGNAL_FLIGHT_LOCK = Lock()
+_SIGNAL_FLIGHTS: dict[str, _SignalFlight] = {}
 
 # Bound the verify-signal request body (each number costs a signal-cli lookup)
 _PhoneList = Annotated[list[Annotated[str, StringConstraints(max_length=32)]], Field(max_length=50)]
@@ -62,26 +84,29 @@ def _normalize_phone_or_400(phone: str) -> str:
         raise HTTPException(status_code=400, detail=f"Invalid phone number: {e}") from e
 
 
-def _signal_registration_status(phone: str) -> bool | None:
+def _signal_registration_status(phone: str, *, force_refresh: bool = False) -> bool | None:
     """Check if phone is registered with Signal.
 
     Centralized low-level function used by both warning generation and
     verification API. Caches results for 24h using time.monotonic().
-    Thread-safe via _SIGNAL_CACHE_LOCK.
+    Thread-safe via _SIGNAL_CACHE_LOCK. ``force_refresh`` skips the cache read; a fresh
+    result replaces the cache entry.
 
     Args:
             phone: E.164 formatted phone number
+            force_refresh: Bypass the cached value once (explicit user re-check only)
 
     Returns:
             True if registered, False if not registered, None if check unavailable
     """
     now = time.monotonic()
 
-    with _SIGNAL_CACHE_LOCK:
-        if phone in _SIGNAL_REGISTRATION_CACHE:
-            is_registered, cached_at = _SIGNAL_REGISTRATION_CACHE[phone]
-            if (now - cached_at) < _SIGNAL_CACHE_TTL:
-                return is_registered
+    if not force_refresh:
+        with _SIGNAL_CACHE_LOCK:
+            if phone in _SIGNAL_REGISTRATION_CACHE:
+                is_registered, cached_at = _SIGNAL_REGISTRATION_CACHE[phone]
+                if (now - cached_at) < _SIGNAL_CACHE_TTL:
+                    return is_registered
 
     try:
         from ..services.notifications.signal_backend import get_signal_backend
@@ -115,8 +140,63 @@ def _signal_registration_status(phone: str) -> bool | None:
         _log.debug("Signal backend unavailable")
         return None
     except Exception as e:  # noqa: BLE001 - Signal-check boundary: any failure degrades to unknown registration
-        _log.debug("Error checking Signal registration: %s", e)
+        # Type only: the message may carry the phone number.
+        _log.debug("Error checking Signal registration: %s", type(e).__name__)
         return None
+
+
+def _cached_signal_age(phone: str) -> tuple[bool, float] | None:
+    """Return (value, age in seconds) of a cache entry, or None."""
+    with _SIGNAL_CACHE_LOCK:
+        entry = _SIGNAL_REGISTRATION_CACHE.get(phone)
+    return None if entry is None else (entry[0], time.monotonic() - entry[1])
+
+
+def _force_signal_registration(phone: str) -> bool | None:
+    """Re-check one number against signal-cli, bypassing the cache.
+
+    Concurrent calls for the same number share one lookup (single flight); at most
+    ``_SIGNAL_FORCE_MAX_CONCURRENT`` lookups run at once and a number refreshed within
+    ``_SIGNAL_FORCE_MIN_INTERVAL`` is answered from the cache. Raises HTTP 429 when busy.
+    """
+    with _SIGNAL_FLIGHT_LOCK:
+        flight = _SIGNAL_FLIGHTS.get(phone)
+        leader = flight is None
+        if flight is None:
+            flight = _SIGNAL_FLIGHTS[phone] = _SignalFlight()
+
+    if not leader:
+        if not flight.done.wait(_SIGNAL_FLIGHT_WAIT):
+            raise _signal_busy()
+        if flight.error is not None:
+            raise flight.error
+        return flight.result
+
+    try:
+        cached = _cached_signal_age(phone)
+        if cached is not None and cached[1] < _SIGNAL_FORCE_MIN_INTERVAL:
+            flight.result = cached[0]
+        elif not _SIGNAL_FORCE_SLOTS.acquire(blocking=False):
+            raise _signal_busy()
+        else:
+            try:
+                flight.result = _signal_registration_status(phone, force_refresh=True)
+            finally:
+                _SIGNAL_FORCE_SLOTS.release()
+        return flight.result
+    except HTTPException as exc:
+        flight.error = exc
+        raise
+    finally:
+        with _SIGNAL_FLIGHT_LOCK:
+            _SIGNAL_FLIGHTS.pop(phone, None)
+        flight.done.set()
+
+
+def _signal_busy() -> HTTPException:
+    return HTTPException(
+        status_code=429, detail="Signal check is busy. Try again shortly.", headers={"Retry-After": "5"}
+    )
 
 
 def _check_signal_registration(phone: str) -> str | None:
@@ -149,6 +229,7 @@ def _row_to_public(row: Mapping[str, Any], targets: Sequence[Mapping[str, Any]] 
         enable_for_all_targets=bool(row["enable_for_all_targets"]),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
+        is_user_linked=row["user_id"] is not None,
         targets=[TargetBrief(id=t["id"], name=t["name"]) for t in (targets or [])],
     )
 
@@ -158,21 +239,18 @@ def list_recipients(conn=Depends(get_conn), _user=Depends(get_current_user)):
     """List all alert recipients."""
     rows = sqlite_db.list_recipients(conn)
     targets_by_recipient = sqlite_db.get_targets_by_recipient(conn)
-    return [_row_to_public(r, targets_by_recipient.get(r["id"])) for r in rows]
-
-
-def _is_phone_probably_registered(phone: str) -> bool | None:
-    """Check if a phone is likely registered with Signal.
-
-    Wrapper around _signal_registration_status() for tri-state API.
-
-    Args:
-            phone: E.164 formatted phone number
-
-    Returns:
-            True if registered, False if not registered, None if check unavailable
-    """
-    return _signal_registration_status(phone)
+    result: list[RecipientPublic] = []
+    for r in rows:
+        if r["user_id"] is None and not (r["phone"] or r["email"]):
+            # A standalone legacy row without a usable channel must not break the whole list. A user's recipient
+            # may legitimately have none and stays visible.
+            _log.warning("Skipping recipient id=%s: stored contact data is invalid", r["id"])
+            continue
+        try:
+            result.append(_row_to_public(r, targets_by_recipient.get(r["id"])))
+        except ValidationError:
+            _log.warning("Skipping recipient id=%s: stored contact data is invalid", r["id"])
+    return result
 
 
 @router.post("/verify-signal", dependencies=[Depends(rate_limit(RATE_LIMIT_HEAVY))])
@@ -213,22 +291,55 @@ def verify_signal_numbers(
             phones_to_check.append(normalized)
 
     # Sequential on purpose: signal-cli serializes on a file lock, so threads would only queue.
-    # _is_phone_probably_registered answers cached numbers without a backend call.
+    # _signal_registration_status answers cached numbers without a backend call and maps failures to None.
     for normalized in phones_to_check:
-        try:
-            is_registered = _is_phone_probably_registered(normalized)
-            results[normalized] = is_registered
-        except Exception as e:  # noqa: BLE001 - Signal-check boundary: any failure degrades to unknown registration
-            _log.warning("Signal check failed for %s: %s", mask_phone(normalized), e)
-            results[normalized] = None
+        results[normalized] = _signal_registration_status(normalized)
 
     return {"results": results, "invalid": invalid_phones}
 
 
-def _raise_duplicate_phone(exc: sqlite3.IntegrityError) -> NoReturn:
-    """Map a unique-index violation to the same conflict as the duplicate pre-check."""
-    if "UNIQUE constraint failed" in str(exc):
+@router.post(
+    "/{recipient_id}/recheck-signal",
+    dependencies=[Depends(rate_limit(_SIGNAL_FORCE_RATE_LIMIT))],
+)
+def recheck_signal(recipient_id: int, conn=Depends(get_conn), _user=Depends(require_admin)):
+    """Re-check one recipient's Signal registration, bypassing the 24h cache once.
+
+    The number is read from the stored recipient (never from the URL or body) so it
+    stays out of access logs. ``registered`` is null when the check is unavailable.
+    """
+    row = sqlite_db.get_recipient(conn, recipient_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Recipient not found")
+    if not row["phone"]:
+        raise HTTPException(status_code=400, detail="Recipient has no Signal number")
+    try:
+        phone = normalize_phone(row["phone"])
+    except ValueError:
+        return {"registered": None}
+    try:
+        return {"registered": _force_signal_registration(phone)}
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 - Signal boundary: report unknown, never the internal text
+        _log.warning("Signal re-check for %s failed: %s", mask_phone(phone), type(exc).__name__)
+        return {"registered": None}
+
+
+def _raise_integrity_conflict(exc: sqlite3.IntegrityError) -> NoReturn:
+    """Map a database constraint violation to its HTTP answer instead of letting it end as a 500.
+
+    A unique-index violation is the duplicate-phone conflict of the pre-check; a CHECK violation means the
+    submitted final state has no usable contact channel (the checks are the database side of the same rule).
+    """
+    message = str(exc)
+    if "UNIQUE constraint failed" in message:
         raise HTTPException(status_code=409, detail="Phone number already exists") from exc
+    if "CHECK constraint failed" in message:
+        raise HTTPException(
+            status_code=422,
+            detail="A recipient needs a phone number or an email address, and only one with a channel can be enabled",
+        ) from exc
     raise exc
 
 
@@ -275,7 +386,7 @@ def create_recipient(payload: RecipientCreate, conn=Depends(get_conn), _user=Dep
         # The pre-check above is racy (signal lookup in between); the write itself re-checks atomically.
         raise HTTPException(status_code=409, detail="Phone number already exists") from exc
     except sqlite3.IntegrityError as exc:
-        _raise_duplicate_phone(exc)
+        _raise_integrity_conflict(exc)
     row = sqlite_db.get_recipient(conn, new_id)
     recipient = _row_to_public(row, sqlite_db.get_recipient_targets(conn, new_id))
     return RecipientResponse(recipient=recipient, warnings=warnings)
@@ -283,53 +394,65 @@ def create_recipient(payload: RecipientCreate, conn=Depends(get_conn), _user=Dep
 
 @router.patch("/{recipient_id}", response_model=RecipientResponse)
 def update_recipient(recipient_id: int, payload: RecipientUpdate, conn=Depends(get_conn), _user=Depends(require_admin)):
-    """Update an alert recipient."""
+    """Update an alert recipient.
+
+    The final state is validated against the row as read under the write lock: a parallel request that
+    removed another channel in the meantime is seen, not overwritten with a stale decision.
+    """
     warnings: list[str] = []
-    clear_phone = False
-    clear_email = False
-
-    existing = sqlite_db.get_recipient(conn, recipient_id)
-    if not existing:
-        raise HTTPException(status_code=404, detail="Recipient not found")
-
     update_data = payload.model_dump(exclude_unset=True)
-
-    if "phone" in update_data:
-        if payload.phone:
-            normalized_phone = _normalize_phone_or_400(payload.phone)
-            if normalized_phone != existing["phone"]:
-                dup = sqlite_db.get_recipient_by_phone(conn, normalized_phone)
-                if dup and dup["id"] != recipient_id:
-                    raise HTTPException(status_code=409, detail="Phone number already exists")
-
-                signal_warning = _check_signal_registration(normalized_phone)
-                if signal_warning:
-                    warnings.append(signal_warning)
-            update_data["phone"] = normalized_phone
-        else:
-            # Phone is being cleared (null or empty string)
-            clear_phone = True
-            del update_data["phone"]
-
-    if "email" in update_data and not payload.email:
-        clear_email = True
-        del update_data["email"]
-
-    final_phone = None if clear_phone else update_data.get("phone", existing["phone"])
-    final_email = None if clear_email else update_data.get("email", existing["email"])
-    if not final_phone and not final_email:
-        raise HTTPException(status_code=400, detail="At least one contact method (phone or email) is required")
-
-    if update_data or clear_phone or clear_email:
-        try:
-            sqlite_db.update_recipient(
-                conn, recipient_id, clear_phone=clear_phone, clear_email=clear_email, **update_data
-            )
-        except sqlite_db.DuplicatePhoneError as exc:
-            raise HTTPException(status_code=409, detail="Phone number already exists") from exc
-        except sqlite3.IntegrityError as exc:
-            _raise_duplicate_phone(exc)
-
+    # Outside the write lock: an early 404 and the slow Signal lookup, which only produces a warning.
+    known = sqlite_db.get_recipient(conn, recipient_id)
+    if not known:
+        raise HTTPException(status_code=404, detail="Recipient not found")
+    normalized_phone = _normalize_phone_or_400(payload.phone) if update_data.get("phone") else None
+    if normalized_phone is not None and normalized_phone != known["phone"]:
+        signal_warning = _check_signal_registration(normalized_phone)
+        if signal_warning:
+            warnings.append(signal_warning)
+    try:
+        with sqlite_db.transaction(conn, immediate=True):
+            existing = sqlite_db.get_recipient(conn, recipient_id)
+            if not existing:
+                raise HTTPException(status_code=404, detail="Recipient not found")
+            clear_phone = False
+            clear_email = False
+            if "phone" in update_data:
+                if normalized_phone is not None:
+                    if normalized_phone != existing["phone"]:
+                        dup = sqlite_db.get_recipient_by_phone(conn, normalized_phone)
+                        if dup and dup["id"] != recipient_id:
+                            raise HTTPException(status_code=409, detail="Phone number already exists")
+                    update_data["phone"] = normalized_phone
+                else:
+                    # Phone is being cleared (null or empty string)
+                    clear_phone = True
+                    del update_data["phone"]
+            if "email" in update_data and not payload.email:
+                clear_email = True
+                del update_data["email"]
+            final_phone = None if clear_phone else update_data.get("phone", existing["phone"])
+            final_email = None if clear_email else update_data.get("email", existing["email"])
+            if not final_phone and not final_email:
+                if existing["user_id"] is None:
+                    raise HTTPException(
+                        status_code=400, detail="At least one contact method (phone or email) is required"
+                    )
+                # An application user's recipient may have no channel, but then it must not stay enabled.
+                if update_data.get("is_enabled", bool(existing["is_enabled"])):
+                    raise HTTPException(
+                        status_code=422,
+                        detail="A recipient without phone number and email address cannot be enabled. "
+                        "Switch it off or keep a channel.",
+                    )
+            if update_data or clear_phone or clear_email:
+                sqlite_db.update_recipient(
+                    conn, recipient_id, clear_phone=clear_phone, clear_email=clear_email, **update_data
+                )
+    except sqlite_db.DuplicatePhoneError as exc:
+        raise HTTPException(status_code=409, detail="Phone number already exists") from exc
+    except sqlite3.IntegrityError as exc:
+        _raise_integrity_conflict(exc)
     row = sqlite_db.get_recipient(conn, recipient_id)
     targets = sqlite_db.get_recipient_targets(conn, recipient_id)
     recipient = _row_to_public(row, targets)
@@ -343,7 +466,18 @@ def delete_recipient(recipient_id: int, conn=Depends(get_conn), _user=Depends(re
     if not existing:
         raise HTTPException(status_code=404, detail="Recipient not found")
 
-    sqlite_db.delete_recipient(conn, recipient_id)
+    if existing["user_id"] is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="This recipient belongs to an application user. Delete the user to remove it.",
+        )
+    try:
+        sqlite_db.delete_recipient(conn, recipient_id)
+    except sqlite_db.UserBoundRecipientError as exc:  # linked between the check above and the delete
+        raise HTTPException(
+            status_code=409,
+            detail="This recipient belongs to an application user. Delete the user to remove it.",
+        ) from exc
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -365,19 +499,6 @@ class _TestRefusedError(Exception):
         super().__init__(message)
         self.status_code = status_code
         self.message = message
-
-
-def _test_cooldown_active(conn, recipient_id: int, channel: str) -> bool:
-    cutoff = (datetime.now(UTC) - timedelta(seconds=RECIPIENT_TEST_COOLDOWN_SECONDS)).isoformat()
-    row = conn.execute(
-        """
-        SELECT 1 FROM notification_queue
-        WHERE notification_type = 'test' AND recipient_id = ? AND channel_type = ? AND created_at >= ?
-        LIMIT 1
-        """,
-        (recipient_id, channel, cutoff),
-    ).fetchone()
-    return row is not None
 
 
 def _build_signal_test_payload(conn, name: str) -> dict[str, str]:
@@ -415,6 +536,7 @@ def _queue_recipient_test(conn, request: Request, row: Mapping[str, Any], channe
     from ..services.notifications.spooler import (
         ChannelType,
         NotificationType,
+        RecipientTestCooldownError,
         SignalQueueLimitError,
         get_spooler,
     )
@@ -423,10 +545,6 @@ def _queue_recipient_test(conn, request: Request, row: Mapping[str, Any], channe
     address = row["phone"] if channel == "signal" else row["email"]
     if not address:
         raise _TestRefusedError(400, f"This recipient has no {_TEST_CHANNEL_LABELS[channel]} address saved.")
-    if _test_cooldown_active(conn, recipient_id, channel):
-        raise _TestRefusedError(
-            429, f"A {_TEST_CHANNEL_LABELS[channel]} test was just sent. Wait a moment before trying again."
-        )
     if channel == "signal":
         payload = _build_signal_test_payload(conn, row["name"])
     else:
@@ -442,7 +560,12 @@ def _queue_recipient_test(conn, request: Request, row: Mapping[str, Any], channe
             recipient_address=address,
             payload=payload,
             immediate=True,
+            recipient_test_cooldown_seconds=RECIPIENT_TEST_COOLDOWN_SECONDS,
         )
+    except RecipientTestCooldownError:
+        raise _TestRefusedError(
+            429, f"A {_TEST_CHANNEL_LABELS[channel]} test was just sent. Wait a moment before trying again."
+        ) from None
     except SignalQueueLimitError:
         raise _TestRefusedError(429, "Signal test-message limit reached. Try again later.") from None
     except Exception as exc:  # noqa: BLE001 - queue boundary: report a generic failure, never the internal text
@@ -478,6 +601,8 @@ def send_recipient_test(
         channels = [c for c, key in (("signal", "phone"), ("email", "email")) if row[key]]
     else:
         channels = [requested]
+    if not channels:
+        raise HTTPException(status_code=400, detail="Recipient has no configured channels")
     results: list[RecipientTestChannelResult] = []
     for channel in channels:
         try:

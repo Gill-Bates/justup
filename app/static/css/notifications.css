@@ -73,7 +73,7 @@
 	border: 1px solid var(--ju-panel-line);
 	border-radius: 0.5rem;
 	background: var(--ju-panel-bg);
-	box-shadow: 0 0.5rem 1.5rem rgb(0 0 0 / 20%);
+	box-shadow: var(--ju-shadow-raised);
 	color: var(--bs-body-color);
 }
 
@@ -107,6 +107,7 @@
 	margin: 0;
 	padding: 0;
 	overflow-y: auto;
+	overscroll-behavior: contain;
 	border-top: 1px solid var(--ju-panel-line);
 	border-bottom: 1px solid var(--ju-panel-line);
 	list-style: none;
@@ -147,6 +148,14 @@
 .ju-notif-pop-title {
 	min-width: 0;
 	max-width: 100%;
+	line-height: 1.25;
+}
+
+/* Severity: status dot plus word on its own line; independent of the unread marker (DC-NOTIF-6). */
+.ju-notif-pop-sev {
+	max-width: 100%;
+	font-size: 0.75rem;
+	font-weight: 400;
 	line-height: 1.25;
 }
 
@@ -223,47 +232,6 @@
 	gap: 0.5rem;
 	min-height: 2.75rem;
 	padding-inline: 1rem;
-}
-
-.ju-notif-tabs {
-	flex-wrap: wrap;
-	gap: 0.5rem;
-}
-
-.ju-notif-tabs .nav-link {
-	display: inline-flex;
-	align-items: center;
-	gap: 0.375rem;
-	min-height: 2.5rem;
-	padding: 0.5rem 0.875rem;
-}
-
-.ju-notif-tabs .material-icons {
-	font-size: 1.25rem;
-}
-
-@media (width <=767.98px) {
-	.ju-notif-tabs {
-		flex-wrap: nowrap;
-		max-width: 100%;
-		overflow-x: auto;
-		padding-block-end: 0.5rem;
-		padding-inline-end: 1.25rem;
-		scroll-padding-inline: 1.25rem;
-		overscroll-behavior-x: contain;
-		-webkit-overflow-scrolling: touch;
-		scroll-snap-type: x proximity;
-	}
-
-	.ju-notif-tabs .nav-item {
-		flex: 0 0 auto;
-		scroll-snap-align: start;
-	}
-
-	.ju-notif-tabs .nav-link {
-		min-height: 2.75rem;
-		white-space: nowrap;
-	}
 }
 
 .ju-notif-item {
@@ -364,7 +332,7 @@
 }
 
 /* Page rows: the unread dot is ringed (shape cue) and the title weight differs, so unread never
-   reads like the event-status badge; read rows use a lighter title. */
+   reads like the severity status dot beside it; read rows use a lighter title. */
 .ju-notif-list .ju-unread-dot {
 	box-shadow: 0 0 0 2px var(--ju-panel-bg, var(--bs-body-bg)), 0 0 0 3px var(--bs-primary);
 }
@@ -379,7 +347,7 @@
 	font-weight: 700;
 }
 
-/* Notification severity uses the shared filled status badge palette. */
+/* Notification severity is the shared status dot plus its word; no badge. */
 .ju-notif-status {
 	font-weight: 500;
 }
@@ -455,10 +423,6 @@
 	margin-right: 0;
 }
 
-.ju-notif-title .badge {
-	flex: 0 0 auto;
-}
-
 .ju-notif-title-text {
 	flex: 0 1 auto;
 	min-width: 0;
@@ -517,7 +481,7 @@
 
 .ju-notif-dismiss-button:hover,
 .ju-notif-dismiss-button:focus-visible {
-	background: color-mix(in srgb, var(--bs-danger) 80%, black);
+	background: color-mix(in srgb, var(--bs-danger) 80%, var(--bs-black));
 	color: var(--bs-white);
 }
 
@@ -570,7 +534,20 @@ a.ju-notif-swipe-content {
 }
 
 .ju-notif-swipe-content.is-actionable:focus-visible {
-	outline: 2px solid var(--ju-focus-ring);
-	outline-offset: -2px;
+	outline: var(--ju-focus-outline-width) solid var(--ju-focus-ring);
+	outline-offset: calc(-1 * var(--ju-focus-outline-width));
 }
 
+/* Forced colors replace author colours and drop box-shadow: the unread dot would match the row background and lose its ring.
+   System colours keep it visible; the ring becomes an outline. */
+@media (forced-colors: active) {
+	.ju-unread-dot {
+		forced-color-adjust: none;
+		background: Highlight;
+	}
+
+	.ju-notif-list .ju-unread-dot {
+		outline: var(--ju-focus-outline-width) solid Highlight;
+		outline-offset: 2px;
+	}
+}

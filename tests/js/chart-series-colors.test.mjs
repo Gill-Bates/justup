@@ -88,7 +88,7 @@ test("series slots are deterministic and independent of source order", () => {
   assert.deepEqual([first["tcp:25"].slot, first["tcp:443"].slot, first["tcp:587"].slot], [2, 3, 4]);
 });
 
-test("the first eight series get eight different slots, extra series change the dash lap", () => {
+test("the first eight series get eight different slots, extra series change the marker lap", () => {
   const keys = ["http", "ping", "tcp:22", "tcp:25", "tcp:80", "tcp:110", "tcp:143", "tcp:443", "tcp:465", "tcp:587"];
   const slots = D.seriesSlots(keys);
   assert.equal(new Set(keys.slice(0, 8).map((k) => slots[k].slot)).size, 8);
@@ -97,6 +97,15 @@ test("the first eight series get eight different slots, extra series change the 
   assert.equal(slots["tcp:587"].lap, 1);
 });
 
+test("marker shapes are the non-colour cue: unique (colour, shape) pairs up to 48 series (DC-CHART-5)", () => {
+  assert.deepEqual(plain(D.SERIES_MARKERS), ["circle", "rect", "rectRot", "cross", "crossRot", "star"]);
+  assert.ok(!D.SERIES_MARKERS.includes("triangle"), "the triangle is reserved for peaks");
+  assert.equal(new Set([0, 1, 2, 3, 4, 5].map((i) => D.markerStyle(i, 0))).size, 6, "the first six series differ by shape alone");
+  const keys = ["http", "ping", ...Array.from({ length: 46 }, (_, i) => `tcp:${1000 + i}`)];
+  const slots = D.seriesSlots(keys);
+  const pairs = keys.map((k) => `${slots[k].slot}/${D.markerStyle(slots[k].slot, slots[k].lap)}`);
+  assert.equal(new Set(pairs).size, 48, "(colour slot, shape) stays unique for 48 series");
+});
 test("the TCP aggregate series keeps its own stable slot", () => {
   assert.equal(D.seriesSlots(["http", "tcp"]).tcp.slot, 2);
 });
@@ -112,22 +121,69 @@ test("palette reads the series tokens of the active theme at runtime", () => {
   assert.equal(dark.down, chart.COMBINED_PALETTES.dark.down);
 });
 
+test("a lone plotted metric uses online green while multiple metrics keep their slots", () => {
+  for (const [mode, tokens] of [["light", lightTokens], ["dark", darkTokens]]) {
+    const chart = loadChart({ getCssVar: (name, fallback) => tokens[name.slice(2)] ?? fallback });
+    const palette = chart._combinedPalette({ mode, text: "#000000" });
+    assert.equal(palette.singleMetric, tokens["ju-st-online"]);
+    assert.equal(chart._seriesColor(palette, { _slot: 2, _singleMetric: true }), tokens["ju-st-online"]);
+    assert.equal(chart._seriesColor(palette, { _slot: 2, _singleMetric: false }), tokens["ju-dv-3"]);
+    assert.ok(contrast(palette.singleMetric, tokens["ju-panel-bg"]) >= 3);
+  }
+});
+
+test("keyboard point inspection skips gaps and announces the selected metric", () => {
+  const listeners = {};
+  const announcement = { setAttribute() {}, textContent: "" };
+  const canvas = {
+    parentNode: { appendChild(child) { assert.equal(child, announcement); } },
+    setAttribute(name, value) { this[name] = value; },
+    addEventListener(name, callback) { listeners[name] = callback; },
+  };
+  const active = [];
+  const chart = {
+    data: { datasets: [{ label: "HTTP", _kind: "ms", data: [{ x: 1, y: 10 }, { x: 2, y: null }, { x: 3, y: 30 }] }] },
+    scales: { x: { min: 1, max: 3 } },
+    isDatasetVisible: () => true,
+    getDatasetMeta: () => ({ data: [{ x: 10, y: 20 }, {}, { x: 30, y: 40 }] }),
+    setActiveElements(points) { active.push(points); },
+    tooltip: { setActiveElements(points) { active.push(points); } },
+    update() {},
+  };
+  const context = loadChart({
+    document: { createElement: () => announcement },
+    Chart: { getChart: () => chart }, navigator: { language: "en-US" },
+    formatChartValue: (_, value) => `${value} ms`,
+  });
+  context._bindCombinedPointKeys(canvas);
+  assert.equal(canvas.tabIndex, 0);
+  let prevented = 0;
+  for (const key of ["ArrowRight", "ArrowRight", "Home", "End"]) {
+    listeners.keydown({ key, preventDefault() { prevented += 1; } });
+  }
+  assert.equal(prevented, 4);
+  assert.deepEqual(active.filter((_, index) => index % 2 === 0).map((item) => item[0].index), [0, 2, 0, 2]);
+  assert.match(announcement.textContent, /HTTP.*30 ms.*Point 2 of 2/);
+  context._bindCombinedPointKeys(canvas);
+  assert.deepEqual(Object.keys(listeners).sort(), ["click", "keydown"], "rebuilds do not add another listener");
+});
+
 test("the chart script holds no hard-coded series colors", () => {
   const chartSource = read("app/static/js/charts/combined-chart.js");
   const hexes = new Set(series(lightTokens).concat(series(darkTokens)));
-  for (const hex of hexes) assert.ok(!chartSource.includes(hex), `${hex} is hard-coded in combined-chart.js`);
+  for (const hex of hexes) assert.ok(!chartSource.toLowerCase().includes(hex.toLowerCase()), `${hex} is hard-coded in combined-chart.js`);
   assert.doesNotMatch(chartSource, /palette\[(src\.id|ds\._srcId)\]/);
 });
 
-test("peak visibility: one switch drives all peaks, hidden series show none, axis follows", () => {
+test("peak visibility: one switch drives all peaks, hidden series show none", () => {
   const both = [{ msVisible: true, hasPeakData: true }, { msVisible: true, hasPeakData: true }];
-  assert.deepEqual(plain(D.peakVisibility(both, true)), { visible: [true, true], axisVisible: true });
-  assert.deepEqual(plain(D.peakVisibility(both, false)), { visible: [false, false], axisVisible: false });
+  assert.deepEqual(plain(D.peakVisibility(both, true)), { visible: [true, true] });
+  assert.deepEqual(plain(D.peakVisibility(both, false)), { visible: [false, false] });
   const mixed = [{ msVisible: true, hasPeakData: true }, { msVisible: false, hasPeakData: true }, { msVisible: true, hasPeakData: false }];
-  assert.deepEqual(plain(D.peakVisibility(mixed, true)), { visible: [true, false, false], axisVisible: true });
+  assert.deepEqual(plain(D.peakVisibility(mixed, true)), { visible: [true, false, false] });
   const none = [{ msVisible: false, hasPeakData: true }];
-  assert.deepEqual(plain(D.peakVisibility(none, true)), { visible: [false], axisVisible: false });
-  assert.deepEqual(plain(D.peakVisibility([], true)), { visible: [], axisVisible: false });
+  assert.deepEqual(plain(D.peakVisibility(none, true)), { visible: [false] });
+  assert.deepEqual(plain(D.peakVisibility([], true)), { visible: [] });
 });
 
 function peakChart(showPeaks) {
@@ -145,7 +201,6 @@ function peakChart(showPeaks) {
     visibility,
     chart: {
       data: { datasets }, scales, _showPeaks: showPeaks,
-      options: { scales: { yPeak: { display: false } } },
       isDatasetVisible: (index) => visibility.get(index) ?? true,
       setDatasetVisibility: (index, visible) => visibility.set(index, visible),
     },
@@ -158,14 +213,12 @@ test("showing peaks follows the legend state of each series and keeps the zoom r
   context._syncPeaks(chart);
   assert.equal(visibility.get(1), true);
   assert.equal(visibility.get(3), false, "peak of a hidden series stays hidden");
-  assert.equal(chart.options.scales.yPeak.display, true);
   visibility.set(2, true);
   context._syncPeaks(chart);
   assert.equal(visibility.get(3), true, "revealing the series reveals its peak");
   chart._showPeaks = false;
   context._syncPeaks(chart);
   assert.deepEqual([visibility.get(1), visibility.get(3)], [false, false]);
-  assert.equal(chart.options.scales.yPeak.display, false, "no empty right axis while peaks are off");
   assert.deepEqual(plain(chart.scales.x), { min: 100, max: 200 });
 });
 
@@ -188,7 +241,7 @@ test("legend lists one entry per series and no peak entries; a toggle updates th
   });
   chart.data.datasets.forEach((d, i) => { d._slot = i < 2 ? 2 : 3; d.label = d._kind + i; d._srcId = "tcp"; });
   const legend = makeElement();
-  context._renderCombinedLegend(chart, legend, makeElement());
+  context._renderCombinedLegend(chart, legend);
   assert.deepEqual(legend.children.map((b) => b.attributes["aria-label"]), ["TCP 25", "TCP 587"]);
   assert.ok(legend.children.every((b) => !/peak/i.test(b.attributes["aria-label"])));
   legend.children[1].listeners.click();

@@ -38,14 +38,7 @@ database rows. The fingerprint verifies the archived structure. The normal
 SQLite compatibility check, not a comparison with a fresh-install fingerprint,
 decides whether the target release supports that structure.
 
-Application and schema versions are compared independently:
-
-| Application version | Database schema | Result |
-| --- | --- | --- |
-| Same or older | Same | Restore without migration |
-| Same or older | Older, with a complete migration path | Migrate the staged database, then restore |
-| Newer | Any | Reject before extraction |
-| Any | Newer than supported, or without a complete migration path | Reject before extraction |
+Application and schema versions are compared independently; the outcomes are listed under [Compatibility](#compatibility).
 
 Versions must be numeric and comparable. Development builds are accepted only
 when both sides report `dev` and their non-empty build IDs match exactly.
@@ -75,9 +68,9 @@ first key. Changing the first `SECRET_KEY` signs all users out.
 3. It extracts into a staging directory and checks the archived databases: the schema must match
    the manifest, the application database must contain no triggers or views, and every database
    must pass the integrity check.
-4. A backup with an older database schema is migrated in the staging directory, never in the live
-   database. The result must pass `integrity_check` and `foreign_key_check`, match the current
-   schema, and leave no `-wal`/`-shm` file behind.
+4. A version-1 backup or an exact former-current version-10 backup is migrated to schema version 2 in
+   the staging directory. The result must pass `integrity_check` and `foreign_key_check`, match the current schema,
+   and leave no `-wal`/`-shm` file behind.
 5. It enters maintenance mode: new checks, jobs, and backups stop, and running work
    gets up to 30 s to finish. New database connections get HTTP 503.
 6. It swaps in the restored data.
@@ -96,10 +89,10 @@ Release number and database schema are compared separately.
 
 | Backup release | Backup schema | Result |
 |---|---|---|
-| same or older | same | Restored, no migration |
-| same or older | older | Migrated, if a complete migration path exists; otherwise rejected |
+| same or older | 2 (current) | Restored, no migration |
+| same or older | 1, or exact former current version 10 | Migrated to version 2 in the staging directory if its layout matches; otherwise rejected |
 | newer | any | Rejected: upgrade justUp! first |
-| any | newer | Rejected: upgrade justUp! first |
+| any | any other version | Rejected: no supported schema path |
 
 There is no downgrade. Releases are ordered numerically (`1.0.10` is newer than `1.0.9`); a
 pre-release (`rc1`, `beta2`, ...) is older than its final release. Versions that cannot be ordered
@@ -108,7 +101,7 @@ development build (`dev`) only restores backups with an identical build ID.
 
 ### Failed migration
 
-The migration runs in one transaction on the staged copy. If it fails, the staged copy is
+The migration of a version-1 or version-10 backup runs in one transaction on the staged copy. If it fails, the staged copy is
 discarded and the response says that the migration failed. Details are in the server log. The
 uploaded backup file is not modified.
 

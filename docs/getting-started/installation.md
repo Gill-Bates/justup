@@ -48,7 +48,7 @@ or bind mount.
 | Measurements | `tsdb/` |
 | PDF reports | `pdf_reports/` |
 | Signal account | `signal/` |
-| GeoLite2 database | `geoip/` |
+| GeoLite2 City and ASN databases | `geoip/` |
 
 The entrypoint sets the owner of the data directory to `PUID`/`PGID` (default
 `1000`) and then runs the app as that user, never as root. The supplied Compose

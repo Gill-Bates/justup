@@ -11,21 +11,24 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
 from ..utils.constants import (
-    DEFAULT_METRICS_TIMEOUT_MINUTES,
     DEFAULT_ONLINE_GEO_FALLBACK_ENABLED,
+    DEFAULT_PDF_EXPORT_ENABLED,
     DEFAULT_SMTP_USE_TLS,
-    METRICS_TIMEOUT_MINUTES_MAX,
-    METRICS_TIMEOUT_MINUTES_MIN,
     PROVIDER_LOOKUP_CACHE_TTL_DEFAULT,
     PROVIDER_LOOKUP_CACHE_TTL_MAX,
     PROVIDER_LOOKUP_CACHE_TTL_MIN,
     QUALITY_MIN_SCORE_DEFAULT,
     QUALITY_RTT_THRESHOLD_MS_DEFAULT,
     RATE_LIMIT_AUTH_DEFAULT,
+    RATE_LIMIT_PATTERN,
     SESSION_MAX_DAYS_DEFAULT,
     SESSION_MAX_DAYS_MAX,
     SESSION_MAX_DAYS_MIN,
 )
+
+# Shared by the read model and the patch model so both accept the same values.
+_THEME_PATTERN = "^(system|light|dark)$"
+_PDF_PAGE_SIZE_PATTERN = "^(a4|letter)$"
 
 
 class Settings(BaseModel):
@@ -35,15 +38,15 @@ class Settings(BaseModel):
     purge_enabled: bool = True
     use_utc_dashboard: bool = False
     geoip_auto_update: bool = Field(default=True, description="Auto-update GeoLite2 database on startup")
-    theme: str = Field(default="system", pattern="^(system|light|dark)$", description="UI theme")
+    theme: str = Field(default="system", pattern=_THEME_PATTERN, description="UI theme")
     last_backup_at: str | None = Field(default=None, description="ISO timestamp of last backup")
-    auth_disabled: bool = Field(default=False, description="Disable authentication (public access)")
-    pdf_page_size: str = Field(default="a4", pattern="^(a4|letter)$", description="PDF report paper size")
-    metrics_timeout_minutes: int = Field(
-        default=DEFAULT_METRICS_TIMEOUT_MINUTES,
-        ge=METRICS_TIMEOUT_MINUTES_MIN,
-        le=METRICS_TIMEOUT_MINUTES_MAX,
-        description="Global timeout for metric alerts (minutes)",
+    public_hostname: str = Field(default="", description="Bare hostname or IP used for https links in notifications")
+    auth_disabled: bool = Field(
+        default=False, description="True when 'Require Authentication' is OFF (public access); inverse of that switch"
+    )
+    pdf_page_size: str = Field(default="a4", pattern=_PDF_PAGE_SIZE_PATTERN, description="PDF report paper size")
+    pdf_export_enabled: bool = Field(
+        default=DEFAULT_PDF_EXPORT_ENABLED, description="PDF export available; when off, every PDF endpoint refuses"
     )
     session_max_days: int = Field(
         default=SESSION_MAX_DAYS_DEFAULT,
@@ -92,13 +95,12 @@ class SettingsUpdate(BaseModel):
     purge_enabled: bool | None = None
     use_utc_dashboard: bool | None = None
     geoip_auto_update: bool | None = None
-    theme: str | None = Field(default=None, pattern="^(system|light|dark)$")
-    pdf_page_size: str | None = Field(default=None, pattern="^(a4|letter)$")
-    metrics_timeout_minutes: int | None = Field(
-        default=None, ge=METRICS_TIMEOUT_MINUTES_MIN, le=METRICS_TIMEOUT_MINUTES_MAX
-    )
+    theme: str | None = Field(default=None, pattern=_THEME_PATTERN)
+    public_hostname: str | None = Field(default=None, max_length=300)  # validated in the PATCH handler
+    pdf_page_size: str | None = Field(default=None, pattern=_PDF_PAGE_SIZE_PATTERN)
+    pdf_export_enabled: bool | None = None
     session_max_days: int | None = Field(default=None, ge=SESSION_MAX_DAYS_MIN, le=SESSION_MAX_DAYS_MAX)
-    rate_limit_auth: str | None = Field(default=None, pattern=r"^[1-9][0-9]{0,5}/(second|minute|hour|day)$")
+    rate_limit_auth: str | None = Field(default=None, pattern=RATE_LIMIT_PATTERN)
     quality_targets: str | None = Field(default=None, max_length=2000)
     quality_min_score: int | None = Field(default=None, ge=0, le=100)
     quality_rtt_threshold_ms: int | None = Field(default=None, ge=1, le=10000)
@@ -110,9 +112,9 @@ class SettingsUpdate(BaseModel):
     ip_api_key: str | None = Field(default=None, max_length=256)  # write-only; empty string clears
     # auth_disabled is intentionally omitted and requires a dedicated endpoint.
     # downsample_enabled was removed: rollups and compression always run (stale clients get a 422).
+    # metrics_timeout_minutes was removed: set down_alert_delay_minutes per target (stale clients get a 422).
     # pop_refresh_interval_seconds / pop_refresh_initial_delay_seconds were removed: POP refresh is
-    # now self-managed from the pop_import_runs history. Old payloads carrying these fields are
-    # rejected as unknown input rather than silently stored (see model_config below).
+    # self-managed from the pop_import_runs history (stale clients get a 422).
 
     # SMTP Email settings
     smtp_enabled: bool | None = None

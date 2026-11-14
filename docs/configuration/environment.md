@@ -48,8 +48,16 @@ signed with it is needed. See [Backup & restore](../features/backup.md).
 | --- | --- | --- |
 | `JUSTUP_HOST` | `0.0.0.0` | Bind address in the container |
 | `JUSTUP_PORT` | `8000` | Bind port in the container; an invalid value falls back to `8000` with a warning |
-| `UPMON_TRUSTED_PROXIES` | empty | Proxy addresses trusted for `X-Forwarded-For`, `X-Real-IP`, and `X-Forwarded-Proto` |
+| `TRUSTED_PROXIES` | empty | Proxy addresses trusted for `X-Forwarded-For`, `X-Real-IP`, and `X-Forwarded-Proto` |
 | `LOG_LEVEL` | `INFO` | Log level (`CRITICAL`, `ERROR`, `WARNING`, `INFO`, `DEBUG`); access lines appear only at `DEBUG`. An invalid value falls back to `INFO` with a warning |
+
+`JUSTUP_HOST=::` makes the listener IPv6-only. Measured with the bundled uvicorn (0.54.0) on
+Linux with `net.ipv6.bindv6only=0`: `ss -ltn` showed `[::]:PORT`, `http://[::1]:PORT/healthz`
+answered `200`, and `127.0.0.1:PORT` refused the connection, because asyncio sets
+`IPV6_V6ONLY` on a socket it binds for a host string. `0.0.0.0` and `127.0.0.1` are
+IPv4-only (`::1` refused). The default `0.0.0.0` therefore does not serve IPv6, and `::` does not
+serve IPv4. Published ports and Docker's IPv6 handling were not tested; see
+[Docker](../getting-started/docker.md#ipv4-and-ipv6).
 
 justUp! supports exactly one app process per data directory. There is no
 `WORKERS` variable.
@@ -82,7 +90,7 @@ These are not variables. Admins change them in the UI without a restart:
 | --- | --- |
 | `purge_enabled` | on |
 | `pdf_page_size` | `a4` |
-| `metrics_timeout_minutes` | 5 (1-10) |
+| `pdf_export_enabled` | on |
 | `session_max_days` | 1 (1-7) |
 | `geoip_auto_update` | on |
 | `rate_limit_auth` | `10/minute` |
@@ -90,7 +98,7 @@ These are not variables. Admins change them in the UI without a restart:
 | `quality_min_score` | 70 (0-100) |
 | `quality_rtt_threshold_ms` | 500 (1-10000) |
 | `provider_lookup_enabled` | on |
-| `online_geo_fallback_enabled` | on until you switch it off; an opt-out is stored and kept |
+| `online_geo_fallback_enabled` | off until you switch it on; your choice is stored and kept |
 | `provider_lookup_cache_ttl_seconds` | 1800 (60-86400) |
 | `ip_api_key` (encrypted) | empty |
 | `signal_api_sender_number` | empty |

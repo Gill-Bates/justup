@@ -56,3 +56,62 @@ def test_temporary_tag_cleanup_does_not_depend_on_artifacts():
 
 def test_no_trivy_result_is_defaulted_to_zero():
     assert not re.search(r"\|\|\s*echo 0", RELEASE + SECURITY)
+
+
+def test_published_version_tag_is_checked_before_it_is_written():
+    publish = RELEASE.index("      - name: Publish version tag")
+    assert (
+        publish
+        < RELEASE.index('dockerhub.py exists "$VERSION"')
+        < RELEASE.index('imagetools create --tag "${IMAGE_NAME}:${VERSION}"')
+    )
+
+
+def test_registry_is_rechecked_right_before_latest_moves_and_before_tags_are_deleted():
+    promote = RELEASE.split("      - name: Promote latest", 1)[1].split("  cleanup-arch-tags:", 1)[0]
+    assert promote.index("release-newest.py") < promote.index('imagetools create --tag "${IMAGE_NAME}:latest"')
+    cleanup = RELEASE.split("  cleanup-dockerhub-tags:", 1)[1].split("  create-release:", 1)[0]
+    assert cleanup.index("release-newest.py") < cleanup.index("dockerhub.py delete")
+
+
+def test_nvd_gate_and_prepared_source_archive_run_before_the_registry_push():
+    push = RELEASE.index("Log in to Docker Hub (push)")
+    assert RELEASE.index("tools/nvd-gate.py check") < push
+    assert RELEASE.index("tools/release-publish.py source") < push
+    # The gate must not swallow its exit status: a CRITICAL CVE (1) or an NVD failure (3) fails the job.
+    assert 'exit "$status"' in RELEASE
+
+
+def test_release_is_a_verified_draft_before_it_is_published():
+    release = RELEASE.split("\n  create-release:", 1)[1]
+    steps = [
+        release.index("tools/release-publish.py plan"),
+        release.index("-F draft=true"),
+        release.index("releases/${RELEASE_ID}/assets?name="),
+        release.index("tools/release-publish.py verify release-draft.json"),
+        release.index("-F draft=false"),
+        release.index("tools/release-publish.py verify release-published.json"),
+    ]
+    assert steps == sorted(steps)
+    # A published tag is never edited, replaced or deleted by the workflow.
+    assert "createRelease" not in release and "updateRelease" not in release
+    # The only delete is the removal of stale assets the plan listed for an unpublished draft.
+    assert release.count("-X DELETE") == 1
+    assert release.index("jq -r '.delete[] | .id' release-plan.json") < release.index("-X DELETE")
+
+
+def test_contents_write_is_confined_to_the_release_job():
+    for job in re.split(r"\n  (?=[a-z][a-z-]*:\n)", RELEASE.split("\njobs:\n", 1)[1]):
+        name = job.split(":", 1)[0]
+        assert ("contents: write" in job) == (name == "create-release"), name
+
+
+def test_every_directory_the_release_job_collects_is_filled_by_an_earlier_step():
+    # A directory read by "Collect release assets" but never downloaded only fails at release time.
+    release = RELEASE.split("\n  create-release:", 1)[1]
+    before, collect = release.split("- name: Collect release assets", 1)
+    collect = collect.split("python3 tools/release-publish.py manifest", 1)[0]
+    directories = set(re.findall(r"(?<![\w/-])([a-z][a-z-]*)/(?=[\w$])", collect)) - {"release-files"}
+    assert {"nmap-nvd", "nmap-provenance", "trivy-reports", "toolchain", "nmap-release-assets"} <= directories
+    for directory in directories:
+        assert f"path: {directory}/" in before or f" {directory} " in before, directory

@@ -20,7 +20,7 @@ background service. Exceeding a limit answers HTTP `429` with a `Retry-After` he
 
 The bucket key is the client IP from `resolve_trusted_client_ip`: `X-Forwarded-For`,
 `X-Real-IP`, or `Forwarded` are honoured only when the direct sender is in
-`UPMON_TRUSTED_PROXIES`; see [Reverse proxy](../configuration/reverse-proxy.md). Forged
+`TRUSTED_PROXIES`; see [Reverse proxy](../configuration/reverse-proxy.md). Forged
 headers from other peers create no new buckets.
 
 - IPv6 clients share one counter per `/64`; IPv4-mapped IPv6 addresses use their IPv4 bucket.
@@ -37,6 +37,7 @@ headers from other peers create no new buckets.
 | `/ui/fragments/status-summary` | GET | `30/minute` | IP |
 | `/ui/fragments/targets-table` | GET | `30/minute` | IP |
 | `/ui/fragments/target-status/{target_id}` | GET | `60/minute` | IP |
+| `/ui/fragments/uptime/{target_id}` | GET | `300/minute` | IP |
 | `/ui/fragments/traceroute/{target_id}` | GET | `10/minute` | IP |
 | `/reports/targets/{target_id}/pdf` | GET | `5/minute` | IP |
 | `/reports/targets/{target_id}/pdf/request` | POST | `5/minute` | IP |
@@ -44,9 +45,11 @@ headers from other peers create no new buckets.
 | `/settings/alerts/purge` | POST | `10/minute` | IP |
 | `/settings/auth/toggle` | POST | `5/minute` | IP |
 | `/settings/signal/test` | POST | `5/minute` | IP |
-| `/settings/signal/status` | GET | `30/minute` | IP |
+| `/signal/status` | GET | `30/minute` | IP |
+| `/settings/signal/status` | GET | `30/minute` (also with `refresh=true`) | IP |
 | `/settings/signal/unregister` | POST | `3/minute` | IP |
 | `/settings/signal/unlink` | POST | `5/minute` | IP |
+| `/settings/network/public-egress` | GET | `12/minute` (also with `refresh=true`) | IP |
 | `/settings/backup` | POST | `10/minute` | IP |
 | `/settings/restore` | POST | `10/minute` | IP |
 | `/settings/smtp/test-mail` | POST | `5/minute` | IP |
@@ -58,10 +61,18 @@ headers from other peers create no new buckets.
 | `/signal/verify` | POST | `10/hour` | user |
 | `/targets/{target_id}/test-alert` | POST | `5/minute` | IP |
 | `/recipients/verify-signal` | POST | `10/minute` | IP |
+| `/recipients/{recipient_id}/recheck-signal` | POST | `5/minute` | IP |
 | `/recipients/{recipient_id}/test` | POST | `10/minute` | IP |
 | `/recipients/{recipient_id}/test/{queue_id}` | GET | `60/minute` | IP |
 | `/me/dashboard-layout` | GET, PUT, DELETE | `60/minute` each | IP |
+| `/me/dashboard-layout/monitors`, `/me/dashboard-layout/uptime` | GET | `60/minute` each | IP |
 | `/api/admin/pop/refresh` | POST | `10/minute` | IP |
+| `/network-scans/status` | GET | `60/minute` | IP |
+| `/network-scans` | POST | `10/minute` and `3/minute` | IP and user |
+| `/network-scans/{scan_id}` | GET | `60/minute` | IP |
+| `/network-scans/{scan_id}` | DELETE | `10/minute` | IP |
+| `/network-scans/services/{target_id}/preview` | POST | `5/minute` and `2/minute` | IP and user |
+| `/network-scans/services/{target_id}/confirm` | POST | `10/minute` and `5/minute` | IP and user |
 | `/csp-report` | POST | `30/minute` | IP |
 
 A regression test (`tests/test_rate_limit.py`) pins this table, including that no route is
@@ -70,7 +81,7 @@ counted twice.
 ## Login limit and lockout
 
 The limit for `/login`, `/me/password`, and `/me/complete-required-change` is the setting
-`rate_limit_auth` (Settings > Users, default `10/minute`). It is read on every request, so
+`rate_limit_auth` (Settings > General, default `10/minute`). It is read on every request, so
 a change applies without a restart. An invalid stored value falls back to `10/minute`. Each
 of the three routes keeps one counter: changing the limit keeps the request history, so
 lowering it never hands out a fresh budget, and raising it takes effect immediately.

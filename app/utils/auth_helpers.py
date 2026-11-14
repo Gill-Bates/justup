@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import logging
 from typing import TYPE_CHECKING, Any
-from urllib.parse import unquote, urlparse
+from urllib.parse import unquote, urlencode, urlparse
 
 from ..db import sqlite as sqlite_db
 from ..models.users import hash_token
@@ -129,6 +129,19 @@ def _safe_redirect_target(target: str, default: str = "/ui/login") -> str:
     return target
 
 
+def login_redirect_url(request: Request, login_path: str = "/ui/login") -> str:
+    """Login URL that carries the requested page as ``next`` so a sign-in can continue to it.
+
+    Only GET page requests are carried; the value is a validated relative path.
+    """
+    if request.method != "GET":
+        return login_path
+    target = request.url.path + (f"?{request.url.query}" if request.url.query else "")
+    if target.startswith(login_path) or _safe_redirect_target(target, "") == "":
+        return login_path
+    return f"{login_path}?{urlencode({'next': target})}"
+
+
 def _has_authorization_header(request: Request) -> bool:
     """Return True if the request carries a non-empty Authorization header.
 
@@ -155,9 +168,14 @@ def _extract_bearer_token(request: Request) -> str | None:
     return None
 
 
+def session_cookie_name(request: Request) -> str:
+    """Name of the session cookie: the ``__Host-`` prefix requires a secure (HTTPS) request."""
+    return "__Host-token" if request_is_https(request) else "token"
+
+
 def _extract_cookie_token(request: Request, *, cookie_name: str | None = None) -> str | None:
     if cookie_name is None:
-        cookie_name = "__Host-token" if request_is_https(request) else "token"
+        cookie_name = session_cookie_name(request)
     token = request.cookies.get(cookie_name)
     if not token:
         return None

@@ -42,23 +42,24 @@
 			<div class="card-header dashboard-widget-header">
 				<span class="material-icons" aria-hidden="true">{{ icon }}</span>
 				<span class="dashboard-monitor-title">{{ title }}</span>
-				{% if status_id %}<span id="{{ status_id }}" class="dashboard-monitor-status badge ju-status-badge--neutral ms-auto d-inline-flex align-items-center gap-1" role="status" aria-live="polite"><span class="material-icons" aria-hidden="true">hourglass_empty</span><span>Loading</span></span>{% endif %}
+				{# Hand-written item: the JS hooks (id, role, aria-live) need it. Loading is S6 (word, aria-busy, no dot); the script swaps in the S3 dot (DC-STATE-1). #}
+				{% if status_id %}<span id="{{ status_id }}" class="ju-status-item dashboard-monitor-status ms-auto" role="status" aria-live="polite" aria-busy="true">Loading</span>{% endif %}
 			</div>
-			<div class="card-body dashboard-widget-body dashboard-monitor-body{% if status_id %} dashboard-monitor-body--compact{% endif %}" aria-live="polite"><span aria-label="Loading">–</span></div>
+			<div class="card-body dashboard-widget-body dashboard-monitor-body{% if status_id %} dashboard-monitor-body--compact{% endif %}" tabindex="0" role="region" aria-label="{{ title }} details" aria-live="polite"><span aria-label="Loading">–</span></div>
 		</section>
 	</div>
 	{% endmacro %}
 	<div class="grid-stack dashboard-grid dashboard-grid--loading" id="dashboard-grid" data-is-admin="{{ 'true' if user.is_admin else 'false' }}">
 
 		<!-- Four independently movable status heroes. -->
-		<div class="grid-stack-item" gs-id="status-online" gs-x="0" gs-y="0" gs-w="3" gs-h="2" data-widget-id="status-online">
+		<div class="grid-stack-item" gs-id="status-online" data-widget-id="status-online">
 			<div class="grid-stack-item-content">
 				<button type="button" class="dashboard-widget-handle" hidden
 					aria-label="Move or resize widget: Online. Arrow keys move it, Shift with arrow keys resizes it.">
 					<span class="material-icons" aria-hidden="true">drag_indicator</span>
 				</button>
 				<div class="card ui-card card-status dashboard-widget-card dashboard-hero" id="dashboard-status-online" data-status="online">
-					<div class="dashboard-widget-body dashboard-hero-body">
+					<div id="dashboard-status-online-body" class="dashboard-widget-body dashboard-hero-body" tabindex="0" role="region" aria-label="Online summary">
 					<div class="dashboard-hero-metric d-flex justify-content-center align-items-center gap-2">
 						<span class="material-icons text-success fs-5" aria-hidden="true">check_circle</span>
 						<span class="dashboard-widget-value fs-3 fw-bold text-body-secondary">–</span>
@@ -68,14 +69,14 @@
 				</div>
 			</div>
 		</div>
-		<div class="grid-stack-item" gs-id="status-offline" gs-x="3" gs-y="0" gs-w="3" gs-h="2" data-widget-id="status-offline">
+		<div class="grid-stack-item" gs-id="status-offline" data-widget-id="status-offline">
 			<div class="grid-stack-item-content">
 				<button type="button" class="dashboard-widget-handle" hidden
 					aria-label="Move or resize widget: Offline. Arrow keys move it, Shift with arrow keys resizes it.">
 					<span class="material-icons" aria-hidden="true">drag_indicator</span>
 				</button>
 				<div class="card ui-card card-status dashboard-widget-card dashboard-hero" id="dashboard-status-offline" data-status="offline">
-					<div class="dashboard-widget-body dashboard-hero-body">
+					<div id="dashboard-status-offline-body" class="dashboard-widget-body dashboard-hero-body" tabindex="0" role="region" aria-label="Offline summary">
 					<div class="dashboard-hero-metric d-flex justify-content-center align-items-center gap-2">
 						<span class="material-icons text-body-secondary fs-5" aria-hidden="true">cancel</span>
 						<span class="dashboard-widget-value fs-3 fw-bold text-body-secondary">–</span>
@@ -85,14 +86,14 @@
 				</div>
 			</div>
 		</div>
-		<div class="grid-stack-item" gs-id="status-disabled" gs-x="6" gs-y="0" gs-w="3" gs-h="2" data-widget-id="status-disabled">
+		<div class="grid-stack-item" gs-id="status-disabled" data-widget-id="status-disabled">
 			<div class="grid-stack-item-content">
 				<button type="button" class="dashboard-widget-handle" hidden
 					aria-label="Move or resize widget: Disabled. Arrow keys move it, Shift with arrow keys resizes it.">
 					<span class="material-icons" aria-hidden="true">drag_indicator</span>
 				</button>
 				<div class="card ui-card card-status dashboard-widget-card dashboard-hero" id="dashboard-status-disabled" data-status="disabled">
-					<div class="dashboard-widget-body dashboard-hero-body">
+					<div id="dashboard-status-disabled-body" class="dashboard-widget-body dashboard-hero-body" tabindex="0" role="region" aria-label="Disabled summary">
 					<div class="dashboard-hero-metric d-flex justify-content-center align-items-center gap-2">
 						<span class="material-icons text-body-secondary fs-5" aria-hidden="true">pause_circle</span>
 						<span class="dashboard-widget-value fs-3 fw-bold text-body-secondary">–</span>
@@ -102,14 +103,14 @@
 				</div>
 			</div>
 		</div>
-		<div class="grid-stack-item" gs-id="status-total" gs-x="9" gs-y="0" gs-w="3" gs-h="2" data-widget-id="status-total">
+		<div class="grid-stack-item" gs-id="status-total" data-widget-id="status-total">
 			<div class="grid-stack-item-content">
 				<button type="button" class="dashboard-widget-handle" hidden
 					aria-label="Move or resize widget: Total. Arrow keys move it, Shift with arrow keys resizes it.">
 					<span class="material-icons" aria-hidden="true">drag_indicator</span>
 				</button>
 				<div class="card ui-card card-status dashboard-widget-card dashboard-hero" id="dashboard-status-total" data-status="total">
-					<div class="dashboard-widget-body dashboard-hero-body">
+					<div id="dashboard-status-total-body" class="dashboard-widget-body dashboard-hero-body" tabindex="0" role="region" aria-label="Total summary">
 					<div class="dashboard-hero-metric d-flex justify-content-center align-items-center gap-2">
 						<span class="material-icons text-body-secondary fs-5" aria-hidden="true">gps_fixed</span>
 						<span class="dashboard-widget-value fs-3 fw-bold text-body-secondary">–</span>
@@ -121,7 +122,7 @@
 		</div>
 
 		<!-- quality -->
-		<div class="grid-stack-item" gs-id="quality" gs-x="0" gs-y="2" gs-w="3" gs-h="3" data-widget-id="quality">
+		<div class="grid-stack-item" gs-id="quality" data-widget-id="quality">
 			<div class="grid-stack-item-content">
 				<button type="button" class="dashboard-widget-handle" hidden aria-label="Move or resize widget: Monitor quality. Arrow keys move it, Shift with arrow keys resizes it.">
 					<span class="material-icons" aria-hidden="true">drag_indicator</span>
@@ -131,19 +132,19 @@
 		</div>
 
 		<!-- downtime -->
-		<div class="grid-stack-item" gs-id="downtime" gs-x="3" gs-y="2" gs-w="6" gs-h="4" data-widget-id="downtime">
+		<div class="grid-stack-item" gs-id="downtime" data-widget-id="downtime">
 			<div class="grid-stack-item-content">
-				<button type="button" class="dashboard-widget-handle" hidden aria-label="Move or resize widget: Downtime overview. Arrow keys move it, Shift with arrow keys resizes it.">
+				<button type="button" class="dashboard-widget-handle" hidden aria-label="Move or resize widget: Downtime overview (24h). Arrow keys move it, Shift with arrow keys resizes it.">
 					<span class="material-icons" aria-hidden="true">drag_indicator</span>
 				</button>
 					<div class="card dashboard-widget-card">
 						<div class="card-header dashboard-widget-header d-flex justify-content-between align-items-center">
-							<span><span class="material-icons me-1" aria-hidden="true">warning</span> Downtime Overview (24h)</span>
+							<span><span class="material-icons me-1" aria-hidden="true">warning</span> Downtime overview (24h)</span>
 							<span class="badge bg-danger d-none" id="downtime-count-badge"></span>
 						</div>
 						<div class="card-body dashboard-widget-body dashboard-widget-body--flush" id="downtime-content">
 							<!-- Downtime Table -->
-							<div id="downtime-table-container" class="ju-table-viewport dashboard-downtime-table d-none" tabindex="0" role="region" aria-label="Downtime overview table">
+							<div id="downtime-table-container" class="ju-table-viewport dashboard-downtime-table d-none" tabindex="0" role="region" aria-label="Downtime overview (24h) table">
 								<table class="table table-sm table-hover align-middle rtable ju-data-table mb-0 table-clickable">
 									<thead class="table-light sticky-top">
 										<tr>
@@ -157,6 +158,11 @@
 									</tbody>
 								</table>
 							</div>
+							<nav id="downtime-pagination" class="dashboard-downtime-pagination d-none" aria-label="Downtime overview (24h) pages">
+								<button id="downtime-prev" type="button" class="btn btn-sm btn-outline-secondary">Previous</button>
+								<span id="downtime-page-status" aria-live="polite"></span>
+								<button id="downtime-next" type="button" class="btn btn-sm btn-outline-secondary">Next</button>
+							</nav>
 							<!-- Empty State: All systems operational -->
 							<div id="downtime-success" class="dashboard-widget-empty text-success d-none">
 								<span class="material-icons fs-1 d-block mb-2" aria-hidden="true">check_circle</span>
@@ -186,27 +192,27 @@
 			</div>
 		</div>
 
-		<div class="grid-stack-item d-none" gs-id="alerts-open" gs-x="9" gs-y="2" gs-w="3" gs-h="4" data-widget-id="alerts-open">
+		<div class="grid-stack-item d-none" gs-id="alerts-open" data-widget-id="alerts-open">
 			{{ monitoring_card('Alerts', 'notifications_active', 'alerts-open-status') }}
 		</div>
 		{% if user.is_admin %}
-		<div class="grid-stack-item d-none" gs-id="delivery-queue" gs-x="9" gs-y="2" gs-w="3" gs-h="3" data-widget-id="delivery-queue">
+		<div class="grid-stack-item d-none" gs-id="delivery-queue" data-widget-id="delivery-queue">
 				{{ monitoring_card('Delivery queue', 'outbox', 'delivery-queue-status') }}
 		</div>
 		{% endif %}
-		<div class="grid-stack-item d-none" gs-id="uptime-day" gs-x="0" gs-y="10" gs-w="3" gs-h="2" data-widget-id="uptime-day">
+		<div class="grid-stack-item d-none" gs-id="uptime-day" data-widget-id="uptime-day">
 			{{ monitoring_card('Uptime (24h)', 'monitor_heart') }}
 		</div>
-		<div class="grid-stack-item d-none" gs-id="cert-expiry" gs-x="3" gs-y="10" gs-w="3" gs-h="4" data-widget-id="cert-expiry">
+		<div class="grid-stack-item d-none" gs-id="cert-expiry" data-widget-id="cert-expiry">
 			{{ monitoring_card('Certificate expiry', 'verified_user') }}
 		</div>
-		<div class="grid-stack-item d-none" gs-id="slowest-monitors" gs-x="0" gs-y="14" gs-w="6" gs-h="4" data-widget-id="slowest-monitors">
+		<div class="grid-stack-item d-none" gs-id="slowest-monitors" data-widget-id="slowest-monitors">
 			{{ monitoring_card('Slowest monitors (latest)', 'speed') }}
 		</div>
-		<div class="grid-stack-item d-none" gs-id="quality-trend" gs-x="6" gs-y="14" gs-w="6" gs-h="4" data-widget-id="quality-trend">
+		<div class="grid-stack-item d-none" gs-id="quality-trend" data-widget-id="quality-trend">
 			{{ monitoring_card('Quality trend (24h)', 'show_chart') }}
 		</div>
-		<div class="grid-stack-item d-none" gs-id="stale-checks" gs-x="6" gs-y="10" gs-w="3" gs-h="4" data-widget-id="stale-checks">
+		<div class="grid-stack-item d-none" gs-id="stale-checks" data-widget-id="stale-checks">
 			{{ monitoring_card('Stale checks', 'schedule') }}
 		</div>
 	</div>
@@ -237,5 +243,6 @@
 <script src="/static/js/dashboard.js"></script>
 <script src="/static/js/dashboard-widgets.js"></script>
 <script src="/static/js/dashboard-grid.js"></script>
+<script src="/static/js/charts/chart-config.js"></script>
 <script src="/static/js/dashboard-monitoring.js"></script>
 {% endblock %}

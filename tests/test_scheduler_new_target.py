@@ -39,15 +39,6 @@ def _create(path: Path, name: str) -> int:
 
 
 @pytest.fixture
-def db_path(tmp_path: Path) -> Path:
-    path = tmp_path / "db" / "justup.db"
-    conn = sqlite_db.connect(path)
-    sqlite_db.init_schema(conn)
-    sqlite_db.close_connection(conn)
-    return path
-
-
-@pytest.fixture
 def sched(db_path: Path, tmp_path: Path) -> MonitorScheduler:
     return MonitorScheduler(get_conn=lambda: sqlite_db.connect(db_path), tsdb_dir=tmp_path / "tsdb")
 
@@ -83,15 +74,15 @@ def test_request_refresh_sets_flag(sched):
     assert sched._refresh_requested is True
 
 
-@pytest.mark.parametrize(
-    ("stored", "expected"),
-    [(0, 5), (5, 5), (10, 10), (17, 10), (-3, 1), ("abc", 5)],
-)
-def test_refresh_clamps_stored_metrics_timeout(db_path, sched, stored, expected):
+@pytest.mark.parametrize(("stored", "expected"), [(1, 1), (5, 5), (10, 10), (99, 10)])
+def test_refresh_reads_the_down_alert_delay_of_each_target(db_path, sched, stored, expected):
+    # The DB CHECK only forbids <= 0; a restored backup may carry more than the API maximum of 10.
+    tid = _create(db_path, "delayed")
     conn = sqlite_db.connect(db_path)
     try:
-        sqlite_db.set_setting(conn, "metrics_timeout_minutes", stored)
+        conn.execute("UPDATE targets SET down_alert_delay_minutes = ? WHERE id = ?", (stored, tid))
+        conn.commit()
     finally:
         sqlite_db.close_connection(conn)
     sched._refresh_targets(utcnow())
-    assert sched._metrics_timeout_minutes == expected
+    assert sched._targets[tid]["down_alert_delay_minutes"] == expected

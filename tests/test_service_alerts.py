@@ -40,15 +40,6 @@ def _no_maintenance():
     maintenance.end_maintenance()
 
 
-@pytest.fixture
-def db_path(tmp_path: Path) -> Path:
-    path = tmp_path / "alerts.db"
-    conn = sqlite_db.connect(path)
-    sqlite_db.init_schema(conn)
-    sqlite_db.close_connection(conn)
-    return path
-
-
 def _rows(db_path: Path) -> list[sqlite3.Row]:
     conn = sqlite_db.connect(db_path)
     try:

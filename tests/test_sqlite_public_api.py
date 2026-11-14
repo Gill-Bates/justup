@@ -13,6 +13,7 @@ and ``monkeypatch.setattr(sqlite_db, ...)``, so all three must keep working.
 
 from __future__ import annotations
 
+import contextlib
 import inspect
 import sqlite3
 
@@ -43,9 +44,6 @@ FUNCTIONS: dict[str, str] = {
     "ensure_notifications_tables": "conn",
     "_create_baseline_schema": "conn",
     "_ensure_unique_recipient_phone": "conn",
-    "_migrate_2_spooler_resilience": "conn",
-    "_migrate_3_alert_dispatch_outbox": "conn",
-    "_migrate_5_recipient_enable_for_all_targets": "conn",
     "assign_flagged_recipients": "conn, target_id",
     "get_schema_version": "conn",
     "_normalise_sql": "expression",
@@ -58,7 +56,8 @@ FUNCTIONS: dict[str, str] = {
     "_diff_layout": "actual, expected",
     "_database_file": "conn",
     "_layout_problems": "conn",
-    "_drift_error": "conn, version, diffs",
+    "_drift_error": "conn, version, diffs, *, expected_version=",
+    "_layout_for_version": "version",
     "check_schema_compatibility": "conn",
     "_missing_migrations": "current",
     "init_schema": "conn",
@@ -71,7 +70,13 @@ FUNCTIONS: dict[str, str] = {
     "delete_target_status": "conn, target_id",
     "get_session_max_days": "conn",
     "cleanup_expired_tokens": "conn",
-    "create_user": "conn, *, username, password_hash, is_admin, can_close_alerts=, must_change_password=",
+    "create_user": (
+        "conn, *, username, password_hash, is_admin, can_close_alerts=, must_change_password=, phone=, email=, "
+        "recipient_enabled=, enable_for_all_targets="
+    ),
+    "get_user_recipient": "conn, user_id",
+    "get_recipients_by_user": "conn",
+    "update_user_recipient": "conn, user_id, *, phone, email, is_enabled, enable_for_all_targets",
     "get_user_by_username": "conn, username",
     "get_user_by_id": "conn, user_id",
     "get_user_theme": "conn, user_id",
@@ -79,6 +84,7 @@ FUNCTIONS: dict[str, str] = {
     "get_user": "conn, user_id",
     "get_all_users": "conn",
     "delete_user": "conn, user_id",
+    "delete_non_admin_user": "conn, user_id",
     "get_first_admin": "conn",
     "update_user": "conn, user_id, *, username, is_admin, can_close_alerts=",
     "set_user_active": "conn, user_id, *, is_active",
@@ -176,6 +182,8 @@ CLASSES = (
     "GroupNotFoundError",
     "GroupNotEmptyError",
     "DuplicatePhoneError",
+    "UserBoundRecipientError",
+    "AdminUserError",
 )
 
 # Module-level constants and shared state (the underscore ones are used by tests and tooling).
@@ -268,7 +276,8 @@ def test_logger_name_is_unchanged() -> None:
 def test_patching_a_package_name_reaches_internal_callers(monkeypatch: pytest.MonkeyPatch) -> None:
     """auth_tokens.get_session_max_days calls get_setting, which lives in another submodule."""
     monkeypatch.setattr(sqlite_db, "get_setting", lambda _conn, _key, _default=None: 7)
-    assert sqlite_db.get_session_max_days(sqlite3.connect(":memory:")) == 7
+    with contextlib.closing(sqlite3.connect(":memory:")) as conn:
+        assert sqlite_db.get_session_max_days(conn) == 7
 
 
 def test_connection_counters_are_read_and_written_through_the_package(monkeypatch: pytest.MonkeyPatch) -> None:

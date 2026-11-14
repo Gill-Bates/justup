@@ -36,6 +36,9 @@ without a general `/api` prefix; exceptions are `/api/meta` and
 | `POST` | `/targets/{target_id}/test-alert` | trigger a test alert |
 | `GET` | `/targets/{target_id}/metrics/{metric}` | query one metric series |
 | `GET` | `/dashboard/uptime`, `/dashboard/downtime` | dashboard time series |
+| `GET` | `/network-scans/status` | whether the Nmap worker accepts scans (admin): `available`, `state`, `message`, `detail` |
+| `POST` | `/network-scans` | start a port discovery scan (admin; `host`, `protocols` `tcp`/`udp`, `profile` `quick`/`extended`); `202`, `429` when busy, `503` with `detail.code` `unavailable` when the worker is down |
+| `GET`, `DELETE` | `/network-scans/{scan_id}` | read status and result / cancel your own scan |
 
 Exact target duplicates respond with `409 Conflict`; different services on
 the same host remain allowed. Preview also classifies overlapping checks.
@@ -52,15 +55,16 @@ server-side validation.
 | `GET` | `/ui/notifications/summary` | unread counter, ID of the newest unread event, preview (UI polling, cookie or bearer) |
 | `GET` | `/ui/notifications/items` | notifications of the signed-in user (filters `category`, `unread`, `severity`, pagination) |
 | `POST` | `/ui/notifications/{id}/read`, `/ui/notifications/read-all` | mark as read (only for the caller; changes no alert) |
+| `POST` | `/ui/notifications/{id}/dismiss` | hide one notification for the caller only |
 | `GET`, `POST` | `/groups` | list / create groups |
 | `GET`, `PATCH`, `DELETE` | `/groups/{group_id}` | read, change, delete group (`409` if the name exists or targets still use the group, `404` if unknown) |
 | `GET`, `POST` | `/recipients` | list / create recipients (`409` if the phone number already exists); `enable_for_all_targets` assigns the recipient to every target |
-| `GET`, `PATCH`, `DELETE` | `/recipients/{recipient_id}` | read, change, delete recipient (`PATCH` of `enable_for_all_targets`: `true` assigns to all targets, `false` after `true` removes from all) |
+| `GET`, `PATCH`, `DELETE` | `/recipients/{recipient_id}` | read, change, delete recipient (`PATCH` of `enable_for_all_targets`: `true` assigns to all targets, `false` after `true` removes from all; `DELETE` of a recipient that belongs to a user answers `409`) |
 | `POST` | `/recipients/verify-signal` | verify Signal number |
 | `POST` | `/recipients/{recipient_id}/test` | queue a test message to the saved Signal/email channel (`channel`: `signal`, `email`, `all`; admin; 30 s cooldown per recipient and channel) |
 | `GET` | `/recipients/{recipient_id}/test/{queue_id}` | delivery state of a test message: `pending`, `sent` (accepted by the SMTP server; final delivery is not verifiable), `failed` (admin) |
-| `GET`, `POST` | `/users` | list / create users (admin) |
-| `PUT`, `DELETE` | `/users/{user_id}` | change / delete user (admin) |
+| `GET`, `POST` | `/users` | list / create users (admin); a `recipient` object with `phone`, `email`, `is_enabled` and `enable_for_all_targets` sets the user's linked recipient |
+| `PUT`, `DELETE` | `/users/{user_id}` | change / delete user (admin); `DELETE` of an admin answers `403`, deleting the user removes its recipient |
 | `POST` | `/users/{user_id}/active` | set user status (admin) |
 | `POST` | `/users/{user_id}/revoke-sessions` | revoke another user's active sessions (admin) |
 
@@ -71,7 +75,7 @@ server-side validation.
 | `GET`, `PATCH` | `/settings` | read / change runtime settings (admin); the response includes the non-secret SMTP values, the effective `smtp_use_tls` and `smtp_password_set`, never the password |
 | `POST` | `/settings/backup` | create and download a backup |
 | `POST` | `/settings/restore` | restore a backup with admin password confirmation |
-| `POST` | `/settings/auth/toggle` | enable or disable authentication (`disable`, admin `password`; admin) |
+| `POST` | `/settings/auth/toggle` | switch Require Authentication off or on (`disable`: `true` turns it off; admin `password`; admin) |
 | `GET` | `/settings/storage`, `/settings/db-health` | storage and database status |
 | `POST` | `/reports/targets/{target_id}/pdf/request` | start an asynchronous RGB PDF report |
 | `GET` | `/reports/jobs/{job_id}` | read report status |
@@ -83,6 +87,11 @@ server-side validation.
 | `GET`, `POST` | `/api/admin/pop/*` | POP data and import runs (admin) |
 
 Backup, restore, purge, and Signal operations are additionally rate-limited.
+Phone numbers in `/recipients` and `/users` bodies must be E.164 (`+`, then 8 to 15 digits, no leading `0`); anything else answers `422`. The Signal endpoints (`/signal/send`, `/signal/register`, `/signal/verify`) first normalise the number: digits, `+`, and the separators space, tab, `-`, `.`, `/`, `(`, `)` are accepted, `00` becomes `+`, and a number without prefix gets `+49`. Letters, extensions such as `ext` or `x`, and any other character answer `422`.
+
+`POST /signal/register` (admin) answers `400` with `{"detail": {"code": "already_registered", "message": ...}}` when the number is already registered with signal-cli. The status stays `400` (not `409`) on purpose, so existing clients keep working; clients should branch on `detail.code`. `captcha_required` uses the same structure. Other registration failures return `400` with a plain-text `detail`, rate limiting `429`, and an unavailable signal-cli `503`.
+
+All `/reports/...` and `/ui/reports/...` routes answer `403` (`PDF export is disabled`) while `pdf_export_enabled` is off.
 
 ## Notifications
 

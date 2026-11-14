@@ -10,7 +10,7 @@
 from __future__ import annotations
 
 import asyncio
-import time
+import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest import mock
@@ -22,16 +22,8 @@ from app.monitor import scheduler
 from app.monitor.scheduler import MonitorScheduler, TargetStatus
 from app.utils import maintenance
 from app.utils.time import utcnow
+from app.utils.uptime_metric import AVAILABILITY_CHECKS
 from tests import _support  # noqa: F401 - imported for its sys.path side effect
-
-
-@pytest.fixture
-def db_path(tmp_path: Path) -> Path:
-    path = tmp_path / "db" / "justup.db"
-    conn = sqlite_db.connect(path)
-    sqlite_db.init_schema(conn)
-    sqlite_db.close_connection(conn)
-    return path
 
 
 def _sched(db_path: Path, tmp_path: Path) -> MonitorScheduler:
@@ -69,6 +61,16 @@ def _alert_rows(db_path: Path) -> list:
         sqlite_db.close_connection(conn)
 
 
+def _outbox(db_path: Path) -> list[tuple[str, str, str]]:
+    """(alert_id, event_type, status) of every durable dispatch row, oldest first."""
+    conn = sqlite_db.connect(db_path)
+    try:
+        rows = conn.execute("SELECT alert_id, event_type, status FROM alert_dispatch_outbox ORDER BY rowid")
+        return [(r[0], r[1], r[2]) for r in rows]
+    finally:
+        sqlite_db.close_connection(conn)
+
+
 async def _alert(sched: MonitorScheduler, tid: int, status: str) -> None:
     await sched._maybe_alert(
         target_id=tid, target_name="t", overall_ok=status == TargetStatus.UP, overall_status=status
@@ -78,37 +80,59 @@ async def _alert(sched: MonitorScheduler, tid: int, status: str) -> None:
 # ── A1: a still-down target must not be reported as recovered ────────────────
 
 
+def test_failed_open_alert_load_is_retried_instead_of_forgetting_the_alert(db_path, tmp_path):
+    tid = _target(db_path, enable_http_check=True)
+    sched = _sched(db_path, tmp_path)
+    sched._refresh_targets(utcnow())
+    rt = sched._rt[tid]
+    rt.down_since_by_service["http"] = utcnow() - timedelta(minutes=10)
+    asyncio.run(_alert(sched, tid, TargetStatus.DOWN))
+    alert_id = rt.current_alert_id
+    assert alert_id
+
+    restarted = _sched(db_path, tmp_path)
+    real = sqlite_db.list_active_alerts
+    with (
+        mock.patch.object(sqlite_db, "list_active_alerts", side_effect=[sqlite_db.sqlite3.OperationalError("busy")]),
+        pytest.raises(sqlite_db.sqlite3.OperationalError),
+    ):
+        restarted._refresh_targets(utcnow())
+    assert not restarted._rt.get(tid)
+
+    with mock.patch.object(sqlite_db, "list_active_alerts", real):
+        restarted._refresh_targets(utcnow())
+    assert restarted._rt[tid].current_alert_id == alert_id
+
+
 def test_open_alert_survives_new_failure_below_timeout(db_path, tmp_path):
     tid = _target(db_path, enable_http_check=True, enable_tcp_connect=True)
     sched = _sched(db_path, tmp_path)
     sched._refresh_targets(utcnow())
     rt = sched._rt[tid]
-    dispatch = mock.AsyncMock()
-    with mock.patch.object(sched, "_dispatch_alert", dispatch):
-        rt.down_since_by_service["http"] = utcnow() - timedelta(minutes=10)
-        asyncio.run(_alert(sched, tid, TargetStatus.DOWN))
-        alert_id = rt.current_alert_id
-        assert alert_id and dispatch.await_count == 1
+    rt.down_since_by_service["http"] = utcnow() - timedelta(minutes=10)
+    asyncio.run(_alert(sched, tid, TargetStatus.DOWN))
+    alert_id = rt.current_alert_id
+    assert alert_id and _outbox(db_path) == [(alert_id, "open", "pending")]
 
-        # HTTP recovers, TCP just failed (below the timeout): target is still DOWN
-        rt.down_since_by_service["http"] = None
-        rt.down_since_by_service["tcp"] = utcnow() - timedelta(minutes=1)
-        failures = rt.consecutive_failures
-        asyncio.run(_alert(sched, tid, TargetStatus.DOWN))
-        assert rt.current_alert_id == alert_id
-        assert dispatch.await_count == 1
-        assert rt.last_overall_ok is False
-        assert rt.consecutive_failures == failures
-        assert rt.consecutive_successes == 0
+    # HTTP recovers, TCP just failed (below the timeout): target is still DOWN
+    rt.down_since_by_service["http"] = None
+    rt.down_since_by_service["tcp"] = utcnow() - timedelta(minutes=1)
+    failures = rt.consecutive_failures
+    asyncio.run(_alert(sched, tid, TargetStatus.DOWN))
+    assert rt.current_alert_id == alert_id
+    assert _outbox(db_path) == [(alert_id, "open", "pending")]  # no duplicate queue entry
+    assert rt.last_overall_ok is False
+    assert rt.consecutive_failures == failures
+    assert rt.consecutive_successes == 0
 
-        assert [r["status"] for r in _alert_rows(db_path)] == ["open"]
+    assert [r["status"] for r in _alert_rows(db_path)] == ["open"]
 
-        # Full UP resolves exactly once
-        rt.down_since_by_service["tcp"] = None
-        asyncio.run(_alert(sched, tid, TargetStatus.UP))
+    # Full UP resolves exactly once
+    rt.down_since_by_service["tcp"] = None
+    asyncio.run(_alert(sched, tid, TargetStatus.UP))
 
     assert rt.current_alert_id is None
-    assert dispatch.await_count == 2
+    assert _outbox(db_path) == [(alert_id, "open", "pending"), (alert_id, "resolved", "pending")]
     assert [r["status"] for r in _alert_rows(db_path)] == ["resolved"]
 
 
@@ -117,22 +141,20 @@ def test_manual_open_alert_is_historical_after_recovery_and_restart(db_path, tmp
     sched = _sched(db_path, tmp_path)
     sched._refresh_targets(utcnow())
     rt = sched._rt[target_id]
-    dispatch = mock.AsyncMock()
-    with mock.patch.object(sched, "_dispatch_alert", dispatch):
-        rt.down_since_by_service["http"] = utcnow() - timedelta(minutes=10)
-        asyncio.run(_alert(sched, target_id, TargetStatus.DOWN))
-        historical_id = rt.current_alert_id
-        assert historical_id is not None
+    rt.down_since_by_service["http"] = utcnow() - timedelta(minutes=10)
+    asyncio.run(_alert(sched, target_id, TargetStatus.DOWN))
+    historical_id = rt.current_alert_id
+    assert historical_id is not None
 
-        rt.down_since_by_service["http"] = None
-        asyncio.run(_alert(sched, target_id, TargetStatus.UP))
-        assert rt.current_alert_id is None
+    rt.down_since_by_service["http"] = None
+    asyncio.run(_alert(sched, target_id, TargetStatus.UP))
+    assert rt.current_alert_id is None
 
-        rt.down_since_by_service["http"] = utcnow() - timedelta(minutes=10)
-        sched._last_alert_at[target_id] = utcnow() - timedelta(seconds=scheduler.ALERT_COOLDOWN_SECONDS + 1)
-        asyncio.run(_alert(sched, target_id, TargetStatus.DOWN))
-        active_id = rt.current_alert_id
-        assert active_id is not None and active_id != historical_id
+    rt.down_since_by_service["http"] = utcnow() - timedelta(minutes=10)
+    sched._last_alert_at[target_id] = utcnow() - timedelta(seconds=scheduler.ALERT_COOLDOWN_SECONDS + 1)
+    asyncio.run(_alert(sched, target_id, TargetStatus.DOWN))
+    active_id = rt.current_alert_id
+    assert active_id is not None and active_id != historical_id
 
     conn = sqlite_db.connect(db_path)
     try:
@@ -212,15 +234,73 @@ def test_restart_restores_only_relevant_enabled_services(db_path, tmp_path, flag
     assert rt.down_since_by_service["cert"] is None
 
     # Recovery: only enabled services report, the alert resolves without naming others
-    dispatch = mock.AsyncMock()
     for svc in expected:
         rt.down_since_by_service[svc] = None
-    with mock.patch.object(sched, "_dispatch_alert", dispatch):
-        asyncio.run(_alert(sched, tid, TargetStatus.UP))
+    asyncio.run(_alert(sched, tid, TargetStatus.UP))
     assert rt.current_alert_id is None
-    payload = dispatch.await_args.args[0]
-    assert payload.failed_service == (failed or "unknown")
+    conn = sqlite_db.connect(db_path)
+    try:
+        stored = conn.execute(
+            "SELECT failed_service FROM alert_dispatch_outbox WHERE event_type = 'resolved'"
+        ).fetchone()
+    finally:
+        sqlite_db.close_connection(conn)
+    # The durable resolve event carries the stored alert record, not the restored runtime state.
+    assert stored["failed_service"] == failed
     assert [r["status"] for r in _alert_rows(db_path)] == ["resolved"]
+
+
+@pytest.mark.parametrize(("service", "flag"), [(svc, flag) for svc, flag, _metric in AVAILABILITY_CHECKS])
+def test_disabling_availability_check_clears_its_down_since(db_path, tmp_path, service, flag):
+    enabled = {check_flag: True for _service, check_flag, _metric in AVAILABILITY_CHECKS}
+    enabled.update(enable_udp_scan=True, udp_ports="53")
+    target_id = _target(db_path, **enabled)
+    sched = _sched(db_path, tmp_path)
+    now = utcnow()
+    sched._refresh_targets(now)
+    rt = sched._rt[target_id]
+    rt.down_since_by_service.update({name: now - timedelta(minutes=5) for name, _flag, _metric in AVAILABILITY_CHECKS})
+
+    conn = sqlite_db.connect(db_path)
+    try:
+        if flag == "enable_udp_scan":
+            conn.execute("UPDATE targets SET enable_udp_scan = 0 WHERE id = ?", (target_id,))
+        elif flag == "enable_http_check":
+            conn.execute("UPDATE targets SET enable_http_check = 0 WHERE id = ?", (target_id,))
+        elif flag == "enable_ping":
+            conn.execute("UPDATE targets SET enable_ping = 0 WHERE id = ?", (target_id,))
+        else:
+            assert flag == "enable_tcp_connect"
+            conn.execute("UPDATE targets SET enable_tcp_connect = 0 WHERE id = ?", (target_id,))
+        conn.commit()
+    finally:
+        sqlite_db.close_connection(conn)
+
+    sched._refresh_targets(now + timedelta(seconds=1))
+    assert rt.down_since_by_service[service] is None
+    for other_service, _other_flag, _other_metric in AVAILABILITY_CHECKS:
+        if other_service != service:
+            assert rt.down_since_by_service[other_service] is not None
+
+
+def test_disabling_a_failed_check_clears_its_down_timer(db_path, tmp_path):
+    target_id = _target(db_path, enable_http_check=True, enable_ping=True)
+    sched = _sched(db_path, tmp_path)
+    sched._refresh_targets(utcnow())
+    rt = sched._rt[target_id]
+    rt.down_since_by_service["http"] = utcnow() - timedelta(minutes=10)
+
+    conn = sqlite_db.connect(db_path)
+    try:
+        sqlite_db.update_target(conn, target_id=target_id, patch={"enable_http_check": False})
+    finally:
+        sqlite_db.close_connection(conn)
+    sched._refresh_targets(utcnow())
+
+    assert rt.down_since_by_service["http"] is None
+    asyncio.run(_alert(sched, target_id, TargetStatus.UP))
+    assert _alert_rows(db_path) == []
+    assert _outbox(db_path) == []
 
 
 # ── A3: alert id becomes active only after a successful insert ───────────────
@@ -232,28 +312,25 @@ def test_failed_alert_insert_is_retried_without_duplicates(db_path, tmp_path):
     sched._refresh_targets(utcnow())
     rt = sched._rt[tid]
     rt.down_since_by_service["http"] = utcnow() - timedelta(minutes=10)
-    dispatch = mock.AsyncMock()
     real_create = sqlite_db.create_alert
     with (
-        mock.patch.object(sched, "_dispatch_alert", dispatch),
         mock.patch.object(
             scheduler.sqlite_db, "create_alert", side_effect=sqlite_db.sqlite3.OperationalError("locked")
         ),
     ):
         asyncio.run(_alert(sched, tid, TargetStatus.DOWN))
     assert rt.current_alert_id is None
-    assert dispatch.await_count == 0
+    assert _outbox(db_path) == []
     assert _alert_rows(db_path) == []
 
     with (
-        mock.patch.object(sched, "_dispatch_alert", dispatch),
         mock.patch.object(scheduler.sqlite_db, "create_alert", side_effect=real_create),
     ):
         asyncio.run(_alert(sched, tid, TargetStatus.DOWN))
         asyncio.run(_alert(sched, tid, TargetStatus.DOWN))
     assert rt.current_alert_id is not None
     assert len(_alert_rows(db_path)) == 1
-    assert dispatch.await_count == 1
+    assert [(e, st) for _a, e, st in _outbox(db_path)] == [("open", "pending")]
 
 
 def test_alert_dispatch_outbox_is_atomic_with_alert_creation(db_path):
@@ -385,10 +462,60 @@ def test_outbox_retries_partial_dispatch_then_completes(db_path, tmp_path):
         sqlite_db.close_connection(conn)
 
 
+def test_outbox_row_with_unparsable_started_at_backs_off_and_does_not_stop_the_batch(db_path, tmp_path):
+    target_id = _target(db_path)
+    conn = sqlite_db.connect(db_path)
+    try:
+        for alert_id in ("bad-alert", "good-alert"):
+            sqlite_db.create_alert(
+                conn,
+                alert_id=alert_id,
+                target_id=target_id,
+                target_name="t",
+                failed_service="http",
+                started_at=utcnow(),
+                recipients_notified=[],
+                dispatch_outbox=True,
+            )
+        conn.execute("UPDATE alert_dispatch_outbox SET started_at = 'not-a-date' WHERE alert_id = 'bad-alert'")
+        conn.commit()
+    finally:
+        sqlite_db.close_connection(conn)
+
+    sched = _sched(db_path, tmp_path)
+    dispatcher = mock.MagicMock()
+    dispatcher.dispatch_alert.return_value = mock.Mock(channels_attempted=1, all_succeeded=True)
+    sched._get_dispatcher = mock.Mock(return_value=dispatcher)
+    with pytest.raises(RuntimeError, match="AlertDispatchPendingError"):
+        asyncio.run(sched._process_alert_dispatch_outbox())
+
+    assert dispatcher.dispatch_alert.call_count == 1  # the valid row was still dispatched
+    conn = sqlite_db.connect(db_path)
+    try:
+        rows = {
+            r["alert_id"]: r
+            for r in conn.execute("SELECT alert_id, status, attempts, next_attempt_at FROM alert_dispatch_outbox")
+        }
+        assert rows["good-alert"]["status"] == "completed"
+        assert (rows["bad-alert"]["status"], rows["bad-alert"]["attempts"]) == ("pending", 1)
+        assert rows["bad-alert"]["next_attempt_at"] > utcnow().isoformat()  # normal backoff applies
+    finally:
+        sqlite_db.close_connection(conn)
+
+
 def test_notification_worker_progresses_while_housekeeping_is_blocked(db_path, tmp_path):
     sched = _sched(db_path, tmp_path)
+    loop_thread = None
+    query_threads: list[int] = []
+    original_query = sqlite_db.has_pending_alert_dispatches
+
+    def query_off_loop(conn):
+        query_threads.append(threading.get_ident())
+        return original_query(conn)
 
     async def scenario():
+        nonlocal loop_thread
+        loop_thread = threading.get_ident()
         loop = asyncio.get_running_loop()
         sched._run_epoch = 1
         sched._last_refresh = loop.time()
@@ -419,7 +546,9 @@ def test_notification_worker_progresses_while_housekeeping_is_blocked(db_path, t
         release_housekeeping.set()
         assert await iteration
 
-    asyncio.run(scenario())
+    with mock.patch.object(scheduler.sqlite_db, "has_pending_alert_dispatches", query_off_loop):
+        asyncio.run(scenario())
+    assert query_threads and all(thread != loop_thread for thread in query_threads)
 
 
 def test_iteration_fails_for_internal_target_exception_not_down_result(db_path, tmp_path):
@@ -474,34 +603,30 @@ def test_tsdb_write_failure_is_retained_until_that_target_persists(db_path, tmp_
     check_result = scheduler.checks.CheckResult(ok=True, latency_ms=1.0)
     with (
         mock.patch.object(scheduler.checks, "ping", mock.AsyncMock(return_value=check_result)),
-        mock.patch.object(scheduler.tsdb_db, "query", return_value=[]),
-        mock.patch.object(scheduler.tsdb_db, "append_point", side_effect=OSError("disk unavailable")),
+        mock.patch.object(scheduler.tsdb_db, "append_points", side_effect=OSError("disk unavailable")),
     ):
         asyncio.run(sched._run_target(target_id, utcnow()))
     assert (target_id, "tsdb") in sched._persistence_failures
 
     with (
         mock.patch.object(scheduler.checks, "ping", mock.AsyncMock(return_value=check_result)),
-        mock.patch.object(scheduler.tsdb_db, "query", return_value=[]),
-        mock.patch.object(scheduler.tsdb_db, "append_point"),
+        mock.patch.object(scheduler.tsdb_db, "append_points"),
     ):
         asyncio.run(sched._run_target(target_id, utcnow()))
     assert (target_id, "tsdb") not in sched._persistence_failures
 
 
-def test_certificate_alert_dispatch_failure_is_retried_from_outbox(db_path, tmp_path):
+@pytest.mark.asyncio
+async def test_certificate_alert_dispatch_failure_is_retried_from_outbox(db_path, tmp_path):
     target_id = _target(db_path, enable_cert_expiration=True)
     sched = _sched(db_path, tmp_path)
     sched._refresh_targets(utcnow())
-    with mock.patch.object(sched, "_dispatch_alert", mock.AsyncMock()):
-        asyncio.run(
-            sched._maybe_cert_alert(
-                target_id=target_id,
-                target_name="t",
-                days_left=3,
-                cert_host="t.example",
-            )
-        )
+    await sched._maybe_cert_alert(
+        target_id=target_id,
+        target_name="t",
+        days_left=3,
+        cert_host="t.example",
+    )
 
     dispatcher = mock.MagicMock()
     dispatcher.dispatch_alert.side_effect = [
@@ -510,7 +635,7 @@ def test_certificate_alert_dispatch_failure_is_retried_from_outbox(db_path, tmp_
     ]
     sched._get_dispatcher = mock.Mock(return_value=dispatcher)
     with pytest.raises(RuntimeError, match="AlertDispatchPendingError"):
-        asyncio.run(sched._process_alert_dispatch_outbox())
+        await sched._process_alert_dispatch_outbox()
     conn = sqlite_db.connect(db_path)
     try:
         row = conn.execute("SELECT status, attempts FROM alert_dispatch_outbox WHERE event_type = 'open'").fetchone()
@@ -520,7 +645,7 @@ def test_certificate_alert_dispatch_failure_is_retried_from_outbox(db_path, tmp_
     finally:
         sqlite_db.close_connection(conn)
 
-    asyncio.run(sched._process_alert_dispatch_outbox())
+    await sched._process_alert_dispatch_outbox()
     assert dispatcher.dispatch_alert.call_count == 2
     conn = sqlite_db.connect(db_path)
     try:
@@ -614,8 +739,7 @@ def test_cert_alert_text_follows_thresholds(db_path, tmp_path, days_left, expect
     tid = _target(db_path, enable_cert_expiration=True)
     sched = _sched(db_path, tmp_path)
     sched._refresh_targets(utcnow())
-    with mock.patch.object(sched, "_dispatch_alert", mock.AsyncMock()):
-        asyncio.run(sched._maybe_cert_alert(target_id=tid, target_name="t", days_left=days_left, cert_host="t.example"))
+    asyncio.run(sched._maybe_cert_alert(target_id=tid, target_name="t", days_left=days_left, cert_host="t.example"))
     conn = sqlite_db.connect(db_path)
     try:
         texts = [r[0] for r in conn.execute("SELECT failed_service FROM alerts")]
@@ -638,8 +762,7 @@ def test_scheduler_checks_certificate_on_explicit_cert_host_and_port(db_path, tm
     cert_check = mock.AsyncMock(return_value=scheduler.checks.CheckResult(ok=False, detail="unreachable"))
     with (
         mock.patch.object(scheduler.checks, "cert_expiration", cert_check),
-        mock.patch.object(scheduler.tsdb_db, "query", return_value=[]),
-        mock.patch.object(scheduler.tsdb_db, "append_point"),
+        mock.patch.object(scheduler.tsdb_db, "append_points"),
     ):
         asyncio.run(sched._run_target(target_id, utcnow()))
     assert cert_check.await_args.args[:2] == ("cert.example", 443)
@@ -659,8 +782,7 @@ def test_invalid_stored_tcp_ports_report_target_down_instead_of_checking_port_80
     tcp = mock.AsyncMock(return_value=scheduler.checks.CheckResult(ok=True, latency_ms=1.0))
     with (
         mock.patch.object(scheduler.checks, "tcp_connect", tcp),
-        mock.patch.object(scheduler.tsdb_db, "query", return_value=[]),
-        mock.patch.object(scheduler.tsdb_db, "append_point"),
+        mock.patch.object(scheduler.tsdb_db, "append_points"),
     ):
         asyncio.run(sched._run_target(target_id, utcnow()))
     tcp.assert_not_awaited()
@@ -698,8 +820,7 @@ def _run_with_slow_tcp_check(db_path, tmp_path, *, renew_period: float, release_
         mock.patch("app.db.sqlite.scheduler_runs.utcnow", lambda: clock["now"]),
         mock.patch.object(scheduler, "_lock_renew_period", lambda _ttl: renew_period),
         mock.patch.object(scheduler.checks, "tcp_connect", slow_tcp),
-        mock.patch.object(scheduler.tsdb_db, "query", return_value=[]),
-        mock.patch.object(scheduler.tsdb_db, "append_point", append),
+        mock.patch.object(scheduler.tsdb_db, "append_points", append),
     ):
         asyncio.run(sched._run_target(target_id, utcnow()))
     return takeover, append
@@ -737,6 +858,83 @@ def test_uptime_uses_the_same_availability_rule_as_the_overall_status(db_path, t
     assert status["uptime_percent"] == 0.0
 
 
+def test_status_refresh_preserves_both_saved_uptime_windows(db_path, tmp_path):
+    target_id = _target(db_path, enable_http_check=True)
+    sched = _sched(db_path, tmp_path)
+    sched._refresh_targets(utcnow())
+    http_ok = scheduler.checks.CheckResult(ok=True, latency_ms=1.0, value={"status": 200})
+    with mock.patch.object(scheduler.checks, "http_head", mock.AsyncMock(return_value=http_ok)):
+        asyncio.run(sched._run_target(target_id, utcnow()))
+        conn = sqlite_db.connect(db_path)
+        try:
+            conn.execute(
+                "UPDATE target_status SET uptime_percent = ?, uptime_percent_30d = ? WHERE target_id = ?",
+                (91.5, 88.25, target_id),
+            )
+            conn.commit()
+        finally:
+            sqlite_db.close_connection(conn)
+        sched._rt[target_id].last_uptime_calc_at = utcnow()
+        asyncio.run(sched._run_target(target_id, utcnow()))
+
+    conn = sqlite_db.connect(db_path)
+    try:
+        status = sqlite_db.get_target_status(conn, target_id)
+    finally:
+        sqlite_db.close_connection(conn)
+    assert status["uptime_percent"] == 91.5
+    assert status["uptime_percent_30d"] == 88.25
+
+
+def test_connectivity_issue_keeps_both_saved_uptime_windows(db_path, tmp_path):
+    target_id = _target(db_path, enable_http_check=True)
+    sched = _sched(db_path, tmp_path)
+    sched._refresh_targets(utcnow())
+    http_ok = scheduler.checks.CheckResult(ok=True, latency_ms=1.0, value={"status": 200})
+    with mock.patch.object(scheduler.checks, "http_head", mock.AsyncMock(return_value=http_ok)):
+        asyncio.run(sched._run_target(target_id, utcnow()))
+    conn = sqlite_db.connect(db_path)
+    try:
+        conn.execute(
+            "UPDATE target_status SET uptime_percent = 91.5, uptime_percent_30d = 88.25 WHERE target_id = ?",
+            (target_id,),
+        )
+        conn.commit()
+    finally:
+        sqlite_db.close_connection(conn)
+    asyncio.run(sched._handle_connectivity_issue(target_id, utcnow()))
+    conn = sqlite_db.connect(db_path)
+    try:
+        status = sqlite_db.get_target_status(conn, target_id)
+    finally:
+        sqlite_db.close_connection(conn)
+    assert status["overall_status"] == TargetStatus.UNKNOWN
+    assert (status["uptime_percent"], status["uptime_percent_30d"]) == (91.5, 88.25)
+
+
+def test_check_switched_off_while_failing_cannot_raise_a_down_alert(db_path, tmp_path):
+    target_id = _target(db_path, enable_http_check=True, enable_ping=True)
+    sched = _sched(db_path, tmp_path)
+    sched._refresh_targets(utcnow())
+    rt = sched._rt[target_id]
+    rt.down_since_by_service["ping"] = utcnow() - timedelta(hours=1)  # failing for longer than the timeout
+    conn = sqlite_db.connect(db_path)
+    try:
+        conn.execute("UPDATE targets SET enable_ping = 0 WHERE id = ?", (target_id,))
+        conn.commit()
+    finally:
+        sqlite_db.close_connection(conn)
+    sched._refresh_targets(utcnow())
+    http_ok = scheduler.checks.CheckResult(ok=True, latency_ms=1.0, value={"status": 200})
+    with (
+        mock.patch.object(scheduler.checks, "http_head", mock.AsyncMock(return_value=http_ok)),
+    ):
+        asyncio.run(sched._run_target(target_id, utcnow()))
+
+    assert rt.down_since_by_service["ping"] is None
+    assert _alert_rows(db_path) == []
+
+
 def test_delayed_metric_storage_keeps_one_check_cycle_one_availability_sample(db_path, tmp_path):
     target_id = _target(db_path, enable_http_check=True, enable_ping=True)
     sched = _sched(db_path, tmp_path)
@@ -771,56 +969,289 @@ def test_check_whose_lock_was_taken_over_and_released_still_discards_results(db_
     append.assert_not_called()
 
 
-def test_slow_tsdb_writes_do_not_stall_the_event_loop_and_share_one_cycle_stamp(db_path, tmp_path):
+def test_slow_tsdb_writes_run_off_the_event_loop_and_share_one_cycle_stamp(db_path, tmp_path):
     target_id = _target(db_path, enable_http_check=True, enable_ping=True)
     sched = _sched(db_path, tmp_path)
     sched._refresh_targets(utcnow())
     http_ok = scheduler.checks.CheckResult(ok=True, latency_ms=1.0, value={"status": 200})
     ping_ok = scheduler.checks.CheckResult(ok=True, latency_ms=2.0)
     written: list[tuple[str, object]] = []
+    write_threads: list[int] = []
 
-    def slow_append(_dir, *, target_id, metric, value, retention_days, at):  # noqa: ARG001 - mirrors append_point
-        time.sleep(0.3)  # a slow volume; blocks only its worker thread
-        written.append((metric, at))
+    def slow_append(_dir, *, target_id, points, retention_days, at, lock_lost):  # noqa: ARG001
+        write_threads.append(threading.get_ident())
+        written.extend((metric, at) for metric, _value in points)
+        return not lock_lost()
 
     async def scenario():
-        gaps: list[float] = []
-        stop = asyncio.Event()
-
-        async def ticker():
-            last = time.monotonic()
-            while not stop.is_set():
-                await asyncio.sleep(0.01)
-                now = time.monotonic()
-                gaps.append(now - last)
-                last = now
-
-        task = asyncio.create_task(ticker())
-        await asyncio.sleep(0.05)
+        loop_thread = threading.get_ident()
         await sched._run_target(target_id, utcnow())
-        await asyncio.sleep(0.05)  # lets the ticker record a gap that ended with the run
-        stop.set()
-        await task
-        return max(gaps)
+        return loop_thread
 
     with (
         mock.patch.object(scheduler.checks, "http_head", mock.AsyncMock(return_value=http_ok)),
         mock.patch.object(scheduler.checks, "ping", mock.AsyncMock(return_value=ping_ok)),
-        mock.patch.object(scheduler.tsdb_db, "query", return_value=[]),
-        mock.patch.object(scheduler.tsdb_db, "append_point", slow_append),
+        mock.patch.object(scheduler.tsdb_db, "append_points", slow_append),
     ):
-        max_gap = asyncio.run(scenario())
+        loop_thread = asyncio.run(scenario())
 
     assert [m for m, _ in written] == ["ping_up", "ping_ms", "http_up", "http_ms", "http_status"]
     assert len({at for _, at in written}) == 1
-    assert max_gap < 0.25, max_gap  # five writes take about 1.5 s in total
+    assert write_threads and loop_thread not in write_threads  # blocking writes never run on the loop thread
+
+
+def test_scheduler_lock_status_and_alert_writes_run_off_event_loop(db_path, tmp_path):
+    target_id = _target(db_path, enable_http_check=True)
+    sched = _sched(db_path, tmp_path)
+    sched._refresh_targets(utcnow())
+    http_ok = scheduler.checks.CheckResult(ok=True, latency_ms=1.0, value={"status": 200})
+    loop_thread = None
+    observed: set[str] = set()
+
+    def off_loop(name, call):
+        def wrapped(*args, **kwargs):
+            assert threading.get_ident() != loop_thread, f"{name} ran on event loop"
+            observed.add(name)
+            return call(*args, **kwargs)
+
+        return wrapped
+
+    async def scenario():
+        nonlocal loop_thread
+        loop_thread = threading.get_ident()
+        await sched._run_target(target_id, utcnow())
+        sched._rt[target_id].down_since_by_service["http"] = utcnow() - timedelta(minutes=10)
+        await _alert(sched, target_id, TargetStatus.DOWN)
+
+    with (
+        mock.patch.object(scheduler.checks, "http_head", mock.AsyncMock(return_value=http_ok)),
+        mock.patch.object(scheduler.sqlite_db, "try_lock_target", off_loop("lock", sqlite_db.try_lock_target)),
+        mock.patch.object(
+            scheduler.sqlite_db, "set_target_status_snapshot", off_loop("status", sqlite_db.set_target_status_snapshot)
+        ),
+        mock.patch.object(scheduler.sqlite_db, "create_alert", off_loop("alert", sqlite_db.create_alert)),
+        mock.patch.object(scheduler.sqlite_db, "get_target", off_loop("snapshot", sqlite_db.get_target)),
+    ):
+        asyncio.run(scenario())
+
+    assert observed == {"lock", "status", "alert", "snapshot"}
 
 
 def test_metric_points_of_a_lost_lock_are_discarded_before_any_write(db_path, tmp_path):
     sched = _sched(db_path, tmp_path)
     lost = asyncio.Event()
     lost.set()
-    with mock.patch.object(scheduler.tsdb_db, "append_point") as append:
+    with mock.patch.object(scheduler.tsdb_db, "append_points") as append:
         written = sched._write_metric_points(None, 1, 30, utcnow(), [("ping_up", 1), ("ping_ms", 2.0)], lost)
     assert written is False
     append.assert_not_called()
+
+
+# ── D5: the outbox is the only alert delivery path ─────────────────────────────
+
+
+def _dispatcher_recording(sched: MonitorScheduler, *results) -> mock.MagicMock:
+    dispatcher = mock.MagicMock()
+    dispatcher.dispatch_alert.side_effect = list(results) or [mock.Mock(channels_attempted=1, all_succeeded=True)] * 8
+    sched._get_dispatcher = mock.Mock(return_value=dispatcher)
+    return dispatcher
+
+
+def _make_due(db_path: Path) -> None:
+    conn = sqlite_db.connect(db_path)
+    try:
+        conn.execute("UPDATE alert_dispatch_outbox SET next_attempt_at = ?", (utcnow() - timedelta(seconds=1),))
+        conn.commit()
+    finally:
+        sqlite_db.close_connection(conn)
+
+
+def test_scheduler_has_no_direct_alert_dispatch_path():
+    assert not hasattr(MonitorScheduler, "_dispatch_alert")
+
+
+def test_down_and_resolve_are_delivered_once_by_the_outbox_across_a_restart(db_path, tmp_path):
+    tid = _target(db_path, enable_http_check=True)
+    sched = _sched(db_path, tmp_path)
+    sched._refresh_targets(utcnow())
+    sched._rt[tid].down_since_by_service["http"] = utcnow() - timedelta(minutes=10)
+    dispatcher = _dispatcher_recording(sched)
+    asyncio.run(_alert(sched, tid, TargetStatus.DOWN))
+    alert_id = sched._rt[tid].current_alert_id
+    assert dispatcher.dispatch_alert.call_count == 0  # creating the alert delivers nothing directly
+
+    # Restart before anything was delivered: the pending row survives and is sent exactly once.
+    restarted = _sched(db_path, tmp_path)
+    restarted._refresh_targets(utcnow())
+    dispatcher = _dispatcher_recording(restarted)
+    asyncio.run(restarted._process_alert_dispatch_outbox())
+    asyncio.run(restarted._process_alert_dispatch_outbox())
+    assert dispatcher.dispatch_alert.call_count == 1
+    sent = dispatcher.dispatch_alert.call_args.args[0]
+    assert (sent.alert_id, sent.status) == (alert_id, "open")
+    assert _outbox(db_path) == [(alert_id, "open", "completed")]
+
+    # Resolve after the restart restores the open alert; one more row, delivered once with its duration.
+    assert restarted._rt[tid].current_alert_id == alert_id
+    asyncio.run(_alert(restarted, tid, TargetStatus.UP))
+    asyncio.run(_alert(restarted, tid, TargetStatus.UP))
+    assert _outbox(db_path) == [(alert_id, "open", "completed"), (alert_id, "resolved", "pending")]
+    asyncio.run(restarted._process_alert_dispatch_outbox())
+    asyncio.run(restarted._process_alert_dispatch_outbox())
+    assert dispatcher.dispatch_alert.call_count == 2
+    resolved = dispatcher.dispatch_alert.call_args.args[0]
+    assert (resolved.alert_id, resolved.status) == (alert_id, "resolved")
+    assert resolved.ended_at is not None and resolved.duration_seconds is not None
+    assert _outbox(db_path) == [(alert_id, "open", "completed"), (alert_id, "resolved", "completed")]
+
+
+def test_failed_resolve_dispatch_is_retried_without_a_duplicate_queue_entry(db_path, tmp_path):
+    tid = _target(db_path, enable_http_check=True)
+    sched = _sched(db_path, tmp_path)
+    sched._refresh_targets(utcnow())
+    sched._rt[tid].down_since_by_service["http"] = utcnow() - timedelta(minutes=10)
+    asyncio.run(_alert(sched, tid, TargetStatus.DOWN))
+    alert_id = sched._rt[tid].current_alert_id
+    sched._rt[tid].down_since_by_service["http"] = None
+    asyncio.run(_alert(sched, tid, TargetStatus.UP))
+
+    ok = mock.Mock(channels_attempted=1, all_succeeded=True)
+    dispatcher = _dispatcher_recording(sched, ok, OSError("down"), ok)
+    with pytest.raises(RuntimeError, match="AlertDispatchPendingError"):
+        asyncio.run(sched._process_alert_dispatch_outbox())
+    assert _outbox(db_path) == [(alert_id, "open", "completed"), (alert_id, "resolved", "pending")]
+
+    _make_due(db_path)
+    asyncio.run(sched._process_alert_dispatch_outbox())
+    assert dispatcher.dispatch_alert.call_count == 3
+    assert _outbox(db_path) == [(alert_id, "open", "completed"), (alert_id, "resolved", "completed")]
+
+
+# ── D8: snapshot check, maintenance and restore ────────────────────────────────
+
+
+def test_snapshot_check_runs_inside_the_callers_work_section_without_nesting(db_path, tmp_path):
+    tid = _target(db_path, enable_http_check=True)
+    sched = _sched(db_path, tmp_path)
+    sched._refresh_targets(utcnow())
+    cfg = sched._targets[tid]
+    with mock.patch.object(maintenance, "work_section", side_effect=AssertionError("nested work section")):
+        assert sched._snapshot_current(tid, cfg) is True
+    conn = sqlite_db.connect(db_path)
+    try:
+        conn.execute("UPDATE targets SET updated_at = '2000-01-01 00:00:00' WHERE id = ?", (tid,))
+        conn.commit()
+    finally:
+        sqlite_db.close_connection(conn)
+    assert sched._snapshot_current(tid, cfg) is False  # edited meanwhile: the cycle discards its results
+
+
+def test_check_cycle_writes_nothing_during_maintenance_or_after_a_restore(db_path, tmp_path):
+    tid = _target(db_path, enable_http_check=True)
+    sched = _sched(db_path, tmp_path)
+    sched._refresh_targets(utcnow())
+    http_ok = scheduler.checks.CheckResult(ok=True, latency_ms=1.0, value={"status": 200})
+
+    def run(write, generation=None):
+        with (
+            mock.patch.object(scheduler.checks, "http_head", mock.AsyncMock(return_value=http_ok)),
+            mock.patch.object(sched, "_write_metric_points", write),
+        ):
+            asyncio.run(sched._run_target(tid, utcnow(), generation))
+
+    stale_generation = maintenance.current_generation()
+    write = mock.Mock(return_value=True)
+    assert maintenance.begin_maintenance(timeout=1.0)
+    try:
+        run(write)
+    finally:
+        maintenance.end_maintenance()
+    write.assert_not_called()
+
+    assert maintenance.begin_maintenance(timeout=1.0)
+    try:
+        maintenance.confirm_data_replaced()
+    finally:
+        maintenance.end_maintenance()
+    run(write, stale_generation)  # computed before the restore: refused, nothing is written
+    write.assert_not_called()
+
+    sched._rt[tid].next_due = utcnow()
+    run(write)  # a cycle of the new generation works again
+    write.assert_called_once()
+
+
+# ── D5: outbox worker, real dispatcher and real spooler; only the transport callable is replaced ──
+def _alert_through_real_pipeline(db_path, tmp_path, monkeypatch, alert_id: str):
+    from app.services.notifications import spooler as spooler_module
+    from app.utils.constants import SettingKeys
+
+    monkeypatch.setattr(spooler_module, "_spooler", None)
+    target_id = _target(db_path, name="Pipeline target")
+    conn = sqlite_db.connect(db_path)
+    try:
+        recipient_id = sqlite_db.create_recipient(conn, name="Receiver", phone="+15555550100")
+        sqlite_db.set_target_recipients(conn, target_id, [recipient_id])
+        sqlite_db.set_setting(conn, SettingKeys.SIGNAL_CHANNEL_ENABLED, True)
+        sqlite_db.set_setting(conn, SettingKeys.SIGNAL_API_SENDER_NUMBER, "+15555550101")
+        sqlite_db.create_alert(
+            conn,
+            alert_id=alert_id,
+            target_id=target_id,
+            target_name="Pipeline target",
+            failed_service="http",
+            started_at=utcnow(),
+            recipients_notified=[],
+            dispatch_outbox=True,
+        )
+        conn.commit()
+    finally:
+        sqlite_db.close_connection(conn)
+    sched = _sched(db_path, tmp_path)
+    asyncio.run(sched._process_alert_dispatch_outbox())
+    return spooler_module.get_spooler(lambda: sqlite_db.connect(db_path))
+
+
+def _queue_states(db_path) -> list[str]:
+    conn = sqlite_db.connect(db_path)
+    try:
+        return [r[0] for r in conn.execute("SELECT status FROM notification_queue ORDER BY id")]
+    finally:
+        sqlite_db.close_connection(conn)
+
+
+def test_outbox_worker_hands_the_alert_to_the_spooler_and_the_transport_delivers_it(db_path, tmp_path, monkeypatch):
+    spool = _alert_through_real_pipeline(db_path, tmp_path, monkeypatch, "pipeline-ok")
+    # The outbox row is done once the spooler holds the message; nothing was sent yet.
+    assert _outbox(db_path) == [("pipeline-ok", "open", "completed")]
+    assert _queue_states(db_path) == ["pending"]
+    sent: list[tuple[str, str, str]] = []
+
+    def send_signal(address, message, sender):
+        sent.append((address, message, sender))
+        return True
+
+    assert spool.process_queue_sync(send_signal=send_signal) == (1, 1)
+    assert [(a, s) for a, _m, s in sent] == [("+15555550100", "+15555550101")]
+    assert "Pipeline target" in sent[0][1]
+    assert _queue_states(db_path) == ["sent"]
+    # A second pass finds nothing: the alert is delivered exactly once.
+    assert spool.process_queue_sync(send_signal=send_signal) == (0, 0)
+    assert len(sent) == 1
+
+
+def test_failing_transport_keeps_the_message_in_the_spooler_not_in_the_outbox(db_path, tmp_path, monkeypatch):
+    spool = _alert_through_real_pipeline(db_path, tmp_path, monkeypatch, "pipeline-retry")
+    calls = []
+
+    def failing_signal(address, message, sender):  # noqa: ARG001
+        calls.append(address)
+        return False
+
+    spool.process_queue_sync(send_signal=failing_signal)
+    assert calls == ["+15555550100"]
+    # The retry belongs to the spooler; the outbox stays completed and does not enqueue a second copy.
+    assert _outbox(db_path) == [("pipeline-retry", "open", "completed")]
+    assert _queue_states(db_path) == ["pending"]
+    asyncio.run(_sched(db_path, tmp_path)._process_alert_dispatch_outbox())
+    assert len(_queue_states(db_path)) == 1

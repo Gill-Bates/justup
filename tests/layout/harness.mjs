@@ -5,6 +5,7 @@
 
 // Shared app, seed and audit helpers used by the Playwright Test layout specifications.
 import { spawn, spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import assert from "node:assert/strict";
 import AxeBuilder from "@axe-core/playwright";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -13,20 +14,23 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { devices } from "playwright";
-import { resolvePythonExecutable } from "./test-support.mjs";
+import { applyTextEnlargement, cssViewport, effectiveZoom, resolvePythonExecutable, textEnlargement } from "./test-support.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(here, "../..");
-// Absolute per-edge tolerance (CSS px, also at 200 % zoom) for the dashboard edit-mode geometry
-// contract in DESIGN.md ("Edit Mode Geometry Contract"). Do not widen it.
+// Absolute per-edge tolerance (CSS px, also at effective 200 % zoom) for the dashboard edit-mode geometry
+// (DESIGN.md, dashboard widgets). Do not widen it.
 const GEOMETRY_TOL_PX = 1;
+const QUEUE_SCROLL_TOL_PX = 1;
 
 const profile = process.env.JUSTUP_LAYOUT_PROFILE || "quick";
 
-// Effective CSS viewports. Browser zoom Z on a W x H window gives a (W/Z) x (H/Z) CSS viewport at
-// device scale factor Z: identical layout, media queries and rem sizes as real zoom.
-const zoom = (w, h, z) => ({ name: `${w}x${h}@${z * 100}%`, w: Math.round(w / z), h: Math.round(h / z), dsf: z });
-const plain = (w, h) => ({ name: `${w}x${h}`, w, h, dsf: 1 });
+// Profiles name the notion they exercise (helpers and definitions: test-support.mjs, DESIGN.md 1.2):
+// `plain` = CSS viewport, `zoom` = effective browser zoom (viewport proxy, not the zoom feature),
+// `text` = text enlargement at an unchanged CSS viewport. DPR alone is never a profile.
+const zoom = effectiveZoom;
+const plain = (w, h) => ({ ...cssViewport(w, h), name: `${w}x${h}` });
+const text = textEnlargement;
 const device = (name) => {
 	const descriptor = devices[name];
 	if (!descriptor) return { name, missing: true };
@@ -40,6 +44,8 @@ const VIEWPORTS = profile === "full"
 	plain(320, 640), device("iPad Pro 11 landscape"), device("iPad Pro 11"), zoom(1920, 1080, 1.5), zoom(1280, 720, 2)];
 // Boundary widths around the 992px sidebar breakpoint and the 576px phone breakpoint.
 if (profile === "full") VIEWPORTS.push(plain(992, 700), plain(1000, 700), plain(1100, 700));
+// Opt-in: text enlargement (DC-MEAS-2) still reports layout findings on most pages, so it is no default gate yet.
+if (process.env.JUSTUP_LAYOUT_TEXT === "1") VIEWPORTS.push(text(1280, 720, 2), text(390, 844, 2));
 
 // Deliberate component decisions: horizontal scrolling that is allowed to stay local.
 const selectedViewports = process.env.JUSTUP_LAYOUT_VIEWPORTS;
@@ -50,12 +56,27 @@ if (selectedViewports) {
 	VIEWPORTS.splice(0, VIEWPORTS.length, ...VIEWPORTS.filter((v) => only.includes(v.name)));
 }
 const CFG = {
-	scrollX: [".settings-tabs", ".nav-tabs", ".ju-notif-tabs", ".table-responsive", ".ju-table-viewport", "pre", ".leaflet-container"],
+	scrollX: [".ju-tabs", ".table-responsive", ".ju-table-viewport", "pre", ".leaflet-container"],
 	revealed: [".ju-notif-swipe-item"],
 	clipX: [".leaflet-container", ".progress"],
 	// Declared overflow areas inside dashboard widgets: the downtime list is capped and scrolls on its own.
 	widgetScroll: [".dashboard-downtime-table"],
+	// Registry of vertical level-2 scroll regions (DESIGN.md 5.2, DC-SCROLL-2); keep in step with the table there.
+	scrollY: [
+		".target-wizard-step", ".downtime-scroll", ".tr-table-scroll", ".dashboard-widget-body",
+		".settings-editor--fill > .card > .card-body", ".alert-recipients-picker", ".ju-scroll-520",
+		".about-changelog-row .card-body", ".dependencies-scroll",
+		"#server-offline-overlay", ".ju-notif-pop-list",
+	],
 };
+
+const scrollPositionSrc = (position) => `(() => {
+	const main = document.getElementById("main-content");
+	const top = ${JSON.stringify(position)} === "top";
+	if (main && document.getElementById("app-shell")) main.scrollTo({ top: top ? 0 : main.scrollHeight, behavior: "instant" });
+	else window.scrollTo({ top: top ? 0 : document.documentElement.scrollHeight, behavior: "instant" });
+})()`;
+const setScrollPosition = (page, position) => page.evaluate(scrollPositionSrc(position));
 
 async function waitForVisualStability(page) {
 	const running = await page.evaluate(async () => {
@@ -171,11 +192,11 @@ async function inspectTargetDashboard(page) {
 			combinedCard: rect(combined), combinedBody: rect(combined?.querySelector(":scope > .card-body")),
 			combinedBodyScroll: scroll(combined?.querySelector(":scope > .card-body")),
 			combinedLegend: rect(node("#combined-legend")), combinedPlot: rect(node("#combined-plot")),
-			combinedFooter: rect(node(".combined-footer")), combinedStatusNote: rect(node("#combined-status-note")), combinedSummary: rect(node("#combined-summary")),
+			combinedStatusNote: rect(node("#combined-status-note")), combinedSummary: rect(node("#combined-summary")),
 			combinedChart: chart("chart-combined"), availabilityCard: rect(node("#availability-card")),
 			availabilityPlot: rect(node("#availability-plot")), availabilityChart: chart("chart-uptime"),
 			downtimeCard: rect(node("#downtime-history-card")), downtimeBody: rect(downtimeBody), downtimeBodyScroll: scroll(downtimeBody),
-			downtimeFragment: rect(node("#downtime-history-body")), downtimeState: rect(node("#downtime-history-body .target-empty-state, #downtime-history-body .downtime-scroll")),
+			downtimeFragment: rect(node("#downtime-history-body")), downtimeState: rect(node("#downtime-history-body .downtime-empty, #downtime-history-body .downtime-scroll")),
 		};
 	});
 }
@@ -190,22 +211,21 @@ const PAGES = [
 				return Boolean(grid?.gridstack) && !grid.classList.contains("dashboard-grid--loading") && (!loading || loading.hidden || loading.classList.contains("d-none"));
 			}, null, { timeout: 15000 });
 			await page.waitForFunction(() => {
-				const tile = document.querySelector('[data-widget-id="delivery-queue"]');
+				const tile = document.querySelector('.grid-stack-item[data-widget-id="delivery-queue"]');
 				const badge = tile?.querySelector(".dashboard-monitor-status");
 				return tile && !tile.classList.contains("d-none") && badge && badge.textContent.trim() !== "Loading";
 			}, null, { timeout: 10000 });
 			// The tile height follows its content one animation frame after the status text lands
 			// (dashboard-grid.js scheduleFit), so the contract is checked on the settled tile: the
 			// body must stop overflowing within the timeout, a permanent ghost scroll still fails.
-			const queueBody = page.locator('[data-widget-id="delivery-queue"] .dashboard-monitor-body');
-			const measureQueue = () => queueBody.evaluate((body) => ({ scrollHeight: body.scrollHeight, clientHeight: body.clientHeight }));
-			const deadline = Date.now() + 5000;
-			let queueScroll = await measureQueue();
-			while (queueScroll.scrollHeight > queueScroll.clientHeight + 2 && Date.now() < deadline) {
-				await page.waitForTimeout(100);
-				queueScroll = await measureQueue();
-			}
-			assert.ok(queueScroll.scrollHeight <= queueScroll.clientHeight + 2, `delivery queue body has ghost scroll: ${queueScroll.scrollHeight}px > ${queueScroll.clientHeight}px`);
+			const queueBody = page.locator('.grid-stack-item[data-widget-id="delivery-queue"] .dashboard-monitor-body');
+			await queueBody.evaluate((body) => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+			await page.waitForFunction((tol) => {
+				const body = document.querySelector('.grid-stack-item[data-widget-id="delivery-queue"] .dashboard-monitor-body');
+				return body && body.scrollHeight <= body.clientHeight + tol;
+			}, QUEUE_SCROLL_TOL_PX, { timeout: 5000 }).catch(() => { /* the assertion below reports the final measurement */ });
+			const queueScroll = await queueBody.evaluate((body) => ({ scrollHeight: body.scrollHeight, clientHeight: body.clientHeight }));
+			assert.ok(queueScroll.scrollHeight <= queueScroll.clientHeight + QUEUE_SCROLL_TOL_PX, `delivery queue body has ghost scroll: ${queueScroll.scrollHeight}px > ${queueScroll.clientHeight}px`);
 		},
 	},
 	{
@@ -216,6 +236,14 @@ const PAGES = [
 	},
 	{ id: "target-new", path: "/ui/targets/new" },
 	{ id: "target-edit", path: "/ui/targets/1/edit" },
+	...["http", "network"].map((tab) => ({
+		id: `target-edit-${tab}`, path: "/ui/targets/1/edit",
+		async prepare(page) {
+			await page.click(`#target-${tab}-tab`);
+			await page.waitForSelector(`#target-${tab}-pane.show.active`);
+			await waitForVisualStability(page);
+		},
+	})),
 	{ id: "target-dashboard", path: "/ui/targets/1", shot: true },
 	{ id: "target-dashboard-kpi", path: "/ui/targets/2", shot: true },
 	{ id: "target-dashboard-data", path: "/ui/targets/4", shot: true },
@@ -264,7 +292,7 @@ async function startApp() {
 	const python = resolvePythonExecutable(repo);
 	const env = {
 		...process.env,
-		SECRET_KEY: Buffer.from(Array.from({ length: 32 }, () => Math.floor(Math.random() * 256))).toString("base64"),
+		SECRET_KEY: randomBytes(32).toString("base64"),
 		JUSTUP_DATA_DIR: data, JUSTUP_HOST: "127.0.0.1", JUSTUP_PORT: String(port), LOG_LEVEL: "WARNING",
 		// The first-boot GeoIP download is not needed here; a dead proxy makes it fail instantly.
 		HTTPS_PROXY: "http://127.0.0.1:9", HTTP_PROXY: "http://127.0.0.1:9", NO_PROXY: "127.0.0.1,localhost",
@@ -295,7 +323,7 @@ async function startApp() {
 			if (spawnError) throw new Error(`could not start app with ${python}: ${spawnError.message}`);
 			if (proc.exitCode !== null) throw new Error(`app exited early:\n${log.slice(-1500)}`);
 			try {
-				if ((await fetch(`${base}/ui/login`)).ok) { ready = true; break; }
+				if ((await fetch(`${base}/ui/login`, { signal: AbortSignal.timeout(2000) })).ok) { ready = true; break; }
 			} catch { /* not up yet */ }
 			await sleep(100);
 		}
@@ -333,6 +361,11 @@ for target_id in ${JSON.stringify(targetIds)}:
 			"tcp_ms_8443": 42 + (index % 6) * 8,
 			"tcp_up_8443": 0 if ping_down else 1,
 		}
+		# Isolated spikes so every series has notable peaks (stems) to render.
+		spikes = {"http_ms": {12: 900, 28: 1400}, "ping_ms": {20: 260}, "tcp_ms_443": {25: 420}, "tcp_ms_8443": {8: 480, 52: 520}}
+		for metric, at_index in spikes.items():
+			if index in at_index:
+				values[metric] = at_index[index]
 		for metric, value in values.items():
 			append_point(config.tsdb_dir, target_id=target_id, metric=metric, value=value, retention_days=365, at=at)
 `;
@@ -340,6 +373,7 @@ for target_id in ${JSON.stringify(targetIds)}:
 		cwd: repo,
 		env: { ...process.env, JUSTUP_DATA_DIR: app.data },
 		encoding: "utf8",
+		timeout: 60000,
 	});
 	if (result.error || result.status !== 0) {
 		throw new Error(`measurement fixture failed: ${result.error?.message || result.stderr || result.status}`);
@@ -351,6 +385,16 @@ async function seed(browser, app) {
 	const ctx = await browser.newContext();
 	const page = await ctx.newPage();
 	const next = "Layout-Check-Pw-2026!";
+	// Every write is recorded with the CSRF token it sent and the cookie the browser attached, so a
+	// 403 names the request and the two values instead of only a status list.
+	const writes = [];
+	page.on("response", async (response) => {
+		const request = response.request();
+		if (request.method() === "GET") return;
+		const headers = await request.allHeaders().catch(() => ({}));
+		const cookie = ((headers.cookie || "").match(/csrf_token=([^;]*)/) || [])[1] || "";
+		writes.push(`${new URL(request.url()).pathname} ${response.status()} header=${(headers["x-csrf-token"] || "").slice(0, 6)} cookie=${cookie.slice(0, 6)}`);
+	});
 	await page.goto(`${app.base}/ui/login`);
 	await page.fill("#username", app.bootstrap.username);
 	await page.fill("#password", app.bootstrap.password);
@@ -390,7 +434,7 @@ async function seed(browser, app) {
 		codes.push(rr.status);
 		return { codes, fixtureTargetId, screenshotTargetId };
 	}, [targets, recipient]);
-	if (!res.codes.every((c) => c === 201) || !res.fixtureTargetId || !res.screenshotTargetId) throw new Error(`seeding failed: HTTP ${res.codes.join(",")}`);
+	if (!res.codes.every((c) => c === 201) || !res.fixtureTargetId || !res.screenshotTargetId) throw new Error(`seeding failed: HTTP ${res.codes.join(",")}; writes: ${writes.join(" | ")}`);
 	seedMeasurementFixture(app, [res.screenshotTargetId, res.fixtureTargetId]);
 	const state = await ctx.storageState();
 	await ctx.close();
@@ -443,10 +487,9 @@ async function auditDashboardGrid(browser, app, adminState, browserName, phase) 
 			assert.ok(widget.width > 0 && widget.height > 0 && widget.text, `empty widget ${widget.id}`);
 			assert.ok(widget.left >= snapshot.left - 2 && widget.right <= snapshot.right + 2, `widget outside grid: ${widget.id}`);
 			if (widget.card) {
-				const expectedTop = widget.top;
 				assert.ok(Math.abs(widget.card.left - widget.left) <= 2 && Math.abs(widget.card.right - widget.right) <= 2,
 					`widget card does not fill its grid cell width: ${widget.id} ` + JSON.stringify({ cell: [widget.left, widget.right], card: widget.card }));
-				assert.ok(Math.abs(widget.card.top - expectedTop) <= 2 && Math.abs(widget.card.bottom - widget.bottom) <= 2,
+				assert.ok(Math.abs(widget.card.top - widget.top) <= 2 && Math.abs(widget.card.bottom - widget.bottom) <= 2,
 					`widget card does not fill its reserved grid cell: ${widget.id} ` + JSON.stringify({ cell: [widget.top, widget.bottom], handle: widget.handle, card: [widget.card.top, widget.card.bottom] }));
 			}
 			for (const other of snapshot.widgets) {
@@ -501,8 +544,6 @@ async function auditDashboardGrid(browser, app, adminState, browserName, phase) 
 		};
 	});
 	const expectGridGeometry = async (page, label, { editing = false, against, dragging = false } = {}) => {
-		// Slots follow the grid height through a ResizeObserver; let that frame run before measuring.
-		await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
 		await waitForVisualStability(page);
 		const snap = await gridSnapshot(page);
 		const tol = GEOMETRY_TOL_PX;
@@ -600,7 +641,7 @@ async function auditDashboardGrid(browser, app, adminState, browserName, phase) 
 	};
 	const widgetChrome = async (page, editing = false) => {
 		const shells = await page.evaluate(() => ['downtime', 'alerts-open', 'delivery-queue']
-			.map((id) => document.querySelector(`[data-widget-id="${id}"]`))
+			.map((id) => document.querySelector(`.grid-stack-item[data-widget-id="${id}"]`))
 			.filter((tile) => tile && !tile.classList.contains('d-none'))
 			.map((tile) => {
 				const card = tile.querySelector('.dashboard-widget-card');
@@ -640,7 +681,7 @@ async function auditDashboardGrid(browser, app, adminState, browserName, phase) 
 		return { x, y, w, h };
 	});
 	const expectQueueContent = async (page, label) => {
-		const geometry = await page.locator('[data-widget-id="delivery-queue"]').evaluate((tile) => {
+		const geometry = await page.locator('.grid-stack-item[data-widget-id="delivery-queue"]').evaluate((tile) => {
 			const content = tile.querySelector('.grid-stack-item-content');
 			const inner = content.querySelector(':scope > :not(.dashboard-widget-handle)');
 			const saved = ['position', 'width', 'height', 'flex', 'transition'].map((name) => [
@@ -674,7 +715,13 @@ async function auditDashboardGrid(browser, app, adminState, browserName, phase) 
 			const overlaps = (left, right) => left.left < right.right && left.right > right.left && left.top < right.bottom && left.bottom > right.top;
 			const bounds = rect(metrics);
 			const metricBoxes = [...metrics.querySelectorAll('dt, dd')].map(rect);
-			return { rows: tile.gridstackNode.h, minRows: tile.gridstackNode.minH, naturalHeight, frame, band, cellHeight,
+			const bodyStyle = getComputedStyle(body);
+			const containerPx = body.clientWidth - parseFloat(bodyStyle.paddingLeft) - parseFloat(bodyStyle.paddingRight);
+			return { cols: tile.gridstackNode.w, minCols: tile.gridstackNode.minW,
+				containerRem: containerPx / parseFloat(getComputedStyle(document.documentElement).fontSize),
+				stacked: getComputedStyle(metrics).gridTemplateColumns.split(' ').length === 1,
+				bodyScroll: [body.scrollHeight, body.clientHeight],
+				rows: tile.gridstackNode.h, minRows: tile.gridstackNode.minH, naturalHeight, frame, band, cellHeight,
 				requiredRows: Math.ceil((naturalHeight + frame + band) / cellHeight),
 				headerOverflow: header.scrollWidth - header.clientWidth,
 				bodyOverflow: body.scrollHeight - body.clientHeight, metricsOverflow: metrics.scrollWidth - metrics.clientWidth,
@@ -685,9 +732,10 @@ async function auditDashboardGrid(browser, app, adminState, browserName, phase) 
 		assert.equal(geometry.minRows, 3, `${label}: GridStack Queue minimum differs from its measured minimum ${JSON.stringify(geometry)}`);
 		assert.ok(geometry.requiredRows <= 3, `${label}: Queue content requires more than three rows ${JSON.stringify(geometry)}`);
 		assert.ok(geometry.headerOverflow <= 1, `${label}: Queue header overflows ${JSON.stringify(geometry)}`);
-		assert.ok(geometry.bodyOverflow <= 1, `${label}: Queue body scrolls or clips content ${JSON.stringify(geometry)}`);
+		assert.ok(geometry.bodyOverflow <= QUEUE_SCROLL_TOL_PX, `${label}: Queue body scrolls or clips content ${JSON.stringify(geometry)}`);
 		assert.ok(geometry.metricsOverflow <= 1 && !geometry.metricOutside, `${label}: Queue metrics overflow their container ${JSON.stringify(geometry)}`);
 		assert.equal(geometry.titleStatusOverlap, false, `${label}: Queue title overlaps its status badge ${JSON.stringify(geometry)}`);
+		return geometry;
 	};
 	if (phase !== "legacy") {
 		const setup = await browser.newContext({ storageState: adminState });
@@ -737,7 +785,7 @@ async function auditDashboardGrid(browser, app, adminState, browserName, phase) 
 			assert.equal((await request(page, "/me/dashboard-layout")).data.layout, null, "users must not inherit another user's layout");
 			await ready(page);
 			if (role === "admin") {
-				const quality = page.locator('[data-widget-id="quality"]');
+				const quality = page.locator('.grid-stack-item[data-widget-id="quality"]');
 				await quality.locator('.quality-target').first().waitFor({ state: "visible" });
 				// Gap between subtitle and badges versus badges and the end of the widget content.
 				const qualitySpacing = () => quality.evaluate((element) => {
@@ -771,7 +819,7 @@ async function auditDashboardGrid(browser, app, adminState, browserName, phase) 
 					'quality tile fell below its minimum height');
 				await expectQualityCentred('default layout');
 				await page.locator('#delivery-queue-status').getByText('Queue clear').waitFor();
-				const queueBody = page.locator('[data-widget-id="delivery-queue"] .dashboard-monitor-body');
+				const queueBody = page.locator('.grid-stack-item[data-widget-id="delivery-queue"] .dashboard-monitor-body');
 				const queueCells = () => queueBody.locator('.dashboard-monitor-metrics > div');
 				await page.route("**/settings/notification-queue/stats", async (route) => {
 					if (queueRequestFailure) return route.fulfill({ status: 503, contentType: "application/json", body: "{}" });
@@ -783,7 +831,7 @@ async function auditDashboardGrid(browser, app, adminState, browserName, phase) 
 					await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
 					await response;
 					if (values) await page.waitForFunction((expected) =>
-						[...document.querySelectorAll('[data-widget-id="delivery-queue"] .dashboard-monitor-metrics dd')]
+						[...document.querySelectorAll('.grid-stack-item[data-widget-id="delivery-queue"] .dashboard-monitor-metrics dd')]
 							.map((value) => value.textContent.trim()).join(',') === expected.join(','), values);
 				};
 				queuePayloadOverride = { pending: 123456789, processing: 234567890, failed: 987654321, failed_recent: null,
@@ -808,22 +856,19 @@ async function auditDashboardGrid(browser, app, adminState, browserName, phase) 
 				await page.locator('#delivery-queue-status').getByText('Queue clear').waitFor();
 				assert.equal(await queueCells().count(), 3, 'Queue metrics did not recover after an API failure');
 				for (const theme of ['light', 'dark']) {
-					const colors = await page.evaluate((value) => {
-					document.documentElement.setAttribute('data-bs-theme', value);
-					return ['quality-state-badge', 'delivery-queue-status'].map((id) => {
-						const badge = document.getElementById(id);
-						const style = getComputedStyle(badge);
-						return { background: style.backgroundColor, foreground: style.color,
-							variant: [...badge.classList].find((name) => name.startsWith('ju-status-badge--')) };
+					const tones = await page.evaluate((value) => {
+						document.documentElement.setAttribute('data-bs-theme', value);
+						return ['quality-state-badge', 'delivery-queue-status'].map((id) => {
+							const dot = document.getElementById(id)?.querySelector('.ju-status-dot');
+							return dot && [...dot.classList].find((name) => name.startsWith('ju-status-dot--') && name !== 'ju-status-dot--unknown');
 						});
 					}, theme);
-					assert.deepEqual(colors[0], colors[1], `${theme}: healthy dashboard badges use different colors`);
-				assert.equal(colors[0].variant, 'ju-status-badge--success', `${theme}: healthy dashboard badges lack the shared success variant`);
+					assert.deepEqual(tones, ['ju-status-dot--success', 'ju-status-dot--success'], `${theme}: healthy dashboard status dots lack the shared success tone`);
 				}
 				await page.evaluate(() => document.documentElement.setAttribute('data-bs-theme', 'light'));
 				assert.equal(
 					await quality.locator('.card-header').evaluate((header) => header.getBoundingClientRect().height),
-					await page.locator('[data-widget-id="delivery-queue"] .card-header').evaluate((header) => header.getBoundingClientRect().height),
+					await page.locator('.grid-stack-item[data-widget-id="delivery-queue"] .card-header').evaluate((header) => header.getBoundingClientRect().height),
 					'quality heading should match the delivery queue header height',
 				);
 				assert.equal(await quality.locator('#quality-updated').count(), 0, 'quality measurement time should not be shown');
@@ -838,7 +883,8 @@ async function auditDashboardGrid(browser, app, adminState, browserName, phase) 
 					'quality score should match dashboard hero numbers',
 				);
 				assert.equal(await page.locator('#quality-targets-tooltip-trigger, .quality-targets-tooltip').count(), 0);
-				assert.equal(await quality.locator('.quality-target').first().textContent(), 'DE 1.1.1.1');
+				assert.equal(await quality.locator('.quality-target').first().textContent(), '1.1.1.1');
+				assert.equal(await quality.locator('.quality-target').first().getAttribute('aria-label'), 'DE: 1.1.1.1');
 				assert.equal(await quality.locator('.quality-target').first().locator('img').getAttribute('src'),
 					'https://cdn.jsdelivr.net/npm/flag-icons@7.3.2/flags/4x3/de.svg');
 				assert.equal(await quality.locator('.quality-target').nth(1).textContent(), '8.8.8.8');
@@ -865,13 +911,13 @@ async function auditDashboardGrid(browser, app, adminState, browserName, phase) 
 				const before = await node(quality);
 				const visible = () => quality.locator('.quality-target:not([hidden]):not(.quality-target-overflow)').count();
 				await quality.evaluate((element) => element.closest('.grid-stack').gridstack.update(element, { w: 6, h: 5 }));
-				await page.waitForFunction(() => document.querySelectorAll('[data-widget-id="quality"] .quality-target:not([hidden]):not(.quality-target-overflow)').length === 5);
+				await page.waitForFunction(() => document.querySelectorAll('.grid-stack-item[data-widget-id="quality"] .quality-target:not([hidden]):not(.quality-target-overflow)').length === 5);
 				assert.equal(await visible(), 5, 'large tile should show all targets');
 				assert.equal(await quality.locator('.quality-target-overflow').isVisible(), false);
 				await quality.evaluate((element) => element.closest('.grid-stack').gridstack.update(element, { w: 2, h: 2 }));
 				await page.waitForFunction(() => {
-					const targets = document.querySelectorAll('[data-widget-id="quality"] .quality-target:not([hidden]):not(.quality-target-overflow)').length;
-					const counter = document.querySelector('[data-widget-id="quality"] .quality-target-overflow:not([hidden])');
+					const targets = document.querySelectorAll('.grid-stack-item[data-widget-id="quality"] .quality-target:not([hidden]):not(.quality-target-overflow)').length;
+					const counter = document.querySelector('.grid-stack-item[data-widget-id="quality"] .quality-target-overflow:not([hidden])');
 					return targets === 5 || counter && counter.textContent === `+${5 - targets}` && targets < 5;
 				});
 				const narrowFit = await quality.evaluate((element) => ({
@@ -917,16 +963,17 @@ async function auditDashboardGrid(browser, app, adminState, browserName, phase) 
 				}
 				await applyQuality({ w: v2Layout.widgets.find((widget) => widget.id === 'quality').w, h: 3, height_mode: 'auto' });
 				await quality.locator('.quality-target').first().evaluate((element) => { window.__qualityBadge = element; });
-				const refresh = page.waitForResponse((response) => response.url().endsWith('/quality/current'));
-				await page.evaluate(() => document.body.dispatchEvent(new Event('dashboard-refresh')));
-				await refresh;
+				const refreshQuality = async () => {
+					const response = page.waitForResponse((result) => result.url().endsWith('/quality/current'));
+					await page.evaluate(() => document.body.dispatchEvent(new Event('dashboard-refresh')));
+					await response;
+				};
+				await refreshQuality();
 				assert.equal(await quality.locator('.quality-target').first().evaluate((element) => element === window.__qualityBadge), true,
 					'unchanged targets were reconstructed');
 				qualityUnavailable = true;
 				for (let attempt = 0; attempt < 2; attempt++) {
-					const failed = page.waitForResponse((response) => response.url().endsWith('/quality/current'));
-					await page.evaluate(() => document.body.dispatchEvent(new Event('dashboard-refresh')));
-					await failed;
+					await refreshQuality();
 				}
 				await page.waitForFunction(() => document.getElementById('quality-label')?.textContent === 'Data unavailable');
 				assert.equal(await quality.locator('.quality-target').count(), 6, 'API failure lost known targets');
@@ -935,25 +982,19 @@ async function auditDashboardGrid(browser, app, adminState, browserName, phase) 
 					targets: ["https://[2001:4860:4860::8888]:8443/check", "very-long-quality-hostname-with-many-labels.example.org", "example.org"],
 					target_details: [],
 				};
-				const changed = page.waitForResponse((response) => response.url().endsWith('/quality/current'));
-				await page.evaluate(() => document.body.dispatchEvent(new Event('dashboard-refresh')));
-				await changed;
+				await refreshQuality();
 				await page.waitForFunction(() => document.querySelectorAll('#quality-targets .quality-target:not(.quality-target-overflow)').length === 3);
 				assert.equal(await quality.locator('.quality-target').first().textContent(), '[2001:4860:4860::8888]:8443/check');
 				assert.equal(await quality.locator('.quality-target').nth(1).textContent(), 'very-long-quality-hostname-with-many-labels.example.org');
 				qualityPayload = { ...qualityPayload, targets: [], target_details: [] };
-				const emptied = page.waitForResponse((response) => response.url().endsWith('/quality/current'));
-				await page.evaluate(() => document.body.dispatchEvent(new Event('dashboard-refresh')));
-				await emptied;
+				await refreshQuality();
 				await page.waitForFunction(() => document.getElementById('quality-targets')?.textContent === 'No quality targets configured');
 				assert.equal(await quality.locator('.quality-target').count(), 0);
 				qualityPayload = initialQualityPayload;
-				const restored = page.waitForResponse((response) => response.url().endsWith('/quality/current'));
-				await page.evaluate(() => document.body.dispatchEvent(new Event('dashboard-refresh')));
-				await restored;
+				await refreshQuality();
 				await page.waitForFunction(() => document.querySelectorAll('#quality-targets .quality-target:not(.quality-target-overflow)').length === 5);
 			}
-			assert.equal(await page.locator('[data-widget-id="delivery-queue"]').count(), role === "admin" ? 1 : 0);
+			assert.equal(await page.locator('.grid-stack-item[data-widget-id="delivery-queue"]').count(), role === "admin" ? 1 : 0);
 			await geometry(page);
 			await widgetChrome(page);
 			const viewSnapshot = await expectGridGeometry(page, `${browserName}/${role} before edit mode`);
@@ -962,21 +1003,21 @@ async function auditDashboardGrid(browser, app, adminState, browserName, phase) 
 			await expectGridGeometry(page, `${browserName}/${role} right after entering edit mode`, { editing: true, against: viewSnapshot });
 			await widgetChrome(page, true);
 			await expectResizeGrips(page, `${browserName}/${role} edit mode`);
-			const online = page.locator('[data-widget-id="status-online"]');
+			const online = page.locator('.grid-stack-item[data-widget-id="status-online"]');
 			const handle = online.getByRole("button", { name: /^Move or resize widget: Online\./ });
 			const original = await node(online);
 			await handle.press("ArrowDown");
 			assert.ok((await node(online)).y > original.y, "keyboard movement did not move the widget");
 			await handle.press("Shift+ArrowRight");
 			assert.ok((await node(online)).w > original.w, "keyboard resize did not resize the widget");
-			const quality = page.locator('[data-widget-id="quality"]');
+			const quality = page.locator('.grid-stack-item[data-widget-id="quality"]');
 			const qualityHandle = quality.getByRole("button", { name: /^Move or resize widget: Monitor quality\./ });
 			const qualityBeforeResize = await node(quality);
 			await qualityHandle.press("Shift+ArrowDown");
 			assert.ok((await node(quality)).h > qualityBeforeResize.h, "keyboard height resize did not resize the widget");
-			const downtime = page.locator('[data-widget-id="downtime"]');
+			const downtime = page.locator('.grid-stack-item[data-widget-id="downtime"]');
 			const downtimeBeforeResize = await node(downtime);
-			const downtimeHandle = downtime.getByRole("button", { name: /^Move or resize widget: Downtime overview\./ });
+			const downtimeHandle = downtime.getByRole("button", { name: /^Move or resize widget: Downtime overview \(24h\)\./ });
 			await downtimeHandle.press("Shift+ArrowDown");
 			assert.ok((await node(downtime)).h > downtimeBeforeResize.h, "downtime keyboard height resize did not resize the widget");
 			await waitForVisualStability(page);
@@ -1021,7 +1062,7 @@ async function auditDashboardGrid(browser, app, adminState, browserName, phase) 
 			await ready(page);
 			assert.deepEqual((await request(page, "/me/dashboard-layout")).data.layout, saved, "reload changed the saved layout");
 			await expectGridGeometry(page, `${browserName}/${role} after reload`);
-			assert.equal(await page.locator('[data-widget-id="status-disabled"]').isVisible(), false);
+			assert.equal(await page.locator('.grid-stack-item[data-widget-id="status-disabled"]').isVisible(), false);
 			const storedOnline = saved.widgets.find((widget) => widget.id === "status-online");
 			const restoredOnline = await node(online);
 			assert.equal((await node(quality)).h, saved.widgets.find((widget) => widget.id === "quality").h,
@@ -1072,7 +1113,7 @@ async function auditDashboardGrid(browser, app, adminState, browserName, phase) 
 				}
 				await geometry(page);
 				if (role === "admin" && viewport.width < 992) {
-					assert.equal(await page.locator('[data-widget-id="quality"] .quality-target:not([hidden]):not(.quality-target-overflow)').count(),
+					assert.equal(await page.locator('.grid-stack-item[data-widget-id="quality"] .quality-target:not([hidden]):not(.quality-target-overflow)').count(),
 						5, `stacked quality tile hid targets at ${viewport.width}px`);
 				}
 				assert.deepEqual((await request(page, "/me/dashboard-layout")).data.layout, saved, "responsive reflow overwrote the desktop layout");
@@ -1084,7 +1125,7 @@ async function auditDashboardGrid(browser, app, adminState, browserName, phase) 
 				assert.deepEqual((await request(page, "/me/dashboard-layout")).data.layout, saved);
 			}
 			// Edit mode exists from the desktop breakpoint up. Below it the saved layout only reflows, and the
-			// hidden edit controls and handles must not disturb it. 1280x720 at 200 % zoom is 640x360 CSS px.
+			// hidden edit controls and handles must not disturb it. the effective 200 % zoom profile of 1280x720 is 640x360 CSS px at DPR 2.
 			for (const viewport of [{ width: 1280, height: 720 }, { width: 640, height: 360 }, { width: 390, height: 844 }, { width: 320, height: 640 }]) {
 				await page.setViewportSize(viewport);
 				await ready(page);
@@ -1143,18 +1184,26 @@ async function auditDashboardGrid(browser, app, adminState, browserName, phase) 
 			await page.mouse.down();
 			await page.mouse.move(dragBox.x + 30, viewportHeight - 4, { steps: 20 });
 			await page.mouse.wheel(0, 600);
-			await page.waitForTimeout(400);
+			await page.waitForFunction(() => new Promise((resolve) => {
+				const read = () => [document.scrollingElement.scrollTop, document.getElementById("main-content").scrollHeight, document.getElementById("dashboard-grid").gridstack.getRow()].join();
+				const first = read();
+				requestAnimationFrame(() => requestAnimationFrame(() => resolve(read() === first)));
+			}), null, { polling: "raf" });
 			await expectContained("while dragging to the bottom edge", settledState);
 			await page.mouse.up();
 			await waitForVisualStability(page);
 			await expectContained("after the drop", settledState);
 			const droppedState = await scrollState(); // the dropped widget is part of the settled layout now
-			const resizeGrip = await page.locator('[data-widget-id="downtime"] .ui-resizable-se').boundingBox();
+			const resizeGrip = await page.locator('.grid-stack-item[data-widget-id="downtime"] .ui-resizable-se').boundingBox();
 			await page.mouse.move(resizeGrip.x + 10, resizeGrip.y + 10);
 			await page.mouse.down();
 			await page.mouse.move(resizeGrip.x + 10, viewportHeight - 4, { steps: 20 });
 			await page.mouse.wheel(0, 600);
-			await page.waitForTimeout(400);
+			await page.waitForFunction(() => new Promise((resolve) => {
+				const read = () => [document.scrollingElement.scrollTop, document.getElementById("main-content").scrollHeight, document.getElementById("dashboard-grid").gridstack.getRow()].join();
+				const first = read();
+				requestAnimationFrame(() => requestAnimationFrame(() => resolve(read() === first)));
+			}), null, { polling: "raf" });
 			await expectContained("while resizing to the bottom edge", droppedState);
 			await page.mouse.up();
 			await waitForVisualStability(page);
@@ -1177,18 +1226,18 @@ async function auditDashboardGrid(browser, app, adminState, browserName, phase) 
 			assert.ok((await resetResponse).ok());
 			await page.reload();
 			await ready(page);
-			assert.equal(await page.locator('[data-widget-id="status-disabled"]').isVisible(), true);
+			assert.equal(await page.locator('.grid-stack-item[data-widget-id="status-disabled"]').isVisible(), true);
 			await geometry(page);
 			await expectGridGeometry(page, `${browserName}/${role} after layout reset`);
 			if (role === "admin") {
 				adminLayout = (await request(page, "/me/dashboard-layout")).data.layout;
-				await page.locator('[data-widget-id="delivery-queue"]').evaluate((tile) => {
+				await page.locator('.grid-stack-item[data-widget-id="delivery-queue"]').evaluate((tile) => {
 					tile.classList.remove("d-none");
 					document.dispatchEvent(new Event("dashboard:widget-shown"));
 				});
-				const queueBody = page.locator('[data-widget-id="delivery-queue"] .dashboard-monitor-body');
+				const queueBody = page.locator('.grid-stack-item[data-widget-id="delivery-queue"] .dashboard-monitor-body');
 				await page.waitForFunction(() => {
-					const tile = document.querySelector('[data-widget-id="delivery-queue"]');
+					const tile = document.querySelector('.grid-stack-item[data-widget-id="delivery-queue"]');
 					return tile?.querySelector('.dashboard-monitor-status')?.textContent.includes("Queue clear") &&
 						tile.querySelector('.dashboard-monitor-body')?.textContent.includes("Failed (24 h)");
 				}, null, { timeout: 10000 });
@@ -1196,7 +1245,7 @@ async function auditDashboardGrid(browser, app, adminState, browserName, phase) 
 				const alertSummaryMock = { open: 3, acknowledged_24h: 2, started_24h: 5, resolved_24h: 4 };
 				await page.route("**/alerts/summary", (route) => route.fulfill({ json: alertSummaryMock }));
 				await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
-				await page.waitForFunction(() => document.querySelector('[data-widget-id="alerts-open"] .dashboard-monitor-metrics'), null, { timeout: 10000 });
+				await page.waitForFunction(() => document.querySelector('.grid-stack-item[data-widget-id="alerts-open"] .dashboard-monitor-metrics'), null, { timeout: 10000 });
 				for (const label of ["Pending", "Processing"]) {
 					assert.ok((await queueBody.innerText()).includes(label), `delivery queue is missing visible label: ${label}`);
 				}
@@ -1204,10 +1253,10 @@ async function auditDashboardGrid(browser, app, adminState, browserName, phase) 
 				assert.ok(!(await queueBody.innerText()).includes("Next retry in"));
 				// Alerts uses the delivery queue structure: header status, then three equal values above their labels.
 				for (const id of ["delivery-queue", "alerts-open"]) {
-					const structure = await page.locator(`[data-widget-id="${id}"]`).evaluate((tile) => {
+					const structure = await page.locator(`.grid-stack-item[data-widget-id="${id}"]`).evaluate((tile) => {
 						return { title: tile.querySelector(".dashboard-monitor-title").textContent.trim(),
 							status: tile.querySelector(".dashboard-monitor-status").textContent.trim(),
-							icon: Boolean(tile.querySelector(".dashboard-monitor-status .material-icons")),
+							icons: tile.querySelectorAll(".dashboard-monitor-status .material-icons").length,
 							mainCount: tile.querySelectorAll(".dashboard-monitor-number").length,
 							statusCount: tile.querySelectorAll(".dashboard-monitor-status").length,
 							metricsTag: tile.querySelector(".dashboard-monitor-metrics").tagName,
@@ -1217,7 +1266,7 @@ async function auditDashboardGrid(browser, app, adminState, browserName, phase) 
 								semanticPair: cell.firstElementChild.tagName === "DT" && cell.lastElementChild.tagName === "DD",
 								valueAboveLabel: cell.querySelector("dd").getBoundingClientRect().bottom <= cell.querySelector("dt").getBoundingClientRect().top + 1 })) };
 					});
-					assert.ok(structure.status && structure.icon, `${id} has no header status with icon and text`);
+					assert.ok(structure.status && structure.icons === 0, `${id} needs a header status with text and without an icon`);
 					assert.equal(structure.statusCount, 1, `${id} status must appear only in the header`);
 					assert.equal(structure.metricsTag, "DL", `${id} metrics are not a definition list`);
 					assert.equal(structure.cells.length, 3, `${id} statistics`);
@@ -1226,9 +1275,9 @@ async function auditDashboardGrid(browser, app, adminState, browserName, phase) 
 						assert.equal(structure.mainCount, 0, "delivery queue must not render a redundant main sum");
 						const stats = await request(page, "/settings/notification-queue/stats");
 						assert.equal(stats.status, 200, "delivery queue stats endpoint failed");
-						const failed = Number.isInteger(stats.data.failed_recent) && stats.data.failed_recent >= 0 ? stats.data.failed_recent : stats.data.failed;
+						assert.ok(Number.isInteger(stats.data.failed_recent), "stats API lacks failed_recent");
 						assert.deepEqual(structure.cells.map((cell) => cell.label), ["Pending", "Processing", "Failed (24 h)"]);
-						assert.deepEqual(structure.cells.map((cell) => cell.value), [String(stats.data.pending), String(stats.data.processing), String(failed)],
+						assert.deepEqual(structure.cells.map((cell) => cell.value), [String(stats.data.pending), String(stats.data.processing), String(stats.data.failed_recent)],
 							"delivery queue metric values do not match the stats API");
 					} else {
 						assert.equal(structure.mainCount, 0, "alerts must not render a main number that repeats the header count");
@@ -1241,7 +1290,7 @@ async function auditDashboardGrid(browser, app, adminState, browserName, phase) 
 				const shotsDir = process.env.JUSTUP_LAYOUT_SHOTS;
 				if (shotsDir) {
 					for (const id of ['downtime', 'alerts-open', 'delivery-queue']) {
-						await page.locator(`[data-widget-id="${id}"] .grid-stack-item-content`).screenshot({
+						await page.locator(`.grid-stack-item[data-widget-id="${id}"] .grid-stack-item-content`).screenshot({
 							path: path.join(shotsDir, `${browserName}-widget-${id}.png`),
 						});
 					}
@@ -1252,7 +1301,8 @@ async function auditDashboardGrid(browser, app, adminState, browserName, phase) 
 		} catch (error) {
 			const animations = await page.evaluate(() => document.getAnimations().filter((animation) => animation.playState === "running")
 				.map((animation) => ({ name: animation.animationName || animation.transitionProperty,
-					target: animation.effect?.target?.className, time: animation.currentTime })));
+					target: animation.effect?.target?.className, time: animation.currentTime })))
+				.catch((reason) => `unavailable (${reason.message})`);
 			error.message += `; running animations: ${JSON.stringify(animations)}`;
 			throw error;
 		} finally {
@@ -1278,7 +1328,7 @@ async function auditDashboardGrid(browser, app, adminState, browserName, phase) 
 			await setupContext.close();
 		}
 		const rows = [
-			["status-online", 0, 0, 3, 2, 1], ["status-offline", 3, 0, 3, 2, 1], ["status-disabled", 6, 0, 3, 2, 1], ["status-total", 9, 0, 3, 2, 1],
+			["status-online", 0, 0, 1, 2, 1], ["status-offline", 3, 0, 3, 2, 1], ["status-disabled", 6, 0, 3, 2, 1], ["status-total", 9, 0, 3, 2, 1],
 			["quality", 0, 2, 3, 2, hidden ? 0 : 1], ["downtime", 3, 2, 6, 4, 1], ["alerts-open", 0, 4, 3, 3, 1],
 		];
 		const stored = spawnSync(app.python, ["-c", `import json, sqlite3, sys
@@ -1287,7 +1337,8 @@ uid = db.execute("SELECT id FROM users WHERE username = ?", (sys.argv[2],)).fetc
 for pos, (wid, x, y, w, h, visible) in enumerate(json.loads(sys.argv[3])):
 	db.execute("INSERT INTO dashboard_layouts (user_id, widget_id, position, x, y, w, h, visible, layout_version, height_mode) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 2, 'auto')", (uid, wid, pos, x, y, w, h, visible))
 db.commit()
-`, app.data, legacyUser, JSON.stringify(rows)], { cwd: repo, encoding: "utf8" });
+`, app.data, legacyUser, JSON.stringify(rows)], { cwd: repo, encoding: "utf8", timeout: 30000 });
+		assert.ifError(stored.error);
 		assert.equal(stored.status, 0, `could not store the legacy layout: ${stored.stderr}`);
 		const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
 		const page = await context.newPage();
@@ -1300,17 +1351,22 @@ db.commit()
 			await page.waitForURL((url) => !/login|change-password/.test(url.pathname), { timeout: 10000 });
 			await page.goto(app.base + "/");
 			await ready(page);
-			const quality = page.locator('[data-widget-id="quality"]');
+			assert.equal((await node(page.locator('.grid-stack-item[data-widget-id="status-online"]'))).w, 2, `${label}: narrow saved hero was not raised to its minimum width`);
+			const quality = page.locator('.grid-stack-item[data-widget-id="quality"]');
 			if (!hidden) {
 				assert.ok((await node(quality)).h >= 3, `${label}: height was not raised to the minimum`);
-				assert.equal(await page.locator('[data-widget-id="downtime"]').evaluate((element) => element.gridstackNode.x), 3, `${label}: neighbour position was not kept`);
+				assert.equal(await page.locator('.grid-stack-item[data-widget-id="downtime"]').evaluate((element) => element.gridstackNode.x), 3, `${label}: neighbour position was not kept`);
 				await expectGridGeometry(page, `${label} after loading`);
 			}
 			await page.getByRole("button", { name: "Edit dashboard", exact: true }).click();
-			const downtime = page.locator('[data-widget-id="downtime"]');
+			const downtime = page.locator('.grid-stack-item[data-widget-id="downtime"]');
 			const downtimeBefore = await node(downtime);
-			await downtime.getByRole("button", { name: /^Move or resize widget: Downtime overview\./ }).press("ArrowDown");
-			assert.ok((await node(downtime)).y > downtimeBefore.y, `${label}: edit did not move the widget`);
+			await downtime.getByRole("button", { name: /^Move or resize widget: Downtime overview \(24h\)\./ }).press("ArrowDown");
+			const downtimeMoved = await node(downtime);
+			assert.ok(downtimeMoved.y > downtimeBefore.y, `${label}: edit did not move the widget`);
+			// DC-GRID-1: a keyboard move is one GridStack step; no client code repositions or resizes it.
+			assert.deepEqual({ x: downtimeMoved.x, w: downtimeMoved.w, h: downtimeMoved.h }, { x: downtimeBefore.x, w: downtimeBefore.w, h: downtimeBefore.h },
+				`${label}: keyboard move changed more than the row`);
 			const savedResponse = page.waitForResponse((response) => response.url().endsWith("/me/dashboard-layout") && response.request().method() === "PUT");
 			await page.getByRole("button", { name: "Done", exact: true }).click();
 			const saveResult = await savedResponse;
@@ -1321,6 +1377,7 @@ db.commit()
 			const savedQuality = layout.widgets.find((widget) => widget.id === "quality");
 			assert.ok(savedQuality.h >= 3, `${label}: stored height is still below the minimum`);
 			assert.equal(savedQuality.visible, !hidden);
+			assert.equal(layout.widgets.find((widget) => widget.id === "status-online").w, 2, `${label}: raised hero width was not saved`);
 			const visibleBoxes = layout.widgets.filter((widget) => widget.visible);
 			for (const a of visibleBoxes) for (const b of visibleBoxes) {
 				if (a.id < b.id) assert.ok(a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y, `${label}: ${a.id} overlaps ${b.id}`);
@@ -1356,13 +1413,31 @@ db.commit()
 				assert.equal((await request(page, "/me/dashboard-layout", "PUT", layout)).status, 200);
 				await page.reload();
 				await ready(page);
+				if (sizing === "minimum") {
+					// The Queue tile at its registry minimum width (3 columns, minW 3) keeps its three-row minimum without
+					// clipping or scrolling; the stacked-metrics container query must not add rows. the effective 200 % zoom profile of 1280x720 is 640x360 CSS px.
+					for (const viewport of [{ width: 992, height: 768 }, { width: 1024, height: 768 }, { width: 640, height: 360 }]) {
+						await page.setViewportSize(viewport);
+						await ready(page);
+						for (const theme of ["light", "dark"]) {
+							await page.evaluate((value) => document.documentElement.setAttribute("data-bs-theme", value), theme);
+							await waitForVisualStability(page);
+							const label = `${browserName} Queue at minimum width ${viewport.width}x${viewport.height} ${theme}`;
+							const measured = await expectQueueContent(page, label);
+							if (viewport.width >= 992) assert.equal(measured.cols, 4, `${label}: Queue is not at its 4-column minimum ${JSON.stringify(measured)}`);
+							console.log(`MEASURED ${label}: ${JSON.stringify(measured)}`);
+						}
+					}
+					await page.setViewportSize({ width: 1440, height: 1000 });
+					await ready(page);
+				}
 				for (const editing of [false, true]) {
 					if (editing) await page.getByRole("button", { name: "Edit dashboard", exact: true }).click();
 					for (const theme of ["light", "dark"]) {
 						await page.evaluate((value) => document.documentElement.setAttribute("data-bs-theme", value), theme);
 						await waitForVisualStability(page);
 						// A manual height below the content may scroll inside the declared body area, never a KPI tile.
-						const allowed = (issue) => sizing === "minimum" && issue.node.includes("dashboard-widget-body") && !issue.node.includes("hero");
+						const allowed = (issue) => sizing === "minimum" && issue.declaredBody && !issue.hero;
 						const scrolling = (await runAudit(page, "top")).issues.filter((issue) => issue.type === "widget-scrollbar" && !allowed(issue));
 						assert.deepEqual(scrolling, [], `${browserName} ${sizing} sizes, ${theme}, ${editing ? "edit" : "view"} mode: widget scrollbar`);
 					}
@@ -1471,7 +1546,7 @@ async function auditSelfTest(browser) {
 			.target-kpi-pair { position: relative; height: 40px; }
 			.target-kpi-label { position: absolute; inset: 0 auto auto 0; }
 			#combined-card { position: relative; height: 60px; }
-			.combined-footer { position: relative; top: 80px; height: 20px; }
+			#combined-summary { position: relative; top: 80px; height: 20px; }
 			.target-combined-plot { height: 12px; }
 			#availability-card { position: relative; height: 80px; }
 			#availability-card > .card-body { height: 40px; padding: 0; }
@@ -1484,10 +1559,12 @@ async function auditSelfTest(browser) {
 		</style><main id="main-content" class="ju-content">
 			<div class="target-kpi-pair"><div><p class="target-kpi-label">Uptime 24h</p><p class="target-kpi-value">100%</p></div><div><p class="target-kpi-label">Uptime 30d</p><p class="target-kpi-value">100%</p></div></div>
 			<section id="target-dashboard-pane" style="position:relative;width:400px;height:40px"><div id="target-info-cards" style="display:contents"><div class="target-kpi-row" style="width:200px;height:20px"></div></div></section>
-			<div class="card" id="combined-card"><div class="target-combined-plot"></div><div class="combined-footer"></div></div>
+			<div class="card" id="combined-card"><div class="target-combined-plot"></div><p id="combined-summary"></p></div>
 			<div class="card" id="availability-card"><div class="card-body"><div class="target-availability-plot"><canvas id="chart-uptime"></canvas></div></div></div>
 			<div id="downtime-history-card"><div class="card-body"><div class="target-empty-state"></div></div></div>
 			<div data-widget-id="delivery-queue"><div class="dashboard-monitor-body" style="height:10px;overflow-y:auto"><div style="height:40px"></div></div></div>
+			<div class="downtime-scroll" style="height:30px;overflow-y:auto"><div class="tr-table-scroll" style="height:80px;overflow-y:auto"><div style="height:200px"></div></div></div>
+			<div id="ghost-bar" style="width:100px;height:40px;overflow-x:auto"><div style="width:80px;height:44px"></div></div>
 			<div class="ju-notif-swipe-item is-dismiss-revealed"><div class="ju-notif-swipe-content"></div><div class="ju-notif-dismiss-action"></div></div>
 		</main>`);
 		await page.evaluate(() => {
@@ -1498,7 +1575,7 @@ async function auditSelfTest(browser) {
 		});
 		const result = await runAudit(page, "top");
 		const types = new Set(result.issues.map((finding) => finding.type));
-		for (const type of ["text-overlap", "dashboard-content-outside-card", "chart-plot-too-small", "chart-plot-outside-card", "chart-legend-outside-canvas", "chart-legend-overlaps-plot", "chart-area-too-small", "chart-legend-position", "dashboard-kpi-row-does-not-fill-grid", "downtime-empty-ghost-scroll", "notification-delete-overlaps-content", "delivery-queue-ghost-scroll"]) {
+		for (const type of ["text-overlap", "dashboard-content-outside-card", "chart-plot-too-small", "chart-plot-outside-card", "chart-legend-outside-canvas", "chart-legend-overlaps-plot", "chart-area-too-small", "chart-legend-position", "dashboard-kpi-row-does-not-fill-grid", "downtime-empty-ghost-scroll", "notification-delete-overlaps-content", "delivery-queue-ghost-scroll", "ghost-scroll-y", "unregistered-scroll-y", "scroll-region-chaining", "scroll-region-keyboard", "nested-scroll-region"]) {
 			assert.ok(types.has(type), `layout audit self-test did not detect ${type}`);
 		}
 		await auditShellSelfTest(context);
@@ -1567,7 +1644,11 @@ const focusAudit = (page) => page.evaluate(() => {
 async function modalAudit(page) {
 	return page.evaluate(async () => {
 		const bad = [];
-		const once = (el, evt, act) => new Promise((resolve) => { el.addEventListener(evt, resolve, { once: true }); act(); });
+		const once = (el, evt, act, ms = 5000) => new Promise((resolve, reject) => {
+			const timer = setTimeout(() => reject(new Error(`modal ${el.id || "(no id)"}: no ${evt} within ${ms} ms`)), ms);
+			el.addEventListener(evt, () => { clearTimeout(timer); resolve(); }, { once: true });
+			act();
+		});
 		for (const modal of document.querySelectorAll(".modal")) {
 			const inst = window.bootstrap.Modal.getOrCreateInstance(modal);
 			await once(modal, "shown.bs.modal", () => inst.show());
@@ -1722,7 +1803,8 @@ async function auditCombinedChartInteractions(page) {
 		window.__justUpChartBeforeResync = window.Chart.getChart(document.getElementById("chart-combined"));
 	});
 	await page.evaluate(() => window.__justUpEventSource.emit("system.resync"));
-	await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 0)));
+	// Assumes the system.resync handler has no debounce: two frames plus a macrotask cover its synchronous path.
+	await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 0)))));
 	assert.equal(await requestCount(), countBeforeResync, "live resync reloaded chart metrics while zoomed");
 	assert.equal(await pendingRequests(), 0);
 	const afterResync = await snapshot();
@@ -1772,6 +1854,7 @@ async function auditPage(browser, app, state, browserName, vp, pg) {
 			if (chartInteractionCheck) await installChartInteractionHooks(page);
 			await page.goto(app.base + pg.path, { waitUntil: "load" });
 			await page.addStyleTag({ content: UNGUARD });
+			await applyTextEnlargement(page, vp.textScale);
 			if (pg.prepare) await pg.prepare(page);
 			if (pg.id.startsWith("target-dashboard")) await waitForTargetDashboard(page);
 			if (process.env.JUSTUP_LAYOUT_INSPECT === "1" && pg.id.startsWith("target-dashboard")) {
@@ -1798,18 +1881,12 @@ async function auditPage(browser, app, state, browserName, vp, pg) {
 				await waitForVisualStability(page);
 				if (pg.id === "dashboard" || pg.id === "login") await assertBranding(page, pg.id, vp.w, theme);
 				for (const position of ["top", "bottom"]) {
-					await page.evaluate((pos) => {
-						const main = document.getElementById("main-content");
-						if (main && document.getElementById("app-shell")) main.scrollTo({ top: pos === "top" ? 0 : main.scrollHeight, behavior: "instant" });
-						else window.scrollTo({ top: pos === "top" ? 0 : document.documentElement.scrollHeight, behavior: "instant" });
-					}, position);
+					await setScrollPosition(page, position);
 					await waitForVisualStability(page);
 					const result = await runAudit(page, position);
 					for (const issue of result.issues) findings.push({ browser: browserName, vp: vp.name, page: pg.id, variant: `${nav}/${theme}/${position}`, ...issue });
 				}
-				await page.evaluate(() => document.getElementById("app-shell")
-					? document.getElementById("main-content").scrollTo({ top: 0, behavior: "instant" })
-					: window.scrollTo({ top: 0, behavior: "instant" }));
+				await setScrollPosition(page, "top");
 				if (nav === "open" && theme === "light") {
 					for (const issue of await focusAudit(page)) findings.push({ browser: browserName, vp: vp.name, page: pg.id, variant: "focus", ...issue });
 				}
@@ -1823,15 +1900,14 @@ async function auditPage(browser, app, state, browserName, vp, pg) {
 				await page.evaluate(() => {
 					document.documentElement.setAttribute("data-bs-theme", "light");
 					document.documentElement.classList.remove("ju-nav-sm");
-					if (document.getElementById("app-shell")) document.getElementById("main-content").scrollTo({ top: 0, behavior: "instant" });
-					else window.scrollTo({ top: 0, behavior: "instant" });
 				});
+				await setScrollPosition(page, "top");
 				await page.screenshot({ path: path.join(shotsDir, `${browserName}-${pg.id}-${vp.name.replace("@", "_")}.png`) });
 			}
-			for (const error of errors) findings.push({ browser: browserName, vp: vp.name, page: pg.id, variant: "js", type: "page-error", node: error.slice(0, 160) });
 		} catch (error) {
 			findings.push({ browser: browserName, vp: vp.name, page: pg.id, variant: "-", type: "page-failed", node: String(error.message).split("\n")[0] });
 		}
+		for (const error of errors) findings.push({ browser: browserName, vp: vp.name, page: pg.id, variant: "js", type: "page-error", node: error.slice(0, 160) });
 		for (const error of unexpectedConsoleErrors(pg, consoleErrors)) findings.push({ browser: browserName, vp: vp.name, page: pg.id, variant: "console", type: "console-error", node: error.slice(0, 160) });
 		return findings;
 	} finally {
@@ -1839,10 +1915,38 @@ async function auditPage(browser, app, state, browserName, vp, pg) {
 	}
 }
 
+// Scrollbar emulation. "classic" keeps the engine's default bars (layout width > 0), "thin" applies
+// `scrollbar-width: thin` to every element and "hidden" turns the bars off through CDP (no layout width:
+// layout-equivalent to overlay scrollbars, which also take no layout space). Chromium on Linux ignores the
+// OverlayScrollbar switches (verified: width stays 15px), so real overlay painting is not emulated. WebKit offers
+// no switch: it runs once, with whatever the build paints.
+const SCROLLBAR_MODES = { chromium: ["classic", "thin", "hidden"], webkit: ["native"], firefox: ["native"] };
+async function applyScrollbarMode(page, mode) {
+	if (mode === "hidden") await (await page.context().newCDPSession(page)).send("Emulation.setScrollbarsHidden", { hidden: true });
+	if (mode === "thin") await page.addInitScript(() => {
+		const style = document.createElement("style");
+		style.textContent = "* { scrollbar-width: thin; }";
+		document.addEventListener("DOMContentLoaded", () => document.head.append(style));
+	});
+}
+// Layout width of a classic scrollbar in this browser; 0 for overlay or hidden bars.
+const probeScrollbar = (page) => page.evaluate(() => {
+	const probe = document.createElement("div");
+	probe.style.cssText = "position:absolute;visibility:hidden;width:100px;height:100px;overflow:scroll";
+	document.body.append(probe);
+	const width = probe.offsetWidth - probe.clientWidth;
+	probe.remove();
+	return width;
+});
+
 export {
 	auditDashboardGrid,
 	auditPage,
 	auditSelfTest,
+	applyScrollbarMode,
+	CFG,
+	probeScrollbar,
+	SCROLLBAR_MODES,
 	PAGES,
 	seed,
 	startApp,

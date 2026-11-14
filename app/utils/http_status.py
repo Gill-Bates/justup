@@ -71,7 +71,7 @@ def parse_status_code_spec(spec: str) -> tuple[tuple[int, int], ...]:
         >>> parse_status_code_spec("2xx")
         ((200, 299),)
         >>> parse_status_code_spec("200-399, 404")
-        ((200, 404),)
+        ((200, 399), (404, 404))
 
     Args:
         spec: Status code specification string
@@ -90,11 +90,7 @@ def parse_status_code_spec(spec: str) -> tuple[tuple[int, int], ...]:
 
 @lru_cache(maxsize=256)
 def _parse_status_code_spec_cached(spec: str) -> tuple[tuple[int, int], ...]:
-    """Internal cached parser (note: failed calls are not cached by lru_cache).
-
-    Cache poisoning risk: Sending 256+ unique invalid specs will evict valid entries.
-    This is acceptable since invalid specs fail fast and don't impact correctness.
-    """
+    """Internal cached parser (failed calls are not cached by lru_cache)."""
     if not spec:
         raise ValueError("empty spec")
 
@@ -155,7 +151,7 @@ def _merge_ranges(ranges: list[tuple[int, int]]) -> tuple[tuple[int, int], ...]:
     if not ranges:
         raise ValueError("no codes specified")
 
-    ranges_sorted = sorted(ranges, key=lambda r: (r[0], r[1]))
+    ranges_sorted = sorted(ranges)
     merged: list[list[int]] = []
     for start, end in ranges_sorted:
         if not merged:

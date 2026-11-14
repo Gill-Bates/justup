@@ -11,7 +11,10 @@ from __future__ import annotations
 import ipaddress
 import logging
 import socket
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeout
 from datetime import timedelta
 from functools import lru_cache
 from urllib.parse import urlsplit
@@ -27,6 +30,25 @@ from .auth import get_current_user
 
 router = APIRouter(prefix="", tags=["quality"])
 _log = logging.getLogger(__name__)
+_DNS_TIMEOUT_SECONDS = 3.0
+_MAX_PENDING_DNS = 4
+_dns_executor = ThreadPoolExecutor(max_workers=_MAX_PENDING_DNS, thread_name_prefix="quality-dns")
+_dns_slots = threading.BoundedSemaphore(_MAX_PENDING_DNS)
+
+
+def _resolve_addresses(host: str) -> list[str]:
+    if not _dns_slots.acquire(blocking=False):
+        return []
+    try:
+        future = _dns_executor.submit(socket.getaddrinfo, host, None)
+    except BaseException:
+        _dns_slots.release()
+        raise
+    future.add_done_callback(lambda _future: _dns_slots.release())
+    try:
+        return list(dict.fromkeys(item[4][0] for item in future.result(timeout=_DNS_TIMEOUT_SECONDS)))
+    except FutureTimeout:
+        return []
 
 
 @lru_cache(maxsize=256)
@@ -44,7 +66,7 @@ def _target_country(target: str, refresh_period: int) -> str | None:
         try:
             addresses = [str(ipaddress.ip_address(host))]
         except ValueError:
-            addresses = list(dict.fromkeys(item[4][0] for item in socket.getaddrinfo(host, None)))
+            addresses = _resolve_addresses(host)
         for address in addresses:
             code = geolocate_country(address)
             if isinstance(code, str) and len(code) == 2 and code.isascii() and code.isalpha():

@@ -32,8 +32,9 @@ LABELS_FILE = GEO_DIR / "labels.json"
 LINE_WEIGHT_PX = 3.0
 LINE_HALO_PX = 3.0  # extra width of the contrast outline under the line
 DASH_ARRAY = "9 6"  # 3:2 stroke to gap, coarse enough to read; scales with the line weight
-MIN_ARROW_SEGMENT_PX = 64.0  # no direction arrow on a shorter segment: it would cover the markers
+MIN_ARROW_SEGMENT_PX = 64.0  # PDF keeps arrows off short links; web folds them into region markers
 MARKER_GAP_PX = 3.0  # the line stops this far before a marker edge
+WEB_ARROW_SPACING_PX = 112.0  # repeated on long overview curves so direction remains visible
 
 # Names: the cap counts every place label of the map; countries are limited to the path.
 MAX_CITY_LABELS = 8
@@ -70,6 +71,13 @@ PALETTE: dict[str, dict[str, str]] = {
         "label_strong": "#d6e2f0",
         "label_halo": "#0c1726",
     },
+    # Marker colours per render target. Web and print differ on purpose (screen contrast vs. print
+    # legibility); both are defined here and consumed by the stylesheet (via inline custom properties
+    # of the fragment) and by pdf_route_map. "hop" is the plain hop marker; the PDF draws it in ink.
+    "markers": {
+        "web": {"start": "#15805a", "hop": "#2563eb", "end": "#c8372d"},
+        "print": {"start": "#146c43", "hop": "#12294a", "end": "#a14d00"},
+    },
 }
 
 _cache: dict[str, Any] = {}
@@ -98,6 +106,10 @@ def map_style() -> dict[str, Any]:
             "fitMaxZoom": FIT_MAX_ZOOM,
             "singlePointZoom": SINGLE_POINT_ZOOM,
         },
+        # Browser layout rules: PDF arrow density and placement remain independent.
+        "web": {
+            "arrowSpacing": WEB_ARROW_SPACING_PX,
+        },
     }
 
 
@@ -108,7 +120,8 @@ def _load(name: str, path: Path) -> Any:
         return _cache[name]
 
 
-def _polygons(geometry: dict[str, Any]) -> list[list[list[list[float]]]]:
+def polygon_parts(geometry: dict[str, Any]) -> list[list[list[list[float]]]]:
+    """Rings of every polygon of a GeoJSON Polygon/MultiPolygon geometry; other types yield none."""
     kind, coords = geometry.get("type"), geometry.get("coordinates") or []
     if kind == "Polygon":
         return [coords]
@@ -138,7 +151,7 @@ def country_names() -> dict[str, str]:
     for feature in world.get("features", []):
         iso = str((feature.get("properties") or {}).get("iso") or "").upper()
         shapes.extend(
-            (iso, rings[0]) for rings in _polygons(feature.get("geometry") or {}) if rings and len(rings[0]) >= 3
+            (iso, rings[0]) for rings in polygon_parts(feature.get("geometry") or {}) if rings and len(rings[0]) >= 3
         )
     names: dict[str, str] = {}
     for name, lat, lon, *_ in labels.get("countries", []):

@@ -12,8 +12,8 @@ import logging
 
 from app.services import geo_resolver as gr
 from app.services.ip_lookup import lookup_public_ip
-from app.services.mtr_run import resolve_target_ip
 from app.services.traceroute_geo import resolve_location
+from app.services.traceroute_service import resolve_target_ip
 from app.utils.constants import (
     PROVIDER_LOOKUP_CACHE_TTL_DEFAULT,
     PROVIDER_LOOKUP_CACHE_TTL_MAX,
@@ -25,17 +25,17 @@ from app.utils.runtime_settings import get_ip_api_key, get_runtime_bool_fail_clo
 _log = logging.getLogger(__name__)
 
 
-def _source_label(value: str | None) -> str:
-    names = {"ip-api-pro": "ip-api Pro", "ipwho.is": "ipwho.is"}
-    return " + ".join(names.get(part, part) for part in value.split(" + ")) if value else ""
-
-
 _GEO_LABELS = {
     gr.SRC_GEOLITE2: "GeoLite2",
     gr.SRC_POP: "POP-Location-DB",
     gr.SRC_IP_API_PRO: "ip-api Pro",
     gr.SRC_IPWHO: "ipwho.is",
+    gr.SRC_IXP: gr.IXP_SOURCE_LABEL,
 }
+
+
+def _source_label(value: str | None) -> str:
+    return " + ".join(_GEO_LABELS.get(part, part) for part in value.split(" + ")) if value else ""
 
 
 def _accuracy_text(decision: gr.GeoDecision) -> str:
@@ -43,6 +43,8 @@ def _accuracy_text(decision: gr.GeoDecision) -> str:
     chosen = decision.selected
     if chosen is None:
         return ""
+    if chosen.source == gr.SRC_IXP:
+        return "Approximate; IXP region, exact router location unknown"
     if decision.accuracy_class != gr.ACCURACY_PRECISE and decision.contradictions:
         return "Approximate; sources disagree"
     if chosen.source == gr.SRC_GEOLITE2 and chosen.accuracy_radius_km is not None:

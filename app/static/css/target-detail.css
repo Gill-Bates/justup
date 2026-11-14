@@ -8,6 +8,9 @@
 	--target-detail-gap: 1.5rem;
 	--target-detail-inner-gap: 1rem;
 	--td-radius: var(--bs-border-radius-lg);
+
+	/* Shared by the availability plot and the downtime list beside it, so both panels end on one line. */
+	--td-panel-plot-h: clamp(240px, 30vh, 340px);
 	--td-shadow: var(--ju-shadow);
 	--td-inset-bg: color-mix(in srgb, var(--bs-body-color) 4%, transparent);
 	--td-control-h: 2.5rem;
@@ -26,16 +29,9 @@
 	--td-inset-bg: color-mix(in srgb, var(--bs-body-color) 5%, transparent);
 }
 
-/* Shared panel look for every card on both tabs. */
-.target-detail-page .card {
-	border-radius: var(--td-radius);
-	box-shadow: var(--td-shadow);
-}
 
 .target-detail-page .card-header {
 	padding: 1rem 1.25rem;
-	border-bottom: 1px solid var(--ju-panel-line);
-	border-radius: var(--td-radius) var(--td-radius) 0 0;
 	font-size: 1rem;
 	font-weight: 600;
 	line-height: 1.3;
@@ -201,75 +197,6 @@
 	font-size: 1.25rem;
 }
 
-.target-detail-page .target-detail-tabs {
-	gap: 0.5rem;
-	margin-bottom: 0;
-	border-bottom: 1px solid var(--ju-panel-line);
-
-	/* Single row; swipe horizontally instead of wrapping on narrow viewports */
-	flex-wrap: nowrap;
-	min-width: 0;
-	overflow: auto hidden;
-	overscroll-behavior-x: contain;
-	scrollbar-width: none;
-	-webkit-overflow-scrolling: touch;
-	scroll-padding-inline: 1rem;
-}
-
-.target-detail-page .target-detail-tabs::-webkit-scrollbar {
-	display: none;
-}
-
-.target-detail-page .target-detail-tabs .nav-item {
-	flex: 0 0 auto;
-}
-
-.target-detail-page .target-detail-tabs .nav-link {
-	display: inline-flex;
-	align-items: center;
-	gap: 0.5rem;
-	min-height: 2.75rem;
-	margin-bottom: -1px;
-	white-space: nowrap;
-	padding: 0.5rem 1rem;
-	border: 0;
-	border-bottom: 2px solid transparent;
-	border-radius: var(--bs-border-radius) var(--bs-border-radius) 0 0;
-	background: transparent;
-	color: var(--bs-secondary-color);
-	font-weight: 500;
-	transition: background-color 0.15s ease, color 0.15s ease;
-}
-
-.target-detail-page .target-detail-tabs .nav-link .material-icons {
-	font-size: 1.25rem;
-}
-
-.target-detail-page .target-detail-tabs .nav-link:hover {
-	background: var(--td-inset-bg);
-	color: var(--bs-body-color);
-}
-
-.target-detail-page .target-detail-tabs .nav-link.active {
-	border-bottom-color: var(--bs-primary);
-	background: color-mix(in srgb, var(--bs-primary) 14%, transparent);
-	color: var(--bs-primary-text-emphasis);
-	font-weight: 600;
-}
-
-.target-detail-page .target-detail-tabs .nav-link.active .material-icons {
-	color: var(--bs-primary);
-}
-
-.target-detail-page .target-detail-tabs .nav-link:focus-visible,
-.target-recipients-summary:focus-visible,
-.target-custom-range>summary:focus-visible,
-.combined-legend-btn:focus-visible,
-.combined-peaks .form-check-input:focus-visible {
-	outline: 2px solid var(--ju-focus-ring);
-	outline-offset: 2px;
-}
-
 .target-detail-tab-content {
 	min-width: 0;
 }
@@ -324,7 +251,7 @@
 	flex: 2 1 15rem;
 }
 
-/* Badges wrap; the card keeps a modest share instead of absorbing spare width. */
+/* Status dots wrap; the card keeps a modest share instead of absorbing spare width. */
 .target-kpi-card--checks {
 	flex: 1.4 1 11rem;
 }
@@ -396,8 +323,7 @@
 	--ju-badges-gap: var(--ui-space-tile-compact);
 }
 
-.target-kpi-badges .badge {
-	padding: 0.45em 0.7em;
+.target-kpi-badges .ju-status-item {
 	font-size: 0.8125rem;
 	font-weight: 600;
 }
@@ -439,11 +365,6 @@
 	flex: 1 1 28rem;
 }
 
-.target-toolbar-group--alerts {
-	flex: 0 1 auto;
-	margin-inline-start: auto;
-}
-
 .target-toolbar-field {
 	display: flex;
 	align-items: center;
@@ -483,14 +404,12 @@
 	font-size: 1.125rem;
 }
 
-.target-custom-range>summary,
-.target-recipients-details>summary {
+.target-custom-range>summary {
 	list-style: none;
 	cursor: pointer;
 }
 
-.target-custom-range>summary::-webkit-details-marker,
-.target-recipients-details>summary::-webkit-details-marker {
+.target-custom-range>summary::-webkit-details-marker {
 	display: none;
 }
 
@@ -514,90 +433,6 @@
 .target-custom-range-fields>div {
 	flex: 1 1 12rem;
 	min-width: 0;
-}
-
-.target-alert-card {
-	position: relative;
-}
-
-.target-alert-inner {
-	display: flex;
-	align-items: center;
-	flex-wrap: wrap;
-	gap: 0.75rem 1rem;
-}
-
-.target-recipients-summary,
-.target-recipients-empty {
-	display: inline-flex;
-	align-items: center;
-	gap: 0.5rem;
-	font-size: 0.875rem;
-	white-space: nowrap;
-}
-
-.target-recipients-summary {
-	min-height: var(--td-toolbar-control-h);
-	padding: 0 0.6rem;
-	border: 1px solid transparent;
-	border-radius: var(--bs-border-radius);
-}
-
-.target-recipients-summary:hover {
-	background: var(--td-inset-bg);
-}
-
-.target-recipients-summary>.material-icons:first-child,
-.target-recipients-empty>.material-icons:first-child {
-	color: var(--bs-link-color);
-	font-size: 1.25rem;
-}
-
-.target-recipients-empty {
-	color: var(--bs-secondary-color);
-}
-
-.target-recipients-expanded {
-	position: absolute;
-	right: 0;
-	top: calc(100% + 0.5rem);
-	width: min(34rem, calc(100vw - 2rem));
-	max-height: min(23rem, 58vh);
-	padding: 1rem;
-	overflow: auto;
-	border: 1px solid var(--bs-border-color);
-	border-radius: var(--td-radius);
-	background: var(--bs-body-bg);
-	box-shadow: 0 0.5rem 1.5rem rgb(0 0 0 / 25%);
-}
-
-.target-recipients-expanded .alert-recipients-grid {
-	grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr));
-}
-
-.target-autoclose-switch {
-	display: inline-flex;
-	align-items: center;
-	gap: 0.5rem;
-	min-height: var(--td-toolbar-control-h);
-	margin: 0;
-	padding-left: 0;
-	font-size: 0.875rem;
-	white-space: nowrap;
-}
-
-.target-autoclose-switch .form-check-input {
-	float: none;
-	margin: 0;
-}
-
-
-.target-details-chevron {
-	transition: transform 0.2s ease;
-}
-
-details[open]>summary .target-details-chevron {
-	transform: rotate(180deg);
 }
 
 /* ---- 5. Secondary row: availability and downtimes ---- */
@@ -643,31 +478,69 @@ details[open]>summary .target-details-chevron {
 
 .target-availability-plot {
 	position: relative;
-	height: clamp(240px, 30vh, 340px);
+	height: var(--td-panel-plot-h);
 }
 
 .target-availability-plot[hidden] {
 	display: none;
 }
 
-.target-downtime-card .downtime-scroll {
-	max-height: clamp(240px, 30vh, 340px);
-	overflow-y: auto;
-	scrollbar-width: thin;
+/* The card is the container: every layout choice below follows the card width, not the viewport. */
+.target-downtime-card {
+	container: downtime / inline-size;
 }
 
-.downtime-summary {
-	display: flex;
-	align-items: center;
-	gap: 0.5rem;
-	margin: 0 0 0.5rem;
+.downtime-range {
+	margin-left: 0.25rem;
 	color: var(--bs-secondary-color);
 	font-size: 0.8125rem;
+	font-weight: 400;
 }
 
-.downtime-summary strong {
+.downtime-panel {
+	display: flex;
+	flex-direction: column;
+	min-height: 0;
+}
+
+.downtime-head {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: space-between;
+	gap: 0.25rem 0.75rem;
+	margin-bottom: 0.25rem;
+}
+
+.downtime-stats {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 0.125rem 1rem;
+	margin: 0;
+	padding: 0;
+	color: var(--bs-secondary-color);
+	font-size: 0.8125rem;
+	list-style: none;
+}
+
+.downtime-stat strong {
 	color: var(--bs-body-color);
-	font-size: 1rem;
+	font-size: 1.125rem;
+	font-variant-numeric: tabular-nums;
+}
+
+.downtime-ongoing {
+	color: var(--td-bad);
+	font-weight: 600;
+}
+
+/* Only the list scrolls; the figures above stay in view. The cap matches the neighbouring availability plot. */
+.downtime-scroll {
+	max-height: calc(var(--td-panel-plot-h) - 2.25rem);
+	overflow-y: auto;
+	overscroll-behavior-y: contain;
+	scrollbar-width: thin;
 }
 
 .downtime-list {
@@ -676,12 +549,19 @@ details[open]>summary .target-details-chevron {
 	list-style: none;
 }
 
+/* Marker | kind | duration; time range and services follow on their own lines. */
 .downtime-item {
 	display: grid;
-	grid-template-columns: auto minmax(0, 1fr) auto;
-	gap: 0.25rem 0.875rem;
-	padding: 0.75rem 0.25rem;
+	grid-template-columns: 0.75rem minmax(0, 1fr) auto;
+	grid-template-areas:
+		"mark kind dur"
+		". when when"
+		". meta meta";
+	gap: 0.05rem 0.625rem;
+	padding: 0.4rem 0.25rem;
 	border-top: 1px solid var(--ju-panel-line);
+	font-size: 0.8125rem;
+	line-height: 1.35;
 }
 
 .downtime-item:first-child {
@@ -689,91 +569,115 @@ details[open]>summary .target-details-chevron {
 }
 
 .downtime-marker {
-	width: 0.75rem;
-	height: 0.75rem;
-	margin-top: 0.3rem;
+	box-sizing: border-box;
+	grid-area: mark;
+	align-self: center;
+	width: 0.625rem;
+	height: 0.625rem;
 	border: 2px solid var(--td-bad);
 	border-radius: 50%;
-	background: color-mix(in srgb, var(--td-bad) 25%, transparent);
-}
-
-.downtime-item--ongoing .downtime-marker {
 	background: var(--td-bad);
 }
 
-.downtime-times {
-	display: flex;
-	align-items: center;
-	flex-wrap: wrap;
-	gap: 0.15rem 0.5rem;
-	font-size: 0.875rem;
-	font-variant-numeric: tabular-nums;
+/* Unmeasured time is no downtime: a dashed ring (gap) and a diamond (unknown) differ from the filled dot by shape. */
+.downtime-item--gap .downtime-marker {
+	border-color: var(--bs-secondary-color);
+	border-style: dashed;
+	background: transparent;
 }
 
-.downtime-arrow {
+.downtime-item--unknown .downtime-marker {
+	border-color: var(--bs-secondary-color);
+	border-radius: 0.1rem;
+	background: transparent;
+	transform: rotate(45deg) scale(0.85);
+}
+
+.downtime-kind {
+	grid-area: kind;
+	min-width: 0;
+	color: var(--td-bad);
+	overflow-wrap: anywhere;
+}
+
+.downtime-item--gap .downtime-kind,
+.downtime-item--unknown .downtime-kind {
 	color: var(--bs-secondary-color);
 }
 
-.downtime-services {
-	display: flex;
-	flex-wrap: wrap;
-	gap: 0.25rem;
-	margin-top: 0.35rem;
+.downtime-when {
+	grid-area: when;
+	min-width: 0;
+	font-variant-numeric: tabular-nums;
+	overflow-wrap: anywhere;
+}
+
+.downtime-meta {
+	grid-area: meta;
+	min-width: 0;
+	color: var(--bs-secondary-color);
+	font-size: 0.75rem;
+	overflow-wrap: anywhere;
+}
+
+.downtime-meta:empty {
+	display: none;
 }
 
 .downtime-duration {
-	align-self: start;
-	font-size: 0.9375rem;
+	grid-area: dur;
+	justify-self: end;
 	font-variant-numeric: tabular-nums;
 	font-weight: 600;
+	text-align: right;
 	white-space: nowrap;
 }
 
-/* Empty, error and loading states */
-.target-empty-state {
-	display: grid;
-	justify-items: center;
-	gap: 0.35rem;
-	padding: 2.5rem 1rem;
-	text-align: center;
-}
-
-.target-empty-icon {
-	display: inline-grid;
-	place-items: center;
-	width: 3rem;
-	height: 3rem;
-	margin-bottom: 0.35rem;
-	border-radius: 50%;
-	background: color-mix(in srgb, var(--bs-secondary-color) 14%, transparent);
-	color: var(--bs-secondary-color);
-}
-
-.target-empty-icon .material-icons {
-	font-size: 1.75rem;
-}
-
-.target-empty-icon--ok {
-	background: color-mix(in srgb, var(--td-ok) 15%, transparent);
-	color: var(--td-ok);
-}
-
-.target-empty-icon--error {
-	background: color-mix(in srgb, var(--td-bad) 15%, transparent);
+.downtime-item--ongoing .downtime-duration {
 	color: var(--td-bad);
 }
 
-.target-empty-title {
-	margin: 0;
-	font-size: 1rem;
-	font-weight: 600;
+/* Wide card: the range moves up next to the kind, two lines per event. */
+@container downtime (min-width: 30rem) {
+	.downtime-item {
+		grid-template-columns: 0.75rem 8.5rem minmax(0, 1fr) auto;
+		grid-template-areas:
+			"mark kind when dur"
+			". meta meta meta";
+	}
 }
 
-.target-empty-text {
-	max-width: 24rem;
+/* Very narrow card: the duration drops under the kind so range and duration never collide. */
+@container downtime (max-width: 15rem) {
+	.downtime-item {
+		grid-template-areas:
+			"mark kind kind"
+			". dur dur"
+			". when when"
+			". meta meta";
+	}
+
+	.downtime-duration {
+		justify-self: start;
+	}
+}
+
+/* Empty and error states stay as small as the text: no illustration, no reserved height. */
+.downtime-empty {
+	display: grid;
+	gap: 0.1rem;
 	margin: 0;
 	color: var(--bs-secondary-color);
+	font-size: 0.8125rem;
+}
+
+.downtime-empty strong {
+	color: var(--bs-body-color);
 	font-size: 0.875rem;
+}
+
+.downtime-empty--error strong {
+	color: var(--td-bad);
 }
 
 .target-skeleton {
@@ -843,8 +747,7 @@ details[open]>summary .target-details-chevron {
 
 @media (prefers-reduced-motion: reduce) {
 	.target-skeleton-line,
-	.target-panel[aria-busy="true"]>.card-body::before,
-	.target-details-chevron {
+	.target-panel[aria-busy="true"]>.card-body::before {
 		animation: none;
 		transition: none;
 	}
@@ -852,12 +755,11 @@ details[open]>summary .target-details-chevron {
 
 @media (forced-colors: active) {
 	.target-status-pill,
-	.target-kpi-card,
-	.target-recipients-summary {
+	.target-kpi-card {
 		border: 1px solid CanvasText;
 	}
 
-	.downtime-marker {
+	.downtime-item--down .downtime-marker {
 		background: CanvasText;
 	}
 }
@@ -867,16 +769,24 @@ details[open]>summary .target-details-chevron {
 	min-width: 0;
 }
 
-@media (width <=576px) {
-	.target-detail-page {
-		--target-detail-gap: 1rem;
-		--target-detail-inner-gap: 0.75rem;
+@media (width <=991.98px) {
+	.target-kpi-group--config {
+		flex-basis: 100%;
 	}
 }
 
-@media (width < 992px) {
-	.target-kpi-group--config {
-		flex-basis: 100%;
+/* Beside the config group the health tiles stay on one line so both groups end at the same bottom edge. */
+@media (width >=992px) {
+	.target-kpi-group--health {
+		flex-wrap: nowrap;
+	}
+
+	.target-kpi-group--health .target-kpi-card {
+		flex-basis: 8rem;
+	}
+
+	.target-kpi-group--health .target-kpi-card--wide {
+		flex-basis: 11rem;
 	}
 }
 
@@ -896,12 +806,13 @@ details[open]>summary .target-details-chevron {
 	display: none;
 }
 
-.combined-legend,
-.combined-status-key {
+.combined-legend {
 	display: flex;
+	flex: 1 1 auto;
 	flex-wrap: wrap;
 	gap: 0.5rem 0.75rem;
 	align-items: center;
+	min-width: 0;
 	font-size: 0.8125rem;
 }
 
@@ -914,11 +825,6 @@ details[open]>summary .target-details-chevron {
 	margin-bottom: 0.75rem;
 }
 
-.combined-legend {
-	flex: 1 1 auto;
-	min-width: 0;
-}
-
 .combined-peaks {
 	flex: none;
 	font-size: 0.8125rem;
@@ -926,27 +832,6 @@ details[open]>summary .target-details-chevron {
 }
 
 .combined-peaks[hidden] {
-	display: none;
-}
-
-.combined-status-key {
-	margin-top: 0.75rem;
-	color: var(--bs-secondary-color);
-}
-
-.combined-footer {
-	display: flex;
-	align-items: flex-start;
-	justify-content: space-between;
-	flex-wrap: wrap;
-	gap: 0 1rem;
-}
-
-.combined-footer .combined-status-key {
-	flex: 1 1 auto;
-}
-
-.combined-status-key:empty {
 	display: none;
 }
 
@@ -978,11 +863,6 @@ details[open]>summary .target-details-chevron {
 	text-decoration: line-through;
 }
 
-.combined-key-item {
-	display: inline-flex;
-	align-items: center;
-	gap: 0.35rem;
-}
 
 .combined-swatch {
 	display: inline-block;
@@ -995,23 +875,6 @@ details[open]>summary .target-details-chevron {
 	forced-color-adjust: none;
 }
 
-.combined-swatch--line {
-	height: 0.2rem;
-	width: 1rem;
-}
-
-/* Dash patterns mirror COMBINED_DASHES in combined-chart.js (16px = 1rem). */
-.combined-swatch--dash-1 {
-	background: repeating-linear-gradient(90deg, var(--swatch-color) 0 6px, transparent 6px 9px);
-}
-
-.combined-swatch--dash-2 {
-	background: repeating-linear-gradient(90deg, var(--swatch-color) 0 2px, transparent 2px 5px);
-}
-
-.combined-swatch--dash-3 {
-	background: linear-gradient(90deg, var(--swatch-color) 0 8px, transparent 8px 11px, var(--swatch-color) 11px 13px, transparent 13px);
-}
 
 .combined-swatch--circle {
 	border-radius: 50%;
@@ -1041,8 +904,20 @@ details[open]>summary .target-details-chevron {
 	text-align: center;
 }
 
+.combined-swatch--cross {
+	background: none;
+	color: var(--swatch-color);
+	line-height: 0.75rem;
+	text-align: center;
+}
+
 .combined-swatch--crossRot::before {
 	content: "\00d7";
+	font-weight: 700;
+}
+
+.combined-swatch--cross::before {
+	content: "+";
 	font-weight: 700;
 }
 
@@ -1083,7 +958,7 @@ details[open]>summary .target-details-chevron {
 	display: none;
 }
 
-@media (width < 576px) {
+@media (width <=576px) {
 	.target-combined-plot {
 		height: 260px;
 	}
@@ -1142,6 +1017,35 @@ details[open]>summary .target-details-chevron {
 	display: none;
 }
 
+/* HTML legend under the donut: swatch shape + code + class; wraps, never overlaps. */
+.combined-donut-legend {
+	display: grid;
+	gap: 0.35rem;
+	margin: 0.75rem 0 0;
+	padding: 0;
+	list-style: none;
+	font-size: 0.8125rem;
+}
+
+.combined-donut-legend[hidden] {
+	display: none;
+}
+
+.combined-donut-legend-item {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 0.15rem 0.5rem;
+}
+
+.combined-donut-legend-item .combined-swatch {
+	align-self: center;
+}
+
+.combined-donut-legend-class {
+	color: var(--bs-secondary-color);
+}
+
 .combined-empty--small {
 	flex: 1 1 auto;
 	min-height: 8rem;
@@ -1150,7 +1054,7 @@ details[open]>summary .target-details-chevron {
 	font-size: 0.8125rem;
 }
 
-@media (width < 992px) {
+@media (width <=991.98px) {
 	.combined-layout--donut {
 		grid-template-columns: minmax(0, 1fr);
 	}
@@ -1166,30 +1070,20 @@ details[open]>summary .target-details-chevron {
 	}
 }
 
-@media (width <=900px) {
-	.target-toolbar-group--alerts {
-		flex: 1 1 100%;
-		margin-inline-start: 0;
-	}
-}
-
-@media (width <=359px) {
+@media (width <=360px) {
 	.target-dates-label {
 		display: none;
 	}
 }
 
 @media (width <=576px) {
+	.target-detail-page {
+		--target-detail-gap: 1rem;
+		--target-detail-inner-gap: 0.75rem;
+	}
+
 	.target-detail-title {
 		font-size: 1.375rem;
-	}
-
-	.target-detail-actions {
-		flex-wrap: wrap;
-	}
-
-	.target-kpi-value {
-		font-size: 1.75rem;
 	}
 
 	/* Range label, select, Dates and zoom reset share one row; the select absorbs the slack. */
@@ -1234,14 +1128,6 @@ details[open]>summary .target-details-chevron {
 	.target-panel>.card-body,
 	.target-combined-card>.card-body {
 		padding: 1rem;
-	}
-
-	.downtime-item {
-		grid-template-columns: auto minmax(0, 1fr);
-	}
-
-	.downtime-duration {
-		grid-column: 2;
 	}
 }
 
@@ -1396,13 +1282,8 @@ details[open]>summary .target-details-chevron {
 		inset: 0;
 	}
 
-	#target-dashboard-pane.active .combined-status-key,
 	#target-dashboard-pane.active .combined-note {
 		margin-top: 0.35rem;
-	}
-
-	#target-dashboard-pane.active .combined-note:empty {
-		display: none;
 	}
 
 	#target-dashboard-pane.active .combined-donut {
@@ -1426,23 +1307,18 @@ details[open]>summary .target-details-chevron {
 		min-height: 0;
 	}
 
-	#target-dashboard-pane.active .target-downtime-card .target-empty-state {
+	#target-dashboard-pane.active .downtime-panel {
 		flex: 1 1 auto;
-		align-content: center;
-		min-height: 0;
-		padding: 0.5rem;
 	}
 
-	#target-dashboard-pane.active .target-downtime-card .downtime-scroll {
+	#target-dashboard-pane.active .downtime-scroll {
 		flex: 1 1 auto;
 		min-height: 0;
 		max-height: none;
-		overflow-y: auto;
-		scrollbar-width: thin;
 	}
 
 	#target-dashboard-pane.active .downtime-item {
-		padding-block: 0.5rem;
+		padding-block: 0.3rem;
 	}
 }
 
@@ -1484,9 +1360,21 @@ details[open]>summary .target-details-chevron {
 		min-height: 0;
 	}
 
-	#target-network-diagnostics-pane.active:has(.traceroute-diagnostics) :is(.target-network-card, #traceroute-container) {
+	/* The card stacks any compact leading block above the traceroute, which takes the remaining height. */
+	#target-network-diagnostics-pane.active:has(.traceroute-diagnostics) .target-network-card {
+		display: flex;
+		flex-direction: column;
+		min-height: 0;
+	}
+
+	#target-network-diagnostics-pane.active:has(.traceroute-diagnostics) .target-network-card > :not(#traceroute-container) {
+		flex: 0 0 auto;
+	}
+
+	#target-network-diagnostics-pane.active:has(.traceroute-diagnostics) #traceroute-container {
 		display: grid;
 		grid-template-rows: minmax(0, 1fr);
+		flex: 1 1 auto;
 		min-height: 0;
 	}
 
@@ -1504,8 +1392,9 @@ details[open]>summary .target-details-chevron {
 		flex: 1 1 0;
 		grid-auto-rows: minmax(0, 1fr);
 
-		/* Floor of the table/map row: panel title plus the 12rem map frame below it. */
-		min-height: 18rem;
+		/* Floor of the table/map row: map panel head, a 20rem map and its legend, so the map card never needs
+		   an inner scroll. A main area lower than the page needs scrolls as a whole instead. */
+		min-height: 36rem;
 	}
 
 	/* One KPI row even in the 800-1000px container range, where the flow layout uses 2x2. */
@@ -1541,7 +1430,13 @@ details[open]>summary .target-details-chevron {
 
 	#target-network-diagnostics-pane.active .tr-map-frame {
 		flex: 1 1 0;
-		min-height: 12rem;
+		grid-template-rows: minmax(20rem, 1fr) auto;
+		min-height: auto;
+		overflow: visible;
+	}
+
+	#target-network-diagnostics-pane.active .tr-map-overview {
+		min-height: 20rem;
 	}
 }
 
@@ -1623,7 +1518,7 @@ details[open]>summary .target-details-chevron {
 	white-space: nowrap;
 }
 
-@media (width < 576px) {
+@media (width <=576px) {
 	.target-detail-heading {
 		gap: 0.75rem;
 	}
@@ -1721,7 +1616,7 @@ details[open]>summary .target-details-chevron {
 		border: 1px solid var(--ju-panel-line);
 		border-radius: var(--bs-border-radius);
 		background: var(--bs-body-bg);
-		box-shadow: var(--bs-box-shadow);
+		box-shadow: var(--ju-shadow-raised);
 	}
 
 	.target-detail-actions .target-detail-more-menu.show {
@@ -1746,4 +1641,21 @@ details[open]>summary .target-details-chevron {
 		clip-path: none;
 		white-space: normal;
 	}
+}
+
+/* Coarse pointers: a 16px select avoids the iOS focus zoom, and legend toggles keep a touch-sized target. */
+@media (pointer: coarse) {
+	.target-toolbar .form-select {
+		font-size: 1rem;
+	}
+
+	.combined-legend-btn,
+	#target-dashboard-pane.active .combined-legend-btn {
+		min-height: var(--ui-target-min, 2.75rem);
+	}
+}
+
+/* Keeps the HTMX-swapped KPI cards laid out as direct children of the dashboard grid. */
+#target-info-cards {
+	display: contents;
 }

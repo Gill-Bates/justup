@@ -146,3 +146,28 @@ class TestSslScan:
             scanner.return_value.get_results.return_value = []
             tls_scanner.scan_tls("https://internal.example")
         assert location.call_args.kwargs["ip_address"] == "10.1.2.3"
+
+
+@pytest.mark.parametrize(
+    "literal",
+    [
+        "100.100.100.200",  # Alibaba Cloud ECS metadata (inside CGNAT 100.64.0.0/10)
+        "::ffff:100.100.100.200",
+        "fd00:ec2::254",  # AWS IMDS over IPv6 (ULA)
+        "168.63.129.16",  # Azure WireServer (globally routable, so also blocked without allow_private)
+        "::ffff:168.63.129.16",
+    ],
+)
+@pytest.mark.parametrize("allow_private", [True, False])
+def test_cloud_metadata_addresses_are_blocked_in_every_mode(literal, allow_private):
+    assert ssrf.resolve_validated(literal, allow_private=allow_private) is None
+
+
+def test_hostname_resolving_to_a_metadata_address_is_rejected():
+    with mock.patch("socket.getaddrinfo", _fake_getaddrinfo("93.184.216.34", "100.100.100.200")):
+        assert ssrf.resolve_validated("meta.example", allow_private=True) is None
+
+
+def test_other_cgnat_and_ula_addresses_stay_allowed_when_private_is_allowed():
+    for literal in ("100.100.100.201", "100.64.0.1", "fd00:ec2::255", "10.0.0.5"):
+        assert ssrf.resolve_validated(literal, allow_private=True) == [ipaddress.ip_address(literal)]

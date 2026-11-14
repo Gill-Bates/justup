@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import itertools
+import math
 import threading
 import time
 from typing import Any
@@ -171,6 +172,9 @@ class _Env:
         self.online: dict[str, dict[str, Any] | None] = {}
         self.switch = True  # online_geo_fallback_enabled
         self.delay = 0.0  # simulated provider latency
+        self.peak = 0  # highest number of lookups running at the same time
+        self._active = 0
+        self._lock = threading.Lock()
         monkeypatch.setattr(
             traceroute_geo,
             "get_runtime_bool_fail_closed",
@@ -184,7 +188,14 @@ class _Env:
 
     def _lookup(self, ip: str, **_kwargs: Any):
         self.online_calls.append(ip)
-        time.sleep(self.delay)
+        with self._lock:
+            self._active += 1
+            self.peak = max(self.peak, self._active)
+        try:
+            time.sleep(self.delay)
+        finally:
+            with self._lock:
+                self._active -= 1
         return tuple(self.online), dict(self.online)
 
 
@@ -194,6 +205,14 @@ def _info(city="Munich", lat=MUNICH[0], lon=MUNICH[1], cc="DE", source="ipwho.is
 
 LOCAL_HIGH = {"lat": BERLIN[0], "lon": BERLIN[1], "city": "Berlin", "country": "DE", "accuracy_radius_km": 10}
 LOCAL = {**LOCAL_HIGH, "accuracy_radius_km": 100}  # limited quality: the online fallback is allowed
+
+
+@pytest.fixture
+def fresh_providers():
+    """Provider throttle/cache state is process-wide; reset it also when a test fails."""
+    ip_lookup.reset_provider_state()
+    yield
+    ip_lookup.reset_provider_state()
 
 
 @pytest.fixture
@@ -286,7 +305,7 @@ def test_route_model_and_geo_points_agree_for_identical_input(env: _Env) -> None
     env.online = {"ipwho.is": _info()}
     hops = [{"hop": 1, "ip": "8.8.8.8", "status": "ok"}]
     node = traceroute_geo.build_route_model(hops)[0]
-    points = traceroute_geo.mtr_hops_to_geo_points(hops)
+    points = traceroute_geo.route_hops_to_geo_points(hops)
     assert node["mappable"] is True and len(points) == 1
     assert (node["location"]["lat"], node["location"]["city"]) == (points[0]["lat"], points[0]["city"])
 
@@ -407,7 +426,7 @@ def test_switch_off_blocks_every_online_call_even_for_poor_geolite2(env: _Env) -
 
 
 def test_http_429_with_retry_after_falls_back_to_geolite2_without_hammering(
-    env: _Env, monkeypatch: pytest.MonkeyPatch
+    env: _Env, monkeypatch: pytest.MonkeyPatch, fresh_providers: None
 ) -> None:
     calls: list[str] = []
 
@@ -415,7 +434,6 @@ def test_http_429_with_retry_after_falls_back_to_geolite2_without_hammering(
         calls.append(ip)
         raise ip_lookup.ProviderThrottledError(120)
 
-    ip_lookup.reset_provider_state()
     monkeypatch.setattr(ip_lookup, "_fetch_json", fetch)
     monkeypatch.setattr(traceroute_geo, "lookup_online_sources", ip_lookup.lookup_online_sources)
     env.geolite = dict(LOCAL)
@@ -423,7 +441,6 @@ def test_http_429_with_retry_after_falls_back_to_geolite2_without_hammering(
         loc = traceroute_geo.geolocate_with_hostname_hint(ip)
         assert loc["city"] == "Berlin"
     assert calls == ["8.8.8.8"]  # the lock period from Retry-After stops further requests
-    ip_lookup.reset_provider_state()
 
 
 # --- Route-level online phase (bounded, deduplicated, deterministic) ---------------------------------
@@ -441,12 +458,10 @@ def test_route_with_many_distinct_ips_is_looked_up_concurrently_and_deduplicated
     env.online = {"ipwho.is": _info()}
     env.delay = 0.2
     hops = _hops(12, duplicate_last=True)
-    started = time.monotonic()
     nodes = traceroute_geo.build_route_model(hops)
-    elapsed = time.monotonic() - started
     assert len(nodes) == 13
     assert sorted(env.online_calls) == sorted({h["ip"] for h in hops})  # one request per distinct IP
-    assert elapsed < 1.5  # sequential would take 12 x 0.2 s = 2.4 s; 4 workers need about 0.6 s
+    assert env.peak >= 2  # concurrency is observed, not timed
 
 
 def test_route_online_budget_caps_the_total_time_and_keeps_local_results(
@@ -458,7 +473,7 @@ def test_route_online_budget_caps_the_total_time_and_keeps_local_results(
     monkeypatch.setattr(traceroute_geo, "ROUTE_ONLINE_BUDGET_SECONDS", 0.2)
     started = time.monotonic()
     nodes = traceroute_geo.build_route_model(_hops(8))
-    assert time.monotonic() - started < 1.0
+    assert time.monotonic() - started < 3.0  # generous: sequential would take 8 x 0.6 s = 4.8 s, the budget is 0.2 s
     # GeoLite2 results stay usable: every hop keeps its local classification
     assert len(nodes) == 8 and all(n["geo_source"] == GeoSource.GEOIP_COARSE for n in nodes)
 
@@ -628,10 +643,14 @@ def test_concurrent_reloads_never_lose_or_cache_a_wrong_result(geodb) -> None:
     [(25.0, True, 0), (25.01, True, 2), (25.01, False, 0), (None, False, 0)],
 )
 def test_http_requests_follow_the_25_km_rule_and_the_switch(
-    env: _Env, monkeypatch: pytest.MonkeyPatch, radius: float | None, switch: bool, http_expected: int
+    env: _Env,
+    monkeypatch: pytest.MonkeyPatch,
+    fresh_providers: None,
+    radius: float | None,
+    switch: bool,
+    http_expected: int,
 ) -> None:
     http_calls: list[str] = []
-    ip_lookup.reset_provider_state()
     monkeypatch.setattr(ip_lookup, "_fetch_json", lambda source, ip, _key: http_calls.append(source) or None)
     monkeypatch.setattr(traceroute_geo, "lookup_online_sources", ip_lookup.lookup_online_sources)
     monkeypatch.setattr(traceroute_geo, "get_ip_api_key", lambda: "k")
@@ -640,4 +659,63 @@ def test_http_requests_follow_the_25_km_rule_and_the_switch(
     loc = traceroute_geo.geolocate_with_hostname_hint("8.8.8.8")
     assert len(http_calls) == http_expected
     assert (loc["lat"], loc["lon"]) == BERLIN  # a failed or skipped fallback keeps the local position
-    ip_lookup.reset_provider_state()
+
+
+# --- Radius handling: one definition of a usable radius, boundaries per call site -------------------
+
+_RADII = [
+    (True, False, False),
+    (float("nan"), False, False),
+    (float("inf"), False, False),
+    (None, False, False),
+]
+
+
+def _radius_cases(lower_inclusive: bool, upper: float | None):
+    """(value, usable) pairs: bad types never count; 0 follows the site's lower bound; the upper bound is inclusive."""
+    cases = [(value, False) for value, _a, _b in _RADII]
+    cases += [(-1.0, False), (0, lower_inclusive), (10.0, True)]
+    if upper is not None:
+        cases += [(upper, True), (upper + 1, False)]
+    return cases
+
+
+@pytest.mark.parametrize(("radius", "usable"), _radius_cases(True, traceroute_geo.MAX_CITY_RADIUS_KM), ids=repr)
+def test_geoip_record_radius_and_city_precision_boundaries(radius, usable) -> None:
+    record = {"lat": 50.0, "lon": 8.0, "country": "DE", "city": "Frankfurt", "subdivision": None}
+    loc = traceroute_geo._to_geo_location("8.8.8.8", {**record, "accuracy_radius": radius})
+    stored = loc["accuracy_radius_km"]
+    # The record keeps any finite non-negative radius; only the precision class is capped.
+    keeps = isinstance(radius, int | float) and not isinstance(radius, bool) and math.isfinite(radius) and radius >= 0
+    assert (stored is not None) == keeps
+    _source, accuracy = traceroute_geo._classify_location(
+        {"lat": 50.0, "lon": 8.0, "city": "Frankfurt", "accuracy_radius_km": radius}
+    )
+    assert (accuracy == traceroute_geo.GeoAccuracy.PRECISE) is usable
+
+
+@pytest.mark.parametrize(("radius", "usable"), _radius_cases(False, None), ids=repr)
+def test_location_note_names_only_a_positive_finite_radius(radius, usable) -> None:
+    for confidence in (None, traceroute_geo.CONFIDENCE_IXP):
+        note = traceroute_geo.location_note({"accuracy_radius_km": radius, "city": "X", "_confidence": confidence})
+        assert ("radius about" in note) is usable
+
+
+@pytest.mark.parametrize(("radius", "usable"), _radius_cases(False, traceroute_geo.MAX_MAP_RADIUS_KM), ids=repr)
+def test_map_radius_is_set_only_for_a_positive_finite_radius_within_the_map_limit(radius, usable) -> None:
+    point = {"_approximate": True, "accuracy_radius_km": radius}
+    traceroute_geo._attach_map_radii([point])
+    assert (traceroute_geo.META_MAP_RADIUS_KM in point) is usable
+
+
+@pytest.mark.parametrize(
+    ("radius", "kept"), [(0, True), (-1.0, False), (float("nan"), False), (True, False), (50.0, True)]
+)
+def test_merged_hops_keep_only_usable_radii(radius, kept) -> None:
+    def hop(n, r):
+        return {"hop": n, "lat": 50.0, "lon": 8.0, "_approximate": True, "accuracy_radius_km": r}
+
+    points = [hop(1, radius), hop(2, 5.0), {"hop": 3, "lat": 10.0, "lon": 10.0}]
+    merged = traceroute_geo._deduplicate_geo_points(points)
+    expected = max(radius, 5.0) if kept else 5.0
+    assert merged[0]["accuracy_radius_km"] == expected

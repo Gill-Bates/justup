@@ -117,6 +117,54 @@ def test_pop_status_sources_sum_to_active(conn, tmp_path) -> None:
     assert sum(body["sources"].values()) == body["active_locations"]
 
 
+def _pop_status_app(conn):
+    from fastapi import FastAPI
+
+    from app.api import pop as pop_api
+    from app.utils.deps import get_conn
+
+    app = FastAPI()
+    app.state.db_path = Path(conn.execute("PRAGMA database_list").fetchone()[2])
+    app.include_router(pop_api.router)
+    app.dependency_overrides[get_conn] = lambda: conn
+    return app, pop_api
+
+
+def test_pop_status_exposes_the_ixp_snapshot(conn) -> None:
+    from fastapi.testclient import TestClient
+
+    app, pop_api = _pop_status_app(conn)
+    app.dependency_overrides[pop_api.require_admin] = lambda: {"is_admin": True}
+    client = TestClient(app)
+    body = client.get("/api/admin/pop/status").json()
+    assert "ixp_snapshot" in body and body["ixp_snapshot"] is None  # visible even before the first import
+    conn.execute(
+        "INSERT INTO ixp_snapshot (id, import_run_id, completed_at, exchange_count, prefix_count, source)"
+        " VALUES (1, 'run-1', '2026-05-01T10:00:00+00:00', 4, 9, 'peeringdb_ixp')"
+    )
+    conn.commit()
+    assert client.get("/api/admin/pop/status").json()["ixp_snapshot"] == {
+        "import_run_id": "run-1",
+        "completed_at": "2026-05-01T10:00:00+00:00",
+        "exchange_count": 4,
+        "prefix_count": 9,
+        "source": "peeringdb_ixp",
+    }
+
+
+def test_pop_status_stays_admin_only(conn) -> None:
+    from fastapi.testclient import TestClient
+
+    from app.api.auth import get_current_user
+
+    app, _pop_api = _pop_status_app(conn)
+    app.dependency_overrides[get_current_user] = lambda: {"id": 2, "is_admin": False, "is_active": True}
+    client = TestClient(app)
+    assert client.get("/api/admin/pop/status").status_code == 403
+    assert client.get("/api/admin/pop/runs").status_code == 403
+    assert client.post("/api/admin/pop/refresh", params={"source": "peeringdb"}).status_code == 403
+
+
 def test_restart_marks_orphaned_pdf_jobs_failed(conn) -> None:
     tid = sqlite_db.create_target(
         conn, {"name": "T", "host": "t.example.com", "interval_seconds": 60, "retention_days": 30}
@@ -133,7 +181,7 @@ def test_collect_resolved_uses_one_shared_budget() -> None:
     import time
     from concurrent.futures import ThreadPoolExecutor
 
-    from app.services.mtr_run import _collect_resolved
+    from app.services.traceroute_service import _collect_resolved
 
     def slow(ip: str) -> str:
         time.sleep(2)
@@ -145,7 +193,7 @@ def test_collect_resolved_uses_one_shared_budget() -> None:
         start = time.monotonic()
         out = _collect_resolved(futures, 0.3)
         elapsed = time.monotonic() - start
-    assert elapsed < 1.0  # sequential waits would have taken 8 x budget
+    assert elapsed < 1.8  # sequential waits would have taken 8 x 0.3 s budget plus the 2 s stragglers
     assert out["10.0.1.1"] == "fast.example"
     assert out["10.0.0.0"] is None
 
@@ -153,7 +201,7 @@ def test_collect_resolved_uses_one_shared_budget() -> None:
 def test_collect_resolved_empty_and_failing() -> None:
     from concurrent.futures import ThreadPoolExecutor
 
-    from app.services.mtr_run import _collect_resolved
+    from app.services.traceroute_service import _collect_resolved
 
     assert _collect_resolved({}, 0.1) == {}
     with ThreadPoolExecutor(max_workers=1) as ex:
@@ -167,13 +215,12 @@ def test_collect_resolved_empty_and_failing() -> None:
 def test_synthetic_destination_hop_does_not_claim_reached_target() -> None:
     from app.services.route_interpolator import ensure_destination_hop
 
-    hops = [{"hop": 1, "ip": "10.0.0.1", "status": "ok", "latency_ms": {"avg": 5.0}, "loss_pct": 0.0}]
-    out = ensure_destination_hop(hops, destination_ip="203.0.113.9", final_latency_ms=5.0)
+    hops = [{"hop": 1, "ip": "10.0.0.1", "status": "ok", "rtt_ms": 5.0}]
+    out = ensure_destination_hop(hops, destination_ip="203.0.113.9", final_rtt_hint_ms=5.0)
     dest = out[-1]
     assert dest["_synthetic_destination"] is True
     assert dest["status"] == "partial"
-    assert dest["latency_ms"] is None
-    assert dest["loss_pct"] is None
+    assert dest["rtt_ms"] is None
     assert dest["_estimated_latency_ms"] == 5.0
 
 

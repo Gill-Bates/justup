@@ -14,6 +14,7 @@ persisted state, so each scenario asserts the decision the scheduler would reach
 
 from __future__ import annotations
 
+import json
 import random
 import sqlite3
 import threading
@@ -49,8 +50,8 @@ def conn(monkeypatch) -> sqlite3.Connection:
         yield c
 
     monkeypatch.setattr(pop_refresh, "_db_connection", _same)
-    monkeypatch.setattr(pop_locations, "MIN_PROCESSED_FOR_RETIRE", 1)
-    monkeypatch.setattr(pop_locations, "MAX_RETIRE_PERCENT", 100)
+    # No IXP network access: a facility-only refresh must not depend on the IXP snapshot.
+    monkeypatch.setattr(pop_refresh, "_fetch_ixp_snapshot", lambda facilities: None)
     maintenance.end_maintenance()
     monkeypatch.setattr(maintenance, "_GENERATION", 0, raising=False)
     return c
@@ -286,6 +287,7 @@ def test_plan_from_db_old_success_is_due(conn):
     """Scenario 4: an expired completed run makes the refresh due now."""
     now = utcnow()
     _insert_run(conn, status="completed", started=now - timedelta(days=40), finished=now - timedelta(days=40))
+    _insert_ixp_snapshot(conn)  # an existing snapshot isolates the freshness-window expiry
     plan = pop_refresh.plan_next_refresh(conn, rng=_seeded_rng())
     assert plan.delay_seconds == 0
 
@@ -357,11 +359,16 @@ def test_rate_limit_429_is_honored_with_retry_after(monkeypatch):
             self.status_code = status
             self.headers = headers or {}
             self._payload = payload or {}
-            self.content = b"{}"
             self.request = None
 
-        def json(self):
-            return self._payload
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def iter_bytes(self):
+            yield json.dumps(self._payload).encode()
 
     class _Client:
         def __init__(self, *a, **k):
@@ -373,7 +380,7 @@ def test_rate_limit_429_is_honored_with_retry_after(monkeypatch):
         def __exit__(self, *a):
             return False
 
-        def get(self, _url):
+        def stream(self, _method, _url):
             calls["n"] += 1
             if calls["n"] == 1:
                 return _Resp(429, headers={"retry-after": "7"})
@@ -472,7 +479,7 @@ def test_incomplete_import_flags_partial_and_keeps_data(conn, monkeypatch):
     monkeypatch.setattr(pop_refresh, "_fetch_with_retry", lambda url: _facs(3))
     monkeypatch.setattr(pop_refresh, "MAX_RECORDS_PER_RUN", 1)
     res = pop_refresh.refresh_from_peeringdb(lambda: conn)
-    assert res.error and "partial" in res.error
+    assert res.error == "[partial][phase=process_facilities] incomplete snapshot: max records limit (1) reached"
     assert res.retired == 0
     # The pre-existing row is not retired because the snapshot was incomplete.
     assert conn.execute("SELECT retired FROM pop_locations WHERE alias_code='zzz'").fetchone()[0] == 0
@@ -502,10 +509,118 @@ def test_auto_scheduler_does_not_run_unlocode_placeholder(conn, monkeypatch):
 
 def test_unlocode_placeholder_not_counted_as_external_success(conn, monkeypatch):
     """Scenario 13: even a manual UN/LOCODE run does not become the scheduler's 'last success'."""
-    # A manual UN/LOCODE refresh records a completed placeholder run with zero records.
-    pop_refresh.refresh_from_unlocode(lambda: conn)
+    # A manual UN/LOCODE refresh is not implemented: it reports that and records no run at all.
+    result = pop_refresh.refresh_from_unlocode(lambda: conn)
+    assert result.error == pop_refresh.ERROR_NOT_IMPLEMENTED and not result.success
+    assert conn.execute("SELECT COUNT(*) FROM pop_import_runs").fetchone()[0] == 0
     # The scheduler keys off PeeringDB only, so its last-success state is still empty.
     state = pop_refresh.get_scheduler_state(conn)
     assert state["last_success_at"] is None
     plan = pop_refresh.plan_next_refresh(conn, rng=_seeded_rng())
     assert "first install" in plan.reason
+
+
+# --------------------------------------------------------------------------- #
+# IXP snapshot after an upgrade: a fresh facility import must not defer the first IXP import
+# --------------------------------------------------------------------------- #
+
+
+def _insert_ixp_snapshot(conn: sqlite3.Connection, *, prefixes: int = 3, completed_at=None) -> None:
+    conn.execute(
+        "INSERT OR REPLACE INTO ixp_snapshot (id, import_run_id, completed_at, exchange_count, prefix_count, source)"
+        " VALUES (1, 'run', ?, 2, ?, 'peeringdb_ixp')",
+        ((completed_at or utcnow()).isoformat(), prefixes),
+    )
+    conn.commit()
+
+
+def test_upgrade_without_ixp_snapshot_schedules_the_first_ixp_import_soon(conn):
+    """A facility import from yesterday is fresh, but the new IXP tables are still empty."""
+    now = utcnow()
+    _insert_run(conn, status="completed", started=now - timedelta(days=1), finished=now - timedelta(days=1))
+    plan = pop_refresh.plan_next_refresh(conn, rng=_seeded_rng())
+    assert plan.delay_seconds <= pop_refresh.POP_STARTUP_JITTER_MAX_SECONDS
+    assert "IXP" in plan.reason
+
+
+@pytest.mark.parametrize("prefix_count", [0, None])
+def test_empty_or_absent_ixp_snapshot_counts_as_missing(conn, prefix_count):
+    now = utcnow()
+    _insert_run(conn, status="completed", started=now - timedelta(days=1), finished=now - timedelta(days=1))
+    if prefix_count is not None:
+        _insert_ixp_snapshot(conn, prefixes=prefix_count)
+    plan = pop_refresh.plan_next_refresh(conn, rng=_seeded_rng())
+    assert plan.delay_seconds <= pop_refresh.POP_STARTUP_JITTER_MAX_SECONDS
+    assert "IXP" in plan.reason
+
+
+def test_present_ixp_snapshot_keeps_the_normal_freshness_window(conn):
+    """No repeated refresh while both data sets are inside their interval."""
+    now = utcnow()
+    _insert_run(conn, status="completed", started=now - timedelta(days=1), finished=now - timedelta(days=1))
+    _insert_ixp_snapshot(conn)
+    plan = pop_refresh.plan_next_refresh(conn, rng=_seeded_rng())
+    assert plan.delay_seconds > 20 * 24 * 3600
+    assert "IXP" not in plan.reason
+
+
+def test_missing_ixp_snapshot_does_not_bypass_the_failure_backoff(conn):
+    now = utcnow()
+    _insert_run(conn, status="completed", started=now - timedelta(days=1), finished=now - timedelta(days=1))
+    _insert_run(
+        conn, status="failed", started=now - timedelta(minutes=1), finished=now - timedelta(minutes=1), error="x"
+    )
+    plan = pop_refresh.plan_next_refresh(conn, rng=_seeded_rng())
+    assert "backoff" in plan.reason
+    assert plan.delay_seconds > pop_refresh.POP_BACKOFF_BASE_SECONDS - 120
+
+
+def test_missing_ixp_snapshot_never_retries_faster_than_the_base_backoff(conn):
+    """A run that ends without an error but without a snapshot must not become a download loop."""
+    now = utcnow()
+    _insert_run(conn, status="completed", started=now - timedelta(minutes=2), finished=now - timedelta(minutes=2))
+    plan = pop_refresh.plan_next_refresh(conn, rng=_seeded_rng())
+    assert plan.delay_seconds >= pop_refresh.POP_BACKOFF_BASE_SECONDS - 3 * 60
+    assert "IXP" in plan.reason
+
+
+def test_status_reports_the_ixp_snapshot_and_the_ixp_reason(conn):
+    now = utcnow()
+    _insert_run(conn, status="completed", started=now - timedelta(days=1), finished=now - timedelta(days=1))
+    status = pop_refresh.get_refresh_status(lambda: conn)
+    assert status["ixp_snapshot"] is None
+    assert "IXP" in status["auto_refresh"]["next_attempt_reason"]
+    _insert_ixp_snapshot(conn)
+    status = pop_refresh.get_refresh_status(lambda: conn)
+    assert status["ixp_snapshot"]["prefix_count"] == 3
+    assert "IXP" not in status["auto_refresh"]["next_attempt_reason"]
+
+
+@pytest.mark.parametrize(
+    ("run", "expected"),
+    [
+        (None, None),
+        ({}, None),
+        ({"started_at": "2026-01-01T10:00:00+00:00"}, "2026-01-01T10:00:00+00:00"),
+        (
+            {"started_at": "2026-01-01T10:00:00+00:00", "finished_at": "2026-01-01T10:05:00+00:00"},
+            "2026-01-01T10:05:00+00:00",
+        ),
+    ],
+    ids=["none", "empty", "only-started", "both-prefers-finished"],
+)
+def test_attempt_time_is_finished_else_started(run, expected):
+    assert pop_refresh._run_time_raw(run) == expected
+    assert (pop_refresh._attempt_timestamp(run) is None) == (expected is None)
+
+
+def test_status_agrees_with_the_refresh_plan(conn):
+    now = utcnow()
+    started = now - timedelta(days=2)
+    _insert_run(conn, status="completed", started=started, finished=started + timedelta(minutes=3))
+    status = pop_refresh.get_refresh_status(lambda: conn)["auto_refresh"]
+    plan = pop_refresh.plan_next_refresh(conn, include_jitter=False)
+    assert status["last_attempt_at"] == (started + timedelta(minutes=3)).isoformat()
+    assert status["next_attempt_reason"] == plan.reason
+    planned_at = now + timedelta(seconds=plan.delay_seconds)
+    assert abs((pop_refresh.parse_utc(status["next_attempt_at"]) - planned_at).total_seconds()) < 5

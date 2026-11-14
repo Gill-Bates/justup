@@ -25,8 +25,20 @@ function _hasValidRange() {
 }
 
 function displayPlotWidth(width) {
-  const pixels = Math.max(120, Math.min(2400, Math.round(width || 900)));
-  return pixels < 500 ? Math.max(120, Math.round(pixels / 3)) : pixels;
+  return Math.max(120, Math.min(2400, Math.round(width || 900)));
+}
+
+function currentMetricPlotWidth() {
+  // Chart.js sizes the canvas after the first metric request. The plot container already
+  // has its layout width at that point; the uninitialized canvas still measures 300 px.
+  const width =
+    document.getElementById("combined-plot")?.clientWidth ||
+    document.getElementById("chart-combined")?.clientWidth ||
+    window.innerWidth ||
+    900;
+  // The API targets roughly one bucket per two plot_width pixels. Leave about 12 CSS px
+  // per overview marker; zoom detail requests continue to use the full chart width.
+  return displayPlotWidth(width / 6);
 }
 
 /** True for the AbortError raised by a deliberately cancelled load cycle. */
@@ -83,7 +95,7 @@ async function fetchAvailabilitySeries(targetId, loadToken, signal) {
  * @param {AbortSignal} [signal] - Load-cycle signal; an abort rejects with an AbortError
  * @returns {Promise<object>} { points: [{ ts, value }, ...] }
  */
-async function fetchMetric(targetId, metric, useCache = true, signal) {
+async function fetchMetric(targetId, metric, useCache = true, signal, requestedPlotWidth) {
   if (!_hasValidRange()) {
     console.warn("appState.range not available or invalid");
     return { points: [] };
@@ -91,11 +103,7 @@ async function fetchMetric(targetId, metric, useCache = true, signal) {
 
   const { from, to } = appState.range;
 
-  const plotWidth = displayPlotWidth(
-    document.getElementById("chart-combined")?.clientWidth ||
-      window.innerWidth ||
-      900,
-  );
+  const plotWidth = requestedPlotWidth ?? currentMetricPlotWidth();
   const cacheKey = `${metric}_${from.toISOString()}_${to.toISOString()}_${plotWidth}`;
   if (
     useCache &&
@@ -177,11 +185,11 @@ async function fetchDisplayMetricRange(
  * @param {AbortSignal} [signal] - Load-cycle signal; aborted requests resolve to null
  * @returns {Promise<object|null>} { points } or null if stale or aborted
  */
-async function fetchMetricGuarded(targetId, metric, loadToken, signal) {
+async function fetchMetricGuarded(targetId, metric, loadToken, signal, plotWidth) {
   if (!appState || appState.currentLoadToken !== loadToken) return null;
 
   try {
-    const data = await fetchMetric(targetId, metric, true, signal);
+    const data = await fetchMetric(targetId, metric, true, signal, plotWidth);
     if (appState.currentLoadToken !== loadToken) return null;
     return data;
   } catch (e) {
@@ -191,13 +199,13 @@ async function fetchMetricGuarded(targetId, metric, loadToken, signal) {
   }
 }
 
+let _lastFetchErrorTime = 0;
+const FETCH_ERROR_DEBOUNCE_MS = 2000;
 /**
  * Show user-visible error feedback when a fetch fails.
  * Debounced to prevent toast spam when multiple metrics fail simultaneously.
  * @param {string} message - Error message
  */
-let _lastFetchErrorTime = 0;
-const FETCH_ERROR_DEBOUNCE_MS = 2000;
 
 function showFetchError(message) {
   console.warn("Fetch error:", message);

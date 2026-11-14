@@ -30,7 +30,7 @@ The builder must be Python ${BUILD_PYTHON_VERSION}; the patch version is pinned 
 the vendored artifact is expected to be reproducible.
 
 Options:
-  --check    Rebuild temporarily and verify byte identity plus lock/provenance hashes.
+  --check    Rebuild temporarily and verify byte identity plus manifest/provenance.
   -h, --help Show this help (exit 0).
 
 Dependencies: ${DEPENDENCIES[*]}, Python ${BUILD_PYTHON_VERSION}, and network access to
@@ -185,46 +185,43 @@ PY
     (( status == 0 )) || fail 1 "wheel metadata validation failed for ${wheel}"
 }
 
-function verify_wheel_triplet() {
-    local wheel="$1" lock_path="$2" provenance_path="$3" python_bin="$4"
-    "$python_bin" - "$wheel" "$lock_path" "$provenance_path" "$EXPECTED_VERSION" <<'PY'
+function verify_wheel_provenance() {
+    local wheel="$1" manifest_path="$2" provenance_path="$3" python_bin="$4"
+    "$python_bin" - "$wheel" "$manifest_path" "$provenance_path" "$EXPECTED_VERSION" <<'PY'
 import hashlib
 import json
-import re
 import sys
+import tomllib
 from pathlib import Path
 
 wheel_path = Path(sys.argv[1])
-lock_path = Path(sys.argv[2])
+manifest_path = Path(sys.argv[2])
 provenance_path = Path(sys.argv[3])
 expected_version = sys.argv[4]
 actual_hash = hashlib.sha256(wheel_path.read_bytes()).hexdigest()
-lock_text = lock_path.read_text(encoding="utf-8").replace("\\\n", " ")
-entries = re.findall(
-    r"(?m)^sslyze==([^\s]+)\s+--hash=sha256:([0-9a-f]{64})$",
-    lock_text,
-)
-if len(entries) != 1:
-    raise SystemExit(f"expected one exact SSLyze lock entry, found {len(entries)}")
-locked_version, locked_hash = entries[0]
+with manifest_path.open("rb") as source:
+    dependencies = tomllib.load(source)["project"]["dependencies"]
+pins = [value for value in dependencies if value.lower().startswith("sslyze==")]
+if pins != [f"sslyze=={expected_version}"]:
+    raise SystemExit(f"unexpected SSLyze manifest pin: {pins}")
 provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
 expected_path = f"docker/vendor/wheels/{wheel_path.name}"
 if wheel_path.name != "sslyze-6.3.1+justup.1-py3-none-any.whl":
     raise SystemExit(f"unexpected wheel filename: {wheel_path.name}")
-if locked_version != expected_version or provenance.get("version") != expected_version:
-    raise SystemExit("wheel version does not match lock and provenance")
+if provenance.get("version") != expected_version:
+    raise SystemExit("wheel version does not match provenance")
 if provenance.get("wheel") != expected_path or provenance.get("tags") != "py3-none-any":
     raise SystemExit("wheel path or tags do not match provenance")
 toolchain = provenance.get("toolchain", {})
 if toolchain.get("python") != "3.13.5" or toolchain.get("umask") != "0002":
     raise SystemExit("builder Python version or umask do not match the reproducibility contract")
-if locked_hash != actual_hash or provenance.get("sha256") != actual_hash:
-    raise SystemExit("wheel SHA-256 does not match lock and provenance")
+if provenance.get("sha256") != actual_hash:
+    raise SystemExit("wheel SHA-256 does not match provenance")
 if provenance.get("size_bytes") != wheel_path.stat().st_size:
     raise SystemExit("wheel size does not match provenance")
 PY
     local status=$?
-    (( status == 0 )) || fail 1 "wheel, requirements lock, and provenance do not agree"
+    (( status == 0 )) || fail 1 "wheel, manifest, and provenance do not agree"
 }
 
 function build_wheel() {
@@ -241,13 +238,13 @@ function build_wheel() {
     final_wheel="${WHEEL_DIR}/${EXPECTED_WHEEL}"
     if [[ "$check" == true ]]; then
         [[ -f "$final_wheel" ]] || fail 1 "stored wheel is missing: ${final_wheel}"
-        verify_wheel_triplet "$final_wheel" "${REPO_ROOT}/docker/requirements.lock" \
+        verify_wheel_provenance "$final_wheel" "${REPO_ROOT}/pyproject.toml" \
             "${REPO_ROOT}/docker/vendor/PROVENANCE.json" "$python_bin" \
-            || fail 1 "stored wheel, requirements lock, and provenance do not agree"
+            || fail 1 "stored wheel, manifest, and provenance do not agree"
         stored_sha="$(sha256_file "$final_wheel")"
         [[ "$stored_sha" == "$built_sha" ]] \
             || fail 1 "rebuild differs from stored wheel (stored: ${stored_sha}, built: ${built_sha})"
-        printf '%s\n' "Rebuild is byte-identical and lock/provenance hashes agree."
+        printf '%s\n' "Rebuild is byte-identical and manifest/provenance agree."
         return
     fi
 
@@ -259,7 +256,7 @@ function build_wheel() {
         || fail 1 "staged wheel hash changed before replacement"
     mv -f -- "$temp_wheel" "$final_wheel" || fail 1 "cannot atomically replace ${final_wheel}"
     STAGED_WHEEL=""
-    printf 'Stored in %s. Update docker/requirements.lock and docker/vendor/PROVENANCE.json.\n' "$final_wheel"
+    printf 'Stored in %s. Update pyproject.toml and docker/vendor/PROVENANCE.json.\n' "$final_wheel"
 }
 
 function cleanup() {

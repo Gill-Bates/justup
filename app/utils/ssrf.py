@@ -16,6 +16,17 @@ IPAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 
 _METADATA_HOSTNAMES = frozenset({"localhost", "localhost.localdomain", "metadata.google.internal"})
 
+# Documented instance-metadata endpoints outside the link-local range (169.254.0.0/16 is blocked as a whole).
+# Only these single addresses are listed: the rest of 100.64.0.0/10 and fc00::/7 stays a private range.
+_METADATA_IPS = frozenset(
+    ipaddress.ip_address(a)
+    for a in (
+        "100.100.100.200",  # Alibaba Cloud ECS
+        "fd00:ec2::254",  # AWS EC2 IMDS over IPv6
+        "168.63.129.16",  # Azure WireServer / host agent endpoint
+    )
+)
+
 
 def _unwrap(ip: IPAddress) -> IPAddress:
     """Judge an IPv4-mapped IPv6 address (::ffff:a.b.c.d) by its IPv4 part."""
@@ -27,11 +38,19 @@ def _unwrap(ip: IPAddress) -> IPAddress:
 def is_blocked_ip(ip: IPAddress, *, allow_private: bool) -> bool:
     """True if the address must not be contacted.
 
-    Always blocked: loopback, link-local (incl. cloud metadata), multicast, reserved, unspecified.
+    Always blocked: loopback, link-local (incl. 169.254.169.254), multicast, reserved, unspecified
+    and the known cloud metadata addresses in ``_METADATA_IPS``.
     With ``allow_private=False`` only globally routable addresses pass (RFC 1918, CGNAT, ULA, ... blocked).
     """
     ip = _unwrap(ip)
-    if ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified:
+    if (
+        ip in _METADATA_IPS
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+    ):
         return True
     return not allow_private and not ip.is_global
 

@@ -107,18 +107,16 @@ def _parse_dtag(hostname: str) -> ProviderPOP | None:
 # ---------------------------------------------------------------------------
 @_register("telia", r"\.telia\.net$")
 def _parse_telia(hostname: str) -> ProviderPOP | None:
-    parts = hostname.split(".")
-    if parts:
-        first = parts[0]
-        m = re.match(r"^([a-z]{2,6})", first)
-        if m:
-            code = m.group(1)
-            if code not in {"link", "peer", "cust"}:
-                return ProviderPOP(
-                    pop_code=code,
-                    provider="telia",
-                    confidence=0.85,
-                )
+    first = hostname.split(".", maxsplit=1)[0]
+    m = re.match(r"^([a-z]{2,6})", first)
+    if m:
+        code = m.group(1)
+        if code not in {"link", "peer", "cust"}:
+            return ProviderPOP(
+                pop_code=code,
+                provider="telia",
+                confidence=0.85,
+            )
     return None
 
 
@@ -238,17 +236,15 @@ def _parse_zayo(hostname: str) -> ProviderPOP | None:
 # ---------------------------------------------------------------------------
 @_register("tinet", r"\.tinet\.net$")
 def _parse_tinet(hostname: str) -> ProviderPOP | None:
-    parts = hostname.split(".")
-    if parts:
-        m = re.match(r"^([a-z]{3})", parts[0])
-        if m:
-            code = m.group(1)
-            if code not in {"ip4", "ip6"}:
-                return ProviderPOP(
-                    pop_code=code,
-                    provider="tinet",
-                    confidence=0.85,
-                )
+    m = re.match(r"^([a-z]{3})", hostname.split(".", maxsplit=1)[0])
+    if m:
+        code = m.group(1)
+        if code not in {"ip4", "ip6"}:
+            return ProviderPOP(
+                pop_code=code,
+                provider="tinet",
+                confidence=0.85,
+            )
     return None
 
 

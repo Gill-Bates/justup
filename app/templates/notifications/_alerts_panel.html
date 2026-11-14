@@ -1,3 +1,4 @@
+{% from "fragments/_state_dot.html" import state_dot, status_dot %}
 {% set has_open_alerts = (open_count|default(0)|int > 0) %}
 
    <!-- Filters -->
@@ -41,8 +42,7 @@
          <div class="col-12">
             <div class="ui-form-actions sticky-actions d-flex justify-content-center justify-content-md-end gap-2 align-items-center">
                {% if can_close_alerts %}
-               <button type="button" class="btn btn-outline-primary" {% if has_open_alerts %}
-                  onclick="closeAllAlerts(); return false;" {% else %} disabled title="No open alerts" {% endif %}>
+               <button type="button" class="btn btn-outline-primary" id="close-all-alerts-btn" {% if not has_open_alerts %}disabled title="No open alerts"{% endif %}>
                   <span class="material-icons" aria-hidden="true">notifications</span>Close all Alerts
                </button>
                {% endif %}
@@ -79,9 +79,9 @@
 
                   <td data-label="Status" class="text-center">
                      {% if alert.status == 'open' %}
-                     <span class="material-icons fs-5 text-danger" role="img" aria-label="Status: Open" title="Open">error</span>
+                     {{ status_dot('danger', 'Open') }}
                      {% else %}
-                     <span class="material-icons fs-5 text-success" role="img" aria-label="Status: Resolved" title="Resolved">check_circle</span>
+                     {{ status_dot('success', 'Resolved') }}
                      {% endif %}
                   </td>
 
@@ -97,15 +97,15 @@
                         {% if alert.target_services %}
                         {% for svc in alert.target_services %}
                         {% if svc in failed_list %}
-                        <span class="badge ju-status-badge--danger">{{ svc }}</span>
+                        {{ state_dot(svc, 'down') }}
                         {% else %}
-                        <span class="badge ju-status-badge--neutral">{{ svc }}</span>
+                        <span class="badge badge-muted">{{ svc }}</span>
                         {% endif %}
                         {% endfor %}
                         {% else %}
-                        {# Fallback: Target deleted or not found, show only failed services #}
+                        {# A failed service is a DOWN dot (S1); the others are neutral count badges (DC-BADGE-5). Fallback: target deleted or not found, show only failed services #}
                         {% for svc in failed_list %}
-                        <span class="badge ju-status-badge--danger">{{ svc }}</span>
+                        {{ state_dot(svc, 'down') }}
                         {% endfor %}
                         {% endif %}
                      </div>
@@ -123,7 +123,7 @@
                      {% if alert.duration_formatted %}
                      <small class="text-body-secondary">{{ alert.duration_formatted }}</small>
                      {% elif alert.status == 'open' %}
-                     <span class="text-danger">Ongoing</span>
+                     <span>Ongoing</span>
                      {% else %}
                      <span class="text-body-secondary">–</span>
                      {% endif %}
@@ -211,72 +211,3 @@
    </nav>
    {% endif %}
 
-   <script>
-      document.getElementById('alert-filters')?.addEventListener('change', function (event) {
-         if (event.target.matches('select[name="target_id"], select[name="status"], input[type="date"]')) {
-            this.requestSubmit();
-         }
-      });
-
-      document.getElementById('alerts-table')?.addEventListener('click', function (event) {
-         const button = event.target.closest('button[data-alert-id]');
-         if (button) acknowledgeAlert(button.dataset.alertId);
-      });
-      async function acknowledgeAlert(alertId) {
-         try {
-            const resp = await apiFetch('/alerts/' + alertId + '/acknowledge', {
-               method: 'POST'
-            });
-            if (resp.ok) {
-               window.justUpToast?.success?.('Alert acknowledged');
-               window.location.reload();
-            } else {
-               // Try to extract error detail from response
-               let errorMsg = 'Failed to acknowledge alert';
-               try {
-                  const data = await resp.json();
-                  if (data.detail) {
-                     errorMsg = data.detail;
-                  }
-               } catch (e) {
-                  // Response wasn't JSON, use status text
-                  errorMsg = `Error ${resp.status}: ${resp.statusText}`;
-               }
-               console.error('Acknowledge failed:', resp.status, errorMsg);
-               window.justUpToast?.error?.(errorMsg);
-            }
-         } catch (e) {
-            console.error('Acknowledge error:', e);
-            window.justUpToast?.error?.('Network error: ' + e.message);
-         }
-      }
-
-      async function closeAllAlerts() {
-         if (!(await window.confirmAction({ title: 'Close all alerts', message: 'All open alerts are closed.', confirmLabel: 'Close all' }))) {
-            return;
-         }
-         try {
-            const resp = await apiFetch('/alerts/acknowledge-all', {
-               method: 'POST'
-            });
-            if (resp.ok) {
-               const data = await resp.json();
-               window.justUpToast?.success?.(`${data.updated || 0} alert(s) closed`);
-               window.location.reload();
-            } else {
-               let errorMsg = 'Failed to close alerts';
-               try {
-                  const data = await resp.json();
-                  if (data.detail) {
-                     errorMsg = data.detail;
-                  }
-               } catch (e) {
-                  errorMsg = `Error ${resp.status}: ${resp.statusText}`;
-               }
-               window.justUpToast?.error?.(errorMsg);
-            }
-         } catch (e) {
-            window.justUpToast?.error?.('Network error: ' + e.message);
-         }
-      }
-   </script>

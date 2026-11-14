@@ -11,7 +11,7 @@
 	src: url("/static/fonts/IBM-Plex-Sans-Variable.woff2") format("woff2");
 	font-weight: 100 700;
 	font-style: normal;
-	font-display: optional;
+	font-display: fallback;
 }
 
 @font-face {
@@ -19,7 +19,7 @@
 	src: url("/static/fonts/IBM-Plex-Sans-Variable-Italic.woff2") format("woff2");
 	font-weight: 100 700;
 	font-style: italic;
-	font-display: optional;
+	font-display: fallback;
 }
 
 :root {
@@ -62,15 +62,21 @@
 	--ju-sidebar-muted: #aebfd1;
 	--ju-sidebar-hover: rgb(255 255 255 / 8%);
 	--ju-sidebar-active: rgb(255 255 255 / 14%);
-	--ju-sidebar-accent: #2fd0b0;
-	--ju-sidebar-ring: #fff;
+	--ju-sidebar-accent: #1fc7a6;
+	--ju-sidebar-ring: var(--ju-sidebar-fg);
+	--ju-sidebar-sub-bg: rgb(0 0 0 / 18%);
+	--ju-sidebar-line: rgb(255 255 255 / 10%);
+	--ju-scrim: rgb(0 0 0 / 45%);
+	--ju-flag-edge: rgb(0 0 0 / 8%);
 	--ju-sidebar-w: 15rem;
 	--ju-sidebar-w-rail: 4.5rem;
 
 	/* Inset that centres a 1.3rem icon on the rail axis inside a link with the 0.5rem side margin. */
 	--ju-nav-icon-inset: 1.1rem;
 	--ju-topbar-h: 3.75rem;
+	--footer-height: calc(48px + env(safe-area-inset-bottom, 0px));
 	--ju-shadow: 0 1px 2px rgb(42 63 84 / 12%);
+	--ju-shadow-raised: 0 0.5rem 1.5rem rgb(42 63 84 / 20%);
 	--bs-code-color: #a82a68;
 	--ju-secondary: #566170;
 	--ju-danger-text: #c0283a;
@@ -87,6 +93,7 @@
 	--ju-dv-6: #8a5a2b;
 	--ju-dv-7: #3730a3;
 	--ju-dv-8: #be185d;
+	--ju-peak: #c62828;
 }
 
 [data-bs-theme="dark"] {
@@ -100,8 +107,8 @@
 	--bs-border-color: #2d3a4d;
 	--bs-primary: #1fc7a6;
 	--bs-primary-rgb: 31, 199, 166;
-	--bs-link-color: #2fd0b0;
-	--bs-link-color-rgb: 47, 208, 176;
+	--bs-link-color: #1fc7a6;
+	--bs-link-color-rgb: 31, 199, 166;
 	--bs-link-hover-color: #6be3cc;
 	--bs-link-hover-color-rgb: 107, 227, 204;
 	--bs-focus-ring-color: var(--ju-focus-ring);
@@ -119,8 +126,9 @@
 	--ju-sidebar-bg: #131c29;
 	--ju-sidebar-fg: #e7e7e7;
 	--ju-sidebar-muted: #9fb0c3;
-	--ju-sidebar-ring: #8fb4ff;
+	--ju-sidebar-ring: var(--ju-sidebar-fg);
 	--ju-shadow: 0 1px 2px rgb(0 0 0 / 40%);
+	--ju-shadow-raised: 0 0.5rem 1.5rem rgb(0 0 0 / 55%);
 	--bs-code-color: #f08cbb;
 	--ju-secondary: #a9b6c6;
 	--ju-danger-text: #ff7d89;
@@ -137,6 +145,7 @@
 	--ju-dv-6: #d2a679;
 	--ju-dv-7: #4f6bed;
 	--ju-dv-8: #f472b6;
+	--ju-peak: #ff6b6b;
 }
 
 body {
@@ -197,9 +206,9 @@ h6,
 	--bs-btn-disabled-border-color: var(--bs-link-color);
 }
 
+/* !important: Bootstrap's .text-bg-primary / .bg-primary set their color with !important. */
 .text-bg-primary,
 .bg-primary,
-.nav-pills .nav-link.active,
 .list-group-item.active,
 .page-item.active .page-link {
 	color: var(--ju-primary-contrast) !important;
@@ -259,22 +268,41 @@ h6,
 }
 
 /* ===== Shared card surface ===== */
-.card,
-.x_panel {
+.card {
 	--bs-card-bg: var(--ju-panel-bg);
 	--bs-card-border-color: var(--ju-panel-line);
 	--bs-card-border-radius: var(--bs-border-radius-lg);
-	--bs-card-inner-border-radius: var(--ju-radius-tile);
+
+	/* Inner edge of the frame: what a header, body or table at a corner has to follow. */
+	--bs-card-inner-border-radius: calc(var(--bs-card-border-radius) - var(--bs-card-border-width, 1px));
 	--bs-card-cap-bg: transparent;
 
 	background-color: var(--ju-panel-bg);
 	border: 1px solid var(--ju-panel-line);
-	border-radius: var(--bs-border-radius-lg);
+	border-radius: var(--bs-card-border-radius);
 	box-shadow: var(--ju-shadow);
 }
 
-.card-header,
-.x_title {
+/* The card does not clip (menus, suggestions and tooltips may leave it); whatever touches a corner is
+   rounded with the inner radius instead, so no square background paints over the curved border. */
+.card > :is(.card-header, .card-body, .card-footer, .ju-table-viewport):first-child {
+	border-top-left-radius: var(--bs-card-inner-border-radius);
+	border-top-right-radius: var(--bs-card-inner-border-radius);
+}
+
+.card > :is(.card-header, .card-body, .card-footer, .ju-table-viewport):last-child,
+.card > .card-header:has(+ :is(.hidden, [hidden]):last-child) {
+	border-bottom-right-radius: var(--bs-card-inner-border-radius);
+	border-bottom-left-radius: var(--bs-card-inner-border-radius);
+}
+
+/* A header with nothing visible below it (collapsed card, hidden body) has no divider line: the card frame closes it. */
+.card > .card-header:last-child,
+.card > .card-header:has(+ :is(.hidden, [hidden]):last-child) {
+	border-bottom-width: 0;
+}
+
+.card-header {
 	background: transparent;
 	border-bottom: 1px solid var(--ju-panel-line);
 	color: var(--ju-title);
@@ -287,8 +315,7 @@ h6,
 	gap: 0.5rem 0.75rem;
 }
 
-.card-header :is(h2, h3, h4, h5, h6),
-.x_title :is(h2, h3, h4, h5, h6) {
+.card-header :is(h2, h3, h4, h5, h6) {
 	color: var(--ju-title);
 	font-weight: 650;
 }
@@ -304,7 +331,7 @@ h6,
 
 /* ===== Tables ===== */
 .table {
-	--bs-table-hover-bg: rgb(var(--bs-primary-rgb) / 8%);
+	--bs-table-hover-bg: rgb(var(--bs-primary-rgb), 0.08);
 	--bs-table-border-color: var(--ju-panel-line);
 }
 
@@ -334,7 +361,7 @@ html {
 	display: flex;
 	flex-direction: column;
 	width: var(--ju-sidebar-w);
-	padding-left: env(safe-area-inset-left, 0);
+	padding-left: calc(0px + env(safe-area-inset-left, 0px));
 	background: var(--ju-sidebar-bg);
 	color: var(--ju-sidebar-fg);
 	border-right: 1px solid var(--ju-panel-line);
@@ -343,8 +370,8 @@ html {
 }
 
 .ju-sidebar :focus-visible {
-	outline: 2px solid var(--ju-sidebar-ring);
-	outline-offset: -2px;
+	outline: var(--ju-focus-outline-width) solid var(--ju-sidebar-ring);
+	outline-offset: calc(-1 * var(--ju-focus-outline-width));
 }
 
 /* Three regions: brand header, scrollable navigation, account footer. The header and the topbar
@@ -387,7 +414,7 @@ html {
 
 .ju-sidebar-close:hover {
 	background: var(--ju-sidebar-hover);
-	color: #fff;
+	color: var(--bs-white);
 }
 
 .ju-sidebar-brand .ju-logo {
@@ -492,13 +519,13 @@ html {
 
 .ju-nav-link:hover {
 	background: var(--ju-sidebar-hover);
-	color: #fff;
+	color: var(--bs-white);
 	text-decoration: none;
 }
 
 .ju-nav-link.active {
 	background: var(--ju-sidebar-active);
-	color: #fff;
+	color: var(--bs-white);
 	font-weight: 650;
 	box-shadow: inset 3px 0 var(--ju-sidebar-accent);
 }
@@ -531,7 +558,7 @@ html {
 }
 
 .ju-nav-sub {
-	background: rgb(0 0 0 / 18%);
+	background: var(--ju-sidebar-sub-bg);
 }
 
 .ju-nav-sub .ju-nav-link {
@@ -582,6 +609,7 @@ html {
 }
 
 .ju-logo {
+	height: auto;
 	filter: drop-shadow(var(--ju-shadow));
 }
 
@@ -594,11 +622,6 @@ html {
 
 [data-bs-theme="dark"] .ju-logo:not(.ju-logo--white) {
 	filter: invert(1) drop-shadow(var(--ju-shadow));
-}
-
-.ju-topbar-brand:focus-visible {
-	outline: 2px solid var(--ju-focus-ring);
-	outline-offset: 3px;
 }
 
 .ju-topbar .btn,
@@ -624,7 +647,7 @@ html {
 
 .ju-topbar-button:hover,
 .ju-topbar-button:focus-visible {
-	background: rgb(var(--bs-primary-rgb) / 9%);
+	background: rgb(var(--bs-primary-rgb), 0.09);
 }
 
 
@@ -666,6 +689,51 @@ html {
 	background: var(--bs-body-bg);
 }
 
+/* Footer sits at the bottom of the content column (see .ju-content). */
+.ju-footer {
+	display: flex;
+	box-sizing: border-box;
+	min-height: var(--footer-height);
+	align-items: center;
+	justify-content: center;
+	padding: 0.75rem calc(1.5rem + env(safe-area-inset-right, 0px)) calc(0.75rem + env(safe-area-inset-bottom, 0px)) calc(1.5rem + env(safe-area-inset-left, 0px));
+	text-align: center;
+	font-size: 0.75rem;
+	line-height: 1.25;
+	color: var(--bs-secondary-color);
+}
+
+/* The hairline spans only the footer text, not the full content width. */
+.ju-footer-content {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	flex-wrap: wrap;
+	gap: 0.15rem 0;
+	padding: 0.5rem 1rem 0;
+	border-top: 1px solid var(--ju-panel-line);
+}
+
+.ju-footer-link {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.3rem;
+	color: inherit;
+	line-height: inherit;
+}
+
+.ju-footer-link:hover,
+.ju-footer-link:focus,
+.ju-footer-link:active,
+.ju-footer-link:visited {
+	color: inherit;
+}
+
+.ju-footer-link-icon {
+	display: block;
+	flex: 0 0 14px;
+}
+
 /* Documented last-resort net only (clip creates no scroll container, so the sticky topbar keeps
    working). Causes are fixed by min-width:0 on flex/grid children, container-driven grids and the
    media/pre limits below; tests/layout runs with this net lifted to prove nothing relies on it. */
@@ -689,6 +757,7 @@ html {
 .ju-content>main pre {
 	max-width: 100%;
 	overflow: auto;
+	overscroll-behavior: contain;
 }
 
 .ju-content>main :is(.card, .card-body, .row > *, .tab-content, .tab-pane) {
@@ -701,62 +770,17 @@ html {
 	letter-spacing: -0.025em;
 }
 
-/* Status hero: icon on a tile tinted with the status color. */
+/* Status heroes keep icon, value, and label centered within the existing card. */
 .dashboard-hero {
-	--ju-hero-accent: var(--bs-primary);
-
 	align-items: stretch;
 	justify-content: center;
 	min-height: 5.5rem;
-	text-align: left !important;
-}
-
-.dashboard-hero[data-status="online"] {
-	--ju-hero-accent: var(--ju-st-online);
-}
-
-.dashboard-hero[data-status="offline"] {
-	--ju-hero-accent: var(--ju-st-offline);
-}
-
-.dashboard-hero[data-status="disabled"] {
-	--ju-hero-accent: var(--ju-st-disabled);
-}
-
-.dashboard-hero>.d-flex {
-	justify-content: space-between !important;
-	flex-direction: row-reverse;
+	text-align: center;
 }
 
 .dashboard-hero .small {
-	order: -1;
 	font-weight: 600;
 	letter-spacing: 0.04em;
-}
-
-.dashboard-hero .material-icons {
-	display: grid;
-	place-items: center;
-	width: 2.5rem;
-	height: 2.5rem;
-	border-radius: var(--bs-border-radius);
-	background: color-mix(in srgb, var(--ju-hero-accent) 12%, transparent);
-}
-
-.dashboard-hero[data-status="online"] .small {
-	color: var(--ju-st-online) !important;
-}
-
-.dashboard-hero[data-status="offline"] .small {
-	color: var(--ju-st-offline) !important;
-}
-
-.dashboard-hero[data-status="disabled"] .small {
-	color: var(--ju-st-disabled) !important;
-}
-
-.dashboard-hero[data-status="total"] .small {
-	color: var(--bs-link-color) !important;
 }
 
 .dashboard-hero .fs-3 {
@@ -774,7 +798,7 @@ html {
    stays reachable at any viewport height. The topbar toggle only serves the mobile drawer. */
 .ju-sidebar-controls {
 	flex: 0 0 auto;
-	border-top: 1px solid rgb(255 255 255 / 10%);
+	border-top: 1px solid var(--ju-sidebar-line);
 	padding-block: 0.5rem;
 }
 
@@ -867,7 +891,7 @@ html {
 		transition: transform 0.2s ease, visibility 0s;
 		transform: none;
 		visibility: visible;
-		box-shadow: 0 0 2rem rgb(0 0 0 / 40%);
+		box-shadow: var(--ju-shadow-raised);
 	}
 
 	.ju-content {
@@ -879,7 +903,7 @@ html {
 		inset: 0;
 		z-index: 1035;
 		display: block;
-		background: rgb(0 0 0 / 45%);
+		background: var(--ju-scrim);
 	}
 
 	.ju-nav-open {

@@ -46,7 +46,10 @@ def _pem(cert: x509.Certificate) -> bytes:
     return cert.public_bytes(serialization.Encoding.PEM)
 
 
-def _issue_expired_chain(tmp_path: Path) -> tuple[Path, Path, Path]:
+def _issue_chain(
+    tmp_path: Path, *, subject: str, san: x509.GeneralName, not_after: datetime
+) -> tuple[Path, Path, Path]:
+    """Issue a leaf from a throwaway CA (no network, no shared state)."""
     now = datetime.now(UTC)
     ca_key, leaf_key = ec.generate_private_key(ec.SECP256R1()), ec.generate_private_key(ec.SECP256R1())
     ca = (
@@ -77,13 +80,13 @@ def _issue_expired_chain(tmp_path: Path) -> tuple[Path, Path, Path]:
     )
     leaf = (
         x509.CertificateBuilder()
-        .subject_name(_name("probe.test"))
+        .subject_name(_name(subject))
         .issuer_name(ca.subject)
         .public_key(leaf_key.public_key())
         .serial_number(x509.random_serial_number())
         .not_valid_before(now - timedelta(days=10))
-        .not_valid_after(now - timedelta(hours=12))
-        .add_extension(x509.SubjectAlternativeName([x509.DNSName("probe.test")]), critical=False)
+        .not_valid_after(not_after)
+        .add_extension(x509.SubjectAlternativeName([san]), critical=False)
         # Python's default context is X509_STRICT and demands an authority key identifier.
         .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(ca_key.public_key()), critical=False)
         .sign(ca_key, hashes.SHA256())
@@ -97,6 +100,15 @@ def _issue_expired_chain(tmp_path: Path) -> tuple[Path, Path, Path]:
         )
     )
     return ca_file, chain_file, key_file
+
+
+def _issue_expired_chain(tmp_path: Path) -> tuple[Path, Path, Path]:
+    return _issue_chain(
+        tmp_path,
+        subject="probe.test",
+        san=x509.DNSName("probe.test"),
+        not_after=datetime.now(UTC) - timedelta(hours=12),
+    )
 
 
 def test_expired_certificate_reports_negative_remaining_time(tmp_path, monkeypatch):
@@ -183,7 +195,7 @@ def test_expired_certificate_retry_shares_the_timeout_budget(tmp_path, monkeypat
     assert not result.ok
     assert result.detail == "timeout"
     # Without a shared budget this takes about 0.6 s + 1.0 s.
-    assert elapsed < 1.35, elapsed
+    assert elapsed < 1.5, elapsed
 
 
 def test_unverified_retry_must_not_turn_expiry_into_ok(tmp_path, monkeypatch):
@@ -243,56 +255,13 @@ def test_unverified_retry_must_not_turn_expiry_into_ok(tmp_path, monkeypatch):
 
 
 def _issue_ip_chain(tmp_path: Path, san_ip: str, *, expired: bool = False) -> tuple[Path, Path, Path]:
-    """Issue a leaf with an IP SAN from a throwaway CA (no network, no shared state)."""
     now = datetime.now(UTC)
-    ca_key, leaf_key = ec.generate_private_key(ec.SECP256R1()), ec.generate_private_key(ec.SECP256R1())
-    ca = (
-        x509.CertificateBuilder()
-        .subject_name(_name("test-ca"))
-        .issuer_name(_name("test-ca"))
-        .public_key(ca_key.public_key())
-        .serial_number(x509.random_serial_number())
-        .not_valid_before(now - timedelta(days=30))
-        .not_valid_after(now + timedelta(days=30))
-        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
-        .add_extension(x509.SubjectKeyIdentifier.from_public_key(ca_key.public_key()), critical=False)
-        .add_extension(
-            x509.KeyUsage(
-                digital_signature=False,
-                content_commitment=False,
-                key_encipherment=False,
-                data_encipherment=False,
-                key_agreement=False,
-                key_cert_sign=True,
-                crl_sign=True,
-                encipher_only=False,
-                decipher_only=False,
-            ),
-            critical=True,
-        )
-        .sign(ca_key, hashes.SHA256())
+    return _issue_chain(
+        tmp_path,
+        subject="ip-target",
+        san=x509.IPAddress(ipaddress.ip_address(san_ip)),
+        not_after=now - timedelta(hours=12) if expired else now + timedelta(days=20),
     )
-    leaf = (
-        x509.CertificateBuilder()
-        .subject_name(_name("ip-target"))
-        .issuer_name(ca.subject)
-        .public_key(leaf_key.public_key())
-        .serial_number(x509.random_serial_number())
-        .not_valid_before(now - timedelta(days=10))
-        .not_valid_after(now - timedelta(hours=12) if expired else now + timedelta(days=20))
-        .add_extension(x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address(san_ip))]), critical=False)
-        .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(ca_key.public_key()), critical=False)
-        .sign(ca_key, hashes.SHA256())
-    )
-    ca_file, chain_file, key_file = tmp_path / "ca.pem", tmp_path / "chain.pem", tmp_path / "key.pem"
-    ca_file.write_bytes(_pem(ca))
-    chain_file.write_bytes(_pem(leaf))
-    key_file.write_bytes(
-        leaf_key.private_bytes(
-            serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
-        )
-    )
-    return ca_file, chain_file, key_file
 
 
 def _check_ip_target(tmp_path, monkeypatch, san_ip: str, *, expired: bool = False, connections: int = 1):

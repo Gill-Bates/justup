@@ -57,6 +57,11 @@ _RELEASE_RE = re.compile(
 _SHA256_RE = re.compile(r"[a-f0-9]{64}\Z")
 
 
+def _connect_snapshot_readonly(db_file: Path) -> sqlite3.Connection:
+    """Open a snapshot read-only and immutable, so inspecting it can neither write nor create side files."""
+    return sqlite3.connect(f"{db_file.resolve().as_uri()}?mode=ro&immutable=1", uri=True)
+
+
 def _canonical_json(value: object) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
 
@@ -90,7 +95,7 @@ def create_backup_manifest(db_file: Path) -> dict[str, object]:
     from .version import get_build_info, get_version
 
     try:
-        conn = sqlite3.connect(f"{db_file.resolve().as_uri()}?mode=ro&immutable=1", uri=True)
+        conn = _connect_snapshot_readonly(db_file)
         try:
             schema_version, schema = _schema_metadata(conn)
         finally:
@@ -248,13 +253,21 @@ def validate_backup_compatibility(manifest: dict[str, object]) -> None:
         if ordering > 0:
             raise BackupError("Backup incompatible! It was created by a newer application version.")
     schema_version = database["schema_version"]
-    if schema_version > sqlite_db.SCHEMA_VERSION:
+    if schema_version > sqlite_db.SCHEMA_VERSION and schema_version != sqlite_db.LEGACY_SCHEMA_VERSION:
+        if schema_version < sqlite_db.LEGACY_SCHEMA_VERSION:
+            raise BackupError(
+                f"Backup incompatible! No migration path exists from schema version {schema_version}. "
+                "Existing data was not changed."
+            )
         raise BackupError(
             f"Backup incompatible! Its database schema version {schema_version} is newer than the supported "
             f"version {sqlite_db.SCHEMA_VERSION}. Existing data was not changed."
         )
-    if schema_version < sqlite_db.SCHEMA_VERSION and sqlite_db._missing_migrations(schema_version):  # noqa: SLF001
-        raise BackupError(f"Backup incompatible! No migration path exists from schema version {schema_version}.")
+    if schema_version != sqlite_db.SCHEMA_VERSION and sqlite_db._missing_migrations(schema_version):  # noqa: SLF001
+        raise BackupError(
+            f"Backup incompatible! No migration path exists from schema version {schema_version}. "
+            "Existing data was not changed."
+        )
 
 
 class BackupError(Exception):
@@ -376,7 +389,7 @@ def snapshot_sqlite_dir(source: Path, dest: Path) -> None:
     """
     dest.mkdir(parents=True, exist_ok=True)
     for entry in sorted(source.iterdir()):
-        if entry.name.endswith(("-wal", "-shm", "-journal")) or not entry.is_file():
+        if entry.name.endswith(SQLITE_SIDE_SUFFIXES) or not entry.is_file():
             continue
         target = dest / entry.name
         if entry.suffix != ".db":
@@ -420,7 +433,7 @@ def check_sqlite_integrity(db_file: Path, *, full: bool = False) -> None:
     """Raise BackupError unless the file is a SQLite database that passes quick_check (or integrity_check)."""
     pragma = "integrity_check" if full else "quick_check"
     try:
-        conn = sqlite3.connect(f"{db_file.resolve().as_uri()}?mode=ro&immutable=1", uri=True)
+        conn = _connect_snapshot_readonly(db_file)
         try:
             rows = [row[0] for row in conn.execute(f"PRAGMA {pragma}").fetchall()]
         finally:
@@ -437,7 +450,7 @@ def check_app_schema_compatible(db_file: Path) -> None:
     """Raise BackupError unless this release can open the application database of a backup."""
     conn = None
     try:
-        conn = sqlite3.connect(f"{db_file.resolve().as_uri()}?mode=ro&immutable=1", uri=True)
+        conn = _connect_snapshot_readonly(db_file)
         sqlite_db.check_schema_compatibility(conn)
     except sqlite_db.IncompatibleSchemaError as exc:
         _log.error("Backup database %s has an incompatible schema (%s): %s", db_file.name, exc.kind, exc)
@@ -465,7 +478,7 @@ def verify_manifest_database(db_file: Path, manifest: dict[str, object]) -> None
     """Verify that the extracted SQLite snapshot matches the signed schema metadata."""
     database = manifest["database"]
     try:
-        conn = sqlite3.connect(f"{db_file.resolve().as_uri()}?mode=ro&immutable=1", uri=True)
+        conn = _connect_snapshot_readonly(db_file)
         try:
             schema_version, schema = _schema_metadata(conn)
         finally:
@@ -480,13 +493,24 @@ def verify_manifest_database(db_file: Path, manifest: dict[str, object]) -> None
 
 
 def _assert_no_foreign_objects(db_file: Path) -> None:
-    """Reject triggers and views: this schema defines none, and a restored one would run SQL of the backup."""
+    """Reject triggers and views this schema does not define: a restored one would run SQL of the backup.
+
+    The user <-> recipient triggers of the schema are accepted only with exactly their own definition.
+    """
     try:
-        conn = sqlite3.connect(f"{db_file.resolve().as_uri()}?mode=ro&immutable=1", uri=True)
+        conn = _connect_snapshot_readonly(db_file)
         try:
-            found = conn.execute("SELECT type, name FROM sqlite_schema WHERE type IN ('trigger', 'view')").fetchall()
+            rows = conn.execute(
+                "SELECT type, name, sql FROM sqlite_schema WHERE type IN ('trigger', 'view')"
+            ).fetchall()
         finally:
             conn.close()
+        known = sqlite_db.expected_triggers()
+        found = [
+            (kind, name)
+            for kind, name, sql in rows
+            if kind != "trigger" or name not in known or sqlite_db.normalise_trigger_sql(sql) != known[name]
+        ]
     except sqlite3.Error as exc:
         raise BackupError("Backup corrupt! Cannot be imported. (Application database is unreadable)") from exc
     if found:
@@ -694,9 +718,9 @@ def migrate_staged_application_database(extracted_data: Path) -> tuple[int, int]
     try:
         conn = sqlite_db.connect(db_file)
         original_version = sqlite_db.get_schema_version(conn)
-        if original_version > sqlite_db.SCHEMA_VERSION:
+        if original_version > sqlite_db.SCHEMA_VERSION and original_version != sqlite_db.LEGACY_SCHEMA_VERSION:
             raise BackupError("Backup incompatible! Its database schema is newer than this release supports.")
-        if original_version < sqlite_db.SCHEMA_VERSION:
+        if original_version != sqlite_db.SCHEMA_VERSION:
             sqlite_db.init_schema(conn)
         else:
             sqlite_db.check_schema_compatibility(conn)

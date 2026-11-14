@@ -4,3 +4,4 @@
 # Obtain the SHA with: git ls-remote https://github.com/signalapp/libsignal "refs/tags/v<version>^{}"
 # A signal-cli update that moves to an unpinned libsignal fails the amd64 and arm64 builds until a reviewer adds the pin.
 0.103.0 ba133bd3457f556fbf56db0a5ab985de0af79da6
+0.106.1 904c8dc8216073b078a5f2f5090e3da8382e6a92

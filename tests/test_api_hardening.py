@@ -16,6 +16,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Barrier
 from types import SimpleNamespace
+from urllib.parse import urlencode
 
 import pytest
 from cryptography.fernet import Fernet
@@ -25,6 +26,7 @@ from starlette.requests import Request
 from app.api import signal as signal_api
 from app.api.auth import require_admin
 from app.db import sqlite as sqlite_db
+from app.db import tsdb as tsdb_db
 from app.models.targets import TargetCreate, TargetPublic, target_row_to_dict
 from app.models.users import hash_token, new_token
 from app.services.notifications.signal_errors import SignalTimeout
@@ -58,18 +60,18 @@ def _request(peer: str | None, headers: dict[str, str] | None = None, scheme: st
 
 class TestClientIp:
     def test_untrusted_peer_cannot_spoof_headers(self, monkeypatch):
-        monkeypatch.delenv("UPMON_TRUSTED_PROXIES", raising=False)
+        monkeypatch.delenv("TRUSTED_PROXIES", raising=False)
         req = _request("203.0.113.9", {"X-Forwarded-For": "1.2.3.4", "X-Real-IP": "5.6.7.8"})
         assert resolve_trusted_client_ip(req) == "203.0.113.9"
         assert audit_client_ip(req) == "203.0.113.9"
 
     def test_trusted_proxy_forwards_first_xff_entry(self, monkeypatch):
-        monkeypatch.setenv("UPMON_TRUSTED_PROXIES", "10.0.0.0/8")
+        monkeypatch.setenv("TRUSTED_PROXIES", "10.0.0.0/8")
         req = _request("10.1.2.3", {"X-Forwarded-For": "198.51.100.7, 10.1.2.3"})
         assert resolve_trusted_client_ip(req) == "198.51.100.7"
 
     def test_trusted_proxy_ipv6_client_and_fallbacks(self, monkeypatch):
-        monkeypatch.setenv("UPMON_TRUSTED_PROXIES", "127.0.0.1,::1")
+        monkeypatch.setenv("TRUSTED_PROXIES", "127.0.0.1,::1")
         assert resolve_trusted_client_ip(_request("::1", {"X-Forwarded-For": "2001:db8::5"})) == "2001:db8::5"
         assert resolve_trusted_client_ip(_request("127.0.0.1", {"X-Real-IP": "192.0.2.4"})) == "192.0.2.4"
         assert resolve_trusted_client_ip(_request("127.0.0.1", {"Forwarded": 'for="192.0.2.60:4711";proto=https'})) == (
@@ -77,29 +79,29 @@ class TestClientIp:
         )
 
     def test_invalid_header_falls_back_to_peer(self, monkeypatch):
-        monkeypatch.setenv("UPMON_TRUSTED_PROXIES", "127.0.0.1")
+        monkeypatch.setenv("TRUSTED_PROXIES", "127.0.0.1")
         assert resolve_trusted_client_ip(_request("127.0.0.1", {"X-Forwarded-For": "not-an-ip"})) == "127.0.0.1"
         assert resolve_trusted_client_ip(_request("127.0.0.1")) == "127.0.0.1"
 
     def test_invalid_trusted_entries_fail_closed(self, monkeypatch):
-        monkeypatch.setenv("UPMON_TRUSTED_PROXIES", "*,garbage")
+        monkeypatch.setenv("TRUSTED_PROXIES", "*,garbage")
         req = _request("203.0.113.9", {"X-Forwarded-For": "1.2.3.4"})
         assert resolve_trusted_client_ip(req) == "203.0.113.9"
 
     def test_missing_or_unparsable_peer(self, monkeypatch):
-        monkeypatch.delenv("UPMON_TRUSTED_PROXIES", raising=False)
+        monkeypatch.delenv("TRUSTED_PROXIES", raising=False)
         assert resolve_trusted_client_ip(_request(None)) == "unknown"
         assert audit_client_ip(_request("testclient")) == "unknown"
 
     def test_secure_flag_trusts_proto_header_only_from_trusted_peer(self, monkeypatch):
-        monkeypatch.setenv("UPMON_TRUSTED_PROXIES", "127.0.0.1")
+        monkeypatch.setenv("TRUSTED_PROXIES", "127.0.0.1")
         assert request_is_https(_request("127.0.0.1", {"X-Forwarded-Proto": "https"})) is True
         assert request_is_https(_request("203.0.113.9", {"X-Forwarded-Proto": "https"})) is False
         assert request_is_https(_request("203.0.113.9", scheme="https")) is True
         assert request_is_https(_request("127.0.0.1", {"X-Forwarded-Proto": "http"}, scheme="https")) is False
 
     def test_proto_uses_the_closest_proxy_value_like_the_forwarded_for_walk(self, monkeypatch):
-        monkeypatch.setenv("UPMON_TRUSTED_PROXIES", "127.0.0.1")
+        monkeypatch.setenv("TRUSTED_PROXIES", "127.0.0.1")
         # A client-forged left value must not beat the value appended by the trusted proxy.
         assert request_is_https(_request("127.0.0.1", {"X-Forwarded-Proto": "https, http"})) is False
         assert request_is_https(_request("127.0.0.1", {"X-Forwarded-Proto": "http, https"})) is True
@@ -108,7 +110,7 @@ class TestClientIp:
         assert request_is_https(request) is False
 
     def test_ipv4_mapped_ipv6_peer_and_chain_hops_match_ipv4_trusted_networks(self, monkeypatch):
-        monkeypatch.setenv("UPMON_TRUSTED_PROXIES", "10.0.0.0/8")
+        monkeypatch.setenv("TRUSTED_PROXIES", "10.0.0.0/8")
         mapped_peer = _request("::ffff:10.0.0.2", {"X-Forwarded-For": "198.51.100.7", "X-Forwarded-Proto": "https"})
         assert resolve_trusted_client_ip(mapped_peer) == "198.51.100.7"
         assert request_is_https(mapped_peer) is True
@@ -221,6 +223,151 @@ def _db(env):
     return sqlite_db.connect(env["db_path"])
 
 
+class TestRequireAuthentication:
+    """ "Require Authentication" is the inverse of the stored `auth_disabled` key (missing = required)."""
+
+    @staticmethod
+    def _store_legacy(env, value: bool | None) -> None:
+        # Old installations only know the `auth_disabled` row; write it the way the old code did.
+        conn = _db(env)
+        try:
+            if value is None:
+                conn.execute("DELETE FROM settings WHERE key='auth_disabled'")
+                conn.commit()
+            else:
+                sqlite_db.set_setting(conn, "auth_disabled", value)
+        finally:
+            sqlite_db.close_connection(conn)
+
+    @staticmethod
+    def _stored(env):
+        conn = _db(env)
+        try:
+            return sqlite_db.get_setting(conn, "auth_disabled", "<missing>")
+        finally:
+            sqlite_db.close_connection(conn)
+
+    @staticmethod
+    def _general_context(env) -> dict:
+        """Template context `settings` that the General fragment hands to the template."""
+        from app.api import frontend
+
+        seen: dict = {}
+        original = frontend.templates.TemplateResponse
+
+        def spy(request, name, context=None, *args, **kwargs):
+            if name == "settings/general.html":
+                seen.update(context["settings"])
+            return original(request, name, context, *args, **kwargs)
+
+        frontend.templates.TemplateResponse = spy
+        try:
+            assert env["admin"].call("GET", "/ui/fragments/settings-general").status_code == 200
+        finally:
+            frontend.templates.TemplateResponse = original
+        return seen
+
+    def _fragment_switch_on(self, env) -> bool:
+        return self._general_context(env)["auth_required"]
+
+    def test_fresh_data_dir_requires_authentication(self, env):
+        assert self._stored(env) == "<missing>"
+        anon = TestClient(env["app"])
+        for url in ("/settings", "/targets", "/ui/events", "/ui/events/session"):
+            assert anon.get(url).status_code == 401, url
+        fragment = anon.get("/ui/fragments/settings-general")  # HTMX: 200 + HX-Redirect, no content
+        assert fragment.headers["HX-Redirect"] == "/ui/login" and "auth_required" not in fragment.text
+        assert anon.get("/ui/events").status_code == 401  # SSE stream
+        assert env["admin"].call("GET", "/settings").json()["auth_disabled"] is False
+        assert self._fragment_switch_on(env) is True
+
+    def test_require_on_rejects_anonymous_and_off_allows_it(self, env):
+        anon = TestClient(env["app"])
+        self._store_legacy(env, False)
+        assert anon.get("/settings").status_code == 401
+        self._store_legacy(env, True)  # Require Authentication OFF
+        assert anon.get("/settings").status_code == 200
+        assert anon.get("/settings").json()["auth_disabled"] is True
+        self._store_legacy(env, False)  # back ON, read per request
+        assert anon.get("/settings").status_code == 401
+
+    @pytest.mark.parametrize(("stored", "require"), [(True, False), (False, True), (None, True)])
+    def test_existing_installation_keeps_its_effective_state(self, env, stored, require):
+        self._store_legacy(env, stored)
+        assert self._fragment_switch_on(env) is require
+        anon = TestClient(env["app"])
+        assert (anon.get("/settings").status_code == 401) is require
+        conn = _db(env)
+        try:
+            from app.utils.settings_cache import is_auth_disabled, is_auth_required
+
+            assert is_auth_required(conn) is require and is_auth_disabled(conn) is (not require)
+        finally:
+            sqlite_db.close_connection(conn)
+        if stored is not True:  # an open instance has every caller as admin
+            assert env["admin"].call("GET", "/settings").json()["auth_disabled"] is (not require)
+
+    def test_switch_off_needs_the_admin_password_and_switch_on_works(self, env, monkeypatch):
+        from app.api import settings as settings_api
+
+        monkeypatch.setattr(settings_api, "verify_password", lambda password, _hash: password == "right")  # noqa: S105
+        admin = env["admin"]
+        for body in ({"disable": True}, {"password": "wrong", "disable": True}):
+            resp = admin.call("POST", "/settings/auth/toggle", body)
+            assert resp.status_code in {401, 422}
+        assert self._stored(env) == "<missing>"  # still required
+        assert admin.call("PATCH", "/settings", {"auth_disabled": True}).status_code == 422
+        resp = admin.call("POST", "/settings/auth/toggle", {"password": "right", "disable": True})
+        assert resp.status_code == 200 and resp.json() == {"ok": True, "auth_disabled": True}
+        assert self._stored(env) is True
+        assert self._fragment_switch_on(env) is False
+        # Switching ON again never locks the admin out.
+        resp = admin.call("POST", "/settings/auth/toggle", {"password": "right", "disable": False})
+        assert resp.status_code == 200 and resp.json()["auth_disabled"] is False
+        assert self._fragment_switch_on(env) is True
+        assert admin.call("GET", "/settings").status_code == 200
+        assert TestClient(env["app"]).get("/settings").status_code == 401
+
+    def test_switch_on_also_needs_the_admin_password(self, env, monkeypatch):
+        from app.api import settings as settings_api
+
+        monkeypatch.setattr(settings_api, "verify_password", lambda password, _hash: password == "right")  # noqa: S105
+        self._store_legacy(env, True)
+        resp = env["admin"].call("POST", "/settings/auth/toggle", {"password": "wrong", "disable": False})
+        assert resp.status_code == 401 and self._stored(env) is True
+
+    def test_toggle_requires_csrf_and_admin(self, env, monkeypatch):
+        from app.api import settings as settings_api
+
+        monkeypatch.setattr(settings_api, "verify_password", lambda *_a: True)
+        body = {"password": "right", "disable": True}
+        cookie_admin = _Session(env["app"], env["admin_token"], cookie=True)
+        csrf = cookie_admin.client.cookies.get("csrf_token")
+        headers = {"Origin": "http://testserver"}
+        assert cookie_admin.client.post("/settings/auth/toggle", json=body, headers=headers).status_code == 403
+        bad = {**headers, "X-CSRF-Token": csrf + "x"}
+        assert cookie_admin.client.post("/settings/auth/toggle", json=body, headers=bad).status_code == 403
+        assert self._stored(env) in {False, "<missing>"}
+        assert env["user"].call("POST", "/settings/auth/toggle", body).status_code == 403
+        assert TestClient(env["app"]).post("/settings/auth/toggle", json=body).status_code in {401, 403}
+        assert self._stored(env) in {False, "<missing>"}
+
+    def test_rate_limit_and_session_lifetime_stay_admin_only(self, env):
+        for body in ({"rate_limit_auth": "3/minute"}, {"session_max_days": 2}):
+            assert env["user"].call("PATCH", "/settings", body).status_code == 403
+            assert TestClient(env["app"]).patch("/settings", json=body).status_code in {401, 403}
+            assert env["admin"].call("PATCH", "/settings", body).status_code == 200
+        assert env["admin"].call("PATCH", "/settings", {"session_max_days": None}).status_code == 422
+        assert env["admin"].call("PATCH", "/settings", {"rate_limit_auth": "nonsense"}).status_code == 422
+        data = env["admin"].call("GET", "/settings").json()
+        assert data["rate_limit_auth"] == "3/minute" and data["session_max_days"] == 2
+
+    def test_general_fragment_exposes_rate_limit_and_session_lifetime(self, env):
+        env["admin"].call("PATCH", "/settings", {"rate_limit_auth": "4/minute", "session_max_days": 3})
+        seen = self._general_context(env)
+        assert seen["rate_limit_auth"] == "4/minute" and seen["session_max_days"] == 3
+
+
 def test_https_login_uses_host_prefixed_http_only_cookie(env, monkeypatch):
     from app.api import users
 
@@ -284,6 +431,9 @@ class TestUserAdmin:
             "PUT", f"/users/{env['user_id']}", {"username": "viewer", "is_admin": False, "can_close_alerts": False}
         )
         assert other.status_code == 200
+        with closing(_db(env)) as conn:
+            assert not sqlite_db.get_user_by_username(conn, "viewer")["is_admin"]
+            assert sqlite_db.get_user_by_username(conn, "root")["is_admin"]
 
     def test_non_admin_gets_403(self, env):
         resp = env["user"].call(
@@ -320,6 +470,18 @@ class TestRecipients:
         assert none_left.status_code == 400
         assert env["admin"].call("GET", f"/recipients/{rid}").json()["email"] == "c@example.com"
 
+    def test_recipient_test_without_channels_is_400_not_500(self, monkeypatch):
+        # The DB CHECK normally prevents such a row; the guard covers a row that slipped through.
+        from fastapi import HTTPException
+
+        from app.api import recipients
+
+        monkeypatch.setattr(recipients.sqlite_db, "get_recipient", lambda _conn, _rid: {"phone": None, "email": None})
+        with pytest.raises(HTTPException) as exc:
+            recipients.send_recipient_test(None, 1, None, conn=None, _admin=None)
+        assert exc.value.status_code == 400
+        assert exc.value.detail == "Recipient has no configured channels"
+
     def test_normalize_failure_maps_to_400(self):
         from fastapi import HTTPException
 
@@ -335,11 +497,18 @@ class TestRecipients:
         too_long = env["admin"].call("POST", "/recipients/verify-signal", ["+" + "1" * 40])
         assert too_long.status_code == 422
 
+    def test_recheck_signal_rejects_anonymous_and_non_admin(self, env):
+        anon = TestClient(env["app"])
+        anon.get("/ui/login")
+        resp = anon.post("/recipients/1/recheck-signal", headers={"X-CSRF-Token": anon.cookies.get("csrf_token")})
+        assert resp.status_code == 401
+        assert env["user"].call("POST", "/recipients/1/recheck-signal").status_code == 403
+
 
 class TestSignal:
     def test_status_degrades_on_timeout(self, env, monkeypatch):
         class _Backend:
-            def status(self):
+            def status(self, **_kwargs):
                 raise SignalTimeout("slow")
 
         monkeypatch.setattr(signal_api, "get_signal_backend", _Backend)
@@ -367,7 +536,9 @@ class TestTargetRowMapping:
         finally:
             sqlite_db.close_connection(conn)
         mapped = target_row_to_dict(row)
-        assert set(mapped) == set(TargetPublic.model_fields)
+        # network_ports lives in its own table; the API layer merges it (a silent [] default here
+        # would hide a caller that forgot to).
+        assert set(mapped) == set(TargetPublic.model_fields) - {"network_ports"}
         assert mapped["has_http_password"] is True
         assert "http_password" not in mapped
         assert "s3cret" not in str(TargetPublic(**mapped).model_dump())
@@ -402,6 +573,15 @@ def _preview_target(env, profile: str, address: str, **extra):
     response = env["admin"].call("POST", "/targets/preview", {"profile": profile, "address": address, **extra})
     assert response.status_code == 200, response.text
     return response.json()
+
+
+def test_tcp_profile_builds_from_udp_ports_alone():
+    from app.services.target_profiles import build_profile
+
+    target, _ = build_profile(profile="tcp", address="example.com", udp_ports="53")
+    assert (target.enable_tcp_connect, target.enable_udp_scan, target.udp_ports) == (False, True, "53")
+    with pytest.raises(ValueError):
+        build_profile(profile="tcp", address="example.com")
 
 
 class TestTargetWizardContracts:
@@ -655,6 +835,12 @@ class TestTargetWizardContracts:
             csrf = cookie_session.client.cookies.get("csrf_token")
             no_origin = cookie_session.client.post("/targets", json=values, headers={"X-CSRF-Token": csrf})
             assert no_origin.status_code == 403
+            no_csrf = cookie_session.client.post("/targets", json=values, headers={"Origin": "http://testserver"})
+            assert no_csrf.status_code == 403
+            bad_csrf = cookie_session.client.post(
+                "/targets", json=values, headers={"Origin": "http://testserver", "X-CSRF-Token": csrf + "x"}
+            )
+            assert bad_csrf.status_code == 403
             hostile_origin = cookie_session.client.post(
                 "/targets",
                 json=values,
@@ -678,6 +864,10 @@ class TestTargetWizardContracts:
         assert 'id="target-form"' in edit_page.text
         assert 'id="target-wizard-form"' not in edit_page.text
         assert "http://example.com:8080/health?x=1" in edit_page.text
+        raw, mid = tsdb_db.ROLLUP_CONFIG["raw"][1], tsdb_db.ROLLUP_CONFIG["5m_median"][1]
+        assert f"Raw: {raw}d · 5-min: {mid}d" in edit_page.text
+        detail_page = env["admin"].call("GET", f"/ui/targets/{created.json()['id']}")
+        assert f'data-raw-retention-days="{raw}"' in detail_page.text
 
     def test_concurrent_exact_create_has_one_winner(self, env):
         values = _preview_target(env, "server", "race.example.com")["values"]
@@ -767,6 +957,16 @@ class TestFailClosedBearerAuth:
         finally:
             anon.close()
 
+    def test_login_redirect_keeps_the_requested_page(self, env):
+        anon = TestClient(env["app"], follow_redirects=False)
+        anon.get("/ui/login")
+        try:
+            page = "/ui/targets/7?from=2026-11-06T10:00:00Z&to=2026-11-06T11:00:00Z"
+            location = anon.get(page).headers["location"]
+            assert location == "/ui/login?" + urlencode({"next": page})
+        finally:
+            anon.close()
+
 
 def test_server_launch_does_not_let_uvicorn_trust_arbitrary_proxy_headers(monkeypatch):
     import sys
@@ -796,7 +996,7 @@ def test_server_launch_does_not_let_uvicorn_trust_arbitrary_proxy_headers(monkey
 
 
 def test_forged_forwarded_chain_is_ignored_unless_peer_is_trusted(monkeypatch):
-    monkeypatch.setenv("UPMON_TRUSTED_PROXIES", "10.0.0.0/8")
+    monkeypatch.setenv("TRUSTED_PROXIES", "10.0.0.0/8")
     forged = {"X-Forwarded-For": "6.6.6.6, 198.51.100.7, 10.0.0.2, 10.0.0.3"}
     assert resolve_trusted_client_ip(_request("10.0.0.4", forged)) == "198.51.100.7"
     assert resolve_trusted_client_ip(_request("203.0.113.9", forged)) == "203.0.113.9"
@@ -903,3 +1103,178 @@ def test_redirect_helpers_fall_back_for_an_unsafe_target(monkeypatch):
         == "/ui/login"
     )
     assert auth_helpers.resolve_user_or_redirect(request, None, "/\\evil.example").headers["location"] == "/ui/login"
+
+
+# --- target profile preview: the https suggestion follows the effective HTTP settings ---------
+
+
+def test_website_profile_without_scheme_suggests_https_by_default():
+    from app.services.target_profiles import build_profile
+
+    target, suggested = build_profile(profile="website", address="example.com")
+    assert str(target.http_url) == "https://example.com/"
+    assert suggested is True
+
+
+def test_website_profile_with_http_override_does_not_suggest_https():
+    from app.services.target_profiles import build_profile
+
+    target, suggested = build_profile(
+        profile="website", address="example.com", overrides={"http_url": "http://example.com/"}
+    )
+    assert str(target.http_url) == "http://example.com/"
+    assert suggested is False
+
+
+def test_website_profile_with_http_check_switched_off_does_not_suggest_https():
+    from app.services.target_profiles import build_profile
+
+    _, suggested = build_profile(profile="website", address="example.com", overrides={"enable_http_check": False})
+    assert suggested is False
+
+
+def test_custom_profile_with_https_override_suggests_https():
+    from app.services.target_profiles import build_profile
+
+    target, suggested = build_profile(
+        profile="custom",
+        address="example.com",
+        overrides={"enable_http_check": True, "http_url": "https://example.com/"},
+    )
+    assert target.enable_http_check is True
+    assert suggested is True
+
+
+def test_address_with_an_explicit_scheme_never_suggests_https():
+    from app.services.target_profiles import build_profile
+
+    _, suggested = build_profile(profile="website", address="https://example.com")
+    assert suggested is False
+
+
+# --- PDF export switch ------------------------------------------------------------------------
+class TestPdfExportSwitch:
+    def _target(self, env) -> int:
+        values = _preview_target(env, "server", "pdf.example.com")["values"]
+        created = env["admin"].call("POST", "/targets", values)
+        assert created.status_code == 201, created.text
+        return created.json()["id"]
+
+    def _set(self, env, enabled: bool) -> None:
+        resp = env["admin"].call("PATCH", "/settings", {"pdf_export_enabled": enabled})
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["pdf_export_enabled"] is enabled
+
+    def test_default_is_enabled_and_null_is_rejected(self, env):
+        assert env["admin"].call("GET", "/settings").json()["pdf_export_enabled"] is True
+        conn = _db(env)
+        try:
+            assert sqlite_db.get_setting(conn, "pdf_export_enabled", None) is None  # nothing stored: default applies
+        finally:
+            sqlite_db.close_connection(conn)
+        assert env["admin"].call("PATCH", "/settings", {"pdf_export_enabled": None}).status_code == 422
+
+    def test_disabled_refuses_every_pdf_route_and_hides_the_icon(self, env):
+        target_id = self._target(env)
+        page = f"/ui/targets/{target_id}"
+        assert 'id="export-pdf-btn"' in env["admin"].call("GET", page).text
+        self._set(env, False)
+        assert 'id="export-pdf-btn"' not in env["admin"].call("GET", page).text
+        for session in (env["admin"], env["user"]):
+            for method, url in (
+                ("GET", f"/reports/targets/{target_id}/pdf"),
+                ("POST", f"/reports/targets/{target_id}/pdf/request?page_size=letter"),
+                ("GET", "/reports/jobs/abc"),
+                ("GET", "/reports/jobs/abc/download"),
+                ("GET", "/ui/reports/jobs/abc/download"),
+            ):
+                resp = session.call(method, url)
+                assert resp.status_code == 403, (method, url, resp.status_code)
+                assert resp.json() == {"detail": "PDF export is disabled"}
+        conn = _db(env)
+        try:
+            assert (
+                sqlite_db.get_report_job(conn, "abc") is None
+                and not conn.execute("SELECT 1 FROM report_jobs").fetchall()
+            )
+        finally:
+            sqlite_db.close_connection(conn)
+
+    def test_anonymous_caller_still_gets_401_not_the_setting(self, env):
+        self._set(env, False)
+        anonymous = TestClient(env["app"])
+        assert anonymous.get("/reports/targets/1/pdf").status_code == 401
+
+    def test_paper_size_stays_writable_while_disabled_and_enabling_restores_everything(self, env):
+        target_id = self._target(env)
+        self._set(env, False)
+        resp = env["admin"].call("PATCH", "/settings", {"pdf_page_size": "letter"})
+        assert resp.status_code == 200 and resp.json()["pdf_page_size"] == "letter"
+        self._set(env, True)  # read per request: no restart needed
+        assert 'id="export-pdf-btn"' in env["admin"].call("GET", f"/ui/targets/{target_id}").text
+        resp = env["admin"].call("POST", f"/reports/targets/{target_id}/pdf/request?page_size=invalid")
+        assert resp.status_code == 400  # past the gate, validation answers again
+        conn = _db(env)
+        try:
+            assert sqlite_db.get_setting(conn, "pdf_page_size", None) == "letter"  # stored value kept
+        finally:
+            sqlite_db.close_connection(conn)
+
+    def test_general_fragment_renders_the_pdf_card(self, env):
+        html = env["admin"].call("GET", "/ui/fragments/settings-general").text
+        assert html.count('class="card shadow-sm settings-card"') == 4  # the Alerting card is gone
+        assert 'name="pdf_export_enabled"' in html and "Enable PDF Export" in html
+        assert "checked" in html.split('name="pdf_export_enabled"')[1].split(">")[0]
+        self._set(env, False)
+        html = env["admin"].call("GET", "/ui/fragments/settings-general").text
+        assert "checked" not in html.split('name="pdf_export_enabled"')[1].split(">")[0]
+        assert "<select" in html and "disabled" not in html.split('name="pdf_page_size"')[1].split(">")[0]
+
+    def test_finished_report_offers_no_download_and_queued_job_is_skipped_while_disabled(self, env):
+        import asyncio
+        from datetime import UTC, datetime
+
+        from app.api.notifications import _action
+        from app.services.pdf_worker import PDFJobRequest, PDFWorker
+
+        target_id = self._target(env)
+        conn = _db(env)
+        try:
+            for job_id in ("done1", "queued1"):
+                sqlite_db.create_report_job(conn, job_id, target_id, user_id=env["admin_id"])
+            sqlite_db.update_report_job(
+                conn, "done1", status="completed", progress=100, filename="r.pdf", completed=True
+            )
+            user = {"id": env["admin_id"], "is_admin": True}
+            item = {"resource_type": "report_job", "resource_id": "done1", "event_type": "report.done"}
+            assert _action(conn, user, item)["type"] == "download"
+            self._set(env, False)
+            assert _action(conn, user, item) == {"type": "unavailable", "label": "PDF export is disabled"}
+
+            with TemporaryDirectory(prefix="justup-pdfq-") as tmp:
+                worker = PDFWorker(storage_dir=Path(tmp), cpu_workers=1, io_workers=1)
+                now = datetime.now(UTC)
+
+                async def run() -> None:
+                    stop = asyncio.Event()
+                    worker.queue.put_nowait(
+                        PDFJobRequest(
+                            "queued1", target_id, {"name": "x"}, now, now, "a4", Path(env["db_path"]), Path(tmp)
+                        )
+                    )
+                    task = asyncio.create_task(worker.run_loop(sqlite_db.connect, stop_event=stop))
+                    await asyncio.wait_for(worker.queue.join(), timeout=10)
+                    stop.set()
+                    await task
+
+                try:
+                    asyncio.run(run())
+                finally:
+                    worker.cpu_executor.shutdown(wait=True)
+                    worker.io_executor.shutdown(wait=True)
+                assert not list(Path(tmp).glob("*.pdf"))
+            job = sqlite_db.get_report_job(conn, "queued1")
+            assert job["status"] == "failed" and job["error"] == "PDF export is disabled"
+            assert sqlite_db.get_report_job(conn, "done1")["status"] == "completed"  # nothing deleted
+        finally:
+            sqlite_db.close_connection(conn)

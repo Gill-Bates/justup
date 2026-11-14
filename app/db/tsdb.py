@@ -41,15 +41,23 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Self
 
-from ..utils.time import ensure_utc, parse_utc, utcnow
+from ..utils.availability_rules import (
+    MIN_DOWNTIME_SECONDS,
+    Outage,
+    gap_threshold_seconds,
+    is_gap,
+    measured_outages,
+    merge_outages,
+    series_interval_seconds,
+)
+from ..utils.availability_series import AvailabilityBuilder, AvailabilitySeries
+from ..utils.time import elapsed_seconds, ensure_utc, parse_utc, utcnow
 from ..utils.uptime_metric import combine_availability
 from . import tsdb_segments as seg
 
 _log = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
 # Constants
-# ---------------------------------------------------------------------------
 
 MIN_RETENTION_DAYS = 1
 MAX_RETENTION_DAYS = 3650
@@ -64,15 +72,26 @@ ROLLUP_CONFIG = {
 }
 
 # Metrics that are 0/1 (up/down) - use min() instead of median
-BINARY_METRICS = {"ping_up", "http_up", "tcp_up"}
-_TCP_UP_PORT_RE = re.compile(r"^tcp_up_([0-9]{1,5})$")
+BINARY_METRICS = {"ping_up", "http_up", "tcp_up", "udp_up"}
+# Per-port series are keyed by protocol + port, so ``tcp_up_53`` and ``udp_up_53`` never collide.
+_PORT_UP_RE = re.compile(r"^(?:tcp|udp)_up_([0-9]{1,5})$")
+_UDP_UNKNOWN_RE = re.compile(r"^udp_unknown_([0-9]{1,5})$")
 
 
 def is_binary_metric(base: str) -> bool:
-    """True for 0/1 availability metrics, including per-port ``tcp_up_<1..65535>``."""
+    """True for 0/1 availability metrics, including per-port ``tcp_up_<port>`` and ``udp_up_<port>``."""
     if base in BINARY_METRICS:
         return True
-    m = _TCP_UP_PORT_RE.match(base)
+    m = _PORT_UP_RE.match(base)
+    return m is not None and 1 <= int(m.group(1)) <= 65535
+
+
+def is_flag_metric(base: str) -> bool:
+    """True for ``udp_unknown_<port>``: a 1 means UNKNOWN in the bucket, so rollups keep the max.
+
+    The ternary UDP state stays lossless: confirmed 0/1 live in ``udp_up_<port>``, UNKNOWN is its own flag.
+    """
+    m = _UDP_UNKNOWN_RE.match(base)
     return m is not None and 1 <= int(m.group(1)) <= 65535
 
 
@@ -80,9 +99,7 @@ def is_binary_metric(base: str) -> bool:
 # Example: http_status is categorical and usually consumed as a distribution, not a time-series line.
 NON_RESAMPLE_METRICS = {"http_status"}
 
-# ---------------------------------------------------------------------------
 # Data Structures
-# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -103,9 +120,7 @@ class _PruneState:
 
 _prune_state = _PruneState()
 
-# ---------------------------------------------------------------------------
 # Helpers
-# ---------------------------------------------------------------------------
 
 
 def _series_path(tsdb_dir: Path, target_id: int, metric: str) -> Path:
@@ -117,6 +132,32 @@ def _series_path(tsdb_dir: Path, target_id: int, metric: str) -> Path:
 def _lock_path(series_path: Path) -> Path:
     """Return the lock file path for a series."""
     return series_path.with_suffix(".lock")
+
+
+def _batch_path(tsdb_dir: Path, target_id: int) -> Path:
+    return tsdb_dir / f"target_{target_id}" / ".batch"
+
+
+_target_read_state = threading.local()
+
+
+@contextlib.contextmanager
+def _target_read_lock(tsdb_dir: Path, target_id: int) -> Iterator[None]:
+    """Shared target lock that keeps a monitoring batch from appending while snapshots are opened.
+
+    Hold it only while opening the series (see ``_target_snapshots``), never while reading them.
+    """
+    path = _batch_path(tsdb_dir, target_id)
+    held = getattr(_target_read_state, "held", set())
+    if path in held:
+        yield
+        return
+    with _FileLock(path, exclusive=False):
+        _target_read_state.held = held | {path}
+        try:
+            yield
+        finally:
+            _target_read_state.held = held
 
 
 class _FileLock:
@@ -134,9 +175,13 @@ class _FileLock:
 
     def __enter__(self) -> Self:
         self._lock_path.parent.mkdir(parents=True, exist_ok=True)
-        self._fd = os.open(str(self._lock_path), os.O_CREAT | os.O_RDWR)
-        mode = fcntl.LOCK_EX if self._exclusive else fcntl.LOCK_SH
-        fcntl.flock(self._fd, mode)
+        fd = os.open(str(self._lock_path), os.O_CREAT | os.O_RDWR)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX if self._exclusive else fcntl.LOCK_SH)
+        except BaseException:
+            os.close(fd)  # __exit__ never runs when __enter__ raises
+            raise
+        self._fd = fd
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
@@ -172,9 +217,7 @@ def _effective_retention_days(resolution: str, target_retention_days: int) -> in
     return min(ROLLUP_CONFIG[resolution][1], _validate_retention(target_retention_days))
 
 
-# ---------------------------------------------------------------------------
 # Public API
-# ---------------------------------------------------------------------------
 
 
 def init_tsdb(tsdb_dir: Path) -> None:
@@ -241,14 +284,14 @@ def _copy_exact(src: Any, dst: Any, size: int) -> None:
 
 
 def snapshot_tsdb(tsdb_dir: Path, dest: Path) -> int:
-    """Copy every series (active file and all its segments) into ``dest``, one series at a time.
+    """Copy every series (active file and all its segments) into ``dest``.
 
     The series lock is held only while the files are opened and the active file's size is noted,
     so the active file and its segments belong to the same state (a compaction in between could
     otherwise duplicate or drop a day) and appends are not delayed by the copy. Segments are
     immutable, and the active file is copied up to the noted size, so no copied file is ever torn.
-    Different series can differ by the copy duration. Lock and temp files are skipped. Returns the
-    number of files copied.
+    All series of one target are opened under the shared target lock, so a check cycle is captured
+    entirely before or after it commits. Lock and temp files are skipped. Returns the number copied.
     """
     dest.mkdir(parents=True, exist_ok=True)
     copied = 0
@@ -256,10 +299,15 @@ def snapshot_tsdb(tsdb_dir: Path, dest: Path) -> int:
         if not tdir.is_dir():
             continue
         out_dir = dest / tdir.name
-        for stem in sorted(_series_stems(tdir)):
-            active = tdir / f"{stem}.jsonl"
-            snap = _open_snapshot(active, binary=True)
-            try:
+        with contextlib.ExitStack() as stack:
+            with _FileLock(tdir / ".batch", exclusive=False):
+                snapshots = []
+                for stem in sorted(_series_stems(tdir)):
+                    snap = _open_snapshot(tdir / f"{stem}.jsonl", binary=True)
+                    stack.callback(snap.close)
+                    snapshots.append((stem, snap))
+            for stem, snap in snapshots:
+                active = tdir / f"{stem}.jsonl"
                 out_dir.mkdir(parents=True, exist_ok=True)
                 for segment, handle in snap.segments:
                     with (out_dir / segment.path.name).open("wb") as out:
@@ -269,8 +317,6 @@ def snapshot_tsdb(tsdb_dir: Path, dest: Path) -> int:
                     with (out_dir / active.name).open("wb") as out:
                         _copy_exact(snap.active, out, snap.active_size)
                     copied += 1
-            finally:
-                snap.close()
     return copied
 
 
@@ -318,6 +364,78 @@ def append_point(
         # Rate-limited + probabilistic pruning to keep append O(1) in hot path
         if _try_prune(series_key):
             _prune_series_locked(p, retention_days)
+
+
+def _append_batch_line(path: Path, line: bytes) -> None:
+    with path.open("ab") as stream:
+        stream.write(line)
+
+
+def _rollback_batch(original: dict[Path, int | None]) -> None:
+    """Cut every series back to its pre-batch size (None: the file did not exist before)."""
+    for path, size in original.items():
+        if not path.exists():
+            continue
+        if size is None:
+            path.unlink()
+        else:
+            with path.open("r+b") as stream:
+                stream.truncate(size)
+
+
+def append_points(
+    tsdb_dir: Path,
+    *,
+    target_id: int,
+    points: Sequence[tuple[str, Any]],
+    retention_days: int,
+    at: datetime,
+    lock_lost: Callable[[], bool],
+) -> bool:
+    """Append a check cycle across series, or roll back every line if its lock is lost."""
+    retention_days = _validate_retention(retention_days)
+    if at.tzinfo is None:
+        raise ValueError("Naive timestamp is not allowed in TSDB")
+    stamp = ensure_utc(at).isoformat()
+    entries = [
+        (
+            _series_path(tsdb_dir, target_id, metric),
+            (json.dumps({"ts": stamp, "value": value}, ensure_ascii=False) + "\n").encode("utf-8"),
+        )
+        for metric, value in points
+    ]
+    if lock_lost():
+        return False
+    paths = sorted({path for path, _ in entries})
+    with _FileLock(_batch_path(tsdb_dir, target_id)), contextlib.ExitStack() as stack:
+        for path in paths:
+            stack.enter_context(_FileLock(path))
+        if lock_lost():
+            return False
+        original = {path: path.stat().st_size if path.exists() else None for path in paths}
+        committed = False
+        try:
+            for path, line in entries:
+                if lock_lost():
+                    break
+                _append_batch_line(path, line)
+            else:
+                # The lock may also vanish right after the last line; all-or-nothing needs this check.
+                if not lock_lost():
+                    committed = True
+        except BaseException:
+            _rollback_batch(original)
+            raise
+        if not committed:
+            _rollback_batch(original)
+            return False
+    for path in paths:
+        if _try_prune(f"{target_id}:{path.stem}"):
+            try:
+                prune_series(tsdb_dir, target_id=target_id, metric=path.stem, retention_days=retention_days)
+            except OSError as exc:
+                _log.warning("TSDB pruning of %s (target %s) failed, will retry: %s", path.stem, target_id, exc)
+    return True
 
 
 def _series_stems(tdir: Path) -> set[str]:
@@ -500,6 +618,31 @@ def _open_snapshot(
     return snap
 
 
+def _iter_snapshot_lines(snap: _Snapshot, *, bounded: bool = False) -> Iterator[str]:
+    """Yield raw lines of an open snapshot, oldest segment first, then the active file.
+
+    A damaged segment is logged and skipped from the point of damage on. With ``bounded`` the active file
+    (opened in binary mode) is read only up to the size recorded when the snapshot was taken, so lines
+    appended afterwards stay out and several series keep one consistent state.
+    """
+    for segment, handle in snap.segments:
+        try:
+            yield from seg.iter_lines_from(handle, segment.path.name)
+        except seg.SegmentCorruptError as e:
+            _log.warning("Skipping damaged TSDB segment %s: %s", segment.path.name, e)
+    if snap.active is None:
+        return
+    if not bounded:
+        yield from snap.active
+        return
+    remaining = snap.active_size
+    for raw in snap.active:
+        remaining -= len(raw)
+        if remaining < 0:
+            return
+        yield raw.decode("utf-8", errors="replace")
+
+
 def _iter_series_lines(
     series_path: Path, since: datetime | None = None, until: datetime | None = None
 ) -> Iterator[str]:
@@ -511,15 +654,38 @@ def _iter_series_lines(
     """
     snap = _open_snapshot(series_path, since, until)
     try:
-        for segment, handle in snap.segments:
-            try:
-                yield from seg.iter_lines_from(handle, segment.path.name)
-            except seg.SegmentCorruptError as e:
-                _log.warning("Skipping damaged TSDB segment %s: %s", segment.path.name, e)
-        if snap.active is not None:
-            yield from snap.active
+        yield from _iter_snapshot_lines(snap)
     finally:
         snap.close()
+
+
+SeriesWindow = tuple[str, datetime | None, datetime | None]  # (metric, since, until)
+
+
+@contextlib.contextmanager
+def _target_snapshots(tsdb_dir: Path, target_id: int, windows: Sequence[SeriesWindow]) -> Iterator[list[_Snapshot]]:
+    """Open all requested series in one short shared-lock section and yield their snapshots.
+
+    Reading happens after the lock is released, so a long query never delays the monitoring appends.
+    Read the active file only with ``_iter_snapshot_lines(..., bounded=True)`` to keep one cycle boundary.
+    """
+    snapshots: list[_Snapshot] = []
+    try:
+        with _target_read_lock(tsdb_dir, target_id):
+            for metric, since, until in windows:
+                snapshots.append(_open_snapshot(_series_path(tsdb_dir, target_id, metric), since, until, binary=True))
+        yield snapshots
+    finally:
+        for snapshot in snapshots:
+            snapshot.close()
+
+
+def _snapshot_points(snap: _Snapshot, since: datetime | None, until: datetime | None) -> Iterator[MetricPoint]:
+    """Parsed points of a snapshot within ``[since, until]``, in file order."""
+    for raw_line in _iter_snapshot_lines(snap, bounded=True):
+        pt = _parse_point(raw_line, since, until)
+        if pt is not None:
+            yield pt
 
 
 def _parse_point(raw_line: str, since: datetime | None, until: datetime | None) -> MetricPoint | None:
@@ -542,10 +708,9 @@ def _parse_point(raw_line: str, since: datetime | None, until: datetime | None) 
     return MetricPoint(ts=ts, value=val)
 
 
-def _tail_lines(f: Any, limit: int) -> list[MetricPoint]:
-    """Last ``limit`` raw lines of an open binary file, read backwards in blocks."""
-    f.seek(0, os.SEEK_END)
-    pos = f.tell()
+def _tail_lines(f: Any, limit: int, end: int | None = None) -> list[MetricPoint]:
+    """Last ``limit`` raw lines of an open binary file (up to byte ``end``), read backwards in blocks."""
+    pos = f.seek(0, os.SEEK_END) if end is None else end
     buffer = b""
     chunks: list[bytes] = []
     while pos > 0 and len(chunks) <= limit:
@@ -621,6 +786,22 @@ def _tail_segments(snap_segments: list[tuple[seg.Segment, Any]], need: int) -> l
     return collected[-need:]
 
 
+def _window_points(
+    snap: _Snapshot, since: datetime | None, until: datetime | None, limit: int, *, latest: bool = False
+) -> list[MetricPoint]:
+    """Oldest (or, with ``latest``, newest) ``limit`` points of a snapshot window; memory is bounded by it."""
+    tail: deque[MetricPoint] = deque(maxlen=limit)
+    head: list[MetricPoint] = []
+    for pt in _snapshot_points(snap, since, until):
+        if latest:
+            tail.append(pt)
+        else:
+            head.append(pt)
+            if len(head) >= limit:
+                break
+    return list(tail) if latest else head
+
+
 def query(
     tsdb_dir: Path,
     *,
@@ -657,32 +838,14 @@ def query(
     if limit <= 0:
         return []
 
-    # Fast path: latest tail without time filters (common dashboard use-case)
-    if latest and since_u is None and until_u is None:
-        snap = _open_snapshot(p, binary=True)
-        try:
-            points = _tail_lines(snap.active, limit) if snap.active is not None else []
+    with _target_snapshots(tsdb_dir, target_id, [(metric, since_u, until_u)]) as (snap,):
+        # Fast path: latest tail without time filters (common dashboard use-case)
+        if latest and since_u is None and until_u is None:
+            points = _tail_lines(snap.active, limit, snap.active_size) if snap.active is not None else []
             if len(points) < limit:
                 points = _tail_segments(snap.segments, limit - len(points)) + points
-        finally:
-            snap.close()
-        return points
-
-    # General path: stream under the shared lock so memory stays bounded by `limit`.
-    tail: deque[MetricPoint] = deque(maxlen=limit)
-    head: list[MetricPoint] = []
-    with contextlib.closing(_iter_series_lines(p, since_u, until_u)) as lines:
-        for raw_line in lines:
-            pt = _parse_point(raw_line, since_u, until_u)
-            if pt is None:
-                continue
-            if latest:
-                tail.append(pt)
-            else:
-                head.append(pt)
-                if len(head) >= limit:
-                    break
-    return list(tail) if latest else head
+            return points
+        return _window_points(snap, since_u, until_u, limit, latest=latest)
 
 
 def query_zero_points(
@@ -704,11 +867,8 @@ def query_zero_points(
     since_u = ensure_utc(since) if since else None
     until_u = ensure_utc(until) if until else None
     tail: deque[MetricPoint] = deque(maxlen=limit)
-    with contextlib.closing(_iter_series_lines(p, since_u, until_u)) as lines:
-        for raw_line in lines:
-            pt = _parse_point(raw_line, since_u, until_u)
-            if pt is not None and pt.value == 0:
-                tail.append(pt)
+    with _target_snapshots(tsdb_dir, target_id, [(metric, since_u, until_u)]) as (snap,):
+        tail.extend(pt for pt in _snapshot_points(snap, since_u, until_u) if pt.value == 0)
     return list(tail)
 
 
@@ -730,10 +890,9 @@ def count_binary_points(
     since_u = ensure_utc(since) if since else None
     until_u = ensure_utc(until) if until else None
     up = total = 0
-    with contextlib.closing(_iter_series_lines(p, since_u, until_u)) as lines:
-        for raw_line in lines:
-            pt = _parse_point(raw_line, since_u, until_u)
-            if pt is not None and pt.value in (0, 1):
+    with _target_snapshots(tsdb_dir, target_id, [(metric, since_u, until_u)]) as (snap,):
+        for pt in _snapshot_points(snap, since_u, until_u):
+            if pt.value in (0, 1):
                 total += 1
                 up += pt.value == 1
     return up, total
@@ -754,27 +913,95 @@ def count_availability(
     """
     if len(metrics) == 1:
         return count_binary_points(tsdb_dir, target_id=target_id, metric=metrics[0], since=since, until=until)
+    up = total = 0
+    for _ts, value in _availability_cycles(tsdb_dir, target_id, metrics, since, until):
+        total += 1
+        up += value == 1
+    return up, total
+
+
+def _availability_cycles(
+    tsdb_dir: Path,
+    target_id: int,
+    metrics: Sequence[str],
+    since: datetime | None,
+    until: datetime | None,
+) -> Iterator[tuple[datetime, int]]:
+    """Stream one ``(ts, 0|1)`` availability sample per check cycle across the given binary metrics."""
     since_u = ensure_utc(since) if since else None
     until_u = ensure_utc(until) if until else None
 
-    def events(metric: str, lines: Iterator[str]) -> Iterator[tuple[datetime, str, int]]:
-        for raw_line in lines:
-            pt = _parse_point(raw_line, since_u, until_u)
-            if pt is not None and pt.value in (0, 1):
+    def events(metric: str, snap: _Snapshot) -> Iterator[tuple[datetime, str, int]]:
+        for pt in _snapshot_points(snap, since_u, until_u):
+            if pt.value in (0, 1):
                 yield pt.ts, metric, int(pt.value)
 
-    up = total = 0
-    with contextlib.ExitStack() as stack:
-        streams = []
-        for metric in metrics:
-            p = _series_path(tsdb_dir, target_id, metric)
-            if _series_exists(p):
-                lines = stack.enter_context(contextlib.closing(_iter_series_lines(p, since_u, until_u)))
-                streams.append(events(metric, lines))
-        for _ts, value in combine_availability(heapq.merge(*streams, key=lambda e: e[0])):
-            total += 1
-            up += value == 1
-    return up, total
+    windows = [(metric, since_u, until_u) for metric in metrics]
+    with _target_snapshots(tsdb_dir, target_id, windows) as snapshots:
+        streams = [events(metric, snap) for metric, snap in zip(metrics, snapshots, strict=True)]
+        yield from combine_availability(heapq.merge(*streams, key=lambda e: e[0]))
+
+
+def query_availability_cycles(
+    tsdb_dir: Path,
+    *,
+    target_id: int,
+    metrics: Sequence[str],
+    since: datetime | None = None,
+    until: datetime | None = None,
+    limit: int = 500,
+) -> list[MetricPoint]:
+    """Return the newest ``limit`` overall-availability samples as ``MetricPoint`` (oldest first).
+
+    Same streams and combination rule as ``count_availability``: one sample per check cycle, up only if
+    every given metric is up. The window is streamed; only the newest ``limit`` samples are kept.
+    """
+    newest: deque[MetricPoint] = deque(maxlen=max(int(limit), 1))
+    for ts, value in _availability_cycles(tsdb_dir, target_id, metrics, since, until):
+        newest.append(MetricPoint(ts=ts, value=value))
+    return list(newest)
+
+
+def query_availability_runs(
+    tsdb_dir: Path,
+    *,
+    target_id: int,
+    metrics: Sequence[str],
+    interval_seconds: float,
+    since: datetime | None = None,
+    until: datetime | None = None,
+) -> AvailabilitySeries:
+    """Return the overall-availability samples as runs with exact counts and real time bounds.
+
+    Same streams and combination rule as ``count_availability``; never thinned, so no outage is lost.
+    The shared target lock is held only while the series are opened: the handles keep the state of that
+    moment (active files are read up to their size then), so the long read neither delays the monitoring
+    appends nor sees half of a later check cycle. Memory depends on the number of state changes.
+    """
+    since_u = ensure_utc(since) if since else None
+    until_u = ensure_utc(until) if until else None
+    snapshots: dict[str, _Snapshot] = {}
+    try:
+        with _target_read_lock(tsdb_dir, target_id):
+            for metric in metrics:
+                path = _series_path(tsdb_dir, target_id, metric)
+                if _series_exists(path):
+                    snapshots[metric] = _open_snapshot(path, since_u, until_u, binary=True)
+
+        def events(metric: str) -> Iterator[tuple[datetime, str, int]]:
+            for raw_line in _iter_snapshot_lines(snapshots[metric], bounded=True):
+                pt = _parse_point(raw_line, since_u, until_u)
+                if pt is not None and pt.value in (0, 1):
+                    yield pt.ts, metric, int(pt.value)
+
+        builder = AvailabilityBuilder(interval_seconds)
+        merged = heapq.merge(*(events(metric) for metric in snapshots), key=lambda e: e[0])
+        for ts, value in combine_availability(merged):
+            builder.add(ts, value)
+        return builder.build()
+    finally:
+        for snapshot in snapshots.values():
+            snapshot.close()
 
 
 def query_latest(
@@ -823,9 +1050,7 @@ def list_metrics(tsdb_dir: Path, target_id: int) -> list[str]:
     return sorted(metrics)
 
 
-# ---------------------------------------------------------------------------
 # Rollup / Downsampling Functions
-# ---------------------------------------------------------------------------
 
 
 def _compute_median(values: list[float]) -> float:
@@ -838,6 +1063,15 @@ def _compute_median(values: list[float]) -> float:
     if n % 2 == 0:
         return (sorted_vals[mid - 1] + sorted_vals[mid]) / 2.0
     return sorted_vals[mid]
+
+
+def _aggregate_bucket(base: str, values: list[float]) -> float:
+    """One bucket value: min for 0/1 availability (any outage survives), max for flags, else the median."""
+    if is_binary_metric(base):
+        return min(values)
+    if is_flag_metric(base):
+        return max(values)
+    return _compute_median(values)
 
 
 def _resample_points(
@@ -897,14 +1131,12 @@ def _resample_points(
         out.sort(key=lambda p: p.ts)
         return out[:max_points]
 
-    is_binary = is_binary_metric(base)
     resampled: list[MetricPoint] = []
     for bucket_start in sorted(buckets.keys()):
         vals = buckets[bucket_start]
         if not vals:
             continue
-        agg_value = min(vals) if is_binary else _compute_median(vals)
-        resampled.append(MetricPoint(ts=bucket_start, value=agg_value))
+        resampled.append(MetricPoint(ts=bucket_start, value=_aggregate_bucket(base, vals)))
 
     # Ensure we keep the first/last timestamps for stable charts
     if resampled:
@@ -1022,7 +1254,7 @@ def downsample_series(
     if not buckets:
         return 0
 
-    is_binary = is_binary_metric(_base_metric(metric))
+    base = _base_metric(metric)
     with _FileLock(target_path):
         target_path.parent.mkdir(parents=True, exist_ok=True)
         # Re-check under the exclusive lock: another run may have written meanwhile.
@@ -1032,8 +1264,7 @@ def downsample_series(
             for bucket_start, values in sorted(buckets.items()):
                 if newest is not None and bucket_start <= newest:
                     continue
-                # For up/down metrics: 0 if any check failed, 1 if all passed
-                agg_value = min(values) if is_binary else _compute_median(values)
+                agg_value = _aggregate_bucket(base, values)
                 f.write(json.dumps({"ts": bucket_start.isoformat(), "value": agg_value}, ensure_ascii=False) + "\n")
                 created += 1
             f.flush()
@@ -1084,10 +1315,10 @@ def run_rollups(
     results: dict[str, int] = {}
     epoch = datetime.fromtimestamp(0, tz=UTC)
 
-    # Get all raw metrics (no @ in name)
-    raw_metrics = [m for m in list_metrics(tsdb_dir, target_id) if not _is_rollup_metric(m)]
+    # Base metrics come from raw and 5m series, so a target whose raw data expired still reaches 1h.
+    base_metrics = sorted({_base_metric(m) for m in list_metrics(tsdb_dir, target_id) if not m.endswith("@1h_median")})
 
-    for metric in raw_metrics:
+    for metric in base_metrics:
         if _base_metric(metric) in NON_RESAMPLE_METRICS:
             continue
         # Convert raw samples just before their effective retention cutoff.
@@ -1147,9 +1378,7 @@ def prune_all_series(
             _log.warning("TSDB pruning of %s (target %s) failed, will retry: %s", metric, target_id, e)
 
 
-# ---------------------------------------------------------------------------
 # Compaction: closed days move from the active JSONL into gzip period segments
-# ---------------------------------------------------------------------------
 
 COMPACT_BUDGET_SECONDS = 3.0  # per target and housekeeping run; the rest continues in the next run
 _STALE_TEMP_SECONDS = 3600
@@ -1619,52 +1848,28 @@ def query_auto_resolution(
     all_points: list[MetricPoint] = []
 
     # Fetch enough points to cover the requested range before visual resampling.
-    # query() applies the limit *during* retrieval, so using the caller's limit
+    # The limit applies *during* retrieval, so using the caller's limit
     # directly can accidentally drop most of the range (e.g. 7 days of raw data).
     internal_limit = max(limit * 20, 50_000)
     internal_limit = min(internal_limit, 200_000)
 
-    # Query 1h rollups if needed (>180 days ago)
-    if since < rollup_5m_cutoff:
-        query_until = min(until, rollup_5m_cutoff - timedelta(microseconds=1))
-        rollup_metric = f"{metric}@1h_median"
-        points = query(
-            tsdb_dir,
-            target_id=target_id,
-            metric=rollup_metric,
-            since=since,
-            until=query_until,
-            limit=internal_limit,
+    windows: list[SeriesWindow] = []
+    if since < rollup_5m_cutoff:  # 1h rollups (>180 days ago)
+        windows.append((f"{metric}@1h_median", since, min(until, rollup_5m_cutoff - timedelta(microseconds=1))))
+    if since < raw_cutoff and until > rollup_5m_cutoff:  # 5m rollups (30-180 days ago)
+        windows.append(
+            (
+                f"{metric}@5m_median",
+                max(since, rollup_5m_cutoff),
+                min(until, raw_cutoff - timedelta(microseconds=1)),
+            )
         )
-        all_points.extend(points)
+    if until > raw_cutoff:  # raw data (<30 days ago)
+        windows.append((metric, max(since, raw_cutoff), until))
 
-    # Query 5m rollups if needed (30-180 days ago)
-    if since < raw_cutoff and until > rollup_5m_cutoff:
-        query_since = max(since, rollup_5m_cutoff)
-        query_until = min(until, raw_cutoff - timedelta(microseconds=1))
-        rollup_metric = f"{metric}@5m_median"
-        points = query(
-            tsdb_dir,
-            target_id=target_id,
-            metric=rollup_metric,
-            since=query_since,
-            until=query_until,
-            limit=internal_limit,
-        )
-        all_points.extend(points)
-
-    # Query raw data if needed (<30 days ago)
-    if until > raw_cutoff:
-        query_since = max(since, raw_cutoff)
-        points = query(
-            tsdb_dir,
-            target_id=target_id,
-            metric=metric,
-            since=query_since,
-            until=until,
-            limit=internal_limit,
-        )
-        all_points.extend(points)
+    with _target_snapshots(tsdb_dir, target_id, windows) as snapshots:
+        for snap, (_name, start, end) in zip(snapshots, windows, strict=True):
+            all_points.extend(_window_points(snap, start, end, internal_limit))
 
     # De-duplicate boundary timestamps across mixed resolutions (prefer newer-resolution points)
     by_ts: dict[datetime, MetricPoint] = {}
@@ -1694,7 +1899,9 @@ def query_display_series(
     until: datetime,
     bucket_seconds: int,
 ) -> dict[str, Any]:
-    """Stream stored points into bounded display buckets without changing stored series.
+    """Stream stored points into display buckets of ``bucket_seconds`` without changing stored series.
+
+    The number of buckets follows the window and the bucket size; each bucket keeps its values in memory.
 
     Historical status medians cannot identify individual HTTP codes, so status
     distributions include raw checks only and expose their coverage explicitly.
@@ -1717,14 +1924,12 @@ def query_display_series(
     buckets: dict[int, list[float]] = {}
     bucket_rollup: set[int] = set()
     status_counts: dict[str, int] = {}
-    for source, start, end in sources:
-        if start > end:
-            continue
-        path = _series_path(tsdb_dir, target_id, source)
-        if not _series_exists(path):
-            continue
-        with contextlib.closing(_iter_series_lines(path, start, end)) as stream:
-            for line in stream:
+    sources = [
+        item for item in sources if item[1] <= item[2] and _series_exists(_series_path(tsdb_dir, target_id, item[0]))
+    ]
+    with _target_snapshots(tsdb_dir, target_id, sources) as snapshots:
+        for snap, (source, start, end) in zip(snapshots, sources, strict=True):
+            for line in _iter_snapshot_lines(snap, bounded=True):
                 try:
                     item = json.loads(line)
                     ts = parse_utc(item["ts"])
@@ -1750,10 +1955,8 @@ def query_display_series(
         end = min(until, start + timedelta(seconds=bucket_seconds))
         if metric == "http_status":
             value = max(values, key=lambda code: (6 if code == 0 else int(code) // 100, code))
-        elif is_binary_metric(metric):
-            value = min(values)
         else:
-            value = _compute_median(values)
+            value = _aggregate_bucket(metric, values)
         code_counts = None
         if metric == "http_status":
             code_counts = {str(int(code)) if code else "Error": values.count(code) for code in set(values)}
@@ -1777,9 +1980,6 @@ def query_display_series(
     }
 
 
-_ALL_POINTS_LIMIT = 2**63 - 1
-
-
 @dataclass
 class DowntimePeriod:
     """Represents a downtime period with start, end, and duration."""
@@ -1790,6 +1990,55 @@ class DowntimePeriod:
     failed_services: list[str] = field(default_factory=list)  # e.g. ["HTTP", "Ping", "TCP"]
 
 
+def _collect_series_points(
+    tsdb_dir: Path,
+    target_id: int,
+    series: Sequence[tuple[str, str]],
+    since: datetime | None,
+    until: datetime | None,
+    check_interval_seconds: int,
+) -> list[tuple[str, str, float, list[tuple[datetime, int | None]]]]:
+    """``(metric, label, interval, points)`` per series, all series opened in one short locked section.
+
+    A UDP series also carries its explicit UNKNOWN markers (``udp_unknown_<port>``), which end an outage
+    like a gap does. The last point before ``since`` (within one gap threshold) seeds the state, clipped
+    to ``since``; the snapshot window starts that far before ``since`` so no older segment is opened.
+    """
+    windows: list[SeriesWindow] = []
+    layout: list[tuple[str, str, float, int, bool]] = []
+    for metric, label in series:
+        interval = series_interval_seconds(metric, check_interval_seconds)
+        start = None if since is None else since - timedelta(seconds=gap_threshold_seconds(interval))
+        has_unknown = metric.startswith("udp_up_")
+        layout.append((metric, label, interval, len(windows), has_unknown))
+        windows.append((metric, start, until))
+        if has_unknown:
+            windows.append((f"udp_unknown_{metric[len('udp_up_') :]}", since, until))
+    collected = []
+    with _target_snapshots(tsdb_dir, target_id, windows) as snapshots:
+        for metric, label, interval, index, has_unknown in layout:
+            seed: MetricPoint | None = None
+            points: list[tuple[datetime, int | None]] = []
+            for pt in _snapshot_points(snapshots[index], None, until):
+                if since is not None and pt.ts <= since:
+                    seed = pt  # newest point at or before ``since``
+                if (since is None or pt.ts >= since) and pt.value in (0, 1):
+                    points.append((pt.ts, int(pt.value)))
+            if (
+                seed is not None
+                and since is not None
+                and seed.ts < since
+                and (since - seed.ts).total_seconds() <= gap_threshold_seconds(interval)
+            ):
+                points.insert(0, (since, 1 if seed.value in (1, True) else 0))
+            if has_unknown:
+                marks = _snapshot_points(snapshots[index + 1], since, until)
+                points.extend((pt.ts, None) for pt in marks if pt.value == 1)
+            points.sort(key=lambda item: item[0])
+            collected.append((metric, label, interval, points))
+    return collected
+
+
 def query_downtime_periods(
     tsdb_dir: Path,
     *,
@@ -1797,121 +2046,126 @@ def query_downtime_periods(
     since: datetime | None = None,
     until: datetime | None = None,
     limit: int = 20,
-    min_duration_seconds: int = 60,
+    min_duration_seconds: int = MIN_DOWNTIME_SECONDS,
+    series: Sequence[tuple[str, str]] | None = None,
+    check_interval_seconds: int = 60,
+    now: datetime | None = None,
 ) -> list[DowntimePeriod]:
+    """Find downtime periods from the confirmed measurements of the given availability series.
+
+    ``series`` lists ``(metric, label)`` of the checks currently enabled (see ``downtime_series``), one
+    series per TCP/UDP port; without it the legacy aggregate series are used. Every series yields its
+    outages by the shared rule in ``availability_rules`` (gaps and UNKNOWN points are neither downtime
+    nor uptime); a period is the union of overlapping outages of all series.
+
+    Only closed periods >= min_duration_seconds are counted, an ongoing one always.
+    Returns the most recent first.
     """
-    Find downtime periods by analyzing metric transitions across all check types.
-
-    A downtime period starts when any metric goes from 1 to 0,
-    and ends when all metrics go back to 1 (or is ongoing).
-
-    Only closed periods >= min_duration_seconds are counted
-    to avoid false positives from transient packet loss or single check failures.
-
-    Returns a list of DowntimePeriod (most recent first), each with a list
-    of which services (HTTP, Ping, TCP) were down during that period.
-    """
-    # Metric name → display label mapping
-    metric_labels = {
-        "http_up": "HTTP",
-        "ping_up": "Ping",
-        "tcp_up": "TCP",
-    }
-
-    # Query all metrics and collect points with their metric type
-    # Build a dict: timestamp → {metric: is_up}
-    timeline: dict[datetime, dict[str, bool]] = {}
-
-    for metric in ("http_up", "ping_up", "tcp_up"):
-        points = query(
-            tsdb_dir,
-            target_id=target_id,
-            metric=metric,
-            since=since,
-            until=until,
-            limit=_ALL_POINTS_LIMIT,  # a head-limited read would drop the newest points
-            latest=False,
+    if series is None:
+        series = (("http_up", "HTTP"), ("ping_up", "Ping"), ("tcp_up", "TCP"))
+    series = list(series)
+    port_series = [item for item in series if item[1].startswith("TCP:")]
+    if port_series and not any(_series_exists(_series_path(tsdb_dir, target_id, m)) for m, _label in port_series):
+        # Data written before per-port series existed only has the aggregate.
+        series = [item for item in series if item not in port_series] + [("tcp_up", "TCP")]
+    until_u = ensure_utc(until) if until else None
+    since_u = ensure_utc(since) if since else None
+    ref_now = now or utcnow()
+    found: list[tuple[str, Outage]] = []
+    for _metric, label, interval, points in _collect_series_points(
+        tsdb_dir, target_id, series, since_u, until_u, check_interval_seconds
+    ):
+        # An ongoing outage is only ongoing at the live edge of the query, never inside a closed range.
+        closed_range = until_u is not None and until_u < ref_now - timedelta(seconds=interval)
+        found.extend(
+            (label, outage)
+            for outage in measured_outages(points, interval_seconds=interval, now=ref_now, period_closed=closed_range)
         )
-        for point in points:
-            if point.ts not in timeline:
-                timeline[point.ts] = {}
-            is_up = point.value == 1 or point.value is True
-            timeline[point.ts][metric] = is_up
-
-    if not timeline:
-        return []
-
-    # Sort timestamps and process transitions
-    sorted_times = sorted(timeline.keys())
-
     periods: list[DowntimePeriod] = []
-    downtime_start: datetime | None = None
-    current_failed: set[str] = set()
-
-    # Track last known state for each metric
-    # Pre-query: get state before 'since' to avoid assuming initial state is "up"
-    last_state: dict[str, bool] = {}
-    if since:
-        for metric in ("http_up", "ping_up", "tcp_up"):
-            pre_points = query(
-                tsdb_dir,
-                target_id=target_id,
-                metric=metric,
-                until=since,
-                limit=1,
-                latest=True,
-            )
-            if pre_points:
-                is_up = pre_points[0].value == 1 or pre_points[0].value is True
-                last_state[metric] = is_up
-
-    for ts in sorted_times:
-        states = timeline[ts]
-
-        # Update last known states with new data
-        last_state.update(states)
-
-        # Determine which services are currently down
-        failed_now = {m for m, is_up in last_state.items() if not is_up}
-
-        if failed_now and downtime_start is None:
-            # Start of downtime
-            downtime_start = ts
-            current_failed = failed_now.copy()
-        elif failed_now and downtime_start is not None:
-            # Still in downtime - track any additional failures
-            current_failed.update(failed_now)
-        elif not failed_now and downtime_start is not None:
-            # End of downtime - check minimum duration
-            duration = int((ts - downtime_start).total_seconds())
-            if duration >= min_duration_seconds:
-                failed_labels = sorted([metric_labels[m] for m in current_failed])
-                periods.append(
-                    DowntimePeriod(
-                        start=downtime_start,
-                        end=ts,
-                        duration_seconds=duration,
-                        failed_services=failed_labels,
-                    )
-                )
-            downtime_start = None
-            current_failed = set()
-
-    # If still in downtime at end of data
-    # Always include ongoing downtime regardless of duration
-    if downtime_start is not None:
-        failed_labels = sorted([metric_labels[m] for m in current_failed])
-        periods.append(
-            DowntimePeriod(
-                start=downtime_start,
-                end=None,
-                duration_seconds=None,
-                failed_services=failed_labels,
-            )
-        )
-
-    # Return most recent first, limited
+    for merged in merge_outages(found):
+        if merged.end is None:
+            periods.append(DowntimePeriod(merged.start, None, None, list(merged.services)))
+            continue
+        duration = elapsed_seconds(merged.start, merged.end)
+        if duration >= min_duration_seconds:
+            periods.append(DowntimePeriod(merged.start, merged.end, duration, list(merged.services)))
     periods.reverse()
+    return periods[:limit]
+
+
+@dataclass
+class UnmeasuredPeriod:
+    """Time without a confirmed result: a measurement ``gap`` or an explicit ``unknown`` result.
+
+    Neither is downtime nor uptime.
+    """
+
+    kind: str
+    start: datetime
+    end: datetime
+    services: list[str] = field(default_factory=list)
+
+    @property
+    def duration_seconds(self) -> int:
+        return elapsed_seconds(self.start, self.end)
+
+
+def _series_unmeasured(
+    points: list[tuple[datetime, int | None]], *, interval_seconds: float
+) -> list[tuple[str, datetime, datetime]]:
+    """``(kind, start, end)`` of the unmeasured time of one series, by the shared gap rule.
+
+    Only time between two points is reported; silence after the last point is not (that is a stopped
+    check, which the target status and the missing data already show).
+    """
+    found: list[tuple[str, datetime, datetime]] = []
+    for (ts, value), (next_ts, _next_value) in itertools.pairwise(points):
+        if value is None:
+            found.append(("unknown", ts, next_ts))
+        elif is_gap((next_ts - ts).total_seconds(), interval_seconds):
+            found.append(("gap", ts, next_ts))
+    if points and points[-1][1] is None:
+        last_ts = points[-1][0]
+        found.append(("unknown", last_ts, last_ts + timedelta(seconds=interval_seconds)))
+    return found
+
+
+def query_unmeasured_periods(
+    tsdb_dir: Path,
+    *,
+    target_id: int,
+    since: datetime | None = None,
+    until: datetime | None = None,
+    limit: int = 20,
+    series: Sequence[tuple[str, str]],
+    check_interval_seconds: int = 60,
+) -> list[UnmeasuredPeriod]:
+    """Measurement gaps and UNKNOWN results of the enabled series, merged per kind, most recent first.
+
+    Uses the same points and gap rule as ``query_downtime_periods``, so a period listed there as downtime
+    never reappears here and the time between two measurements is never silently counted as either.
+    """
+    until_u = ensure_utc(until) if until else None
+    since_u = ensure_utc(since) if since else None
+    collected: dict[str, list[tuple[str, datetime, datetime]]] = {"gap": [], "unknown": []}
+    for _metric, label, interval, points in _collect_series_points(
+        tsdb_dir, target_id, series, since_u, until_u, check_interval_seconds
+    ):
+        for kind, start, end in _series_unmeasured(points, interval_seconds=interval):
+            collected[kind].append((label, start, end))
+    periods: list[UnmeasuredPeriod] = []
+    for kind, items in collected.items():
+        merged: list[UnmeasuredPeriod] = []
+        for label, start, end in sorted(items, key=lambda item: item[1]):
+            last = merged[-1] if merged else None
+            if last is not None and last.end is not None and start < last.end:
+                last.end = max(last.end, end)
+                if label not in last.services:
+                    last.services.append(label)
+            else:
+                merged.append(UnmeasuredPeriod(kind, start, end, [label]))
+        periods.extend(merged)
+    periods.sort(key=lambda period: period.start, reverse=True)
     return periods[:limit]
 
 
@@ -1925,6 +2179,16 @@ def _availability_transitions(
     check_interval_seconds: int = 60,
 ) -> list[dict[str, Any]]:
     """Keep every observed state transition and mark gaps without filling them."""
+    sources = _transition_sources(metric, since, until)
+    windows = [(name, start, end) for name, start, end, _interval in sources]
+    with _target_snapshots(tsdb_dir, target_id, windows) as snapshots:
+        return _transitions_from_snapshots(metric, sources, snapshots, check_interval_seconds=check_interval_seconds)
+
+
+def _transition_sources(
+    metric: str, since: datetime, until: datetime
+) -> list[tuple[str, datetime, datetime, float | None]]:
+    """``(series, start, end, rollup_interval)`` per resolution that can hold data of the window."""
     now = utcnow()
     raw_cutoff = now - timedelta(days=ROLLUP_CONFIG["raw"][1])
     rollup_cutoff = now - timedelta(days=ROLLUP_CONFIG["5m_median"][1])
@@ -1943,46 +2207,54 @@ def _availability_transitions(
         ),
         (metric, max(since, raw_cutoff), until, None),
     )
+    return [source for source in sources if source[1] <= source[2]]
+
+
+def _transitions_from_snapshots(
+    metric: str,
+    sources: Sequence[tuple[str, datetime, datetime, float | None]],
+    snapshots: Sequence[_Snapshot],
+    *,
+    check_interval_seconds: int,
+) -> list[dict[str, Any]]:
+    """Evaluate already opened snapshots of ``_transition_sources`` without holding any lock."""
+    check_interval_seconds = int(series_interval_seconds(metric, check_interval_seconds))
     result: list[dict[str, Any]] = []
     previous_ts: datetime | None = None
     previous_up: int | None = None
     interval: float | None = None
-    for name, start, end, rollup_interval in sources:
-        if start > end:
-            continue
-        path = _series_path(tsdb_dir, target_id, name)
-        if not _series_exists(path):
-            continue
-        with contextlib.closing(_iter_series_lines(path, start, end)) as stream:
-            for line in stream:
-                try:
-                    item = json.loads(line)
-                    ts = parse_utc(item["ts"])
-                    up = int(float(item["value"]))
-                except (ValueError, TypeError, KeyError, json.JSONDecodeError):
-                    continue
-                if ts is None or ts < start or ts > end or up not in (0, 1):
-                    continue
-                if previous_ts is not None:
-                    delta = (ts - previous_ts).total_seconds()
-                    expected = rollup_interval or interval or check_interval_seconds
-                    if expected is not None and delta > expected * 3:
-                        if previous_up is not None and result[-1]["ts"] != previous_ts.isoformat():
-                            result.append({"ts": previous_ts.isoformat(), "up": previous_up})
-                        if previous_up is not None:
-                            result.append({"ts": (previous_ts + timedelta(microseconds=1)).isoformat(), "up": None})
-                        previous_up = None
-                    elif rollup_interval is None and delta > 0:
-                        interval = min(interval, delta) if interval is not None else delta
-                if rollup_interval and up == 0:
-                    result.append({"ts": ts.isoformat(), "up": 0, "observed": True})
-                    result.append({"ts": (ts + timedelta(microseconds=1)).isoformat(), "up": None})
+    for snap, (_name, start, end, rollup_interval) in zip(snapshots, sources, strict=True):
+        for line in _iter_snapshot_lines(snap, bounded=True):
+            try:
+                item = json.loads(line)
+                ts = parse_utc(item["ts"])
+                up = item["value"]
+            except (ValueError, TypeError, KeyError, json.JSONDecodeError):
+                continue
+            # Same binary rule as count_binary_points(): 0.7, 1.5, NaN, inf and strings are no state.
+            if ts is None or ts < start or ts > end or up not in (0, 1):
+                continue
+            up = int(up)
+            if previous_ts is not None:
+                delta = (ts - previous_ts).total_seconds()
+                expected = rollup_interval or interval or check_interval_seconds
+                if expected is not None and is_gap(delta, expected):
+                    if previous_up is not None and result[-1]["ts"] != previous_ts.isoformat():
+                        result.append({"ts": previous_ts.isoformat(), "up": previous_up})
+                    if previous_up is not None:
+                        result.append({"ts": (previous_ts + timedelta(microseconds=1)).isoformat(), "up": None})
                     previous_up = None
-                else:
-                    if previous_up != up:
-                        result.append({"ts": ts.isoformat(), "up": up})
-                    previous_up = up
-                previous_ts = ts
+                elif rollup_interval is None and delta > 0:
+                    interval = min(interval, delta) if interval is not None else delta
+            if rollup_interval and up == 0:
+                result.append({"ts": ts.isoformat(), "up": 0, "observed": True})
+                result.append({"ts": (ts + timedelta(microseconds=1)).isoformat(), "up": None})
+                previous_up = None
+            else:
+                if previous_up != up:
+                    result.append({"ts": ts.isoformat(), "up": up})
+                previous_up = up
+            previous_ts = ts
     if previous_ts is not None and previous_up is not None and result[-1]["ts"] != previous_ts.isoformat():
         result.append({"ts": previous_ts.isoformat(), "up": previous_up})
     return result
@@ -2031,6 +2303,7 @@ def query_availability_series(
     enabled_services: set[str] | None = None,
     tcp_ports: list[int] | None = None,
     check_interval_seconds: int = 60,
+    udp_ports: list[int] | None = None,
 ) -> dict[str, list[dict]]:
     """
     Query availability time series per service (not aggregated).
@@ -2052,24 +2325,10 @@ def query_availability_series(
             tcp_ports: List of TCP ports to query individually (e.g., [80, 443, 8080]).
                        Only used when "TCP" is in enabled_services.
     """
-    series: dict[str, list[dict]] = {}
+    wanted: list[tuple[str, str]] = []
 
     def add_series(label: str, metric: str) -> None:
-        try:
-            points = _availability_transitions(
-                tsdb_dir,
-                target_id=target_id,
-                metric=metric,
-                since=ensure_utc(since) if since else utcnow() - timedelta(days=30),
-                until=ensure_utc(until) if until else utcnow(),
-                check_interval_seconds=check_interval_seconds,
-            )
-            points = _limit_availability_points(points, limit)
-        except (OSError, ValueError, TypeError, json.JSONDecodeError) as e:
-            _log.debug("Skipping availability metric %s for target %s: %s", metric, target_id, e)
-            return
-        if points:
-            series[label] = points
+        wanted.append((label, metric))
 
     for metric, label in [("ping_up", "PING"), ("http_up", "HTTP")]:
         if enabled_services is None or label in enabled_services:
@@ -2083,4 +2342,33 @@ def query_availability_series(
             # No per-port list: fall back to the aggregated tcp_up series.
             add_series("TCP", "tcp_up")
 
+    if enabled_services is None or "UDP" in enabled_services:
+        # UNKNOWN UDP cycles write no udp_up point, so they surface as gaps, never as down.
+        if udp_ports:
+            for port in udp_ports:
+                add_series(f"UDP:{port}", f"udp_up_{port}")
+        else:
+            add_series("UDP", "udp_up")
+
+    since_u = ensure_utc(since) if since else utcnow() - timedelta(days=30)
+    until_u = ensure_utc(until) if until else utcnow()
+    plans = [(label, metric, _transition_sources(metric, since_u, until_u)) for label, metric in wanted]
+    windows = [(name, start, end) for _label, _metric, sources in plans for name, start, end, _iv in sources]
+    series: dict[str, list[dict]] = {}
+    # All series of the target are opened together, then evaluated without any lock.
+    with _target_snapshots(tsdb_dir, target_id, windows) as snapshots:
+        offset = 0
+        for label, metric, sources in plans:
+            own = snapshots[offset : offset + len(sources)]
+            offset += len(sources)
+            try:
+                points = _transitions_from_snapshots(
+                    metric, sources, own, check_interval_seconds=check_interval_seconds
+                )
+                points = _limit_availability_points(points, limit)
+            except (OSError, ValueError, TypeError, json.JSONDecodeError) as e:
+                _log.debug("Skipping availability metric %s for target %s: %s", metric, target_id, e)
+                continue
+            if points:
+                series[label] = points
     return series

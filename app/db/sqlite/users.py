@@ -14,6 +14,85 @@ from typing import Any
 from ...utils import bootstrap_credentials
 from ...utils.time import utcnow
 from .connection import run_after_commit, transaction
+from .recipients import _insert_recipient, cancel_pending_notifications, update_recipient
+
+
+def _can_close_alerts_value(*, is_admin: bool, can_close_alerts: bool) -> int:
+    """Stored can_close_alerts flag: admins always hold the permission."""
+    return 1 if is_admin or can_close_alerts else 0
+
+
+def _insert_user_with_recipient(
+    conn: sqlite3.Connection,
+    *,
+    username: str,
+    password_hash: str,
+    is_admin: bool,
+    can_close_alerts: bool,
+    must_change_password: bool,
+    phone: str | None,
+    email: str | None,
+    recipient_enabled: bool | None,
+    enable_for_all_targets: bool,
+) -> int:
+    """Insert a user and its one recipient; the only place that inserts into ``users``.
+
+    Must run inside the caller's write transaction so both rows commit or roll back together. The recipient
+    carries the username as its name and stays disabled while it has no contact channel.
+    """
+    can_close_value = _can_close_alerts_value(is_admin=is_admin, can_close_alerts=can_close_alerts)
+    name = username.lower()
+    cur = conn.execute(
+        "INSERT INTO users(username, password_hash, is_admin, can_close_alerts, is_active, "
+        "must_change_password, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (
+            name,
+            password_hash,
+            1 if is_admin else 0,
+            can_close_value,
+            1,
+            1 if must_change_password else 0,
+            utcnow(),
+        ),
+    )
+    user_id = int(cur.lastrowid)
+    # The database trigger created a disabled, channel-less recipient with the username as name; set its channels
+    # through the same code path as every recipient edit (phone uniqueness, all-targets assignment).
+    recipient = get_user_recipient(conn, user_id)
+    if recipient is None:  # trigger missing: the layout check does not cover triggers, so stay safe
+        _insert_recipient(
+            conn,
+            name=name,
+            phone=None,
+            email=None,
+            is_enabled=False,
+            enable_for_all_targets=False,
+            user_id=user_id,
+        )
+        recipient = get_user_recipient(conn, user_id)
+    update_recipient(
+        conn,
+        int(recipient["id"]),
+        phone=phone or None,
+        email=email or None,
+        clear_phone=not phone,
+        clear_email=not email,
+        is_enabled=_recipient_enabled(phone, email, recipient_enabled),
+        enable_for_all_targets=enable_for_all_targets,
+    )
+    return user_id
+
+
+def _recipient_enabled(phone: str | None, email: str | None, requested: bool | None) -> bool:
+    """A recipient is only enabled with a contact channel; unset means enabled when it has one.
+
+    Raises:
+        ValueError: enabling was requested explicitly although there is no channel.
+    """
+    has_channel = bool(phone or email)
+    if requested and not has_channel:
+        raise ValueError("A recipient without phone number and email address cannot be enabled")
+    return has_channel and (True if requested is None else bool(requested))
 
 
 def create_user(
@@ -24,25 +103,107 @@ def create_user(
     is_admin: bool,
     can_close_alerts: bool = False,
     must_change_password: bool = False,
+    phone: str | None = None,
+    email: str | None = None,
+    recipient_enabled: bool | None = None,
+    enable_for_all_targets: bool = False,
 ) -> int:
-    """Create a user and return the new user id."""
-    with transaction(conn):
-        # Admins always have can_close_alerts permission
-        can_close_value = 1 if is_admin or can_close_alerts else 0
-        cur = conn.execute(
-            "INSERT INTO users(username, password_hash, is_admin, can_close_alerts, is_active, "
-            "must_change_password, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (
-                username.lower(),
-                password_hash,
-                1 if is_admin else 0,
-                can_close_value,
-                1,
-                1 if must_change_password else 0,
-                utcnow(),
-            ),
+    """Create a user together with its recipient (one transaction) and return the new user id.
+
+    Without ``phone`` and ``email`` the recipient is created disabled and without channel.
+
+    Raises:
+        DuplicatePhoneError: another recipient already has this phone number (nothing is written).
+        sqlite3.IntegrityError: the username exists.
+    """
+    with transaction(conn, immediate=True):
+        return _insert_user_with_recipient(
+            conn,
+            username=username,
+            password_hash=password_hash,
+            is_admin=is_admin,
+            can_close_alerts=can_close_alerts,
+            must_change_password=must_change_password,
+            phone=phone,
+            email=email,
+            recipient_enabled=recipient_enabled,
+            enable_for_all_targets=enable_for_all_targets,
         )
-        return int(cur.lastrowid)
+
+
+def get_user_recipient(conn: sqlite3.Connection, user_id: int) -> sqlite3.Row | None:
+    """Get the recipient bound to a user (None only for a user created by raw SQL, healed on the next save)."""
+    return conn.execute("SELECT * FROM recipients WHERE user_id = ?", (user_id,)).fetchone()
+
+
+def ensure_user_recipients(conn: sqlite3.Connection) -> int:
+    """Give every user without a recipient a disabled, channel-less one; returns how many were created.
+
+    Idempotent repair for databases that were written around the application (the triggers prevent it).
+    """
+    now = utcnow()
+    with transaction(conn, immediate=True):
+        return conn.execute(
+            "INSERT INTO recipients(name, phone, email, is_enabled, enable_for_all_targets, created_at, updated_at, "
+            "user_id) SELECT u.username, NULL, NULL, 0, 0, ?, ?, u.id FROM users u "
+            "WHERE NOT EXISTS (SELECT 1 FROM recipients r WHERE r.user_id = u.id)",
+            (now, now),
+        ).rowcount
+
+
+def get_recipients_by_user(conn: sqlite3.Connection) -> dict[int, sqlite3.Row]:
+    """Get the recipients of all users in one query, keyed by user id."""
+    return {
+        int(row["user_id"]): row
+        for row in conn.execute("SELECT * FROM recipients WHERE user_id IS NOT NULL").fetchall()
+    }
+
+
+def update_user_recipient(
+    conn: sqlite3.Connection,
+    user_id: int,
+    *,
+    phone: str | None,
+    email: str | None,
+    is_enabled: bool | None,
+    enable_for_all_targets: bool | None,
+) -> int:
+    """Set the channel configuration of a user's recipient and return the recipient id.
+
+    A missing recipient (user inserted by raw SQL) is created. Without a channel the recipient is disabled.
+
+    Raises:
+        DuplicatePhoneError: another recipient already has this phone number.
+        LookupError: the user does not exist.
+    """
+    with transaction(conn, immediate=True):
+        user = conn.execute("SELECT username FROM users WHERE id = ?", (user_id,)).fetchone()
+        if user is None:
+            raise LookupError(f"user {user_id} not found")
+        enabled = _recipient_enabled(phone, email, is_enabled)
+        recipient = get_user_recipient(conn, user_id)
+        if recipient is None:
+            return _insert_recipient(
+                conn,
+                name=user["username"],
+                phone=phone or None,
+                email=email or None,
+                is_enabled=enabled,
+                enable_for_all_targets=bool(enable_for_all_targets),
+                user_id=user_id,
+            )
+        recipient_id = int(recipient["id"])
+        update_recipient(
+            conn,
+            recipient_id,
+            phone=phone or None,
+            email=email or None,
+            clear_phone=not phone,
+            clear_email=not email,
+            is_enabled=enabled,
+            enable_for_all_targets=enable_for_all_targets,
+        )
+        return recipient_id
 
 
 def get_user_by_username(conn: sqlite3.Connection, username: str) -> sqlite3.Row | None:
@@ -77,14 +238,41 @@ def get_all_users(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return conn.execute("SELECT * FROM users ORDER BY username").fetchall()
 
 
+class AdminUserError(ValueError):
+    """The user is an administrator, and administrators are never deleted."""
+
+
+def delete_non_admin_user(conn: sqlite3.Connection, user_id: int) -> bool:
+    """Delete a user like ``delete_user``, but refuse an administrator.
+
+    The role is read in the same immediate write transaction as the delete, so a promotion that commits
+    before the lock is seen and one that comes later waits for the delete.
+
+    Raises:
+        AdminUserError: the user is an administrator; nothing was changed.
+    Returns True if the user was deleted, False if not found.
+    """
+    with transaction(conn, immediate=True):
+        row = conn.execute("SELECT is_admin FROM users WHERE id = ?", (user_id,)).fetchone()
+        if row is not None and row["is_admin"]:
+            raise AdminUserError(user_id)
+        return delete_user(conn, user_id)
+
+
 def delete_user(conn: sqlite3.Connection, user_id: int) -> bool:
-    """Delete a user. Associated tokens and alert assignments are
-    automatically removed via ON DELETE CASCADE.
+    """Delete a user together with its recipient (and thus the recipient's target assignments).
+
+    Tokens and alert assignments are removed via ON DELETE CASCADE. The recipient is deleted explicitly first,
+    so it never survives even on a connection without foreign key enforcement.
 
     Returns True if user was deleted, False if not found.
     """
-    with transaction(conn):
+    with transaction(conn, immediate=True):
+        for row in conn.execute("SELECT id FROM recipients WHERE user_id = ?", (user_id,)).fetchall():
+            cancel_pending_notifications(conn, int(row["id"]))
         cursor = conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        # The cascade removed the recipient; this also covers a connection without foreign key enforcement.
+        conn.execute("DELETE FROM recipients WHERE user_id = ?", (user_id,))
         return cursor.rowcount > 0
 
 
@@ -101,14 +289,19 @@ def update_user(
     is_admin: bool,
     can_close_alerts: bool = False,
 ) -> None:
-    """Update a user's basic fields."""
-    with transaction(conn):
-        # Admins always have can_close_alerts permission
-        can_close_value = 1 if is_admin or can_close_alerts else 0
+    """Update a user's basic fields; the recipient name follows a rename while it still equals the old username."""
+    with transaction(conn, immediate=True):
+        can_close_value = _can_close_alerts_value(is_admin=is_admin, can_close_alerts=can_close_alerts)
+        previous = conn.execute("SELECT username FROM users WHERE id = ?", (user_id,)).fetchone()
         conn.execute(
             "UPDATE users SET username = ?, is_admin = ?, can_close_alerts = ? WHERE id = ?",
             (username.lower(), 1 if is_admin else 0, can_close_value, user_id),
         )
+        if previous is not None and previous["username"] != username.lower():
+            conn.execute(
+                "UPDATE recipients SET name = ?, updated_at = ? WHERE user_id = ? AND name = ?",
+                (username.lower(), utcnow(), user_id, previous["username"]),
+            )
 
 
 def set_user_active(conn: sqlite3.Connection, user_id: int, *, is_active: bool) -> None:

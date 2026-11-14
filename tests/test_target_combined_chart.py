@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from app.api.metrics import _is_allowed_metric
-from app.utils.uptime_metric import _PRIORITY
+from app.utils.uptime_metric import AVAILABILITY_CHECKS
 
 ROOT = Path(__file__).resolve().parent.parent
 TEMPLATE = ROOT / "app" / "templates" / "fragments" / "target_detail" / "charts_and_downtime.html"
@@ -34,7 +34,7 @@ def test_metrics_used_by_the_combined_chart_are_served(metric: str) -> None:
 def test_latency_source_priority_matches_uptime_metric_selection() -> None:
     js = DATA_JS.read_text(encoding="utf-8")
     js_up = re.findall(r"""upMetric: ['"]([a-z_]+)['"]""", js)
-    assert js_up == [metric for _flag, metric in _PRIORITY]
+    assert js_up == [metric for _svc, _flag, metric in AVAILABILITY_CHECKS[:3]]
 
 
 @pytest.mark.parametrize("theme", ["light", "dark"])
@@ -72,22 +72,9 @@ def test_page_loads_combined_chart_scripts_after_the_chart_builder() -> None:
     assert order == sorted(order)
 
 
-def test_performance_details_tile_is_gone_and_donut_sits_next_to_the_chart() -> None:
+def test_donut_sits_next_to_the_chart() -> None:
     html = TEMPLATE.read_text(encoding="utf-8")
-    assert "target-performance" not in html
-    for removed in ("chart-response-time", "chart-ping", "chart-tcp"):
-        assert f'id="{removed}"' not in html
     canvas = re.search(r'<canvas\b[^>]*id="chart-status-code"[^>]*>', html)
     assert canvas and 'role="img"' in canvas.group(0) and "aria-label=" in canvas.group(0)
     assert re.search(r"enable_http_check %\}\s*<section", html)
     assert 'id="status-donut-empty"' in html and "combined-layout--donut" in html
-
-
-def test_removed_performance_chart_code_is_not_referenced_anywhere() -> None:
-    for name in ("target-detail.js", "charts/chart-builder.js"):
-        text = (ROOT / "app" / "static" / "js" / name).read_text(encoding="utf-8")
-        assert "target-performance-details" not in text
-        assert "buildMultiPortTcpChart" not in text
-        assert "function buildChart(" not in text
-    css = (ROOT / "app" / "static" / "css" / "target-detail.css").read_text(encoding="utf-8")
-    assert "target-performance" not in css

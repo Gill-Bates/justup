@@ -1,16 +1,17 @@
 {# Settings: Storage Tab Content #}
+{% from "fragments/_warning.html" import ju_warning %}
 <div class="ju-settings-grid">
 <form id="storage-settings-form" data-settings-autosave autocomplete="off">
 <section class="card shadow-sm settings-card">
 	<div class="card-header"><h2 class="h6 mb-0">Retention</h2></div>
 	<div class="card-body settings-compact">
 		<div>
-			<div class="form-check form-switch">
+			<div class="form-check form-switch ju-switch">
 				<input type="checkbox" class="form-check-input" role="switch" name="purge_enabled"
 					id="purge_enabled" {% if settings.purge_enabled %}checked{% endif %} aria-describedby="purge_enabled_hint">
 				<label class="form-check-label" for="purge_enabled">Allow Metric Purge</label>
 			</div>
-			<div class="form-text text-warning-emphasis" id="purge_enabled_hint">Permits permanent deletion of all metrics (password required).</div>
+			<div class="form-text" id="purge_enabled_hint">{{ ju_warning('Permits permanent deletion of all metrics.') }}</div>
 		</div>
 	</div>
 </section>
@@ -19,12 +20,12 @@
 	<div class="card-body">
 		<div class="d-flex justify-content-between align-items-center mb-3">
 			<h2 class="h6 mb-0">
-				<span class="material-icons align-middle me-1" style="font-size: 20px;" aria-hidden="true">storage</span>
+				<span class="material-icons ju-icon-20 align-middle me-1" aria-hidden="true">storage</span>
 				Storage Statistics
 			</h2>
 			<button type="button" class="btn btn-outline-secondary btn-sm btn-icon"
 				hx-get="/ui/fragments/settings-storage" hx-target="#storage-pane" hx-swap="innerHTML" title="Refresh" aria-label="Refresh">
-				<span class="material-icons" style="font-size: 16px;" aria-hidden="true">refresh</span>
+				<span class="material-icons ju-icon-16" aria-hidden="true">refresh</span>
 			</button>
 		</div>
 		<div class="row text-center g-2" id="storage-stats">

@@ -1,27 +1,30 @@
 {# Settings: SMTP Tab Content #}
 {% from "settings/_secret_field.html" import secret_field %}
+{% from "fragments/_state_dot.html" import status_dot %}
 <div class="ui-grid ui-grid--sidebar settings-editor settings-editor--fill">
 	{# Left Column: SMTP Configuration (1/3) #}
 		<div class="card shadow-sm">
 			<div class="card-header d-flex justify-content-between align-items-center">
 				<div class="d-flex align-items-center gap-3">
 					<h2 class="h6 mb-0">
-						<span class="material-icons align-middle me-1" style="font-size: 20px;" aria-hidden="true">mail</span>
+						<span class="material-icons align-middle me-1 ju-icon-20" aria-hidden="true">mail</span>
 						SMTP Email
 					</h2>
+					{# Mirrors updateSmtpStatusBadge in settings.storage.js #}
 					<div id="smtp-status-badge">
 						{% if not smtp.smtp_enabled %}
-						<span class="badge ju-status-badge--neutral">Disabled</span>
+						{{ status_dot('neutral', 'Disabled') }}
 						{% elif smtp.smtp_host and smtp.smtp_from %}
-						<span class="badge ju-status-badge--success">Configured</span>
+						{{ status_dot('success', 'Configured') }}
 						{% else %}
-						<span class="badge ju-status-badge--warning">Not Configured</span>
+						{{ status_dot('warning', 'Not Configured') }}
 						{% endif %}
 					</div>
 				</div>
-				<div class="form-check form-switch m-0">
-					<input type="checkbox" class="form-check-input" role="switch" name="smtp_enabled" id="smtp_enabled" aria-label="Enable SMTP email"
+				<div class="form-check form-switch ju-switch m-0">
+					<input type="checkbox" class="form-check-input" role="switch" name="smtp_enabled" id="smtp_enabled"
 						{% if smtp.smtp_enabled %}checked{% endif %}>
+							<label class="visually-hidden" for="smtp_enabled">Enable SMTP email</label>
 				</div>
 			</div>
 			<div class="card-body">
@@ -30,7 +33,7 @@
 						<div class="mb-3">
 							<label class="form-label" for="smtp_host">Host</label>
 							<input type="text" class="form-control" id="smtp_host" name="smtp_host"
-								value="{{ smtp.smtp_host }}" placeholder="smtp.example.com" autocomplete="off">
+								value="{{ smtp.smtp_host }}" placeholder="smtp.example.com" autocomplete="off" autocapitalize="none" spellcheck="false">
 						</div>
 
 						<div class="row g-2 mb-3">
@@ -45,7 +48,7 @@
 								{% set implicit_tls = smtp.smtp_port == implicit_tls_port %}
 								{% set label_implicit = "Implicit TLS (SMTPS)" %}
 								{% set label_starttls = "Use STARTTLS" %}
-								<div class="form-check form-switch">
+								<div class="form-check form-switch ju-switch">
 									<input type="checkbox" class="form-check-input" role="switch" id="smtp_use_tls"
 										name="smtp_use_tls" data-stored-value="{{ 'true' if smtp.smtp_use_tls else 'false' }}"
 										data-implicit-port="{{ implicit_tls_port }}"
@@ -66,7 +69,7 @@
 						<div class="mb-3">
 							<label class="form-label" for="smtp_user">Username</label>
 							<input type="text" class="form-control" id="smtp_user" name="smtp_user"
-								value="{{ smtp.smtp_user }}" autocomplete="off">
+								value="{{ smtp.smtp_user }}" autocomplete="off" autocapitalize="none" spellcheck="false">
 						</div>
 
 						<div class="mb-0">
@@ -82,7 +85,11 @@
 					<div class="mb-2">
 						<label class="form-label" for="smtp_test_recipient">Test Recipient</label>
 						<input type="email" class="form-control" id="smtp_test_recipient" name="smtp_test_recipient"
-							value="" placeholder="you@example.com" autocomplete="off">
+							value="" placeholder="you@example.com" autocomplete="off"
+							aria-describedby="smtp_test_recipient_help">
+						<div class="form-text" id="smtp_test_recipient_help">
+							Sends a short welcome message to check the SMTP setup. It does not use the alert template.
+						</div>
 					</div>
 					<button type="button" class="btn btn-outline-primary btn-sm" id="test-smtp-btn">
 						Send Test Email
@@ -95,14 +102,14 @@
 		<div class="card shadow-sm">
 			<div class="card-header d-flex justify-content-between align-items-center">
 				<h2 class="h6 mb-0">
-					<span class="material-icons align-middle me-1" style="font-size: 20px;" aria-hidden="true">description</span>
+					<span class="material-icons align-middle me-1 ju-icon-20" aria-hidden="true">description</span>
 					Email Template
 				</h2>
 				<div class="btn-group btn-group-sm" role="group" aria-label="Editor mode">
-					<button type="button" class="btn btn-outline-secondary" id="btn-mode-edit">Edit</button>
-					<button type="button" class="btn btn-outline-secondary" id="btn-mode-html">Source</button>
+					<button type="button" class="btn btn-outline-secondary" id="btn-mode-edit" aria-pressed="false">Edit</button>
+					<button type="button" class="btn btn-outline-secondary" id="btn-mode-html" aria-pressed="false">Source</button>
 					<button type="button" class="btn btn-outline-secondary active"
-						id="btn-mode-preview">Preview</button>
+						id="btn-mode-preview" aria-pressed="true">Preview</button>
 				</div>
 			</div>
 			<div class="card-body">
@@ -112,7 +119,7 @@
 						autocomplete="off">
 				</div>
 
-				<div id="wysiwyg-container" class="mb-3" style="display:none;">
+				<div id="wysiwyg-container" class="mb-3" hidden>
 					<span class="form-label d-inline-block">Edit Template</span>
 					<div class="border rounded">
 						<div class="wysiwyg-toolbar border-bottom bg-body-tertiary p-1 d-flex flex-wrap gap-1">
@@ -124,18 +131,14 @@
 								title="Underline" aria-label="Underline"><u>U</u></button>
 							<span class="border-start mx-1"></span>
 							<button type="button" class="btn btn-sm btn-outline-secondary"
-								data-cmd="insertUnorderedList" title="Bullet List" aria-label="Bullet list"><span class="material-icons"
-									style="font-size:16px;" aria-hidden="true">format_list_bulleted</span></button>
+								data-cmd="insertUnorderedList" title="Bullet List" aria-label="Bullet list"><span class="material-icons ju-icon-16" aria-hidden="true">format_list_bulleted</span></button>
 							<button type="button" class="btn btn-sm btn-outline-secondary" data-cmd="insertOrderedList"
-								title="Numbered List" aria-label="Numbered list"><span class="material-icons"
-									style="font-size:16px;" aria-hidden="true">format_list_numbered</span></button>
+								title="Numbered List" aria-label="Numbered list"><span class="material-icons ju-icon-16" aria-hidden="true">format_list_numbered</span></button>
 							<span class="border-start mx-1"></span>
 							<button type="button" class="btn btn-sm btn-outline-secondary" data-cmd="createLink"
-								title="Insert Link" aria-label="Insert link"><span class="material-icons"
-									style="font-size:16px;" aria-hidden="true">link</span></button>
+								title="Insert Link" aria-label="Insert link"><span class="material-icons ju-icon-16" aria-hidden="true">link</span></button>
 							<button type="button" class="btn btn-sm btn-outline-secondary" data-cmd="unlink"
-								title="Remove link" aria-label="Remove link"><span class="material-icons"
-									style="font-size:16px;" aria-hidden="true">link_off</span></button>
+								title="Remove link" aria-label="Remove link"><span class="material-icons ju-icon-16" aria-hidden="true">link_off</span></button>
 							<span class="border-start mx-1"></span>
 							<select class="form-select form-select-sm w-auto" data-cmd="formatBlock"
 								title="Heading" aria-label="Block format">
@@ -146,6 +149,16 @@
 								<option value="p">Paragraph</option>
 							</select>
 						</div>
+						{# Link address: replaces the native prompt(); errors use the shared field error (DESIGN.md). #}
+						<div class="border-bottom bg-body-tertiary p-2" id="wysiwyg-link-row" hidden>
+							<label for="wysiwyg-link-url" class="form-label small mb-1">Link address</label>
+							<div class="d-flex flex-wrap gap-2">
+								<input type="url" class="form-control form-control-sm flex-grow-1 w-auto" id="wysiwyg-link-url"
+									value="https://" autocomplete="off" spellcheck="false" inputmode="url">
+								<button type="button" class="btn btn-sm btn-primary" id="wysiwyg-link-apply">Insert link</button>
+								<button type="button" class="btn btn-sm btn-outline-secondary" id="wysiwyg-link-cancel">Cancel</button>
+							</div>
+						</div>
 						<iframe id="wysiwyg_frame" class="w-100 bg-white smtp-editor-frame"
 							sandbox="allow-same-origin"
 							srcdoc="<!DOCTYPE html><html><head></head><body></body></html>"
@@ -153,7 +166,7 @@
 					</div>
 				</div>
 
-				<div id="html-source-container" class="mb-3" style="display:none;">
+				<div id="html-source-container" class="mb-3" hidden>
 					<label class="form-label" for="email_html_source">HTML Source</label>
 					<textarea class="form-control font-monospace smtp-editor-frame" id="email_html_source">{{ template.html }}</textarea>
 				</div>
@@ -162,8 +175,8 @@
 					<div class="d-flex justify-content-between align-items-center mb-1">
 						<span class="form-label d-inline-block mb-0">Preview</span>
 						<div class="btn-group btn-group-sm" role="group" aria-label="Preview example">
-							<button type="button" class="btn btn-outline-secondary active" id="btn-preview-down">DOWN</button>
-							<button type="button" class="btn btn-outline-secondary" id="btn-preview-resolved">RESOLVED</button>
+							<button type="button" class="btn btn-outline-secondary active" id="btn-preview-down" aria-pressed="true">DOWN</button>
+							<button type="button" class="btn btn-outline-secondary" id="btn-preview-resolved" aria-pressed="false">RESOLVED</button>
 						</div>
 					</div>
 					<iframe id="email_preview_frame" class="w-100 border rounded bg-white smtp-editor-frame"
@@ -181,76 +194,15 @@
 				</div>
 				<div class="mt-3">
 					<p class="form-text mb-2">
-						<a class="text-decoration-none collapsed" data-bs-toggle="collapse" href="#placeholdersCollapse"
-							role="button" aria-expanded="false" aria-controls="placeholdersCollapse">
-							<span class="material-icons fs-6 align-middle" aria-hidden="true">expand_more</span>
+						<button type="button" class="btn btn-link p-0 border-0 align-baseline text-decoration-none collapsed" data-bs-toggle="collapse" data-bs-target="#placeholdersCollapse"
+							aria-expanded="false" aria-controls="placeholdersCollapse">
+							<span class="material-icons fs-6 align-middle ju-collapse-chevron" aria-hidden="true">expand_more</span>
 							Available Placeholders
-						</a>
+						</button>
 					</p>
 					<div class="collapse" id="placeholdersCollapse">
 						<div class="table-responsive">
-							<table class="table table-sm table-bordered small mb-0">
-								<thead class="table-light">
-									<tr>
-										<th scope="col">Placeholder</th>
-										<th scope="col">Description</th>
-									</tr>
-								</thead>
-								<tbody>
-									<tr>
-										<td><code>{{"{{"}}status.emoji{{"}}"}}</code></td>
-										<td>🚨 or ✅</td>
-									</tr>
-									<tr>
-										<td><code>{{"{{"}}status.text{{"}}"}}</code></td>
-										<td>Service DOWN / Service RESOLVED</td>
-									</tr>
-									<tr>
-										<td><code>{{"{{"}}status.label{{"}}"}}</code></td>
-										<td>Short status pill: DOWN / RESOLVED</td>
-									</tr>
-									<tr>
-										<td><code>{{"{{"}}target.name{{"}}"}}</code></td>
-										<td>Target display name</td>
-									</tr>
-									<tr>
-										<td><code>{{"{{"}}target.host{{"}}"}}</code></td>
-										<td>Host / URL</td>
-									</tr>
-									<tr>
-										<td><code>{{"{{"}}target.group{{"}}"}}</code></td>
-										<td>Group name</td>
-									</tr>
-									<tr>
-										<td><code>{{"{{"}}alert.started_at{{"}}"}}</code></td>
-										<td>Alert start time</td>
-									</tr>
-									<tr>
-										<td><code>{{"{{"}}alert.resolved_at{{"}}"}}</code></td>
-										<td>Resolution time</td>
-									</tr>
-									<tr>
-										<td><code>{{"{{"}}alert.duration{{"}}"}}</code></td>
-										<td>Downtime duration</td>
-									</tr>
-									<tr>
-										<td><code>{{"{{"}}alert.reason{{"}}"}}</code></td>
-										<td>Failure reason</td>
-									</tr>
-									<tr>
-										<td><code>{{"{{"}}sla.threshold{{"}}"}}</code></td>
-										<td>SLA target %</td>
-									</tr>
-									<tr>
-										<td><code>{{"{{"}}sla.actual{{"}}"}}</code></td>
-										<td>Current SLA %</td>
-									</tr>
-									<tr>
-										<td><code>{{"{{"}}logo_url{{"}}"}}</code></td>
-										<td>Logo image URL</td>
-									</tr>
-								</tbody>
-							</table>
+							{% include "settings/_placeholder_table.html" %}
 						</div>
 					</div>
 				</div>

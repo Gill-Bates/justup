@@ -9,18 +9,26 @@
 // Key: phone number as returned by backend (E.164 normalized)
 // Value: { registered: true|false|null, cachedAt: timestamp }
 let _signalStatusCache = {};
-// Frontend TTL is shorter (10min) than backend (24h) to allow re-verification
-// after user actions like linking a Signal account
+// Frontend TTL is shorter (10min) than backend (24h). The explicit "Re-check" action
+// bypasses the backend cache once (force_refresh) and replaces this entry.
 const SIGNAL_STATUS_TTL_MS = 10 * 60 * 1000;
 
-const SIGNAL_ICONS = {
-	registered: 'check_circle',
-	unregistered: 'warning',
-	pending: 'hourglass_empty',
-	unknown: 'help_outline',
-	unavailable: 'cancel',  // Gray X for "no Signal account"
-};
-
+// Single mapping from a cached registration state (true|false|null|undefined) to its status view
+// (DC-STATE S3: dot and word; S6 while checking: spinner and word, no dot).
+function signalView(registered) {
+	if (registered === true) return { tone: 'success', word: 'Registered', title: 'Registered with Signal' };
+	if (registered === false) return { tone: 'warning', word: 'Not registered', title: 'Not registered with Signal' };
+	if (registered === null) return { tone: 'neutral', word: 'No account', title: 'No Signal account linked' };
+	return { busy: true, word: 'Checking...', title: 'Checking...' };
+}
+const SIGNAL_FAILED_VIEW = { tone: 'neutral', word: 'Check failed', title: 'Check failed' };
+function signalStateHtml(view) {
+	const busyAttr = view.busy ? ' aria-busy="true"' : '';
+	const inner = view.busy
+		? '<span class="ju-status-item"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span>' + escapeHtml(view.word) + '</span>'
+		: JuStatusDot.html(view.tone, view.word);
+	return '<span class="signal-state" title="' + escapeHtml(view.title) + '"' + busyAttr + '>' + inner + '</span>';
+}
 // Normalize phone for cache key lookup (strip whitespace only)
 // Note: Backend returns E.164 normalized phones, this just handles minor display variations
 function normalizePhoneForCache(phone) {
@@ -29,24 +37,39 @@ function normalizePhoneForCache(phone) {
 }
 
 async function extractApiError(response, fallbackMessage) {
-	let msg = fallbackMessage;
-	try {
-		const data = await response.json();
-		// Classic script: the ES module formatter is loaded dynamically.
-		const { formatErrorDetail } = await import('./settings.core.js');
-		msg = formatErrorDetail(data?.detail) || (typeof data?.error === 'string' && data.error) || msg;
-	} catch (e) {
-		// ignore parse errors
-	}
-	return msg;
+	return window.JuApiError.fromResponse(response, fallbackMessage);
 }
 
+// Request body shared by create (POST) and update (PATCH); a disabled channel sends null.
+function recipientPayload({ name, isEnabled, enableForAllTargets, signalEnabled, emailEnabled, phone, email }) {
+	return {
+		name,
+		is_enabled: isEnabled,
+		enable_for_all_targets: enableForAllTargets,
+		phone: signalEnabled ? phone : null,
+		email: emailEnabled ? email : null,
+	};
+}
+// Server warnings (e.g. phone not registered with Signal) replace the success toast.
+function toastSaveResult(data, successMessage) {
+	if (data.warnings && data.warnings.length > 0) {
+		for (const warning of data.warnings) window.justUpToast.show(warning, 'warning');
+	} else {
+		window.justUpToast.show(successMessage, 'success');
+	}
+}
 // Field errors for the add (prefix 'recipient-') and edit (prefix 'edit-recipient-') dialogs.
-function validateRecipientInput({ name, signalEnabled, emailEnabled, phone, email }, prefix) {
+// An application user's recipient may have no channel, but then it cannot stay enabled.
+function validateRecipientInput({ name, signalEnabled, emailEnabled, phone, email, userLinked = false, isEnabled = true }, prefix) {
 	const errors = [];
 	if (!name) errors.push({ id: `${prefix}name`, message: 'Please enter a name' });
-	if (!signalEnabled && !emailEnabled) {
-		errors.push({ id: `${prefix}signal-enabled`, message: 'Please enable at least one notification channel' });
+	if (!signalEnabled && !emailEnabled && (!userLinked || isEnabled)) {
+		errors.push({
+			id: `${prefix}signal-enabled`,
+			message: userLinked
+				? 'Enable a channel or switch the recipient off'
+				: 'Please enable at least one notification channel',
+		});
 	}
 	if (signalEnabled && !phone) errors.push({ id: `${prefix}phone`, message: 'Please enter a Signal phone number' });
 	if (emailEnabled && !email) errors.push({ id: `${prefix}email`, message: 'Please enter an email address' });
@@ -57,11 +80,6 @@ function _getCachedSignalRegistration(phone) {
 	const key = normalizePhoneForCache(phone);
 	if (!key) return undefined;
 	const entry = _signalStatusCache[key];
-	// Backwards-compat: previously allowed boolean
-	if (typeof entry === 'boolean') {
-		_signalStatusCache[key] = { registered: entry, cachedAt: Date.now() };
-		return entry;
-	}
 	if (!entry || typeof entry !== 'object') return undefined;
 	// Allow true, false, or null (unavailable)
 	if (entry.registered !== true && entry.registered !== false && entry.registered !== null) return undefined;
@@ -97,24 +115,16 @@ function _purgeExpiredCache() {
 }
 
 /**
- * Set Signal status icon for a recipient.
+ * Render the Signal status (dot or spinner plus word) of a recipient row.
  * @private
  * @param {number} recipientId
- * @param {string} icon - Material icon name
- * @param {string} cssClass - Color class (text-success, text-warning, etc.)
- * @param {string} title - Tooltip text
+ * @param {object} view - signalView() result
  */
-function _setSignalIcon(recipientId, icon, cssClass, title) {
-	const statusEl = document.getElementById(`signal-status-${recipientId}`);
-	const iconEl = statusEl?.querySelector('.signal-status-icon');
-	if (!iconEl) return;
-
-	iconEl.textContent = icon;
-	iconEl.classList.remove('text-success', 'text-warning', 'text-body-secondary');
-	iconEl.classList.add(cssClass);
-	iconEl.title = title;
+function _setSignalState(recipientId, view) {
+	const stateEl = document.getElementById(`signal-status-${recipientId}`)?.querySelector('.signal-state');
+	if (!stateEl) return;
+	stateEl.outerHTML = signalStateHtml(view);
 }
-
 function applyCachedSignalStatus(recipients) {
 	for (const r of recipients) {
 		if (!r.phone) continue;
@@ -122,16 +132,61 @@ function applyCachedSignalStatus(recipients) {
 		// Skip if still pending (undefined)
 		if (cached === undefined) continue;
 
-		if (cached === true) {
-			_setSignalIcon(r.id, SIGNAL_ICONS.registered, 'text-success', 'Registered with Signal');
-		} else if (cached === false) {
-			_setSignalIcon(r.id, SIGNAL_ICONS.unregistered, 'text-warning', 'Not registered with Signal');
-		} else {
-			// null = unavailable (no Signal account linked)
-			_setSignalIcon(r.id, SIGNAL_ICONS.unavailable, 'text-body-secondary', 'No Signal account linked');
-		}
+		const view = signalView(cached);
+		_setSignalState(r.id, view);
 	}
 }
+
+/* ----- Recipients search (DESIGN.md, "Filter-as-you-type search") -----
+   Filtering runs in the browser only; names, addresses and numbers never reach URL, storage or logs. */
+const recipientSearchEl = (id) => document.getElementById('recipients-search' + id);
+
+function setRecipientSearchState(noMatch, hits, total) {
+	const input = recipientSearchEl('');
+	const clear = recipientSearchEl('-clear');
+	const searching = Boolean(input && window.JuListFilter.normalizeQuery(input.value) !== '');
+	if (clear && input) clear.hidden = input.value === '';
+	const empty = recipientSearchEl('-empty');
+	if (empty) empty.hidden = !noMatch;
+	const term = recipientSearchEl('-term');
+	if (term) term.textContent = noMatch ? '"' + input.value.trim() + '"' : '';
+	const status = recipientSearchEl('-status');
+	if (status) status.textContent = searching && total > 0 ? window.JuListFilter.statusMessage(hits, 'recipient') : '';
+	const table = document.querySelector('#recipients-list table');
+	if (table) table.hidden = noMatch;
+}
+
+// Applies the current query to the rendered rows; also re-run after every list reload.
+function applyRecipientSearch() {
+	const input = recipientSearchEl('');
+	if (!input || !window.JuListFilter) return;
+	const needle = window.JuListFilter.normalizeQuery(input.value);
+	const rows = document.querySelectorAll('#recipients-list tbody tr[data-search]');
+	const hits = window.JuListFilter.filterRows(rows, needle);
+	setRecipientSearchState(needle !== '' && rows.length > 0 && hits === 0, hits, rows.length);
+}
+
+function clearRecipientSearch(focus) {
+	const input = recipientSearchEl('');
+	if (!input) return;
+	input.value = '';
+	applyRecipientSearch();
+	if (focus) input.focus();
+}
+
+// Delegated: the field lives in a fragment that HTMX loads after this script.
+document.addEventListener('input', (event) => {
+	if (event.target.id === 'recipients-search') applyRecipientSearch();
+});
+document.addEventListener('keydown', (event) => {
+	if (event.target.id === 'recipients-search' && event.key === 'Escape' && event.target.value !== '') {
+		event.preventDefault();
+		clearRecipientSearch(true);
+	}
+});
+document.addEventListener('click', (event) => {
+	if (event.target.closest('#recipients-search-clear, #recipients-search-reset')) clearRecipientSearch(true);
+});
 
 // Load Recipients List
 let recipientsGeneration = 0;
@@ -156,9 +211,10 @@ async function loadRecipients() {
 		if (generation !== recipientsGeneration) return;
 		
 		if (recipients.length === 0) {
+			setRecipientSearchState(false, 0, 0);
 			container.innerHTML = `
 				<div class="text-center text-body-secondary py-4">
-					<span class="material-icons mb-2" style="font-size: 48px;">notifications_off</span>
+					<span class="material-icons ju-icon-48 mb-2">notifications_off</span>
 					<p class="mb-0">No recipients configured yet.</p>
 				</div>
 			`;
@@ -181,33 +237,15 @@ async function loadRecipients() {
 		
 			for (const r of recipients) {
 				const statusBadge = r.is_enabled 
-					? '<span class="badge ju-status-badge--success">Enabled</span>'
-					: '<span class="badge ju-status-badge--neutral">Disabled</span>';
+					? JuStatusDot.html('success', 'Enabled')
+					: JuStatusDot.html('neutral', 'Disabled');
 				
 				// Signal column - with placeholder for verification status
 				const cachedSignal = _getCachedSignalRegistration(r.phone);
-				let signalIcon, signalClass, signalTitle;
-				if (cachedSignal === true) {
-					signalIcon = SIGNAL_ICONS.registered;
-					signalClass = 'text-success';
-					signalTitle = 'Registered with Signal';
-				} else if (cachedSignal === false) {
-					signalIcon = SIGNAL_ICONS.unregistered;
-					signalClass = 'text-warning';
-					signalTitle = 'Not registered with Signal';
-				} else if (cachedSignal === null) {
-					signalIcon = SIGNAL_ICONS.unavailable;
-					signalClass = 'text-body-secondary';
-					signalTitle = 'No Signal account linked';
-				} else {
-					signalIcon = SIGNAL_ICONS.pending;
-					signalClass = 'text-body-secondary';
-					signalTitle = 'Checking...';
-				}
+				const signalCellView = signalView(cachedSignal);
 				const signalCell = r.phone
-					? `<span class="d-flex align-items-center gap-1" id="signal-status-${r.id}">
-						<span class="material-icons signal-status-icon ${signalClass}" style="font-size: 16px;"
-							title="${signalTitle}">${signalIcon}</span>
+					? `<span class="d-flex flex-wrap align-items-center column-gap-2" id="signal-status-${r.id}">
+						${signalStateHtml(signalCellView)}
 						<span class="small">${escapeHtml(r.phone)}</span>
 					   </span>`
 					: '<span class="text-body-secondary">—</span>';
@@ -215,17 +253,18 @@ async function loadRecipients() {
 			// Email column
 			const emailCell = r.email 
 				? `<span class="d-flex align-items-center gap-1">
-					<span class="material-icons text-success" style="font-size: 16px;">check_circle</span>
+					<span class="material-icons text-body-secondary ju-icon-14" aria-hidden="true">check_circle</span>
 					<span class="small">${escapeHtml(r.email)}</span>
 				   </span>`
 				: '<span class="text-body-secondary">—</span>';
 			
 				html += `
-					<tr data-recipient-id="${r.id}">
+					<tr data-recipient-id="${r.id}" data-search="${escapeHtml([r.name, r.email, r.phone].filter(Boolean).join(' '))}">
 						<td data-label="Name" class="ju-cell-text">
 							<span class="d-flex align-items-center gap-2">
-								<span class="material-icons" style="font-size: 20px;">person</span>
+								<span class="material-icons ju-icon-20" aria-hidden="true">person</span>
 								<strong>${escapeHtml(r.name)}</strong>
+								${r.is_user_linked ? '<span class="badge bg-secondary">Application User</span>' : ''}
 						</span>
 					</td>
 					<td data-label="Signal">${signalCell}</td>
@@ -246,6 +285,14 @@ async function loadRecipients() {
 								aria-label="Send test message to ${escapeHtml(r.name)}">
 								<span class="material-icons" aria-hidden="true">send</span>
 							</button>
+							${r.phone ? `<button type="button" class="btn btn-sm btn-icon btn-outline-secondary recheck-signal-btn"
+								data-recipient-id="${r.id}"
+								data-recipient-name="${escapeHtml(r.name)}"
+								data-recipient-phone="${escapeHtml(r.phone)}"
+								title="Re-check Signal"
+								aria-label="Re-check Signal for ${escapeHtml(r.name)}">
+								<span class="material-icons" aria-hidden="true">sync</span>
+							</button>` : ''}
 							<button class="btn btn-sm btn-icon btn-outline-secondary edit-recipient-btn"
 								data-recipient-id="${r.id}"
 								title="Edit recipient">
@@ -254,7 +301,7 @@ async function loadRecipients() {
 							<button class="btn btn-sm btn-icon btn-outline-danger delete-recipient-btn"
 								data-recipient-id="${r.id}"
 								data-recipient-name="${escapeHtml(r.name)}"
-								title="Delete recipient">
+								${r.is_user_linked ? `data-user-linked="1" disabled aria-label="Cannot delete ${escapeHtml(r.name)}: it belongs to an application user" title="Belongs to an application user. Delete the user to remove it."` : 'title="Delete recipient"'}>
 								<span class="material-icons">delete</span>
 							</button>
 						</div>
@@ -265,6 +312,7 @@ async function loadRecipients() {
 		
 		html += '</tbody></table>';
 			container.innerHTML = html;
+		applyRecipientSearch();
 		
 		// Event delegation - remove old listener and re-bind (handles HTMX swaps)
 		container.removeEventListener('click', handleRecipientListClick);
@@ -279,7 +327,7 @@ async function loadRecipients() {
 		console.error('Load recipients error:', error);
 		container.innerHTML = `
 			<div class="text-center text-danger py-4">
-				<span class="material-icons mb-2" style="font-size: 48px;">error</span>
+				<span class="material-icons ju-icon-48 mb-2">error</span>
 				<p class="mb-0">Failed to load recipients</p>
 			</div>
 		`;
@@ -293,8 +341,11 @@ async function handleRecipientListClick(e) {
 	const toggleBtn = e.target.closest('.toggle-recipient-btn');
 	
 	const testBtn = e.target.closest('.test-recipient-btn');
+	const recheckBtn = e.target.closest('.recheck-signal-btn');
 	if (testBtn) {
 		await sendTestFromList(testBtn);
+	} else if (recheckBtn) {
+		await recheckSignalFromList(recheckBtn);
 	} else if (toggleBtn) {
 		toggleBtn.disabled = true;
 		try {
@@ -305,6 +356,7 @@ async function handleRecipientListClick(e) {
 	} else if (editBtn) {
 		await editRecipient(Number(editBtn.dataset.recipientId));
 	} else if (deleteBtn) {
+		if (deleteBtn.disabled || deleteBtn.dataset.userLinked === '1') return;
 		await deleteRecipient(Number(deleteBtn.dataset.recipientId), deleteBtn.dataset.recipientName);
 	}
 }
@@ -357,7 +409,48 @@ function showAllSignalStatusAsUnavailable(recipients) {
 		if (!r.phone) continue;
 		if (_getCachedSignalRegistration(r.phone) !== undefined) continue;
 		// Use 'unknown' icon for API failure (different from 'unavailable' = no Signal account)
-		_setSignalIcon(r.id, SIGNAL_ICONS.unknown, 'text-body-secondary', 'Verification failed');
+		_setSignalState(r.id, { tone: 'neutral', word: 'Check failed', title: 'Verification failed' });
+	}
+}
+
+// Explicit "Re-check": asks the backend to bypass its 24h cache for this one recipient.
+// The number is never sent: the server reads it from the stored recipient.
+// aria-disabled (not disabled) keeps keyboard focus on the button while it works.
+async function recheckSignalFromList(btn) {
+	if (btn.getAttribute('aria-disabled') === 'true') return;
+	const recipientId = Number(btn.dataset.recipientId);
+	const phone = btn.dataset.recipientPhone;
+	const name = btn.dataset.recipientName || 'recipient';
+	const icon = btn.querySelector('.material-icons');
+	btn.setAttribute('aria-disabled', 'true');
+	btn.setAttribute('aria-busy', 'true');
+	btn.classList.add('disabled');
+	_setSignalState(recipientId, signalView(undefined));
+	try {
+		const response = await window.apiFetch(`/recipients/${recipientId}/recheck-signal`, { method: 'POST' });
+		if (!response.ok) {
+			const message = await extractApiError(response, 'Signal check failed');
+			_setSignalState(recipientId, SIGNAL_FAILED_VIEW);
+			window.justUpToast.show(`${name} · Signal: ${message}`, 'warning');
+			return;
+		}
+		const data = await response.json();
+		const registered = data?.registered;
+		if (registered !== true && registered !== false && registered !== null) throw new Error('Unexpected response');
+		_setCachedSignalRegistration(phone, registered);
+		const view = signalView(registered);
+		const label = view.title;
+		_setSignalState(recipientId, view);
+		window.justUpToast.show(`${name} · Signal: ${label}`, registered === true ? 'success' : 'warning');
+	} catch (error) {
+		console.warn('Signal re-check failed:', error?.name);
+		_setSignalState(recipientId, SIGNAL_FAILED_VIEW);
+		window.justUpToast.show(`${name} · Signal: Check failed`, 'warning');
+	} finally {
+		if (icon) icon.textContent = 'sync';
+		btn.removeAttribute('aria-busy');
+		btn.removeAttribute('aria-disabled');
+		btn.classList.remove('disabled');
 	}
 }
 
@@ -368,6 +461,7 @@ async function addRecipient() {
 	const form = document.getElementById('add-recipient-form');
 	
 	if (!btn || !errorDiv || !form) return;
+	if (btn.disabled) return;
 	
 	const originalBtnText = btn.innerHTML;
 	const name = document.getElementById('recipient-name').value.trim();
@@ -388,13 +482,7 @@ async function addRecipient() {
 	errorDiv.classList.add('d-none');
 	
 	try {
-		const payload = { 
-			name, 
-			is_enabled: isEnabled,
-			enable_for_all_targets: enableForAllTargets,
-			phone: signalEnabled ? phone : null,
-			email: emailEnabled ? email : null
-		};
+		const payload = recipientPayload({ name, isEnabled, enableForAllTargets, signalEnabled, emailEnabled, phone, email });
 		
 		const response = await window.apiFetch('/recipients', {
 			method: 'POST',
@@ -404,22 +492,13 @@ async function addRecipient() {
 		
 		if (response.ok) {
 			const data = await response.json();
-			const modal = document.getElementById('addRecipientModal');
-			if (modal) {
-				const bsModal = bootstrap.Modal.getInstance(modal);
-				if (bsModal) bsModal.hide();
-			}
+			bootstrap.Modal.getInstance(document.getElementById('addRecipientModal'))?.hide();
 			form.reset();
+			// A new entry must not stay hidden behind an active filter.
+			clearRecipientSearch(false);
 			loadRecipients();
 			
-			// Show warning toast if phone not registered with Signal
-			if (data.warnings && data.warnings.length > 0) {
-				for (const warning of data.warnings) {
-					showToast(warning, 'warning');
-				}
-			} else {
-				showToast('Recipient added successfully', 'success');
-			}
+			toastSaveResult(data, 'Recipient added successfully');
 		} else {
 			const errorMsg = await extractApiError(response, 'Failed to add recipient');
 			errorDiv.textContent = errorMsg;
@@ -476,6 +555,8 @@ async function editRecipient(recipientId) {
 		if (enabledInput) enabledInput.checked = r.is_enabled;
 		const allTargetsInput = document.getElementById('edit-recipient-all-targets');
 		if (allTargetsInput) allTargetsInput.checked = Boolean(r.enable_for_all_targets);
+		const userNote = document.getElementById('edit-recipient-user-note');
+		if (userNote) userNote.hidden = !r.is_user_linked;
 		if (errorDiv) errorDiv.classList.add('d-none');
 		
 		if (phoneInput) phoneInput.value = r.phone || '';
@@ -488,6 +569,7 @@ async function editRecipient(recipientId) {
 			email: r.email || '',
 			allTargets: Boolean(r.enable_for_all_targets),
 			targetCount: r.targets?.length ?? 0,
+			userLinked: Boolean(r.is_user_linked),
 		};
 		_clearTestResult();
 		updateEditTestButtons();
@@ -500,7 +582,7 @@ async function editRecipient(recipientId) {
 		}
 	} catch (error) {
 		console.error('Edit recipient error:', error);
-		showToast('Failed to load recipient', 'danger');
+		window.justUpToast.show('Failed to load recipient', 'danger');
 	}
 }
 
@@ -559,8 +641,13 @@ async function sendRecipientTest(recipientId, channel, ui = {}) {
 			report(lines);
 			lines = await Promise.all(results.map(async (r, i) => {
 				if (r.state !== 'queued') return lines[i];
-				const final = await _pollTestStatus(recipientId, r.queue_id);
-				return { channel: r.channel, state: final.state, message: final.message };
+				try {
+					const final = await _pollTestStatus(recipientId, r.queue_id);
+					return { channel: r.channel, state: final.state, message: final.message };
+				} catch (pollError) {
+					console.warn('Test delivery status failed:', pollError);
+					return { channel: r.channel, state: 'pending', message: 'Delivery status unavailable. Check the Spooler log for the result.' };
+				}
 			}));
 		}
 	} catch (error) {
@@ -575,8 +662,8 @@ async function sendRecipientTest(recipientId, channel, ui = {}) {
 }
 
 const TEST_STATE_VIEW = {
-	sending: { icon: 'hourglass_empty', cls: 'text-body-secondary' },
-	pending: { icon: 'hourglass_empty', cls: 'text-warning' },
+	sending: { icon: null, cls: 'text-body-secondary' },
+	pending: { icon: null, cls: 'text-warning' },
 	sent: { icon: 'check_circle', cls: 'text-success' },
 	failed: { icon: 'error', cls: 'text-danger' },
 };
@@ -595,12 +682,22 @@ function renderTestResult(lines) {
 		const row = document.createElement('div');
 		row.className = `ju-test-result-line ${view.cls}`;
 		const icon = document.createElement('span');
-		icon.className = 'material-icons ju-icon-inline';
 		icon.setAttribute('aria-hidden', 'true');
-		icon.textContent = view.icon;
-		const text = document.createElement('span');
-		text.textContent = `${TEST_CHANNEL_LABELS[line.channel] || line.channel}: ${line.message}`;
-		row.append(icon, text);
+		if (line.state === 'sending') {
+			// A running test is S6 (DC-STATE): spinner and word, aria-busy, no icon glyph.
+			icon.className = 'spinner-border spinner-border-sm';
+			row.setAttribute('aria-busy', 'true');
+		} else {
+			icon.className = 'material-icons ju-icon-inline';
+			icon.textContent = view.icon;
+		}
+		const message = `${TEST_CHANNEL_LABELS[line.channel] || line.channel}: ${line.message}`;
+		if (line.state === 'pending') row.append(window.JuWarning.create(message));
+		else {
+			const text = document.createElement('span');
+			text.textContent = message;
+			row.append(icon, text);
+		}
 		box.appendChild(row);
 	}
 }
@@ -646,7 +743,7 @@ async function sendTestFromList(btn) {
 			for (const line of lines) {
 				if (line.state === 'sending') continue;
 				const label = TEST_CHANNEL_LABELS[line.channel] || line.channel;
-				showToast(`${name} · ${label}: ${line.message}`, line.state === 'sent' ? 'success' : 'warning');
+				window.justUpToast.show(`${name} · ${label}: ${line.message}`, line.state === 'sent' ? 'success' : 'warning');
 			}
 		},
 	});
@@ -685,7 +782,7 @@ async function saveRecipient() {
 	
 	// Validation
 	const editModal = document.getElementById('editRecipientModal');
-	if (window.JuFieldErrors.show(editModal, validateRecipientInput({ name, signalEnabled, emailEnabled, phone, email }, 'edit-recipient-'))) {
+	if (window.JuFieldErrors.show(editModal, validateRecipientInput({ name, signalEnabled, emailEnabled, phone, email, userLinked: _editSaved.userLinked, isEnabled }, 'edit-recipient-'))) {
 		return;
 	}
 	
@@ -705,13 +802,7 @@ async function saveRecipient() {
 		}
 		btn.disabled = true;
 
-		const payload = {
-			name,
-			is_enabled: isEnabled,
-			enable_for_all_targets: enableForAllTargets,
-			phone: signalEnabled ? phone : null,
-			email: emailEnabled ? email : null
-		};
+		const payload = recipientPayload({ name, isEnabled, enableForAllTargets, signalEnabled, emailEnabled, phone, email });
 		
 		const response = await window.apiFetch(`/recipients/${recipientId}`, {
 			method: 'PATCH',
@@ -724,21 +815,15 @@ async function saveRecipient() {
 			bootstrap.Modal.getInstance(document.getElementById('editRecipientModal'))?.hide();
 			loadRecipients();
 			
-			// Show warning toast if phone not registered with Signal
-			if (data.warnings && data.warnings.length > 0) {
-				for (const warning of data.warnings) {
-					showToast(warning, 'warning');
-				}
-			} else {
-				showToast('Recipient updated successfully', 'success');
-			}
+			toastSaveResult(data, 'Recipient updated successfully');
 		} else {
 			const errorMsg = await extractApiError(response, 'Failed to update recipient');
 			errorDiv.textContent = errorMsg;
 			errorDiv.classList.remove('d-none');
 		}
 	} catch (error) {
-		errorDiv.textContent = 'Network error: ' + error.message;
+		console.error('Save recipient error:', error);
+		errorDiv.textContent = 'Network error. Please check your connection.';
 		errorDiv.classList.remove('d-none');
 	} finally {
 		_saveInFlight = false;
@@ -749,28 +834,13 @@ async function saveRecipient() {
 
 // Ask for confirmation in a Bootstrap modal; resolves true only on explicit confirm.
 function confirmDeleteRecipient(recipientName) {
-	const modalEl = document.getElementById('deleteRecipientModal');
-	const confirmBtn = document.getElementById('confirm-delete-recipient-btn');
-	if (!modalEl || !confirmBtn || !window.bootstrap?.Modal) return Promise.resolve(false);
-	document.getElementById('delete-recipient-name').textContent = `"${recipientName}"`;
-	const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
-	return new Promise((resolve) => {
-		let confirmed = false;
-		const onConfirm = () => {
-			confirmed = true;
-			modal.hide();
-		};
-		confirmBtn.addEventListener('click', onConfirm, { once: true });
-		modalEl.addEventListener('hidden.bs.modal', () => {
-			confirmBtn.removeEventListener('click', onConfirm);
-			resolve(confirmed);
-		}, { once: true });
-		modal.show();
-	});
+	return window.confirmViaModal({ modalId: 'deleteRecipientModal', confirmId: 'confirm-delete-recipient-btn', nameId: 'delete-recipient-name', name: recipientName });
 }
 
 // Delete Recipient
 async function deleteRecipient(recipientId, recipientName) {
+	const row = document.querySelector(`.delete-recipient-btn[data-recipient-id="${recipientId}"]`);
+	if (row?.dataset.userLinked === '1') return; // the server refuses it as well (409)
 	if (!(await confirmDeleteRecipient(recipientName))) {
 		return;
 	}
@@ -781,13 +851,13 @@ async function deleteRecipient(recipientId, recipientName) {
 		
 		if (response.ok) {
 			loadRecipients();
-			showToast('Recipient deleted', 'success');
+			window.justUpToast.show('Recipient deleted', 'success');
 		} else {
-			showToast('Failed to delete recipient', 'danger');
+			window.justUpToast.show(await extractApiError(response, 'Failed to delete recipient'), 'danger');
 		}
 	} catch (error) {
 		console.error('Delete recipient error:', error);
-		showToast('Network error. Please check your connection.', 'danger');
+		window.justUpToast.show('Network error. Please check your connection.', 'danger');
 	}
 }
 
@@ -802,59 +872,14 @@ async function toggleRecipientEnabled(recipientId, currentlyEnabled) {
 		
 		if (response.ok) {
 			loadRecipients();
-			showToast(currentlyEnabled ? 'Recipient paused' : 'Recipient enabled', 'success');
+			window.justUpToast.show(currentlyEnabled ? 'Recipient paused' : 'Recipient enabled', 'success');
 		} else {
-			showToast('Failed to update recipient', 'danger');
+			window.justUpToast.show(await extractApiError(response, 'Failed to update recipient'), 'danger');
 		}
 	} catch (error) {
 		console.error('Toggle recipient error:', error);
-		showToast('Network error. Please check your connection.', 'danger');
+		window.justUpToast.show('Network error. Please check your connection.', 'danger');
 	}
-}
-
-// Utility: Show Toast with appropriate icon (XSS-safe)
-function showToast(message, type = 'success') {
-	// Use global toast system if available (consistent with rest of app)
-	if (window.justUpToast) {
-		const method = type === 'danger' ? 'error' : type;
-		if (window.justUpToast[method]) {
-			window.justUpToast[method](message);
-			return;
-		}
-	}
-
-	// Fallback: local toast implementation
-	const toastEl = document.getElementById('settings-toast');
-	if (!toastEl) return;
-	
-	const toastBody = toastEl.querySelector('.toast-body');
-	if (!toastBody) return;
-	
-	const icons = {
-		success: 'check_circle',
-		warning: 'warning',
-		danger: 'error'
-	};
-	const icon = icons[type] || 'info';
-	
-	// XSS-safe: build DOM nodes instead of innerHTML
-	// Normalize: info -> success (no cyan toasts)
-	const normalizedType = (type === 'info') ? 'success' : type;
-	toastEl.className = `toast align-items-center text-bg-${normalizedType} border-0`;
-	toastBody.innerHTML = '';
-	
-	const iconSpan = document.createElement('span');
-	iconSpan.className = 'material-icons me-2';
-	iconSpan.textContent = icon;
-	
-	const textSpan = document.createElement('span');
-	textSpan.textContent = message;  // Safe: uses textContent
-	
-	toastBody.appendChild(iconSpan);
-	toastBody.appendChild(textSpan);
-	
-	const toast = new bootstrap.Toast(toastEl);
-	toast.show();
 }
 
 // Event Listeners
@@ -865,18 +890,6 @@ document.addEventListener('DOMContentLoaded', () => {
 			loadRecipients();
 		}
 	});
-	
-	// Add recipient button
-	const addRecipientBtn = document.getElementById('add-recipient-btn');
-	if (addRecipientBtn) {
-		addRecipientBtn.addEventListener('click', addRecipient);
-	}
-	
-	// Edit recipient button
-	const editRecipientBtn = document.getElementById('edit-recipient-btn');
-	if (editRecipientBtn) {
-		editRecipientBtn.addEventListener('click', saveRecipient);
-	}
 	
 	for (const id of ['addRecipientModal', 'editRecipientModal']) {
 		const dialog = document.getElementById(id);
@@ -897,7 +910,7 @@ document.addEventListener('DOMContentLoaded', () => {
 			input.addEventListener('change', updateEditTestButtons);
 		}
 	}
-	// Form submit prevention
+	// The submit buttons are type="submit" form=..., so the form submit is the only entry point
 	const addRecipientForm = document.getElementById('add-recipient-form');
 	if (addRecipientForm) {
 		addRecipientForm.addEventListener('submit', (e) => {
@@ -919,10 +932,14 @@ document.addEventListener('DOMContentLoaded', () => {
 window.SettingsPage = window.SettingsPage || {};
 window.SettingsPage.Recipients = {
 	loadRecipients,
+	syncChannelFields,
+	recipientPayload,
+	validateRecipientInput,
 	addRecipient,
 	editRecipient,
 	saveRecipient,
 	deleteRecipient,
 	sendRecipientTest,
 	updateEditTestButtons,
+	recheckSignalFromList,
 };

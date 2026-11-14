@@ -87,7 +87,9 @@
 		var dismiss = e.target.closest('.ju-notif-dismiss-button');
 		if (dismiss) {
 			e.preventDefault();
-			dismiss.disabled = true;
+			// aria-busy instead of `disabled`: a disabled button drops keyboard focus (DC-INT-3).
+			if (dismiss.getAttribute('aria-busy') === 'true') return;
+			dismiss.setAttribute('aria-busy', 'true');
 			window.apiFetch('/ui/notifications/' + encodeURIComponent(dismiss.dataset.notificationId) + '/dismiss', {
 				method: 'POST'
 			}).then(function (response) {
@@ -95,7 +97,7 @@
 				changed();
 				window.location.reload();
 			}).catch(function () {
-				dismiss.disabled = false;
+				dismiss.removeAttribute('aria-busy');
 				toastError('Notification could not be deleted');
 			});
 			return;

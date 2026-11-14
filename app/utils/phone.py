@@ -11,6 +11,8 @@ from __future__ import annotations
 import re
 
 _E164_RE = re.compile(r"\+[1-9][0-9]{7,14}\Z")
+# ASCII digits, '+', and the separators space, tab, '-', '.', '/', '(' and ')'
+_ALLOWED_RE = re.compile(r"[0-9+ \t\-./()]+\Z")
 
 
 def normalize_phone(
@@ -26,11 +28,14 @@ def normalize_phone(
     - '+' prefix   -> treated as international
     - '00' prefix  -> converted to '+'
     - otherwise    -> default_country is prepended
+    - allowed separators: space, tab, '-', '.', '/', '(' and ')'; any other character
+      (letters, 'ext'/'x', NBSP, ',', ';', '#', '*') is rejected
 
     Args:
         phone: Input phone number
         default_country: Country code with leading '+'
-        strict: If True, invalid formats raise ValueError
+        strict: If True, invalid formats raise ValueError; if False, unsupported input is
+            returned unchanged (never silently altered)
 
     Returns:
         Phone number in E.164 format
@@ -48,8 +53,14 @@ def normalize_phone(
         if strict:
             raise ValueError(f"Non-ASCII digits in phone number: {phone}")
         return phone
-    # Keep ASCII digits and '+'
-    p = re.sub(r"[^0-9+]", "", phone.strip())
+    # Only digits, '+' and explicit separators are allowed; letters, extensions and anything else
+    # are rejected, never dropped (a dropped character could address another recipient)
+    stripped = phone.strip()
+    if not _ALLOWED_RE.fullmatch(stripped):
+        if strict:
+            raise ValueError(f"Unsupported characters in phone number: {phone!r}")
+        return phone
+    p = re.sub(r"[^0-9+]", "", stripped)
 
     # '+' must appear only once and only at the beginning
     if p.count("+") > 1 or ("+" in p and not p.startswith("+")):

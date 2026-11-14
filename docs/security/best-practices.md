@@ -18,13 +18,13 @@
 ## HTTPS
 
 Terminate TLS at a reverse proxy and enter its direct address in
-`UPMON_TRUSTED_PROXIES`. See [Reverse proxy](../configuration/reverse-proxy.md).
+`TRUSTED_PROXIES`. See [Reverse proxy](../configuration/reverse-proxy.md).
 
 ## Users
 
 - Give admin rights sparingly.
 - Change the initial admin password at once.
-- Use **Disable Authentication** only on an isolated network.
+- Keep **Require Authentication** (Settings > General) on; switch it off only on an isolated network.
 
 ## External services
 
@@ -32,19 +32,27 @@ justUp! contacts these services:
 
 | Service | Purpose | Can be disabled |
 | --- | --- | --- |
-| ipwho.is, ip-api Pro (with key) | Hop geolocation fallback when GeoLite2 is not precise enough (public IPs only, HTTPS) | Yes (`online_geo_fallback_enabled`) |
+| ipwho.is, ip-api Pro (with key) | Enhanced Accuracy: hop geolocation when GeoLite2 is not precise enough (public IPs only, HTTPS) | Yes, off by default (`online_geo_fallback_enabled`) |
 | Provider lookup | ASN and ISP of target IPs | Yes (Settings > Network) |
-| MaxMind | GeoLite2 update | Yes (`geoip_auto_update`) |
+| icanhazip.com, ipify.org | Public outbound IPs card (Settings > Network): the services see the server's public address; run on tab open and Refresh, not stored | No (no request while the Network tab is closed) |
+| github.com (P3TERX GeoLite.mmdb mirror) | GeoLite2 City and ASN database download | Yes (`geoip_auto_update`) |
 | api.github.com | Daily release check | No |
 | jsDelivr | Country flag images in the web UI | No (falls back to country codes) |
 | flagcdn.com | Country flag images in PDF reports (optional, PNG over HTTPS) | No (falls back to the country code) |
 
 PDF reports request only `https://flagcdn.com/48x36/<code>.png` for the countries shown. flagcdn.com sees the
-server's public IP and which countries are requested, never target or hop addresses. Flags are cached
-locally; if the service is unreachable the report shows the country code only.
+server's public IP and which countries are requested, never target or hop addresses. Flags are not cached
+and are fetched again for every report; if the service is unreachable the report shows the country code only.
 
 Block outbound access at the network level if a service is not acceptable.
-GeoLite2 needs a MaxMind account and license key.
+The GeoLite2 download needs no MaxMind account or license key; check the GeoLite2 license terms for your use.
+This product includes GeoLite2 Data created by MaxMind, available from <https://www.maxmind.com>.
+
+## Port scans
+
+Only administrators can start Nmap scans. Scan hosts you are authorized to scan; scans can
+trigger alerts at the target. See
+[Network monitoring with Nmap](../features/network-monitoring.md#security-and-operations).
 
 ## Updates
 

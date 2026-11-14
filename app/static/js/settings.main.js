@@ -13,6 +13,7 @@ import { DOM } from './settings.core.js';
 import { initSignal, toggleSignalPanel, loadSignalStatus } from './settings.signal.js';
 import { initStorage } from './settings.storage.js';
 import { initTagInputs } from './utils/tag-input.js';
+import { initPublicEgress } from './settings.public-egress.js';
 
 
 function initTooltips() {
@@ -21,46 +22,6 @@ function initTooltips() {
         bootstrap.Tooltip.getOrCreateInstance(el);
     });
 }
-
-// Tabs: horizontal scroll strip (edge fade state, keep active tab visible)
-
-function initSettingsTabStrip() {
-    const tabs = document.getElementById('settingsTabs');
-    if (!tabs || tabs.dataset.stripBound === '1') return;
-    tabs.dataset.stripBound = '1';
-
-    const EDGE_SLOP_PX = 1;
-    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
-
-    const updateEdges = () => {
-        const maxScroll = tabs.scrollWidth - tabs.clientWidth;
-        if (maxScroll <= EDGE_SLOP_PX) {
-            tabs.classList.add('is-at-start', 'is-at-end');
-            return;
-        }
-        tabs.classList.toggle('is-at-start', tabs.scrollLeft <= EDGE_SLOP_PX);
-        tabs.classList.toggle('is-at-end', tabs.scrollLeft >= maxScroll - EDGE_SLOP_PX);
-    };
-
-    // Scroll only the strip (not the page) so the active tab is fully visible.
-    const revealTab = (tab) => {
-        if (!tab) return;
-        const left = tab.offsetLeft - (tabs.clientWidth - tab.offsetWidth) / 2;
-        tabs.scrollTo({ left: Math.max(0, left), behavior: reduceMotion.matches ? 'auto' : 'smooth' });
-    };
-
-    tabs.addEventListener('scroll', updateEdges, { passive: true });
-    window.addEventListener('resize', updateEdges);
-    tabs.addEventListener('shown.bs.tab', (e) => revealTab(e.target));
-    tabs.addEventListener('focusin', (e) => {
-        if (e.target.matches?.('[role="tab"]')) revealTab(e.target);
-    });
-    updateEdges();
-    // Initial tab may have been restored from the URL hash.
-    const active = tabs.querySelector('[role="tab"].active');
-    if (active) tabs.scrollLeft = Math.max(0, active.offsetLeft - (tabs.clientWidth - active.offsetWidth) / 2);
-}
-
 
 function initRegisteredAccountDisplay(senderNumber) {
     if (!senderNumber) return;
@@ -89,20 +50,20 @@ function initRegisteredAccountDisplay(senderNumber) {
 
 document.addEventListener('DOMContentLoaded', () => {
     initTooltips();
-	initSettingsTabStrip();
 
     // Re-init modules after HTMX fragments load (tabs are lazy-loaded)
-    document.body.addEventListener('htmx:afterSettle', () => {
+    document.body.addEventListener('htmx:afterSettle', (event) => {
         initTooltips();
-        initSignal();
+        if (event.target?.id === 'signal-pane') initSignal();
         initStorage();
         initTagInputs();
+        initPublicEgress();
     });
     
     // Initialize all modules (for non-HTMX loaded content)
-    initSignal();
     initStorage();
     initTagInputs();
+    initPublicEgress();
     
     // Note: Settings and storage stats are loaded via HTMX fragments,
     // not via direct API calls (which would require auth)

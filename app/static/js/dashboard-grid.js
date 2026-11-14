@@ -89,7 +89,7 @@
 		if (!response.ok) {
 			let detail = '';
 			try { detail = (await response.json()).detail; } catch (e) { /* non-JSON error body */ }
-			throw new Error(typeof detail === 'string' && detail ? detail : `Request failed (${response.status})`);
+			throw new Error(window.JuApiError.message(detail, `Request failed (${response.status})`));
 		}
 		return response.json();
 	}
@@ -144,8 +144,6 @@
 		return layout;
 	}
 
-	// Two passes: park every widget far down first, then move it to its row, so a widget does not
-	// collide with neighbours still at the template position and shove them around.
 	// GridStack's own row bound: settled layout plus the reserve while editing, the layout bound otherwise.
 	// Never 0: GridStack compacts the whole layout when its rows exceed the new bound; the open bound
 	// also has to cover the parking rows of applyLayout.
@@ -153,6 +151,8 @@
 		grid.updateOptions({ maxRow: editing ? grid.getRow() + EDIT_RESERVE_ROWS : NO_ROW_LIMIT });
 	}
 
+	// Two passes: park every widget far down first, then move it to its row, so a widget does not
+	// collide with neighbours still at the template position and shove them around.
 	function applyLayout(layout) {
 		applyingLayout = true;
 		limitRows(false); // parking rows and stored positions must not be clamped by the edit bound
@@ -263,7 +263,14 @@
 			scheduleFit();
 		});
 		if (document.fonts) document.fonts.ready.then(scheduleFit);
-		new MutationObserver(scheduleFit).observe(root, {
+		// GridStack re-appends every tile (_sortDom) at the end of each batchUpdate(false), i.e. after
+		// every fit. Reacting to that would re-run the fit forever, and the endless remove/insert
+		// drops keyboard focus to BODY (WebKit: the Tab sequence restarts, later stops stay unreachable).
+		const isTileReorder = (record) => record.target === root
+			&& [...record.addedNodes, ...record.removedNodes].every((node) => node.classList && node.classList.contains('grid-stack-item'));
+		new MutationObserver((records) => {
+			if (!records.every(isTileReorder)) scheduleFit();
+		}).observe(root, {
 			// Content swaps/text need a new fit. GridStack and edit-mode class toggles do not, and
 			// reacting to those during interaction can queue redundant layout passes and flicker.
 			subtree: true, childList: true, characterData: true,
@@ -399,6 +406,8 @@
 
 	function renderWidgetList() {
 		const list = $('dashboard-widgets-list');
+		// The rebuild drops the pressed button; keep focus inside the modal so Escape still reaches it.
+		const focusedId = list.contains(document.activeElement) ? document.activeElement.dataset.widgetId : null;
 		list.replaceChildren(
 			...DEFAULT_LAYOUT.map((def) => {
 				const visible = (widgetState.get(def.id) || {}).visible !== false;
@@ -410,12 +419,14 @@
 				button.type = 'button';
 				button.className = visible ? 'btn btn-sm btn-outline-secondary' : 'btn btn-sm btn-primary';
 				button.textContent = visible ? 'Remove' : 'Add';
+				button.dataset.widgetId = def.id;
 				button.setAttribute('aria-label', `${visible ? 'Remove' : 'Add'} widget: ${def.label}`);
 				button.addEventListener('click', () => toggleWidgetVisibility(def.id, !visible));
 				item.append(label, button);
 				return item;
 			})
 		);
+		if (focusedId) list.querySelector(`button[data-widget-id="${CSS.escape(focusedId)}"]`)?.focus();
 	}
 
 	function resetLayout() {
@@ -494,6 +505,17 @@
 			alwaysShowResizeHandle: true,
 			handle: '.dashboard-widget-handle',
 		}, '#dashboard-grid');
+		// GridStack re-appends every tile at the end of a batch; WebKit then drops focus to BODY.
+		const batchUpdate = grid.batchUpdate.bind(grid);
+		grid.batchUpdate = (flag) => {
+			const focused = document.activeElement;
+			const result = batchUpdate(flag);
+			if (flag === false && focused && focused !== document.body && root.contains(focused) &&
+				document.activeElement !== focused && focused.isConnected) focused.focus({ preventScroll: true });
+			return result;
+		};
+		// The template carries no geometry; place every tile from the registry before anything is revealed.
+		applyLayout(DEFAULT_LAYOUT.map(defaultEntry));
 
 		grid.on('change', onGridChange);
 		grid.on('dragstart resizestart', () => limitRows(true));

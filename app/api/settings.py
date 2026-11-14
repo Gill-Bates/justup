@@ -17,6 +17,7 @@ import tarfile
 import tempfile
 import threading
 from pathlib import Path
+from typing import Literal
 
 from fastapi import (
     APIRouter,
@@ -29,7 +30,7 @@ from fastapi import (
     Request,
     UploadFile,
 )
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, EmailStr
 from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
@@ -41,6 +42,8 @@ from ..models.users import verify_password
 from ..services.notifications.email_template import (
     DEFAULT_HTML_TEMPLATE,
     DEFAULT_SUBJECT,
+    EMAIL_TEMPLATE_HTML_KEY,
+    EMAIL_TEMPLATE_SUBJECT_KEY,
 )
 from ..services.notifications.smtp_settings import load_public_smtp_settings
 from ..utils import maintenance
@@ -63,7 +66,6 @@ from ..utils.backup import (
 from ..utils.client_ip import audit_client_ip
 from ..utils.constants import (
     DEFAULT_GEOIP_AUTO_UPDATE,
-    DEFAULT_METRICS_TIMEOUT_MINUTES,
     DEFAULT_PDF_PAGE_SIZE,
     DEFAULT_PURGE_ENABLED,
     VALID_PDF_PAGE_SIZES,
@@ -71,9 +73,10 @@ from ..utils.constants import (
 )
 from ..utils.deps import get_conn, get_tsdb_dir
 from ..utils.phone import mask_phone
+from ..utils.public_url import get_public_base_url, get_public_hostname, normalize_public_hostname, target_url
 from ..utils.rate_limit import RATE_LIMIT_HEAVY, rate_limit
 from ..utils.runtime_fields import NON_NULL_RUNTIME_KEYS, load_runtime_fields, validate_quality_targets
-from ..utils.settings_cache import invalidate_settings_cache, is_purge_enabled
+from ..utils.settings_cache import invalidate_settings_cache, is_pdf_export_enabled, is_purge_enabled
 from ..utils.smtp_readiness import SmtpReadiness, smtp_readiness
 from ..utils.storage_stats import compute_storage_stats
 from ..utils.time import utcnow
@@ -106,15 +109,13 @@ def _load(conn) -> Settings:
         geoip_auto_update=bool(sqlite_db.get_setting(conn, SettingKeys.GEOIP_AUTO_UPDATE, DEFAULT_GEOIP_AUTO_UPDATE)),
         use_utc_dashboard=bool(sqlite_db.get_setting(conn, SettingKeys.USE_UTC_DASHBOARD, False)),
         last_backup_at=sqlite_db.get_setting(conn, SettingKeys.LAST_BACKUP_AT, None),
+        public_hostname=get_public_hostname(conn),
         auth_disabled=bool(sqlite_db.get_setting(conn, SettingKeys.AUTH_DISABLED, False)),
         pdf_page_size=str(
             sqlite_db.get_setting(conn, SettingKeys.PDF_PAGE_SIZE, DEFAULT_PDF_PAGE_SIZE) or DEFAULT_PDF_PAGE_SIZE
         ).lower(),
+        pdf_export_enabled=is_pdf_export_enabled(conn),
         theme=sqlite_db.get_setting(conn, SettingKeys.THEME, "system"),
-        metrics_timeout_minutes=int(
-            sqlite_db.get_setting(conn, SettingKeys.METRICS_TIMEOUT_MINUTES, DEFAULT_METRICS_TIMEOUT_MINUTES)
-            or DEFAULT_METRICS_TIMEOUT_MINUTES
-        ),
         session_max_days=sqlite_db.get_session_max_days(conn),
         **load_runtime_fields(conn),
         **load_public_smtp_settings(conn),
@@ -130,6 +131,14 @@ def _encrypt_ip_api_key(value: str | None, encrypt):
     except Exception as e:
         _log.error("Failed to encrypt ip-api key: %s", type(e).__name__)
         raise HTTPException(status_code=500, detail="Failed to encrypt key") from e
+
+
+def _request_spooler(request: Request):
+    """Spooler singleton with a fresh-connection factory; a request-scoped conn would be closed under it."""
+    from ..services.notifications.spooler import get_spooler
+
+    db_path = request.app.state.db_path
+    return get_spooler(lambda: sqlite_db.connect(db_path))
 
 
 @router.get("", response_model=Settings)
@@ -159,6 +168,13 @@ def update_settings(payload: SettingsUpdate, conn=Depends(get_conn), _admin=Depe
             raise HTTPException(status_code=422, detail=f"{k} must not be null")
         if k == SettingKeys.QUALITY_TARGETS and value is not None:
             value = validate_quality_targets(value)
+        if k == SettingKeys.PUBLIC_HOSTNAME:
+            if value is None:
+                raise HTTPException(status_code=422, detail="public_hostname must not be null")
+            try:
+                value = normalize_public_hostname(value)
+            except ValueError as e:
+                raise HTTPException(status_code=422, detail=f"public_hostname: {e}") from e
         if k == SettingKeys.IP_API_KEY:
             value = _encrypt_ip_api_key(value, encrypt_secret)
         if k == SettingKeys.SESSION_MAX_DAYS and value is None:
@@ -170,7 +186,7 @@ def update_settings(payload: SettingsUpdate, conn=Depends(get_conn), _admin=Depe
             try:
                 value = encrypt_secret(value)
             except Exception as e:
-                _log.error("Failed to encrypt SMTP password: %s", e)
+                _log.error("Failed to encrypt SMTP password: %s", type(e).__name__)
                 raise HTTPException(status_code=500, detail="Failed to encrypt password") from e
         transformed[k] = value
 
@@ -245,7 +261,11 @@ class AuthToggleRequest(BaseModel):
 # Strict rate limit for security-critical action
 @router.post("/auth/toggle", dependencies=[Depends(rate_limit("5/minute"))])
 def toggle_auth(request: Request, body: AuthToggleRequest, conn=Depends(get_conn), admin=Depends(require_admin)):
-    """Enable or disable authentication (requires password confirmation)."""
+    """Switch "Require Authentication" (requires password confirmation).
+
+    The wire contract is unchanged: `disable=true` turns Require Authentication OFF,
+    `disable=false` turns it ON. The stored key stays `auth_disabled`.
+    """
     _verify_admin_password(conn, admin, body.password)
     if body.disable:
         _log.critical(
@@ -283,13 +303,12 @@ async def send_signal_test(request: Request, conn=Depends(get_conn), _admin=Depe
         ChannelType,
         NotificationType,
         SignalQueueLimitError,
-        get_spooler,
     )
 
     backend = get_signal_backend()
 
     # Get valid sender from signal-cli (THE authority), not from DB
-    configured_sender = sqlite_db.get_setting(conn, SettingKeys.SIGNAL_API_SENDER_NUMBER)
+    configured_sender = await run_in_threadpool(sqlite_db.get_setting, conn, SettingKeys.SIGNAL_API_SENDER_NUMBER)
     try:
         sender_number = await run_in_threadpool(backend.get_valid_sender, configured_sender)
     except SignalNotRegistered as exc:
@@ -300,13 +319,12 @@ async def send_signal_test(request: Request, conn=Depends(get_conn), _admin=Depe
 
     # Store the sender on first setup (no silent switch away from a configured sender)
     if not configured_sender:
-        sqlite_db.set_setting(conn, SettingKeys.SIGNAL_API_SENDER_NUMBER, sender_number)
+        await run_in_threadpool(sqlite_db.set_setting, conn, SettingKeys.SIGNAL_API_SENDER_NUMBER, sender_number)
 
     test_message = "🔔 justUp Signal Test\n\nIf you receive this message, your Signal integration is working correctly!"
 
     # Enqueue to spooler (all notifications go through spooler)
-    db_path = request.app.state.db_path
-    spooler = get_spooler(lambda: sqlite_db.connect(db_path))
+    spooler = await run_in_threadpool(_request_spooler, request)
 
     try:
         queue_id = await run_in_threadpool(
@@ -327,9 +345,7 @@ async def send_signal_test(request: Request, conn=Depends(get_conn), _admin=Depe
     return {"ok": True, "message": "Test message queued"}
 
 
-# ============================================================================
 # Signal Template Management
-# ============================================================================
 
 
 class SignalTemplateResponse(BaseModel):
@@ -357,15 +373,17 @@ def get_signal_template(conn=Depends(get_conn), _admin=Depends(require_admin)):
 @router.post("/signal/template")
 def update_signal_template(payload: SignalTemplateUpdate, conn=Depends(get_conn), _admin=Depends(require_admin)):
     """Update Signal templates (DOWN and/or UP)."""
-    if payload.down is not None:
-        if not payload.down.strip():
-            raise HTTPException(status_code=400, detail="DOWN template must not be empty")
-        sqlite_db.set_setting(conn, SettingKeys.SIGNAL_MESSAGE_TEMPLATE_DOWN, payload.down)
+    if payload.down is not None and not payload.down.strip():
+        raise HTTPException(status_code=400, detail="DOWN template must not be empty")
+    if payload.up is not None and not payload.up.strip():
+        raise HTTPException(status_code=400, detail="UP template must not be empty")
 
-    if payload.up is not None:
-        if not payload.up.strip():
-            raise HTTPException(status_code=400, detail="UP template must not be empty")
-        sqlite_db.set_setting(conn, SettingKeys.SIGNAL_MESSAGE_TEMPLATE_UP, payload.up)
+    # Validate everything first, then save both fields in one transaction (no partial update).
+    with sqlite_db.transaction(conn):
+        if payload.down is not None:
+            sqlite_db.set_setting(conn, SettingKeys.SIGNAL_MESSAGE_TEMPLATE_DOWN, payload.down, auto_commit=False)
+        if payload.up is not None:
+            sqlite_db.set_setting(conn, SettingKeys.SIGNAL_MESSAGE_TEMPLATE_UP, payload.up, auto_commit=False)
 
     return {"ok": True}
 
@@ -378,8 +396,9 @@ def reset_signal_template(conn=Depends(get_conn), _admin=Depends(require_admin))
         DEFAULT_SIGNAL_TEMPLATE_UP,
     )
 
-    sqlite_db.set_setting(conn, SettingKeys.SIGNAL_MESSAGE_TEMPLATE_DOWN, None)
-    sqlite_db.set_setting(conn, SettingKeys.SIGNAL_MESSAGE_TEMPLATE_UP, None)
+    with sqlite_db.transaction(conn):
+        sqlite_db.set_setting(conn, SettingKeys.SIGNAL_MESSAGE_TEMPLATE_DOWN, None, auto_commit=False)
+        sqlite_db.set_setting(conn, SettingKeys.SIGNAL_MESSAGE_TEMPLATE_UP, None, auto_commit=False)
 
     return SignalTemplateResponse(down=DEFAULT_SIGNAL_TEMPLATE_DOWN, up=DEFAULT_SIGNAL_TEMPLATE_UP)
 
@@ -438,13 +457,13 @@ async def _resolve_signal_sender(conn, admin: dict, password: str, backend) -> s
     from ..services.notifications.signal_errors import SignalTimeout, SignalUnavailable
 
     await run_in_threadpool(_verify_admin_password, conn, admin, password)
-    configured_sender = sqlite_db.get_setting(conn, SettingKeys.SIGNAL_API_SENDER_NUMBER)
+    configured_sender = await run_in_threadpool(sqlite_db.get_setting, conn, SettingKeys.SIGNAL_API_SENDER_NUMBER)
     try:
         accounts = await run_in_threadpool(backend.list_accounts)
     except (SignalUnavailable, SignalTimeout) as e:
         raise HTTPException(status_code=503, detail="Unable to inspect Signal accounts") from e
     if not accounts:
-        sqlite_db.set_setting(conn, SettingKeys.SIGNAL_API_SENDER_NUMBER, None)
+        await run_in_threadpool(sqlite_db.set_setting, conn, SettingKeys.SIGNAL_API_SENDER_NUMBER, None)
         return None
     if not configured_sender or configured_sender not in accounts:
         raise HTTPException(status_code=409, detail="Configured Signal sender does not match a local account")
@@ -495,7 +514,7 @@ async def unregister_phone(
         await run_in_threadpool(lambda: backend.unregister(sender_number=sender_number))
 
         # Clear the sender number from database after successful unregister
-        sqlite_db.set_setting(conn, SettingKeys.SIGNAL_API_SENDER_NUMBER, None)
+        await run_in_threadpool(sqlite_db.set_setting, conn, SettingKeys.SIGNAL_API_SENDER_NUMBER, None)
 
         _log.info("Phone number %s successfully unregistered from signal-cli", mask_phone(sender_number))
         return {"ok": True, "message": "Phone number successfully unregistered"}
@@ -503,7 +522,7 @@ async def unregister_phone(
     except SignalNotRegistered:
         # Account already not registered - still clear sender number and return success
         # (the desired end state is achieved)
-        sqlite_db.set_setting(conn, SettingKeys.SIGNAL_API_SENDER_NUMBER, None)
+        await run_in_threadpool(sqlite_db.set_setting, conn, SettingKeys.SIGNAL_API_SENDER_NUMBER, None)
         _log.info("Phone number %s was already unregistered", mask_phone(sender_number))
         return {"ok": True, "message": "Account was already unregistered"}
 
@@ -555,14 +574,14 @@ async def unlink_device(
         await run_in_threadpool(lambda: backend.unlink_device(sender_number=sender_number, delete_cache=True))
 
         # Clear the sender number from database
-        sqlite_db.set_setting(conn, SettingKeys.SIGNAL_API_SENDER_NUMBER, None)
+        await run_in_threadpool(sqlite_db.set_setting, conn, SettingKeys.SIGNAL_API_SENDER_NUMBER, None)
 
         _log.info("Device unlinked: %s", mask_phone(sender_number))
         return {"ok": True, "message": "Local Signal data removed; revoke the device in Signal on your primary phone"}
 
     except SignalNotRegistered:
         # Already unlinked - still clear sender and return success
-        sqlite_db.set_setting(conn, SettingKeys.SIGNAL_API_SENDER_NUMBER, None)
+        await run_in_threadpool(sqlite_db.set_setting, conn, SettingKeys.SIGNAL_API_SENDER_NUMBER, None)
         return {"ok": True, "message": "Device was already unlinked"}
 
     except (SignalUnavailable, SignalTimeout, SignalSendFailed) as e:
@@ -592,7 +611,20 @@ async def get_storage_stats(request: Request, _admin=Depends(require_admin)):
     }
 
 
-@router.get("/db-health")
+@router.get("/network/public-egress", dependencies=[Depends(rate_limit("12/minute"))])
+async def get_public_egress(refresh: bool = False, _admin=Depends(require_admin)):
+    """Observed public IPv4/IPv6 egress address of this server (read-only, never stored).
+
+    The addresses come from external HTTPS echo endpoints queried by the server itself, one connection per
+    address family. ``refresh`` skips a fresh cache but stays inside the rate limit and a minimum interval.
+    """
+    from ..services.public_egress import get_public_egress as lookup
+
+    result = await run_in_threadpool(lookup, refresh=refresh)
+    return JSONResponse(result, headers={"Cache-Control": "private, no-store"})
+
+
+@router.get("/db-health", dependencies=[Depends(rate_limit(RATE_LIMIT_HEAVY))])
 async def get_db_health(request: Request, quick_check: bool = False, _admin=Depends(require_admin)):
     """SQLite health: file/WAL size, free pages, queue backlog, connections.
 
@@ -775,7 +807,8 @@ async def restore_backup(
 
     CRITICAL: Requires password confirmation (most destructive operation).
     Validates HMAC signature from filename before restoring.
-    Streams upload to temp file to avoid OOM on large backups.
+    The body is capped earlier by RestoreBodyLimitMiddleware; Starlette spools the multipart
+    part before this handler runs, so the copy below only bounds the file size.
     """
 
     await run_in_threadpool(_verify_admin_password, conn, admin, password)
@@ -786,7 +819,7 @@ async def restore_backup(
     except BackupError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    # Stream upload to temp file to avoid OOM on large backups; file I/O runs in worker threads
+    # Copy the spooled upload in chunks (bounded memory); file I/O runs in worker threads
     fd, tmp_upload_str = tempfile.mkstemp(suffix=".tar.bz2")
     os.close(fd)
     tmp_upload_path = Path(tmp_upload_str)
@@ -912,7 +945,13 @@ async def restore_backup(
     background_tasks.add_task(restart_app)
 
     message = "Backup compatible. Restore successful. Application is restarting..."
-    if original_schema_version < migrated_schema_version:
+    schema_changed = original_schema_version != migrated_schema_version
+    if original_schema_version > migrated_schema_version:
+        message = (
+            f"Backup compatible; database schema reset from {original_schema_version} to "
+            f"{migrated_schema_version}. Restore successful. Application is restarting..."
+        )
+    elif schema_changed:
         message = (
             f"Backup compatible; database schema migrated from {original_schema_version} to "
             f"{migrated_schema_version}. Restore successful. Application is restarting..."
@@ -920,15 +959,13 @@ async def restore_backup(
     return {
         "ok": True,
         "message": message,
-        "migrated": original_schema_version < migrated_schema_version,
+        "migrated": schema_changed,
         "backup_schema_version": original_schema_version,
         "current_schema_version": migrated_schema_version,
     }
 
 
-# ============================================================================
 # Email Template Management
-# ============================================================================
 
 
 class EmailTemplateResponse(BaseModel):
@@ -964,19 +1001,19 @@ def update_email_template(payload: EmailTemplateUpdate, conn=Depends(get_conn), 
     """
     from ..services.notifications.email_template import LOGO_URL_PREVIEW
 
-    # Validate: subject must not be empty or whitespace-only
-    if payload.subject is not None:
-        if not payload.subject.strip():
-            raise HTTPException(status_code=400, detail="Subject must not be empty")
-        subject_save = payload.subject.replace(LOGO_URL_PREVIEW, "{{logo_url}}")
-        sqlite_db.set_setting(conn, "smtp_mail_template_subject", subject_save)
+    # Validate everything first, then save both fields in one transaction (no partial update).
+    if payload.subject is not None and not payload.subject.strip():
+        raise HTTPException(status_code=400, detail="Subject must not be empty")
+    if payload.html is not None and not payload.html.strip():
+        raise HTTPException(status_code=400, detail="HTML body must not be empty")
 
-    # Validate: HTML must not be empty or whitespace-only
-    if payload.html is not None:
-        if not payload.html.strip():
-            raise HTTPException(status_code=400, detail="HTML body must not be empty")
-        html_save = payload.html.replace(LOGO_URL_PREVIEW, "{{logo_url}}")
-        sqlite_db.set_setting(conn, "smtp_mail_template_html", html_save)
+    with sqlite_db.transaction(conn):
+        if payload.subject is not None:
+            subject_save = payload.subject.replace(LOGO_URL_PREVIEW, "{{logo_url}}")
+            sqlite_db.set_setting(conn, EMAIL_TEMPLATE_SUBJECT_KEY, subject_save, auto_commit=False)
+        if payload.html is not None:
+            html_save = payload.html.replace(LOGO_URL_PREVIEW, "{{logo_url}}")
+            sqlite_db.set_setting(conn, EMAIL_TEMPLATE_HTML_KEY, html_save, auto_commit=False)
 
     return {"ok": True}
 
@@ -985,11 +1022,12 @@ def update_email_template(payload: EmailTemplateUpdate, conn=Depends(get_conn), 
 def reset_email_template(conn=Depends(get_conn), _admin=Depends(require_admin)):
     """Reset email template to defaults by clearing custom values.
 
-    Sets template values to NULL so defaults are used on read.
-    This allows distinguishing between 'user accepted default' and 'never changed'.
+    Sets template values to NULL so defaults are used on read. A reset template reads like one that was
+    never changed: the NULL does not record whether the user once accepted the default.
     """
-    sqlite_db.set_setting(conn, "smtp_mail_template_subject", None)
-    sqlite_db.set_setting(conn, "smtp_mail_template_html", None)
+    with sqlite_db.transaction(conn):
+        sqlite_db.set_setting(conn, EMAIL_TEMPLATE_SUBJECT_KEY, None, auto_commit=False)
+        sqlite_db.set_setting(conn, EMAIL_TEMPLATE_HTML_KEY, None, auto_commit=False)
 
     return EmailTemplateResponse(
         subject=DEFAULT_SUBJECT,
@@ -1002,7 +1040,7 @@ class EmailTemplatePreviewRequest(BaseModel):
 
     subject: str | None = None
     html: str | None = None
-    variant: str = "down"  # "down" or "resolved"
+    variant: Literal["down", "resolved"] = "down"
 
 
 class EmailTemplatePreviewResponse(BaseModel):
@@ -1022,14 +1060,9 @@ def preview_email_template(payload: EmailTemplatePreviewRequest, _admin=Depends(
     iframe shows the logo without a mail client. DOWN and RESOLVED samples are available.
     """
     from ..services.notifications.email_template import (
-        DEFAULT_HTML_TEMPLATE as _DEF_HTML,
-    )
-    from ..services.notifications.email_template import (
-        DEFAULT_SUBJECT as _DEF_SUBJECT,
-    )
-    from ..services.notifications.email_template import (
         build_alert_context,
         build_test_alert_sample,
+        render_subject,
         render_template,
         template_to_preview,
     )
@@ -1049,10 +1082,10 @@ def preview_email_template(payload: EmailTemplatePreviewRequest, _admin=Depends(
         }
 
     context = build_alert_context(alert_data, target_data)
-    subject_template = payload.subject if payload.subject is not None else _DEF_SUBJECT
-    html_template = payload.html if payload.html is not None else _DEF_HTML
+    subject_template = payload.subject if payload.subject is not None else DEFAULT_SUBJECT
+    html_template = payload.html if payload.html is not None else DEFAULT_HTML_TEMPLATE
 
-    subject = render_template(subject_template, context)
+    subject = render_subject(subject_template, context)
     html = template_to_preview(render_template(html_template, context))
     return EmailTemplatePreviewResponse(subject=subject, html=html)
 
@@ -1067,44 +1100,33 @@ class TestEmailRequest(BaseModel):
 async def send_test_email(
     request: Request, payload: TestEmailRequest, conn=Depends(get_conn), _admin=Depends(require_admin)
 ):
-    """Queue a test email using current template and SMTP settings.
+    """Queue the SMTP setup test email (a welcome message, not an alert).
 
-    All notifications go through the spooler for consistent visibility
-    and automatic retry handling.
+    The message is rendered by a dedicated renderer and ignores the saved alert template.
+    All notifications go through the spooler for consistent visibility and automatic
+    retry handling; a queued message is a handoff, not a delivery guarantee.
     """
-    from ..services.notifications.email_template import (
-        build_alert_context,
-        build_test_alert_sample,
-        html_to_text,
-        load_email_templates,
-        render_template,
-    )
+    from ..services.notifications.smtp_test_email import build_smtp_test_email
     from ..services.notifications.spooler import (
         ChannelType,
         NotificationType,
-        get_spooler,
     )
 
-    readiness = smtp_readiness(conn)
+    readiness = await run_in_threadpool(smtp_readiness, conn)
     if readiness is SmtpReadiness.DISABLED:
         raise HTTPException(status_code=400, detail="SMTP is not enabled")
     if readiness is SmtpReadiness.INCOMPLETE:
         raise HTTPException(status_code=400, detail="SMTP not configured (missing host or from address)")
 
-    stored = load_email_templates(conn)
-    subject_template, html_template = stored["subject"], stored["html"]
-
-    test_alert_data, test_target_data = build_test_alert_sample()
-
-    context = build_alert_context(test_alert_data, test_target_data)
-
-    subject = render_template(subject_template, context)
-    html_body = render_template(html_template, context)
-    text_body = html_to_text(html_body)
+    # The button must lead to this instance; without a public hostname it is omitted.
+    message = build_smtp_test_email(
+        str(payload.recipient),
+        system_url=target_url(await run_in_threadpool(get_public_base_url, conn), None),
+    )
+    subject, html_body, text_body = message.subject, message.html_body, message.text_body
 
     # Enqueue to spooler (all notifications go through spooler)
-    db_path = request.app.state.db_path
-    spooler = get_spooler(lambda: sqlite_db.connect(db_path))
+    spooler = await run_in_threadpool(_request_spooler, request)
 
     queue_id = await run_in_threadpool(
         spooler.enqueue,
@@ -1122,10 +1144,10 @@ async def send_test_email(
         immediate=True,
     )
 
-    _log.info("Test email queued for %s (queue_id=%d)", payload.recipient, queue_id)
+    _log.info("Test email queued (queue_id=%d)", queue_id)
     return {
         "ok": True,
-        "message": f"Test email queued for {payload.recipient}; the SMTP handoff result appears in the delivery log",
+        "message": "Test email queued.",
     }
 
 
@@ -1143,16 +1165,7 @@ async def get_notification_queue_stats(
     Shows the current state of the notification spooler (retry queue).
     Includes time dimension for debugging: oldest entry, max retry count, etc.
     """
-    from ..services.notifications.spooler import get_spooler
-
-    # Factory must create fresh connections - do NOT return a request-scoped conn
-    # because the singleton would hold a reference to a closed connection
-    db_path = request.app.state.db_path
-
-    def _get_db():
-        return sqlite_db.connect(db_path)
-
-    spooler = get_spooler(_get_db)
+    spooler = await run_in_threadpool(_request_spooler, request)
     detailed = await run_in_threadpool(spooler.get_queue_stats_detailed)
 
     return {
@@ -1187,14 +1200,7 @@ async def get_notification_queue_log(
 
     Supports pagination and optional filtering by status/channel.
     """
-    from ..services.notifications.spooler import get_spooler
-
-    db_path = request.app.state.db_path
-
-    def _get_db():
-        return sqlite_db.connect(db_path)
-
-    spooler = get_spooler(_get_db)
+    spooler = await run_in_threadpool(_request_spooler, request)
     return await run_in_threadpool(
         spooler.get_log,
         limit=limit,
@@ -1215,14 +1221,7 @@ async def flush_notification_queue(
     This is useful when Signal is rate-limited or broken and you want
     to clear the backlog instead of waiting for retries.
     """
-    from ..services.notifications.spooler import get_spooler
-
-    db_path = request.app.state.db_path
-
-    def _get_db():
-        return sqlite_db.connect(db_path)
-
-    spooler = get_spooler(_get_db)
+    spooler = await run_in_threadpool(_request_spooler, request)
     deleted = await run_in_threadpool(spooler.flush_queue)
     _log.info("Flushed %d notifications from queue", deleted)
     return {"deleted": deleted, "message": f"Flushed {deleted} notifications"}
@@ -1237,14 +1236,7 @@ async def clear_notification_log(
 
     Keeps pending, processing and failed entries intact.
     """
-    from ..services.notifications.spooler import get_spooler
-
-    db_path = request.app.state.db_path
-
-    def _get_db():
-        return sqlite_db.connect(db_path)
-
-    spooler = get_spooler(_get_db)
+    spooler = await run_in_threadpool(_request_spooler, request)
     deleted = await run_in_threadpool(spooler.clear_log)
     _log.info("Cleared %d sent notifications from log", deleted)
     return {"deleted": deleted, "message": f"Cleared {deleted} log entries"}

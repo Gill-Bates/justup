@@ -52,39 +52,45 @@
 
 	// Failed handoffs of the last 24 h (server window) keep the queue from looking healthy.
 	function _healthState(data) {
-		const failed = Number.isInteger(data.failed_recent) ? data.failed_recent : (data.failed || 0);
+		const failed = Number.isInteger(data.failed_recent) && data.failed_recent >= 0 ? data.failed_recent : (data.failed || 0);
 		if (failed > 0) {
-			return { icon: 'error_outline', tone: 'text-danger', text: failed + ' handoff failure(s) in the last 24 h' };
+			return { tone: 'danger', text: failed + ' handoff failure(s) in the last 24 h' };
 		}
 		if ((data.cooldowns || []).length > 0 || (data.max_retry_count || 0) > 0) {
-			return { icon: 'sync_problem', tone: 'text-warning', text: 'SMTP/Signal handoff is being retried' };
+			return { tone: 'warning', text: 'SMTP/Signal handoff is being retried' };
 		}
-		return { icon: 'info', tone: 'text-body-secondary', text: 'No failed handoffs in the last 24 h' };
+		return { tone: 'neutral', text: 'No failed handoffs in the last 24 h' };
 	}
 
 	function _renderHealth(data) {
 		const state = _healthState(data);
-		const icon = document.getElementById('spooler-health-icon');
-		const wrap = document.getElementById('spooler-health');
-		if (icon) icon.textContent = state.icon;
-		if (wrap) wrap.className = 'small mb-0 d-flex align-items-center gap-2 ' + state.tone;
+		const dot = document.getElementById('spooler-health-dot');
+		if (dot) dot.className = window.JuStatusDot.classes(state.tone);
 		_setText('spooler-health-text', state.text);
 	}
 
 	function _renderChannels(channels) {
-		document.querySelectorAll('#spooler-channel-table tr[data-channel]').forEach(function (row) {
+		document.querySelectorAll('#spooler-channel-status [data-channel]').forEach(function (row) {
 			const info = channels[row.getAttribute('data-channel')] || {};
-			const values = {
-				pending: info.pending || 0,
-				next_attempt_at: info.next_attempt_at ? _formatTime(info.next_attempt_at) : '–',
-				oldest_at: info.oldest_at ? _formatTime(info.oldest_at) : '–',
-				cooldown_until: info.cooldown_until ? _formatTime(info.cooldown_until) : '–',
-				failed: info.failed || 0,
-			};
-			Object.keys(values).forEach(function (field) {
-				const cell = row.querySelector('[data-field="' + field + '"]');
-				if (cell) cell.textContent = String(values[field]);
+			['pending', 'failed'].forEach(function (field) {
+				const value = row.querySelector('[data-field="' + field + '"]');
+				if (value) value.textContent = String(info[field] || 0);
 			});
+			let hasTimes = false;
+			['next_attempt_at', 'oldest_at', 'cooldown_until'].forEach(function (field) {
+				const wrapper = row.querySelector('[data-time-field="' + field + '"]');
+				if (!wrapper) return;
+				const raw = info[field];
+				const value = wrapper.querySelector('[data-field="' + field + '"]');
+				wrapper.hidden = !raw;
+				hasTimes = hasTimes || !!raw;
+				if (value) {
+					value.textContent = raw ? _formatTime(raw) : '';
+					value.dateTime = raw || '';
+				}
+			});
+			const times = row.querySelector('.spooler-channels__times');
+			if (times) times.hidden = !hasTimes;
 		});
 	}
 
@@ -114,7 +120,13 @@
 			const data = await res.json();
 			if (generation !== _logGeneration) return;
 
-			_renderLogTable(data.entries);
+			// The data shrank below the requested page; jump to the last valid page (strictly lower, so this runs once).
+			if (data.total > 0 && (!data.entries || data.entries.length === 0) && _currentPage > 0) {
+				_currentPage = Math.max(0, Math.ceil(data.total / PAGE_SIZE) - 1);
+				return loadLog();
+			}
+
+			_renderLogTable(data.entries, Boolean(statusVal || channelVal));
 			_renderPagination(data.total);
 			_setText('spooler-log-info', data.total > 0 ? `(${data.total} entries)` : '');
 		} catch (err) {
@@ -123,21 +135,20 @@
 		}
 	}
 
-	function _renderLogTable(entries) {
+	function _renderLogTable(entries, filtered) {
 		const tbody = document.getElementById('spooler-log-body');
 		if (!tbody) return;
 
 		if (!entries || entries.length === 0) {
-			tbody.innerHTML = '<tr><td colspan="8" class="text-center text-body-secondary py-4">No entries</td></tr>';
+			tbody.innerHTML = '<tr><td colspan="8" class="spooler-log__state text-body-secondary">'
+				+ (filtered ? 'No matching entries' : 'No entries') + '</td></tr>';
 			return;
 		}
 
 		const rows = entries.map(function (e) {
-			const channelIcon = e.channel_type === 'signal'
-				? '<span class="material-icons me-1" style="font-size:16px;vertical-align:middle;">chat</span><span class="d-none d-md-inline">Signal</span>'
-				: '<span class="material-icons me-1" style="font-size:16px;vertical-align:middle;">email</span><span class="d-none d-md-inline">Email</span>';
+			const channelIcon = _channelIcon(e.channel_type);
 
-			const statusBadge = _statusBadge(e.status, e.retry_count);
+			const statusBadge = _statusBadge(e.status, e.retry_count, e.channel_type);
 			const errorCell = e.last_error
 				? '<span class="text-danger" title="' + escapeHtml(e.last_error) + '">' + escapeHtml(e.last_error.substring(0, 160)) + (e.last_error.length > 160 ? '…' : '') + '</span>'
 				: '<span class="text-body-secondary">–</span>';
@@ -145,12 +156,12 @@
 			const timeStr = _formatTime(e.updated_at);
 			const recipientDisplay = escapeHtml(e.recipient_name || e.recipient_address);
 			const targetDisplay = e.target_name
-				? '<a href="/targets/' + e.target_id + '" class="text-decoration-none">' + escapeHtml(e.target_name) + '</a>'
+				? '<a href="/ui/targets/' + encodeURIComponent(e.target_id) + '" class="text-decoration-none">' + escapeHtml(e.target_name) + '</a>'
 				: '<span class="text-body-secondary">–</span>';
 
 			return '<tr>'
 				+ '<td data-label="Time" class="small text-nowrap">' + timeStr + '</td>'
-				+ '<td data-label="Channel" class="small text-nowrap">' + channelIcon + '</td>'
+				+ '<td data-label="Channel" class="small text-center ju-cell-icon">' + channelIcon + '</td>'
 				+ '<td data-label="Target" class="small ju-cell-text">' + targetDisplay + '</td>'
 				+ '<td data-label="Recipient" class="small ju-cell-text">' + recipientDisplay + '</td>'
 				+ '<td data-label="Type" class="small">' + _typeBadge(e.notification_type) + '</td>'
@@ -215,7 +226,7 @@
 			const res = await apiFetch(API.flush, { method: 'DELETE' });
 			if (!res.ok) {
 				const err = await res.json().catch(function () { return {}; });
-				throw new Error(err.detail || 'Flush failed');
+				throw new Error(window.JuApiError.message(err.detail, 'Flush failed'));
 			}
 			const data = await res.json();
 			window.justUpToast?.success?.('Flushed ' + (data.deleted || 0) + ' notifications');
@@ -240,15 +251,11 @@
 			const res = await apiFetch(API.clearLog, { method: 'DELETE' });
 			if (!res.ok) {
 				const err = await res.json().catch(function () { return {}; });
-				throw new Error(err.detail || 'Clear log failed');
+				throw new Error(window.JuApiError.message(err.detail, 'Clear log failed'));
 			}
 			const data = await res.json();
 			window.justUpToast?.success?.('Cleared ' + (data.deleted || 0) + ' log entries');
-			const modalEl = document.getElementById('spoolerClearLogModal');
-			const modal = modalEl ? bootstrap.Modal.getInstance(modalEl) : null;
-			if (modal) {
-				modal.hide();
-			}
+			bootstrap.Modal.getInstance(document.getElementById('spoolerClearLogModal'))?.hide();
 			_currentPage = 0;
 			loadStats();
 			loadLog();
@@ -267,22 +274,29 @@
 		if (el) el.textContent = String(text);
 	}
 
-	// Labels state what is known: "sent" only means the server accepted the message.
-	function _statusBadge(status, retries) {
+	// Channel is shown as an icon only; the name stays available as tooltip and screen-reader text.
+	function _channelIcon(channelType) {
+		const channel = channelType === 'signal' ? ['chat', 'Signal'] : ['email', 'Email'];
+		return '<span title="' + channel[1] + '">'
+			+ '<span class="material-icons" style="font-size:16px;vertical-align:middle;" aria-hidden="true">' + channel[0] + '</span>'
+			+ '<span class="visually-hidden">' + channel[1] + '</span></span>';
+	}
+
+	// "sent" only means the server accepted the message; the caveat is documented, not shown as tooltip.
+	function _statusBadge(status, retries, channelType) {
+		const handoff = channelType === 'signal' ? 'Signal handoff' : 'SMTP handoff';
 		const map = {
-			pending: ['ju-status-badge--warning', 'schedule', 'Waiting for handoff', 'Waiting for SMTP handoff'],
-			processing: ['ju-status-badge--info', 'sync', 'Handing over', 'Being handed to the server'],
-			sent: ['ju-status-badge--success', 'check', 'Accepted by server', 'Accepted by the server; final delivery is not verifiable'],
-			failed: ['ju-status-badge--danger', 'error_outline', 'Handoff failed', 'Handoff to the server failed'],
+			pending: ['warning', 'Waiting for handoff', 'Waiting for ' + handoff],
+			processing: ['info', 'Handing over', 'Being handed to the server'],
+			sent: ['success', 'Sent', ''],
+			failed: ['danger', 'Handoff failed', 'Handoff to the server failed'],
 		};
 		const entry = map[status];
-		if (!entry) return '<span class="badge ju-status-badge--neutral">' + escapeHtml(status) + '</span>';
+		if (!entry) return JuStatusDot.html('neutral', status);
 		const retrying = status === 'pending' && retries > 0;
-		const label = retrying ? 'Retrying handoff' : entry[2];
-		const title = retrying ? 'SMTP handoff is being retried' : entry[3];
-		return '<span class="badge ' + entry[0] + '" title="' + title + '">'
-			+ '<span class="material-icons me-1" style="font-size:12px;vertical-align:middle;" aria-hidden="true">' + entry[1] + '</span>'
-			+ label + '</span>';
+		const label = retrying ? 'Retrying handoff' : entry[1];
+		const title = retrying ? handoff + ' is being retried' : entry[2];
+		return JuStatusDot.html(entry[0], label, { title });
 	}
 
 	function _typeBadge(type) {
@@ -297,8 +311,7 @@
 	function _formatTime(isoStr) {
 		if (!isoStr) return '–';
 		try {
-			const normalized = /(?:Z|[+-]\d{2}:\d{2})$/i.test(isoStr) ? isoStr : isoStr.replace(' ', 'T') + 'Z';
-			const d = new Date(normalized);
+			const d = new Date(parseUtcTimestamp(isoStr));
 			if (isNaN(d.getTime())) return isoStr.substring(0, 19);
 			return d.toLocaleString(undefined, {
 				month: 'short', day: 'numeric',
@@ -374,7 +387,7 @@
 	// The HTMX after-settle event calls window._initSpoolerTab()
 	window._initSpoolerTab = init;
 	// Test hook: pure state helpers
-	window._spoolerInternals = { healthState: _healthState, statusBadge: _statusBadge };
+	window._spoolerInternals = { healthState: _healthState, statusBadge: _statusBadge, channelIcon: _channelIcon };
 
 	// Also try immediate init if already in DOM (e.g. direct page load)
 	if (document.getElementById('spooler-stat-queue')) {

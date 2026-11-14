@@ -19,11 +19,13 @@ Lifecycle:
 from __future__ import annotations
 
 import logging
+import math
 import sqlite3
 import uuid
 from typing import Any
 
 from app.db.pop_lookup import CONFIDENCE_HIGH, CONFIDENCE_MEDIUM, _rf, lkp_h, lkp_p, lkp_t, normalize_pop_code
+from app.db.sqlite import transaction
 from app.utils.time import utcnow
 
 _log = logging.getLogger(__name__)
@@ -32,9 +34,7 @@ _log = logging.getLogger(__name__)
 Location = dict[str, Any]
 
 
-# ---------------------------------------------------------------------------
 # Helper functions
-# ---------------------------------------------------------------------------
 
 
 # Shared normalizer (defined in pop_lookup to avoid a circular import).
@@ -75,16 +75,16 @@ def normalize_country(country: str) -> str:
     return _normalize_country(country)
 
 
-# ---------------------------------------------------------------------------
 # Sources and confidence levels
-# ---------------------------------------------------------------------------
 
 # Source identifiers (where did this entry come from?)
 SOURCE_PEERINGDB = "peeringdb"  # Imported from PeeringDB API
 SOURCE_UNLOCODE = "unlocode"  # Imported from UN/LOCODE database
 SOURCE_SEED = "seed"  # Built-in seed data (stable, curated)
 SOURCE_MANUAL = "manual"  # Manually added via admin API
+SOURCE_LEARNED = "learned"  # Approved through explicit candidate review (pop_candidates.review)
 _PROTECTED_SOURCES = (SOURCE_MANUAL, SOURCE_SEED)  # never overwritten or retired by imports
+_PROTECTED_PLACEHOLDERS = ", ".join("?" * len(_PROTECTED_SOURCES))
 
 # Confidence levels (how certain are we about this mapping?)
 # - HIGH (100): Authoritative source (manual, PeeringDB verified, seed)
@@ -101,9 +101,7 @@ CONFIDENCE_LOW = 40  # HIGH/MEDIUM are imported from app.db.pop_lookup
 PRIORITY_CANONICAL = 0
 PRIORITY_ALIAS = 10
 
-# ---------------------------------------------------------------------------
 # Safety thresholds for retire logic
-# ---------------------------------------------------------------------------
 
 # Minimum records to process before allowing retire (prevents empty-run disasters)
 MIN_PROCESSED_FOR_RETIRE = 10
@@ -231,9 +229,7 @@ def _validate_seed_data() -> None:
 _validate_seed_data()
 
 
-# ---------------------------------------------------------------------------
 # Table management
-# ---------------------------------------------------------------------------
 
 
 def is_pop_table_empty(conn: sqlite3.Connection) -> bool:
@@ -251,6 +247,7 @@ def bootstrap_pop_locations(conn: sqlite3.Connection) -> int:
     """
     now = utcnow()
     inserted = 0
+    skipped = 0
 
     try:
         conn.execute("BEGIN")
@@ -270,11 +267,11 @@ def bootstrap_pop_locations(conn: sqlite3.Connection) -> int:
                 )
                 inserted += 1
             except sqlite3.IntegrityError:
-                # Already exists (UNIQUE constraint)
-                pass
+                # Already exists (UNIQUE constraint): not counted as inserted
+                skipped += 1
 
         conn.commit()
-        _log.info("Bootstrapped %d POP locations from seed data", inserted)
+        _log.info("Bootstrapped %d POP locations from seed data (%d skipped)", inserted, skipped)
         return inserted
     except Exception:
         conn.rollback()
@@ -287,7 +284,7 @@ def ensure_pop_locations(conn: sqlite3.Connection) -> None:
 
     Call this on app startup AFTER init_db() has created the schema.
 
-    Note: Schema is defined in sqlite.py (single source of truth).
+    Note: Schema is defined in app/db/sqlite/schema.py (single source of truth).
     """
     # Bootstrap seed data if table is empty
     if is_pop_table_empty(conn):
@@ -295,18 +292,43 @@ def ensure_pop_locations(conn: sqlite3.Connection) -> None:
         bootstrap_pop_locations(conn)
 
 
-# ---------------------------------------------------------------------------
 # Lookup functions
-# ---------------------------------------------------------------------------
 
 lookup_pop_by_tokens = lkp_t
 lookup_pop_by_prefix = lkp_p
 lookup_pop_by_hostname = lkp_h
 
 
-# ---------------------------------------------------------------------------
 # Refresh / import functions
-# ---------------------------------------------------------------------------
+
+
+# A reviewed location must lie this close to a curated anchor; facility spread uses the same distance.
+CURATED_ANCHOR_KM = 50.0
+
+
+def valid_coordinates(lat: object, lon: object) -> bool:
+    """True for finite numeric WGS84 coordinates (-90..90, -180..180); booleans and non-numbers are invalid."""
+    if any(isinstance(v, bool) or not isinstance(v, (int, float)) for v in (lat, lon)):
+        return False
+    return math.isfinite(lat) and math.isfinite(lon) and -90 <= lat <= 90 and -180 <= lon <= 180
+
+
+_UPSERT_ERROR_DETAIL_LIMIT = 5
+_UPSERT_ERROR_SUMMARY_EVERY = 100
+_upsert_error_count = 0
+
+
+def _log_upsert_error(canonical_code: str, alias_code: str, exc: sqlite3.Error) -> None:
+    """Log the first few write errors individually, then one aggregate line per batch of errors."""
+    global _upsert_error_count
+    _upsert_error_count += 1
+    n = _upsert_error_count
+    if n <= _UPSERT_ERROR_DETAIL_LIMIT:
+        _log.warning("Failed to upsert POP location %s/%s: %s", canonical_code, alias_code, exc)
+    elif n % _UPSERT_ERROR_SUMMARY_EVERY == 0:
+        _log.warning("%d POP location upserts failed so far (last: %s/%s: %s)", n, canonical_code, alias_code, exc)
+    else:
+        _log.debug("Failed to upsert POP location %s/%s: %s", canonical_code, alias_code, exc)
 
 
 def upsert_pop_location(
@@ -325,7 +347,8 @@ def upsert_pop_location(
     """
     Insert or update a POP location.
 
-    Manual and seed entries are never overwritten; only imported rows are updated.
+    Manual and seed entries and active reviewed ('learned') rows are never overwritten; only imported rows
+    are updated. Invalid coordinates (NaN, infinite, outside the WGS84 range) skip the record.
 
     Args:
         import_run_id: Optional run ID for delta tracking
@@ -341,9 +364,12 @@ def upsert_pop_location(
     city = _normalize_city(city)
     country = _normalize_country(country)
 
-    # Clamp coordinates to valid range
-    lat = max(-90.0, min(90.0, float(lat)))
-    lon = max(-180.0, min(180.0, float(lon)))
+    # Reject, never clamp: an out-of-range or non-finite value marks a corrupt source record, and clamping
+    # would store a fabricated position at a pole or the antimeridian instead of dropping the record.
+    if not valid_coordinates(lat, lon):
+        _log.debug("Skipping POP location %s/%s: invalid coordinates", canonical_code, alias_code)
+        return False
+    lat, lon = float(lat), float(lon)
 
     # Clamp confidence/priority
     confidence = max(0, min(100, int(confidence)))
@@ -352,13 +378,14 @@ def upsert_pop_location(
     # Check if a protected (manual or seed) entry exists
     existing = conn.execute(
         """
-        SELECT source FROM pop_locations
+        SELECT source, retired FROM pop_locations
         WHERE alias_code = ? AND canonical_code = ?
         """,
         (alias_code, canonical_code),
     ).fetchone()
 
-    if existing and existing[0] in _PROTECTED_SOURCES:
+    # An active reviewed ('learned') row is protected too; once revoked (retired) imports may reclaim it.
+    if existing and (existing[0] in _PROTECTED_SOURCES or (existing[0] == SOURCE_LEARNED and not existing[1])):
         # Never overwrite curated entries, but update last_seen
         if import_run_id:
             conn.execute(
@@ -373,7 +400,7 @@ def upsert_pop_location(
 
     try:
         conn.execute(
-            """
+            f"""
             INSERT INTO pop_locations
                 (canonical_code, alias_code, city, country, lat, lon,
                  source, confidence, priority, created_at, updated_at,
@@ -391,8 +418,9 @@ def upsert_pop_location(
                 last_seen_at = excluded.last_seen_at,
                 import_run_id = excluded.import_run_id,
                 retired = 0
-            WHERE pop_locations.source NOT IN ('manual', 'seed')
-            """,
+            WHERE pop_locations.source NOT IN ({_PROTECTED_PLACEHOLDERS})
+              AND NOT (pop_locations.source = 'learned' AND pop_locations.retired = 0)
+            """,  # noqa: S608 - placeholders only
             (
                 canonical_code,
                 alias_code,
@@ -407,11 +435,12 @@ def upsert_pop_location(
                 now,
                 now,
                 import_run_id,
+                *_PROTECTED_SOURCES,
             ),
         )
         return True
     except sqlite3.Error as e:
-        _log.debug("Failed to upsert POP location %s/%s: %s", canonical_code, alias_code, e)
+        _log_upsert_error(canonical_code, alias_code, e)
         return False
 
 
@@ -479,9 +508,7 @@ def list_pop_locations(
     return [dict(row) for row in rows]
 
 
-# ---------------------------------------------------------------------------
 # Import run management
-# ---------------------------------------------------------------------------
 
 
 def start_import_run(conn: sqlite3.Connection, source: str) -> str:
@@ -590,57 +617,58 @@ def retire_stale_entries(
         )
         return 0
 
-    row = conn.execute(
-        """
-        SELECT COUNT(*) FROM pop_locations
-        WHERE source = ? AND retired = 0
-        """,
-        (source,),
-    ).fetchone()
-    active_count = row[0]
+    # Quota check and UPDATE share one write lock; a caller-owned transaction is not committed.
+    with transaction(conn, immediate=not conn.in_transaction):
+        row = conn.execute(
+            """
+            SELECT COUNT(*) FROM pop_locations
+            WHERE source = ? AND retired = 0
+            """,
+            (source,),
+        ).fetchone()
+        active_count = row[0]
 
-    if active_count == 0:
-        return 0
+        if active_count == 0:
+            return 0
 
-    row = conn.execute(
-        """
-        SELECT COUNT(*) FROM pop_locations
-        WHERE source = ?
-          AND (import_run_id IS NULL OR import_run_id != ?)
-          AND retired = 0
-        """,
-        (source, run_id),
-    ).fetchone()
-    would_retire = row[0]
+        row = conn.execute(
+            """
+            SELECT COUNT(*) FROM pop_locations
+            WHERE source = ?
+              AND (import_run_id IS NULL OR import_run_id != ?)
+              AND retired = 0
+            """,
+            (source, run_id),
+        ).fetchone()
+        would_retire = row[0]
 
-    # Safety: Max retire percentage
-    retire_percent = (would_retire / active_count) * 100
-    if retire_percent > MAX_RETIRE_PERCENT:
-        _log.warning(
-            "Skipping retire for %s: would retire %.1f%% (%d/%d) > max %.1f%%. "
-            "Possible shrinking dataset attack or API issue.",
-            source,
-            retire_percent,
-            would_retire,
-            active_count,
-            MAX_RETIRE_PERCENT,
+        # Safety: Max retire percentage
+        retire_percent = (would_retire / active_count) * 100
+        if retire_percent > MAX_RETIRE_PERCENT:
+            _log.warning(
+                "Skipping retire for %s: would retire %.1f%% (%d/%d) > max %.1f%%. "
+                "Possible shrinking dataset attack or API issue.",
+                source,
+                retire_percent,
+                would_retire,
+                active_count,
+                MAX_RETIRE_PERCENT,
+            )
+            return 0
+
+        # Actually retire entries from this source that weren't updated
+        result = conn.execute(
+            """
+            UPDATE pop_locations SET
+                retired = 1,
+                updated_at = ?
+            WHERE source = ?
+              AND (import_run_id IS NULL OR import_run_id != ?)
+              AND retired = 0
+            """,
+            (utcnow(), source, run_id),
         )
-        return 0
-
-    # Actually retire entries from this source that weren't updated
-    result = conn.execute(
-        """
-        UPDATE pop_locations SET
-            retired = 1,
-            updated_at = ?
-        WHERE source = ?
-          AND (import_run_id IS NULL OR import_run_id != ?)
-          AND retired = 0
-        """,
-        (utcnow(), source, run_id),
-    )
-    retired_count = result.rowcount
-    conn.commit()
+        retired_count = result.rowcount
 
     if retired_count > 0:
         _log.info(
@@ -754,7 +782,10 @@ def count_retired_pop_locations(conn: sqlite3.Connection) -> int:
 
 def count_external_pop_locations(conn: sqlite3.Connection) -> int:
     """Count POP locations from external sources (not seed/manual)."""
-    row = conn.execute("SELECT COUNT(*) FROM pop_locations WHERE source NOT IN ('seed', 'manual')").fetchone()
+    row = conn.execute(
+        f"SELECT COUNT(*) FROM pop_locations WHERE source NOT IN ({_PROTECTED_PLACEHOLDERS})",  # noqa: S608 - placeholders only
+        _PROTECTED_SOURCES,
+    ).fetchone()
     return row[0] if row else 0
 
 

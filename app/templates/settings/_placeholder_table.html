@@ -1,0 +1,21 @@
+{# Placeholder reference, rendered from PLACEHOLDER_DOCS (email_template.py), the same whitelist both renderers use. #}
+<table class="table table-sm table-bordered mb-0 bg-body placeholders-table">
+	<thead class="sticky-top placeholders-thead">
+		<tr>
+			<th scope="col">Category</th>
+			<th scope="col">Placeholder</th>
+			<th scope="col">Description</th>
+		</tr>
+	</thead>
+	<tbody>
+		{% for category, rows in placeholder_groups %}
+		{% for name, description in rows %}
+		<tr>
+			{% if loop.first %}<td rowspan="{{ rows | length }}">{{ category }}</td>{% endif %}
+			<td><code>{{ '{{' }}{{ name }}{{ '}}' }}</code></td>
+			<td>{{ description }}</td>
+		</tr>
+		{% endfor %}
+		{% endfor %}
+	</tbody>
+</table>

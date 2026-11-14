@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import weakref
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -17,6 +18,7 @@ from starlette.concurrency import run_in_threadpool
 
 from ..db import sqlite as sqlite_db
 from ..db import tsdb as tsdb_db
+from ..utils.availability_rules import downtime_series
 from ..utils.deps import get_conn, get_tsdb_dir
 from ..utils.metric_limits import choose_display_bucket_seconds
 from ..utils.time import assume_utc, utcnow
@@ -34,21 +36,23 @@ ALLOWED_METRICS = {
     "ping_up",
     "tcp_ms",
     "tcp_up",
+    "udp_up",
     "cert_days_left",
 }
 
-# Pattern for port-specific TCP metrics (tcp_ms_80, tcp_up_443, etc.)
-TCP_PORT_METRIC_PATTERN = re.compile(r"^tcp_(ms|up)_(\d{1,5})$")
+# Port-specific series the monitor writes: TCP latency and availability, UDP availability only (there is no
+# UDP latency series). TCP and UDP of one port are separate series. ``udp_unknown_<port>`` is an internal
+# flag that rollups read; no client queries it, so it is not served.
+PORT_METRIC_PATTERN = re.compile(r"^(?:tcp_(?:ms|up)|udp_up)_(\d{1,5})$")
 
 
 def _is_allowed_metric(metric: str) -> bool:
-    """Check if metric name is allowed (static or port-specific TCP)."""
+    """Check if metric name is allowed (static or port-specific TCP/UDP)."""
     if metric in ALLOWED_METRICS:
         return True
-    # Allow tcp_ms_<port> and tcp_up_<port> patterns
-    match = TCP_PORT_METRIC_PATTERN.match(metric)
+    match = PORT_METRIC_PATTERN.match(metric)
     if match:
-        port = int(match.group(2))
+        port = int(match.group(1))
         return 1 <= port <= 65535
     return False
 
@@ -62,10 +66,32 @@ AUTO_RESOLUTION_THRESHOLD_SECONDS = 3600
 # when many targets exist. Balances responsiveness vs resource usage.
 MAX_CONCURRENT_DASHBOARD_QUERIES = 20
 
+_dashboard_semaphores: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Semaphore] = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def dashboard_query_semaphore() -> asyncio.Semaphore:
+    """Return the semaphore shared by all dashboard requests of the running loop."""
+    loop = asyncio.get_running_loop()
+    sem = _dashboard_semaphores.get(loop)
+    if sem is None:
+        sem = _dashboard_semaphores[loop] = asyncio.Semaphore(MAX_CONCURRENT_DASHBOARD_QUERIES)
+    return sem
+
 
 def _serialize_points(points):
     """Serialize MetricPoint objects to JSON-compatible dicts."""
     return [{"ts": p.ts, "value": p.value} for p in points]
+
+
+def _utc_range(since: datetime | None, until: datetime | None) -> tuple[datetime | None, datetime | None]:
+    """Read naive bounds as UTC and reject an inverted range (400), the contract of every metrics route."""
+    since = assume_utc(since) if since else since
+    until = assume_utc(until) if until else until
+    if since and until and since > until:
+        raise HTTPException(status_code=400, detail="'since' must be <= 'until'")
+    return since, until
 
 
 @router.get("/targets/{target_id}/metrics/{metric}")
@@ -92,17 +118,13 @@ async def get_metric(
     plot_width: int = Query(default=900, ge=120, le=2400),
 ):
     """Query metric time series points for a target."""
-    if sqlite_db.get_target(conn, target_id) is None:
+    if await run_in_threadpool(sqlite_db.get_target, conn, target_id) is None:
         raise HTTPException(status_code=404, detail="Target not found")
 
     if not _is_allowed_metric(metric):
         raise HTTPException(status_code=400, detail="Unknown or unsupported metric")
 
-    since = assume_utc(since) if since else since
-    until = assume_utc(until) if until else until
-
-    if since and until and since > until:
-        raise HTTPException(status_code=400, detail="'since' must be <= 'until'")
+    since, until = _utc_range(since, until)
 
     if display:
         if since is None or until is None:
@@ -164,34 +186,30 @@ async def get_all_uptime(
     limit: int = Query(default=500, ge=1, le=10_000),
 ):
     """Get uptime data for all targets for dashboard chart."""
-    targets = sqlite_db.list_targets(conn)
+    targets = await run_in_threadpool(sqlite_db.list_targets, conn)
     tsdb_dir = get_tsdb_dir(request)
 
-    since = assume_utc(since) if since else since
-    until = assume_utc(until) if until else until
-
-    if since and until and since > until:
-        raise HTTPException(status_code=400, detail="'since' must be <= 'until'")
+    since, until = _utc_range(since, until)
 
     meta = []  # (target_id, target_name)
 
     # Cap limit for large target counts to prevent performance issues
     effective_limit = min(limit, 200) if len(targets) > 100 else limit
 
-    # Semaphore limits concurrent TSDB I/O to prevent resource exhaustion
-    sem = asyncio.Semaphore(MAX_CONCURRENT_DASHBOARD_QUERIES)
+    # Shared semaphore caps concurrent TSDB I/O across all dashboard requests
+    sem = dashboard_query_semaphore()
 
-    async def query_with_sem(target_id: int, metric: str):
+    async def query_with_sem(target_id: int, metrics: tuple[str, ...]):
+        # Same rule as the overall status, the scheduler and the PDF: up only if every enabled check is up.
         async with sem:
             return await run_in_threadpool(
-                tsdb_db.query,
+                tsdb_db.query_availability_cycles,
                 tsdb_dir,
                 target_id=target_id,
-                metric=metric,
+                metrics=metrics,
                 since=since,
                 until=until,
                 limit=effective_limit,
-                latest=True,
             )
 
     tasks = []
@@ -201,7 +219,7 @@ async def get_all_uptime(
             continue
 
         meta.append((target["id"], target["name"]))
-        tasks.append(query_with_sem(target["id"], metric))
+        tasks.append(query_with_sem(target["id"], (metric,)))
 
     if not tasks:
         return {"targets": []}
@@ -221,44 +239,34 @@ async def get_all_uptime(
     return {"targets": response_data}
 
 
-# Incidents shorter than this are transient check failures, not downtime.
-MIN_DOWNTIME_SECONDS = 60
-# Raw points read per series for the 24h overview (covers a 1s interval).
-DOWNTIME_MAX_POINTS = 100_000
 # Window used by /dashboard/downtime when the caller sends no ``since``.
 DOWNTIME_DEFAULT_WINDOW = timedelta(hours=24)
+# Periods read per service; far above what a day of 5 s checks can produce.
+DOWNTIME_MAX_PERIODS = 10_000
+# Dashboard column key of a service group: the aggregate metric name the widget has always used.
+_SERVICE_KEYS = (("http_up", "HTTP"), ("ping_up", "Ping"), ("tcp_up", "TCP:"), ("udp_up", "UDP:"))
 
 
-def _summarize_downtime(points, *, now: datetime, stale_after: float) -> dict:
-    """Sum down periods (value 0 until the next up point) of one binary series.
+def _service_groups(target) -> dict[str, list[tuple[str, str]]]:
+    """Currently enabled series of a target, grouped by dashboard service key."""
+    groups: dict[str, list[tuple[str, str]]] = {}
+    for metric, label in downtime_series(target):
+        for key, prefix in _SERVICE_KEYS:
+            if label == prefix or (prefix.endswith(":") and label.startswith(prefix)):
+                groups.setdefault(key, []).append((metric, label))
+                break
+    return groups
 
-    A series that ends down is ongoing only while its last point is fresh; a stale one is
-    cut off at the last observed point so a stopped scheduler cannot grow the downtime.
-    """
-    total = 0.0
-    incidents = 0
-    down_since: datetime | None = None
-    last_ts: datetime | None = None
-    for pt in points:
-        last_ts = pt.ts
-        if pt.value == 0:
-            if down_since is None:
-                down_since = pt.ts
-        elif down_since is not None:
-            duration = (pt.ts - down_since).total_seconds()
-            if duration >= MIN_DOWNTIME_SECONDS:
-                total += duration
-                incidents += 1
-            down_since = None
-    ongoing = False
-    if down_since is not None and last_ts is not None:
-        ongoing = (now - last_ts).total_seconds() <= stale_after
-        end = now if ongoing else last_ts
-        duration = (end - down_since).total_seconds()
-        if duration >= MIN_DOWNTIME_SECONDS:
-            total += duration
-            incidents += 1
-    return {"downtime_seconds": round(total), "incidents": incidents, "ongoing": ongoing}
+
+def _summarize_periods(periods, *, now: datetime) -> dict:
+    """Total of the downtime periods of one service; an ongoing period runs up to ``now``."""
+    total = sum(((p.end or now) - p.start).total_seconds() for p in periods)
+    return {
+        "downtime_seconds": round(total),
+        "incidents": len(periods),
+        "ongoing": any(p.end is None for p in periods),
+        "latest_start": max((p.start for p in periods), default=None).isoformat() if periods else None,
+    }
 
 
 @router.get("/dashboard/downtime")
@@ -270,56 +278,47 @@ async def get_downtime_targets(
     until: datetime | None = Query(default=None),
 ):
     """Per-service downtime summary for enabled targets with at least one incident in the range."""
-    targets = sqlite_db.list_targets(conn)
+    targets = await run_in_threadpool(sqlite_db.list_targets, conn)
     tsdb_dir = get_tsdb_dir(request)
 
-    since = assume_utc(since) if since else since
-    until = assume_utc(until) if until else until
-
-    if since and until and since > until:
-        raise HTTPException(status_code=400, detail="'since' must be <= 'until'")
+    since, until = _utc_range(since, until)
 
     now = utcnow()
     # Without a lower bound the oldest points would fill the point limit and hide current outages.
     if since is None:
         since = (until or now) - DOWNTIME_DEFAULT_WINDOW
-    # Semaphore limits concurrent TSDB I/O to prevent resource exhaustion
-    sem = asyncio.Semaphore(MAX_CONCURRENT_DASHBOARD_QUERIES)
+    # Shared semaphore caps concurrent TSDB I/O across all dashboard requests
+    sem = dashboard_query_semaphore()
 
-    async def summarize(target_id: int, metric: str, stale_after: float):
+    async def summarize(target_id: int, series: list[tuple[str, str]], interval_seconds: int):
         async with sem:
-            points = await run_in_threadpool(
-                tsdb_db.query,
+            periods = await run_in_threadpool(
+                tsdb_db.query_downtime_periods,
                 tsdb_dir,
                 target_id=target_id,
-                metric=metric,
                 since=since,
                 until=until,
-                limit=DOWNTIME_MAX_POINTS,
-                latest=False,
+                limit=DOWNTIME_MAX_PERIODS,
+                series=series,
+                check_interval_seconds=interval_seconds,
+                now=now,
             )
-        return _summarize_downtime(points, now=now, stale_after=stale_after)
+        return _summarize_periods(periods, now=now)
 
     tasks = []
-    meta = []  # (target_id, target_name, enabled_services)
+    meta = []  # (target_id, target_name, service keys)
 
     for target in targets:
         # Disabled targets are not measured; their last state is not a running outage.
         if not target["is_enabled"]:
             continue
-        enabled = []
-        if target["enable_http_check"]:
-            enabled.append("http_up")
-        if target["enable_ping"]:
-            enabled.append("ping_up")
-        if target["enable_tcp_connect"]:
-            enabled.append("tcp_up")
-        if not enabled:
+        # Only the checks enabled now count; the shared rule in tsdb treats gaps as unknown.
+        groups = _service_groups(target)
+        if not groups:
             continue
-
-        stale_after = max(3 * target["interval_seconds"], MIN_DOWNTIME_SECONDS)
-        meta.append((target["id"], target["name"], enabled))
-        tasks.extend(summarize(target["id"], svc, stale_after) for svc in enabled)
+        interval = max(int(target["interval_seconds"]), 1)
+        meta.append((target["id"], target["name"], list(groups)))
+        tasks.extend(summarize(target["id"], series, interval) for series in groups.values())
 
     if not tasks:
         return {"targets": []}
@@ -327,7 +326,7 @@ async def get_downtime_targets(
     results = iter(await asyncio.gather(*tasks))
     response_data = []
     for target_id, name, enabled in meta:
-        services = {svc: summary for svc in enabled if (summary := next(results))["incidents"] > 0}
+        services = {key: summary for key in enabled if (summary := next(results))["incidents"] > 0}
         if services:
             response_data.append({"target_id": target_id, "name": name, "services": services})
 

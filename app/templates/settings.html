@@ -11,22 +11,8 @@
 		</div>
 	</div>
 
-	<!-- Toast Container -->
-	<div class="toast-container position-fixed top-0 end-0 p-3 ui-toast-container">
-		<div id="settings-toast" class="toast align-items-center text-bg-success border-0" role="alert"
-			aria-live="assertive" aria-atomic="true">
-			<div class="d-flex">
-				<div class="toast-body">
-					<span class="material-icons me-2" aria-hidden="true">check_circle</span>Settings saved successfully!
-				</div>
-				<button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"
-					aria-label="Close"></button>
-			</div>
-		</div>
-	</div>
-
-	<!-- Settings tabs: one horizontally scrollable strip for all viewports (edge fade + active-tab scrolling in settings.main.js) -->
-	<ul class="nav nav-tabs settings-tabs" id="settingsTabs" role="tablist" aria-label="Settings sections">
+	<!-- Settings tabs: one horizontally scrollable strip for all viewports (active-tab scrolling in settings.main.js) -->
+	<ul class="nav nav-pills ju-tabs" id="settingsTabs" role="tablist" aria-label="Settings sections">
 		<li class="nav-item" role="presentation">
 			<button class="nav-link active" id="general-tab" data-bs-toggle="tab" data-bs-target="#general-pane"
 				type="button" role="tab" aria-controls="general-pane" aria-selected="true">
@@ -171,7 +157,9 @@
 	<script type="module" src="/static/js/settings.main.js"></script>
 	<script src="/static/js/settings.users.js"></script>
 	<script src="/static/js/utils/optional-groups.js"></script>
+	<script src="/static/js/utils/list-filter.js"></script>
 	<script src="/static/js/settings.recipients.js"></script>
+	<script src="/static/js/utils/link-url.js"></script>
 	<script src="/static/js/settings.smtp-template.js"></script>
 	<script src="/static/js/settings.spooler.js"></script>
 

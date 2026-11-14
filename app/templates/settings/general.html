@@ -1,14 +1,49 @@
-{# Settings: General Tab Content (display, alerting timeout, connection quality, network & geo) #}
+{# Settings: General Tab Content (display, instance, PDF, access and sessions) #}
+{% from "fragments/_warning.html" import ju_warning %}
 <form id="general-settings-form" class="ju-settings-grid" autocomplete="off">
 			<section class="card shadow-sm settings-card">
 				<div class="card-header">
 					<h2 class="h6 mb-0">Display</h2>
 				</div>
 				<div class="card-body settings-compact">
-					<div class="form-check form-switch">
+					<div class="form-check form-switch ju-switch">
 						<input type="checkbox" class="form-check-input" role="switch" name="use_utc_dashboard"
 							id="use_utc_dashboard" {% if settings.use_utc_dashboard %}checked{% endif %}>
 						<label class="form-check-label" for="use_utc_dashboard">Show dashboard times in UTC</label>
+					</div>
+				</div>
+			</section>
+
+			<section class="card shadow-sm settings-card">
+				<div class="card-header">
+					<h2 class="h6 mb-0">Instance</h2>
+				</div>
+				<div class="card-body settings-compact">
+					<div>
+						<label class="form-label" for="public_hostname">Public hostname</label>
+						<div class="input-group">
+							<input type="text" class="form-control" id="public_hostname" name="public_hostname"
+								value="{{ settings.public_hostname or '' }}" maxlength="253" inputmode="url"
+								autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"
+								placeholder="justup.example.com" aria-describedby="public_hostname_hint">
+							<button type="button" class="btn btn-outline-secondary btn-icon" id="public_hostname_detect"
+								aria-label="Auto-detect from current address" title="Auto-detect from current address">
+								<span class="material-icons" aria-hidden="true">auto_fix_high</span>
+							</button>
+						</div>
+						<div class="form-text" id="public_hostname_hint">Hostname or IP only. Used for HTTPS links in notifications.</div>
+					</div>
+				</div>
+			</section>
+			<section class="card shadow-sm settings-card">
+				<div class="card-header">
+					<h2 class="h6 mb-0">PDF</h2>
+				</div>
+				<div class="card-body settings-compact">
+					<div class="form-check form-switch ju-switch">
+						<input type="checkbox" class="form-check-input" role="switch" name="pdf_export_enabled"
+							id="pdf_export_enabled" {% if settings.pdf_export_enabled %}checked{% endif %}>
+						<label class="form-check-label" for="pdf_export_enabled">Enable PDF Export</label>
 					</div>
 					<div>
 						<label class="form-label" for="pdf_page_size">PDF Paper Size</label>
@@ -19,27 +54,43 @@
 					</div>
 				</div>
 			</section>
-
-			<section class="card shadow-sm settings-card">
+			<section class="card shadow-sm settings-card" id="access-sessions-card">
 				<div class="card-header">
-					<h2 class="h6 mb-0">Alerting</h2>
+					<h2 class="h6 mb-0">Access &amp; Sessions</h2>
 				</div>
 				<div class="card-body settings-compact">
 					<div>
-						<label for="metrics_timeout_minutes" class="form-label">
-							Down Alert Delay: <span class="badge badge-interval" id="metrics_timeout_value">{{ settings.metrics_timeout_minutes }} min</span>
-						</label>
-						{% set timeout_min = settings_limits.metrics_timeout_minutes.min %}
-						{% set timeout_max = settings_limits.metrics_timeout_minutes.max %}
-						<div class="range-wrapper" data-range-positions="{{ timeout_max - timeout_min + 1 }}" data-active-index="{{ settings.metrics_timeout_minutes - timeout_min }}">
-							<input type="range" class="form-range" name="metrics_timeout_minutes" id="metrics_timeout_minutes"
-								min="{{ timeout_min }}" max="{{ timeout_max }}" step="1" value="{{ settings.metrics_timeout_minutes }}"
-								aria-describedby="metrics_timeout_hint">
-							<div class="range-ticks" aria-hidden="true">
-								{% for i in range(timeout_min, timeout_max + 1) %}<div class="tick"><span class="tick-label">{{ i }}</span><span class="tick-mark"></span></div>{% endfor %}
-							</div>
+						<div class="form-check form-switch ju-switch">
+							<input type="checkbox" class="form-check-input" role="switch" name="auth_required"
+								id="auth_required" {% if settings.auth_required %}checked{% endif %}
+								aria-describedby="auth_required_hint">
+							<label class="form-check-label" for="auth_required">Require Authentication</label>
 						</div>
-						<div class="form-text" id="metrics_timeout_hint">Minutes a service must stay down before a DOWN alert fires.</div>
+						<div class="form-text" id="auth_required_hint" role="status"><span data-auth-warning{% if settings.auth_required %} hidden{% endif %}>{{ ju_warning('Your instance is publicly accessible!') }}</span></div>
+					</div>
+					<div class="settings-field-row">
+						<div>
+							<label for="rate_limit_auth" class="form-label">Login Rate Limit</label>
+							<input type="text" class="form-control" name="rate_limit_auth" id="rate_limit_auth"
+								value="{{ settings.rate_limit_auth }}" placeholder="10/minute" pattern="[1-9][0-9]{0,5}/(second|minute|hour|day)" aria-describedby="rate_limit_auth_hint">
+							<div class="form-text" id="rate_limit_auth_hint">Per IP: N/second, minute, hour or day.</div>
+						</div>
+						<div>
+							<label for="session_max_days" class="form-label">
+								Session Lifetime: <span class="badge badge-interval" id="session_max_days_value">{{ settings.session_max_days }} {{ 'day' if settings.session_max_days == 1 else 'days' }}</span>
+							</label>
+							{% set session_min = settings_limits.session_max_days.min %}{% set session_max = settings_limits.session_max_days.max %}
+							<div class="range-wrapper" data-range-positions="{{ session_max - session_min + 1 }}" data-active-index="{{ settings.session_max_days - session_min }}">
+								<input type="range" class="form-range" name="session_max_days" id="session_max_days"
+									min="{{ session_min }}" max="{{ session_max }}" step="1" value="{{ settings.session_max_days }}"
+									data-unit-singular="day" data-unit-plural="days"
+									aria-valuetext="{{ settings.session_max_days }} {{ 'day' if settings.session_max_days == 1 else 'days' }}" aria-describedby="session_max_days_hint">
+								<div class="range-ticks" aria-hidden="true">
+									{% for i in range(session_min, session_max + 1) %}<div class="tick"><span class="tick-label">{{ i }}</span><span class="tick-mark"></span></div>{% endfor %}
+								</div>
+							</div>
+							<div class="form-text" id="session_max_days_hint">Applies to new logins only.</div>
+						</div>
 					</div>
 				</div>
 			</section>

@@ -122,3 +122,35 @@ def test_dashboard_alert_summary_is_exact_beyond_one_page(tmp_path: Path) -> Non
         assert summary["resolved_24h"] == 7
     finally:
         sqlite_db.close_connection(conn)
+
+
+def test_alert_duration_truncates_to_whole_seconds_on_all_paths(tmp_path: Path) -> None:
+    conn = sqlite_db.connect(tmp_path / "duration.db")
+    sqlite_db.init_schema(conn)
+    try:
+        target_id = _target(conn, "duration")
+        start = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
+        _alert(conn, target_id, "r", start, start + timedelta(seconds=59, milliseconds=999))
+        _alert(conn, target_id, "r2", start, start + timedelta(seconds=60, milliseconds=1))
+        _alert(conn, target_id, "bulk", start - timedelta(seconds=30, milliseconds=900), None)
+        assert sqlite_db.acknowledge_all_open_alerts(conn, "admin") == 1
+        got = {r["id"]: r["duration_seconds"] for r in conn.execute("SELECT id, duration_seconds FROM alerts")}
+        assert got["r"] == 59
+        assert got["r2"] == 60
+        assert got["bulk"] >= 30  # now - (start - 30.9s) is at least 30 whole seconds
+    finally:
+        sqlite_db.close_connection(conn)
+
+
+def test_acknowledge_keeps_preset_duration_seconds(tmp_path: Path) -> None:
+    conn = sqlite_db.connect(tmp_path / "preset.db")
+    sqlite_db.init_schema(conn)
+    try:
+        target_id = _target(conn, "preset")
+        _alert(conn, target_id, "a", datetime(2026, 1, 1, tzinfo=UTC), None)
+        conn.execute("UPDATE alerts SET duration_seconds = 7 WHERE id = 'a'")
+        conn.commit()
+        sqlite_db.acknowledge_all_open_alerts(conn, "admin")
+        assert conn.execute("SELECT duration_seconds FROM alerts WHERE id = 'a'").fetchone()[0] == 7
+    finally:
+        sqlite_db.close_connection(conn)

@@ -58,7 +58,8 @@ def try_lock_target(
     Try to acquire lock for target check.
 
     Returns True if lock acquired, False if already locked by another run.
-    Uses INSERT OR REPLACE with expiry check for atomic locking.
+    The expiry DELETE takes the write lock first, so the holder check and the write run
+    serialized; INSERT OR REPLACE alone would take over a live lock and is only the write step.
     """
     now = utcnow()
     expires_at = now + timedelta(seconds=ttl_seconds)

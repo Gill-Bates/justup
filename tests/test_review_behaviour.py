@@ -39,6 +39,7 @@ from tests import _support  # noqa: F401 - imported for its sys.path side effect
 @pytest.fixture
 def sched():
     s = MonitorScheduler.__new__(MonitorScheduler)
+    MonitorScheduler._init_thread_call_state(s)
     s._rt = {1: TargetRuntime(next_due=dt.datetime.now(dt.UTC))}
 
     @contextmanager
@@ -46,7 +47,6 @@ def sched():
         yield mock.MagicMock()
 
     s._db_conn = _conn
-    s._dispatch_alert = mock.AsyncMock()
     return s
 
 
@@ -54,20 +54,23 @@ def _call(s, days):
     asyncio.run(s._maybe_cert_alert(target_id=1, target_name="t", days_left=days, cert_host="h"))
 
 
-def test_cert_alert_resolves_after_renewal_and_realerts_on_new_expiry(sched):
+@pytest.mark.asyncio
+async def test_cert_alert_resolves_after_renewal_and_realerts_on_new_expiry(sched):
     with (
         mock.patch.object(scheduler.sqlite_db, "create_alert") as create,
         mock.patch.object(scheduler.sqlite_db, "resolve_alert") as resolve,
     ):
-        _call(sched, 6)
-        _call(sched, 5)  # no duplicate
+        await sched._maybe_cert_alert(target_id=1, target_name="t", days_left=6, cert_host="h")
+        await sched._maybe_cert_alert(target_id=1, target_name="t", days_left=5, cert_host="h")  # no duplicate
         assert create.call_count == 1
+        assert create.call_args.kwargs["dispatch_outbox"] is True  # the outbox is the only delivery path
         rt = sched._rt[1]
         assert rt.cert_alert_sent and rt.cert_alert_id
-        _call(sched, 8)  # renewed
+        await sched._maybe_cert_alert(target_id=1, target_name="t", days_left=8, cert_host="h")  # renewed
         assert resolve.call_count == 1
+        assert resolve.call_args.kwargs["dispatch_outbox"] is True
         assert not rt.cert_alert_sent and rt.cert_alert_id is None
-        _call(sched, 7)  # new expiry window -> new alert
+        await sched._maybe_cert_alert(target_id=1, target_name="t", days_left=7, cert_host="h")  # new expiry window
         assert create.call_count == 2
 
 

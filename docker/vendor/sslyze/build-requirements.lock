@@ -1,5 +1,5 @@
-# Build-only toolchain for docker/vendor/sslyze/build-wheel.sh. Isolated from the
-# runtime lock (docker/requirements.lock): none of it is installed in the image or in CI.
+# Build-only toolchain for docker/vendor/sslyze/build-wheel.sh. None of it is
+# installed in the runtime image or CI's application environment.
 # Exact versions plus hashes (wheel files only; PyPI JSON API, resolved 2026-10-29).
 # `wheel` needs `packaging`; setuptools vendors everything else it uses.
 pip==26.2.2 \

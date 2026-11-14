@@ -9,6 +9,8 @@
 from __future__ import annotations
 
 import asyncio
+import functools
+import inspect
 import ipaddress
 import logging
 import re
@@ -25,17 +27,24 @@ from weakref import WeakKeyDictionary
 
 from cryptography import x509
 
+from app.db.sqlite.network_ports import SERVICE_NAME_MAX, SERVICE_TEXT_MAX
 from app.utils.http_status import DEFAULT_HTTP_SUCCESS_CODES, is_status_code_allowed
 from app.utils.ssrf import is_blocked_ip, redact_url, resolve_validated
 
 _log = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
 # Configuration Constants
-# ---------------------------------------------------------------------------
 
 # ThreadPool for blocking I/O (prevents thread explosion)
 _EXECUTOR = ThreadPoolExecutor(max_workers=10, thread_name_prefix="check_")
+
+# Separate pool for system-resolver calls: getaddrinfo cannot be cancelled, so a hung resolver
+# may pin at most these threads and never starves the ping/TCP/cert workers above.
+_DNS_EXECUTOR = ThreadPoolExecutor(max_workers=8, thread_name_prefix="check_dns_")
+
+# Overall per-check deadline = timeout_seconds * factor + margin (covers DNS, HEAD->GET fallback, redirects)
+CHECK_DEADLINE_FACTOR = 3.0
+CHECK_DEADLINE_MARGIN_SECONDS = 10.0
 
 # Semaphores for limiting concurrent operations (lazy-init per event loop)
 # Use WeakKeyDictionary to avoid memory leaks when event loops are destroyed
@@ -44,6 +53,7 @@ _SEMAPHORES: WeakKeyDictionary[asyncio.AbstractEventLoop, dict[str, asyncio.Sema
 # Maximum concurrent ping/tcp operations
 MAX_CONCURRENT_PINGS = 5
 MAX_CONCURRENT_TCP = 10
+MAX_CONCURRENT_TCP_PER_TARGET = 3
 MAX_CONCURRENT_DNS = 8
 
 # DNS negative cache max size (prevents unbounded memory growth)
@@ -56,17 +66,7 @@ _DNS_NEG_CACHE: dict[str, float] = {}
 # Maximum error detail length (prevents log poisoning)
 MAX_ERROR_DETAIL_LENGTH = 200
 
-# Blocked hosts/networks for SSRF protection
-# NOTE: RFC 1918 private networks (10.x, 172.16.x, 192.168.x) are ALLOWED
-# because this is an internal monitoring tool that needs to check internal systems.
-# Only dangerous/unusable networks are blocked.
-BLOCKED_NETWORKS = [
-    ipaddress.ip_network("127.0.0.0/8"),  # Loopback (use real IPs instead)
-    ipaddress.ip_network("169.254.0.0/16"),  # Link-local (APIPA, not routable)
-    ipaddress.ip_network("::1/128"),  # IPv6 loopback
-    ipaddress.ip_network("fe80::/10"),  # IPv6 link-local
-]
-
+# Blocked hostnames; IP policy lives in app.utils.ssrf (RFC 1918 stays allowed for internal monitoring).
 BLOCKED_HOSTNAMES = {"localhost", "localhost.localdomain", "ip6-localhost", "ip6-loopback"}
 
 # Default User-Agent (deterministic, identifiable)
@@ -109,17 +109,14 @@ def _deterministic_user_agent(target_id: int | None = None) -> str:
     """
     Return a deterministic User-Agent.
 
-    If target_id is provided, returns a stable UA based on hash.
-    Otherwise returns the default UA.
+    With a target_id the UA carries it as a suffix; otherwise the default UA is returned.
     """
     if target_id is not None:
         return f"{DEFAULT_USER_AGENT} target/{target_id}"
     return DEFAULT_USER_AGENT
 
 
-# ---------------------------------------------------------------------------
 # Helper Functions
-# ---------------------------------------------------------------------------
 
 
 NETWORK_UNREACHABLE = "network unreachable"
@@ -127,11 +124,12 @@ NETWORK_UNREACHABLE = "network unreachable"
 
 def _sanitize_error(error: Exception | str, max_length: int = MAX_ERROR_DETAIL_LENGTH) -> str:
     """
-    Sanitize error message for safe logging/storage.
+    Normalize an error message for logging/storage.
 
-    - Truncates to max_length
-    - Removes potential sensitive info patterns
-    - Normalizes whitespace
+    - Collapses all whitespace (including newlines) to single spaces
+    - Truncates to max_length, ending in "..."
+
+    It does not remove or mask any content: secrets or hostnames inside the message stay in it.
     """
     msg = str(error)
     msg = " ".join(msg.split())
@@ -199,8 +197,8 @@ async def _resolve_host_via_public_dns_first_answer(
     """Resolve hostname via two public DNS servers concurrently.
 
     Queries Quad9 and Cloudflare at the same time and returns the first
-    successful A/AAAA answer. If the first finished query returns no answer,
-    we keep waiting for the other one.
+    successful A/AAAA answer (family is not guaranteed). If the first finished query
+    returns no answer, we keep waiting for the others.
 
     Returns an IP string or None.
     """
@@ -234,7 +232,7 @@ async def _resolve_host_via_public_dns_first_answer(
         except Exception:  # noqa: BLE001 - any resolver failure degrades to no-answer
             return None
 
-    # Priority: A before AAAA; Cloudflare before Quad9
+    # All four queries run concurrently and the first answer wins; the list order is only the submit order.
     priority: list[tuple[str, str]] = [
         ("1.1.1.1", "A"),
         ("9.9.9.9", "A"),
@@ -244,7 +242,7 @@ async def _resolve_host_via_public_dns_first_answer(
 
     async def _submit(nameserver: str, rdtype: str) -> str | None:
         async with sem:
-            return await loop.run_in_executor(_EXECUTOR, _blocking_resolve, nameserver, rdtype)
+            return await loop.run_in_executor(_DNS_EXECUTOR, _blocking_resolve, nameserver, rdtype)
 
     tasks: set[asyncio.Task[str | None]] = set()
     for ns, qtype in priority:
@@ -315,10 +313,12 @@ def _is_host_blocked(host: str) -> bool:
 
     Blocks:
     - Loopback addresses
-    - Private network ranges
     - Link-local addresses
     - Known local hostnames
     - Hostnames resolving to blocked IPs
+
+    RFC 1918 private ranges are allowed on purpose (``allow_private=True``, see app.utils.ssrf): the
+    monitor checks internal systems.
     """
     host_lower = host.lower().strip()
     if host_lower in BLOCKED_HOSTNAMES:
@@ -332,13 +332,18 @@ def _is_host_blocked(host: str) -> bool:
         # Not an IP address, it's a hostname.
         pass
 
-    # Check if hostname resolves to a blocked IP
     return bool(_resolve_and_check_host(host_lower))
+
+
+async def _run_in_dns_executor(func, *args, **kwargs):
+    """Run a blocking resolver call in the bounded DNS pool (the thread itself cannot be cancelled)."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(_DNS_EXECUTOR, functools.partial(func, *args, **kwargs))
 
 
 async def _is_host_blocked_async(host: str) -> bool:
     """Same policy as _is_host_blocked, but DNS resolution runs off the event loop."""
-    return await asyncio.to_thread(_is_host_blocked, host)
+    return await _run_in_dns_executor(_is_host_blocked, host)
 
 
 async def _validate_url(url: str) -> tuple[bool, str | None]:
@@ -376,6 +381,31 @@ class CheckResult:
     value: dict[str, object] | None = None
 
 
+def _with_deadline(func):
+    """Bound a whole check (DNS + transport) and report an overrun as a normal timeout result.
+
+    Cancelling cannot interrupt a blocking thread: a hung resolver or socket call keeps its
+    worker until the OS call returns, so the pools (_EXECUTOR, _DNS_EXECUTOR) are the leak bound.
+    """
+    signature = inspect.signature(func)
+
+    @functools.wraps(func)
+    async def wrapper(*args, **kwargs):
+        bound = signature.bind(*args, **kwargs)
+        bound.apply_defaults()
+        limit = float(bound.arguments["timeout_seconds"]) * CHECK_DEADLINE_FACTOR + CHECK_DEADLINE_MARGIN_SECONDS
+        try:
+            async with asyncio.timeout(limit) as scope:
+                return await func(*args, **kwargs)
+        except TimeoutError:
+            if not scope.expired():
+                raise
+            _log.warning("%s exceeded its %.1fs deadline", func.__name__, limit)
+            return CheckResult(ok=False, detail="timeout")
+
+    return wrapper
+
+
 _ping_time_re = re.compile(r"time[=<]([0-9.]+)\s*ms", re.IGNORECASE)
 
 
@@ -399,7 +429,7 @@ async def _resolve_probe_target(host: str, *, skip_ssrf_check: bool) -> tuple[st
                 resolved_ip = None
         if not resolved_ip and not skip_ssrf_check:
             # Never hand the bare name to the connector: it would resolve it again after the check.
-            pinned = await asyncio.to_thread(resolve_validated, host, allow_private=True)
+            pinned = await _run_in_dns_executor(resolve_validated, host, allow_private=True)
             if pinned is None:
                 return None, True
             resolved_ip = str(pinned[0])
@@ -407,6 +437,57 @@ async def _resolve_probe_target(host: str, *, skip_ssrf_check: bool) -> tuple[st
     return host, False
 
 
+_MAX_PROBE_ADDRESSES = 4
+
+
+def _system_addresses(host: str, skip_ssrf_check: bool) -> list[str]:
+    """All A/AAAA addresses of the system resolver; blocked ones are dropped unless the check is skipped."""
+    try:
+        infos = socket.getaddrinfo(host, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+    except (OSError, UnicodeError):
+        return []
+    found: list[str] = []
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(info[4][0].split("%")[0])
+        except ValueError:
+            continue
+        if (skip_ssrf_check or not _is_ip_blocked_for_ssrf(ip)) and str(ip) not in found:
+            found.append(str(ip))
+    return found
+
+
+async def _resolve_probe_addresses(host: str, *, skip_ssrf_check: bool) -> list[str]:
+    """Validated addresses to try in order (empty: blocked or unresolvable).
+
+    The primary address of ``_resolve_probe_target`` comes first, then the other IP family,
+    so a broken family does not make a dual-stack host look down.
+    """
+    primary, is_hostname = await _resolve_probe_target(host, skip_ssrf_check=skip_ssrf_check)
+    if primary is None:
+        return []
+    if not is_hostname:
+        return [primary]
+    try:
+        extra = await _run_in_dns_executor(_system_addresses, host, skip_ssrf_check)
+    except Exception:  # noqa: BLE001 - fallback addresses are optional
+        extra = []
+    try:
+        primary_v6 = ipaddress.ip_address(primary).version == 6
+    except ValueError:
+        return [primary]  # skip_ssrf_check without any answer: keep the name
+    others = [a for a in extra if a != primary]
+    other_family = [a for a in others if (":" in a) != primary_v6]
+    same_family = [a for a in others if (":" in a) == primary_v6]
+    return ([primary, *other_family, *same_family])[:_MAX_PROBE_ADDRESSES]
+
+
+def _attempt_budget(timeout_seconds: float, count: int) -> float:
+    """Per-address share of the check timeout, so all fallbacks together stay within it."""
+    return max(1.0, timeout_seconds / max(1, count))
+
+
+@_with_deadline
 async def ping(host: str, timeout_seconds: int = 4, *, skip_ssrf_check: bool = False) -> CheckResult:
     """
     Ping a host using system ping command.
@@ -424,11 +505,11 @@ async def ping(host: str, timeout_seconds: int = 4, *, skip_ssrf_check: bool = F
     if sys.platform not in ("linux", "linux2"):
         return CheckResult(ok=False, detail="unsupported platform")
 
-    effective_host, _ = await _resolve_probe_target(host, skip_ssrf_check=skip_ssrf_check)
-    if effective_host is None:
+    addresses = await _resolve_probe_addresses(host, skip_ssrf_check=skip_ssrf_check)
+    if not addresses:
         return CheckResult(ok=False, detail="blocked host")
 
-    def _run() -> CheckResult:
+    def _run_one(effective_host: str, timeout_seconds: float) -> CheckResult:
         import subprocess
 
         start = time.perf_counter()
@@ -468,6 +549,16 @@ async def ping(host: str, timeout_seconds: int = 4, *, skip_ssrf_check: bool = F
             detail = _sanitize_error(out.strip())
         return CheckResult(ok=False, latency_ms=lat, detail=detail)
 
+    def _run() -> CheckResult:
+        budget = _attempt_budget(timeout_seconds, len(addresses))
+        first_failure: CheckResult | None = None
+        for address in addresses:
+            result = _run_one(address, int(budget))
+            if result.ok:
+                return result
+            first_failure = first_failure or result
+        return first_failure  # type: ignore[return-value]
+
     # Use semaphore to limit concurrent pings
     sem = _get_semaphore("ping")
     loop = asyncio.get_running_loop()
@@ -506,6 +597,13 @@ def _pinned_request(
     return url, ssl_extensions, {**base_headers, "Host": host_header}
 
 
+async def _fetch_headers(client, method: str, url: str, extensions, headers):
+    """Return status and headers without reading the body; the connection is closed on return."""
+    async with client.stream(method, url, extensions=extensions, headers=headers) as response:
+        return response
+
+
+@_with_deadline
 async def http_head(
     url: str,
     timeout_seconds: float = 5.0,
@@ -559,7 +657,12 @@ async def http_head(
     candidate_ips: list[str] = []
     if hostname:
         # Prefer our own parallel DNS lookup (Quad9 + Cloudflare): independent of the container resolver.
-        public_ip = await _resolve_host_via_public_dns_first_answer(hostname)
+        try:
+            ipaddress.ip_address(hostname)
+            hostname_is_literal = True  # a literal needs no DNS query (and must not be sent to public resolvers)
+        except ValueError:
+            hostname_is_literal = False
+        public_ip = None if hostname_is_literal else await _resolve_host_via_public_dns_first_answer(hostname)
         if public_ip:
             try:
                 if not skip_ssrf_check and _is_ip_blocked_for_ssrf(ipaddress.ip_address(public_ip)):
@@ -568,15 +671,13 @@ async def http_head(
             except ValueError:
                 pass
         if not skip_ssrf_check:
-            system_ips = await asyncio.to_thread(resolve_validated, hostname, allow_private=True)
+            system_ips = await _run_in_dns_executor(resolve_validated, hostname, allow_private=True)
             if system_ips is None:
                 return CheckResult(ok=False, detail="blocked host")
             candidate_ips.extend(str(ip) for ip in system_ips if str(ip) not in candidate_ips)
 
     auth = httpx.BasicAuth(*basic_auth) if basic_auth else None
     base_headers = {"User-Agent": _deterministic_user_agent(target_id)}
-
-    # Maximum redirects to follow (SSRF protection)
 
     start = time.perf_counter()
     try:
@@ -610,11 +711,11 @@ async def http_head(
                         # Use HEAD if preferred (avoids affecting visitor counters)
                         # Fallback to GET if HEAD returns 4xx/5xx (some servers don't support HEAD)
                         if prefer_head:
-                            resp = await client.head(current_url, extensions=current_ext, headers=current_headers)
+                            resp = await _fetch_headers(client, "HEAD", current_url, current_ext, current_headers)
                             if resp.status_code >= 400:
-                                resp = await client.get(current_url, extensions=current_ext, headers=current_headers)
+                                resp = await _fetch_headers(client, "GET", current_url, current_ext, current_headers)
                         else:
-                            resp = await client.get(current_url, extensions=current_ext, headers=current_headers)
+                            resp = await _fetch_headers(client, "GET", current_url, current_ext, current_headers)
 
                         # Redirects: validate target for SSRF, but do not follow.
                         if resp.status_code in (301, 302, 303, 307, 308):
@@ -686,6 +787,7 @@ async def http_head(
 _X509_V_ERR_CERT_HAS_EXPIRED = 10
 
 
+@_with_deadline
 async def cert_expiration(
     host: str,
     port: int = 443,
@@ -765,8 +867,44 @@ async def cert_expiration(
         return await loop.run_in_executor(_EXECUTOR, _run)
 
 
+class ProbeHostResolution:
+    """Resolve and SSRF-check one host once; all port checks of a cycle share the pinned address.
+
+    The lookup runs as one shielded task, so a port whose deadline expires does not cancel it for the others.
+    """
+
+    def __init__(self, host: str, *, skip_ssrf_check: bool = False) -> None:
+        self._host = host
+        self._skip_ssrf_check = skip_ssrf_check
+        self._task: asyncio.Future[list[str]] | None = None
+
+    async def addresses(self) -> list[str]:
+        """Validated addresses in connect order; empty when the host is blocked or cannot be resolved."""
+        if self._task is None:
+            self._task = asyncio.ensure_future(
+                _resolve_probe_addresses(self._host, skip_ssrf_check=self._skip_ssrf_check)
+            )
+        return await asyncio.shield(self._task)
+
+    async def connect_host(self) -> str | None:
+        """First validated address, or ``None`` when the host is blocked or cannot be resolved."""
+        addresses = await self.addresses()
+        return addresses[0] if addresses else None
+
+    def close(self) -> None:
+        """Cancel a lookup that is still running (a hung resolver after the cycle ended)."""
+        if self._task is not None and not self._task.done():
+            self._task.cancel()
+
+
+@_with_deadline
 async def tcp_connect(
-    host: str, port: int, timeout_seconds: float = 5.0, *, skip_ssrf_check: bool = False
+    host: str,
+    port: int,
+    timeout_seconds: float = 5.0,
+    *,
+    skip_ssrf_check: bool = False,
+    resolution: ProbeHostResolution | None = None,
 ) -> CheckResult:
     """
     Check if a TCP port is open and measure connection time.
@@ -776,21 +914,28 @@ async def tcp_connect(
             port: TCP port
             timeout_seconds: Connection timeout
             skip_ssrf_check: If True, skip SSRF validation
+            resolution: Shared, already validated resolution of ``host``; resolved here when omitted
     """
-    connect_host, _ = await _resolve_probe_target(host, skip_ssrf_check=skip_ssrf_check)
-    if connect_host is None:
+    if resolution is not None:
+        addresses = await resolution.addresses()
+    else:
+        addresses = await _resolve_probe_addresses(host, skip_ssrf_check=skip_ssrf_check)
+    if not addresses:
         return CheckResult(ok=False, detail="blocked host")
 
     def _run() -> CheckResult:
         start = time.perf_counter()
-        try:
-            with socket.create_connection((connect_host, port), timeout=timeout_seconds):
-                pass
-            elapsed_ms = (time.perf_counter() - start) * 1000.0
-            return CheckResult(ok=True, latency_ms=elapsed_ms)
-        except OSError as e:
-            elapsed_ms = (time.perf_counter() - start) * 1000.0
-            return CheckResult(ok=False, latency_ms=elapsed_ms, detail=_normalize_error_type(e))
+        budget = _attempt_budget(timeout_seconds, len(addresses))
+        first_error: OSError | None = None
+        for address in addresses:
+            try:
+                with socket.create_connection((address, port), timeout=min(budget, timeout_seconds)):
+                    pass
+                return CheckResult(ok=True, latency_ms=(time.perf_counter() - start) * 1000.0)
+            except OSError as e:
+                first_error = first_error or e
+        elapsed_ms = (time.perf_counter() - start) * 1000.0
+        return CheckResult(ok=False, latency_ms=elapsed_ms, detail=_normalize_error_type(first_error))
 
     # Use semaphore to limit concurrent TCP connections
     sem = _get_semaphore("tcp")
@@ -799,9 +944,41 @@ async def tcp_connect(
         return await loop.run_in_executor(_EXECUTOR, _run)
 
 
-# ---------------------------------------------------------------------------
+async def tcp_connect_ports(
+    host: str,
+    ports: list[int],
+    *,
+    start_delays: list[float] | None = None,
+    skip_ssrf_check: bool = False,
+) -> list[CheckResult]:
+    """Check several TCP ports of one host: one validated resolution, at most ``MAX_CONCURRENT_TCP_PER_TARGET`` at once.
+
+    Results keep the order of ``ports``; each port is measured and bounded by its own deadline.
+    ``start_delays`` staggers the connection starts (jitter) and is aligned with ``ports``.
+    """
+    resolution = ProbeHostResolution(host, skip_ssrf_check=skip_ssrf_check)
+    gate = asyncio.Semaphore(MAX_CONCURRENT_TCP_PER_TARGET)
+    delays = start_delays or [0.0] * len(ports)
+
+    async def one(port: int, delay: float) -> CheckResult:
+        if delay > 0:
+            await asyncio.sleep(delay)
+        async with gate:
+            return await tcp_connect(host, port, skip_ssrf_check=skip_ssrf_check, resolution=resolution)
+
+    try:
+        outcomes = await asyncio.gather(
+            *(one(p, d) for p, d in zip(ports, delays, strict=True)), return_exceptions=True
+        )
+    finally:
+        resolution.close()
+    for outcome in outcomes:
+        if isinstance(outcome, BaseException):
+            raise outcome
+    return outcomes  # type: ignore[return-value]
+
+
 # Connectivity Check - Verify Application's Own Internet Connection
-# ---------------------------------------------------------------------------
 
 # Reference hosts that are considered "always available"
 # We check multiple to avoid false positives if one is temporarily down
@@ -906,11 +1083,112 @@ async def check_connectivity(timeout_seconds: float = 2.0) -> CheckResult:
     )
 
 
-async def has_connectivity(timeout_seconds: float = 2.0) -> bool:
-    """
-    Quick check if the application has internet connectivity.
+# Network port checks (UDP via the Nmap worker) and service identity
 
-    Convenience wrapper around check_connectivity() that returns a simple bool.
+# Port status is the transport dimension; service identity is a separate one (see assess_service_identity).
+PORT_UP = "up"
+PORT_DOWN = "down"
+PORT_UNKNOWN = "unknown"
+SERVICE_IDENTIFIED = "identified"
+SERVICE_UNKNOWN = "unknown"
+SERVICE_CHANGED = "changed"
+
+# Only these Nmap states are unambiguous. filtered, open|filtered, closed|filtered, unfiltered and
+# anything unexpected stay UNKNOWN: they never raise a downtime and open|filtered is never UP.
+_UDP_STATE_STATUS = {"open": PORT_UP, "closed": PORT_DOWN}
+UDP_SCAN_TIMEOUT_SECONDS = 60.0
+
+
+def udp_state_status(state: str | None) -> str:
+    """Map an Nmap UDP port state to the internal port status."""
+    return _UDP_STATE_STATUS.get(state or "", PORT_UNKNOWN)
+
+
+@dataclass(frozen=True)
+class PortCheck:
+    """Outcome of one protocol + port check; ``raw_state`` is the Nmap state, recorded unchanged."""
+
+    protocol: str
+    port: int
+    status: str
+    raw_state: str | None = None
+    detail: str | None = None
+    latency_ms: float | None = None
+
+
+async def udp_scan_ports(
+    host: str,
+    ports: list[int],
+    *,
+    timeout_seconds: float = UDP_SCAN_TIMEOUT_SECONDS,
+    scan=None,
+) -> dict[int, PortCheck]:
+    """Scan exactly the configured UDP ports (no service detection) and map each to a status.
+
+    A failing scan engine (worker down, missing privileges, crash, invalid result, timeout) says nothing
+    about the target, so every port becomes UNKNOWN with the error code; it never becomes DOWN. A port
+    missing from the result is UNKNOWN too.
     """
-    result = await check_connectivity(timeout_seconds)
-    return result.ok
+    if scan is None:
+        from app.services.nmap_client import request_scan as scan
+
+    def unknown_all(detail: str) -> dict[int, PortCheck]:
+        return {p: PortCheck("udp", p, PORT_UNKNOWN, None, detail) for p in ports}
+
+    try:
+        result = await scan(host, udp_ports=list(ports), timeout=timeout_seconds, detect_services=False)
+    except Exception as exc:  # noqa: BLE001 - any scan-engine failure is UNKNOWN, never a target outage
+        code = getattr(getattr(exc, "error", None), "code", None) or type(exc).__name__
+        _log.warning("UDP scan engine failure for %s: %s", host, code)
+        return unknown_all(f"scan {code}")
+    observed = {(p.protocol, p.port): p for h in result.hosts for p in h.ports}
+    checks: dict[int, PortCheck] = {}
+    for port in ports:
+        found = observed.get(("udp", port))
+        if found is None or not result.complete:
+            checks[port] = PortCheck("udp", port, PORT_UNKNOWN, found.state if found else None, "no result")
+        else:
+            checks[port] = PortCheck("udp", port, udp_state_status(found.state), found.state, found.reason)
+    return checks
+
+
+@dataclass(frozen=True)
+class IdentityAssessment:
+    """Result of comparing a fresh service detection with the stored base identity."""
+
+    identity: str | None  # None: nothing to judge, keep the stored value
+    detail: str | None = None
+    adopt: bool = False  # store the observed service as the new base
+    version: str | None = None
+    version_changed: bool = False
+
+
+def assess_service_identity(stored: dict | None, service) -> IdentityAssessment:
+    """Compare an explicit service re-detection with the stored identity.
+
+    A changed version string (an update) is only a diagnostic note. A different service name or product
+    is SERVICE_CHANGED. Neither ever affects the port status: identity is not availability.
+    """
+    # Stored values are truncated on write, so compare the observed ones truncated alike.
+    name = (getattr(service, "name", None) or "")[:SERVICE_NAME_MAX].strip()
+    if service is None or getattr(service, "method", None) != "probed" or not name:
+        return IdentityAssessment(None)
+    product = (getattr(service, "product", None) or "")[:SERVICE_TEXT_MAX].strip()
+    version = (getattr(service, "version", None) or "")[:SERVICE_TEXT_MAX].strip()
+    old_name = ((stored or {}).get("service_name") or "").strip()
+    if not old_name or (stored or {}).get("service_identity") != SERVICE_IDENTIFIED:
+        return IdentityAssessment(SERVICE_IDENTIFIED, None, adopt=True, version=version)
+    old_product = ((stored or {}).get("service_product") or "").strip()
+    old_version = ((stored or {}).get("service_version") or "").strip()
+    if name.lower() != old_name.lower() or product.lower() != old_product.lower():
+        return IdentityAssessment(
+            SERVICE_CHANGED, f"service identity changed: {old_product or old_name} -> {product or name}"
+        )
+    if version != old_version:
+        return IdentityAssessment(
+            SERVICE_IDENTIFIED,
+            f"version changed: {old_version or '-'} -> {version or '-'}",
+            version=version,
+            version_changed=True,
+        )
+    return IdentityAssessment(SERVICE_IDENTIFIED)

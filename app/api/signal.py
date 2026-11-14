@@ -43,6 +43,7 @@ from ..services.notifications.signal_errors import (
     SignalTimeout,
     SignalUnavailable,
 )
+from ..utils.constants import SettingKeys
 from ..utils.deps import get_conn
 from ..utils.phone import normalize_phone
 from ..utils.rate_limit import RATE_LIMIT_DEFAULT, rate_limit, rate_limit_user
@@ -63,9 +64,6 @@ _PREAUTH_GUARD = rate_limit(RATE_LIMIT_DEFAULT)
 def _signal_limits(limit: str) -> list[Any]:
     """Pre-auth IP guard plus a per-user budget (all tokens of a user share it)."""
     return [Depends(_PREAUTH_GUARD), Depends(rate_limit_user(limit, require_admin))]
-
-
-# ─── Models ─────────────────────────────────────────────────────────────────────
 
 
 def _normalize_e164(v: str) -> str:
@@ -104,23 +102,21 @@ class VerifyRequest(BaseModel):
     code: str = Field(..., pattern=r"^[0-9]{6}$", description="6-digit verification code")
 
 
-# ─── Helpers ────────────────────────────────────────────────────────────────────
-
-
-# ─── Endpoints ──────────────────────────────────────────────────────────────────
-
-
-@router.get("/status")
-def signal_status(_user=Depends(get_current_user)):
-    """Get Signal status.
+@router.get("/status", dependencies=[Depends(rate_limit("30/minute"))])
+def signal_status(refresh: bool = False, _user=Depends(get_current_user)):
+    """Get Signal status; admin-only ``refresh=true`` bypasses the 60 s status cache.
 
     Returns status information for UI badges.
     Always returns 200 with status object - never fails hard.
     """
     backend = get_signal_backend()
+    is_admin = bool(_user and _user.get("is_admin"))
     try:
-        status_obj = backend.status()
-        return status_obj.to_dict()
+        status_obj = backend.status(force_refresh=refresh and is_admin)
+        data = status_obj.to_dict()
+        if not is_admin:
+            data["accounts"] = []  # account metadata is admin-only
+        return data
 
     except (SignalUnavailable, SignalTimeout) as e:
         # Return degraded status with error in payload (always 200 for UI badges)
@@ -148,7 +144,6 @@ def signal_send(
         SignalQueueLimitError,
         get_spooler,
     )
-    from ..utils.constants import SettingKeys
 
     signal_sender_number = sqlite_db.get_setting(conn, SettingKeys.SIGNAL_API_SENDER_NUMBER, None)
     if not signal_sender_number:
@@ -291,8 +286,16 @@ def signal_register(body: RegisterRequest, _admin=Depends(require_admin)):
         ) from e
 
     except SignalSendFailed as e:
-        if "captcha" in str(e).lower():
-            raise HTTPException(status_code=400, detail="Signal requires a captcha to continue registration") from e
+        if e.code == "captcha_required":
+            raise HTTPException(
+                status_code=400,
+                detail={"code": e.code, "message": "Signal requires a captcha to continue registration"},
+            ) from e
+        if e.code == "already_registered":
+            raise HTTPException(
+                status_code=400,
+                detail={"code": e.code, "message": "This number is already registered"},
+            ) from e
         raise HTTPException(status_code=400, detail="Signal registration failed; check the number and try again") from e
 
     except (SignalUnavailable, SignalTimeout) as e:
@@ -338,24 +341,26 @@ class ProfileRequest(BaseModel):
 
 
 @router.post("/profile-name", status_code=status.HTTP_204_NO_CONTENT)
-def signal_update_profile(request: ProfileRequest, _admin=Depends(require_admin)):
+def signal_update_profile(request: ProfileRequest, _admin=Depends(require_admin), conn=Depends(get_conn)):
     """Update Signal profile name and avatar (admin only).
 
     Sets the display name shown in Signal chats and the justUp avatar.
     Avatar path resolution is handled by the backend.
     """
     backend = get_signal_backend()
+    configured = sqlite_db.get_setting(conn, SettingKeys.SIGNAL_API_SENDER_NUMBER, None)
 
     try:
         # Backend handles avatar path resolution
-        backend.update_profile(name=request.name)
+        backend.update_profile(name=request.name, sender=configured or None)
         return Response(status_code=204)
 
     except SignalSendFailed as e:
         raise HTTPException(status_code=400, detail="Signal profile update failed; try again later") from e
 
     except SignalNotRegistered as e:
-        raise HTTPException(status_code=409, detail="No Signal account is linked") from e
+        detail = "Configured Signal sender is not registered" if configured else "No Signal account is linked"
+        raise HTTPException(status_code=409, detail=detail) from e
 
     except (SignalUnavailable, SignalTimeout) as e:
         _log.warning("Signal unavailable for profile update: %s", e)

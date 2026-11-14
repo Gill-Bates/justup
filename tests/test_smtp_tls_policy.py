@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import re
+from html import unescape
 from pathlib import Path
 
 import pytest
@@ -43,15 +44,6 @@ def _encryption_key(monkeypatch: pytest.MonkeyPatch):
     crypto.reset_fernet_cache()
     yield
     crypto.reset_fernet_cache()
-
-
-@pytest.fixture
-def db_path(tmp_path: Path) -> Path:
-    path = tmp_path / "db" / "justup.db"
-    connection = sqlite_db.connect(path)
-    sqlite_db.init_schema(connection)
-    sqlite_db.close_connection(connection)
-    return path
 
 
 @pytest.fixture
@@ -311,13 +303,27 @@ def _message():
 
 def test_every_smtp_connection_and_tls_decision_goes_through_the_shared_modules():
     """Alert mail and test mail share one spooler closure; no other module may open SMTP or re-decide TLS."""
-    opener = re.compile(r"smtplib\.SMTP(_SSL)?\(|from smtplib import")
+    # Importing smtplib for its exception types is fine; constructing a client or importing names from it is not.
+    opener = re.compile(
+        r"^\s*from smtplib import|^\s*import smtplib\b(?=[\s\S]*\b(?:SMTP(?:_SSL)?|LMTP)\s*\()",
+        re.MULTILINE,
+    )
     tls_key = re.compile(r"SettingKeys\.SMTP_USE_TLS")
     offenders = []
     for path in APP_ROOT.rglob("*.py"):
         text = path.read_text(encoding="utf-8")
-        if path.name != "smtp_transport.py" and opener.search(text):
-            offenders.append(f"{path.name}: opens SMTP itself")
-        if path.name not in {"smtp_settings.py", "settings.py"} and tls_key.search(text):
-            offenders.append(f"{path.name}: reads smtp_use_tls itself")
+        rel = path.relative_to(APP_ROOT).as_posix()
+        if rel != "services/notifications/smtp_transport.py" and opener.search(text):
+            offenders.append(f"{rel}: opens SMTP itself")
+        if rel not in {"services/notifications/smtp_settings.py", "api/settings.py"} and tls_key.search(text):
+            offenders.append(f"{rel}: reads smtp_use_tls itself")
     assert offenders == []
+
+
+@pytest.mark.parametrize("fragment", ["settings-smtp", "settings-signal"])
+def test_settings_fragments_list_every_allowed_placeholder(client, fragment):
+    from app.services.notifications.email_template import ALLOWED_PLACEHOLDERS
+
+    html = unescape(client.get(f"/ui/fragments/{fragment}").text)
+    missing = [p for p in sorted(ALLOWED_PLACEHOLDERS) if f"<code>{{{{{p}}}}}</code>" not in html]
+    assert not missing

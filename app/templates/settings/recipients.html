@@ -1,11 +1,24 @@
 {# Settings: Recipients Tab Content #}
 <div class="card shadow-sm settings-editor">
 	<div class="card-header d-flex justify-content-between align-items-center">
-		<h2 class="h6 mb-0"><span class="material-icons me-1" style="font-size: 18px;" aria-hidden="true">notifications_active</span>Alert
+		<h2 class="h6 mb-0"><span class="material-icons ju-icon-18 me-1" aria-hidden="true">notifications_active</span>Alert
 			Recipients</h2>
 		<button type="button" class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#addRecipientModal">
-			<span class="material-icons me-1" style="font-size: 16px;" aria-hidden="true">person_add</span>New Recipient
+			<span class="material-icons ju-icon-16 me-1" aria-hidden="true">person_add</span>New Recipient
 		</button>
+	</div>
+	{# Filter-as-you-type search (DESIGN.md, "Filter-as-you-type search"); outside the list so reloads keep the query #}
+	<div class="px-3 py-2 border-bottom">
+		<div class="ui-search" role="search" aria-label="Recipients">
+			<label class="visually-hidden" for="recipients-search">Search recipients</label>
+			<span class="material-icons ui-search-icon" aria-hidden="true">search</span>
+			<input type="search" class="form-control ui-search-input" id="recipients-search" placeholder="Search recipients"
+				maxlength="100" autocomplete="off" autocapitalize="off" spellcheck="false" inputmode="search" enterkeyhint="search">
+			<button type="button" class="ui-search-clear" id="recipients-search-clear" aria-label="Clear search" hidden>
+				<span class="material-icons" aria-hidden="true">close</span>
+			</button>
+		</div>
+		<p class="visually-hidden" id="recipients-search-status" role="status" aria-live="polite" aria-atomic="true"></p>
 	</div>
 	<div class="card-body p-0">
 		<div id="recipients-list" class="ju-table-viewport" role="region" tabindex="0" aria-label="Recipients">
@@ -15,6 +28,11 @@
 					<span class="visually-hidden">Loading...</span>
 				</div>
 			</div>
+		</div>
+		<div class="ui-empty text-center text-body-secondary m-3" id="recipients-search-empty" hidden>
+			<span class="material-icons fs-1 mb-2" aria-hidden="true">search_off</span>
+			<p class="mb-3">No recipients match <span class="targets-search-term" id="recipients-search-term"></span></p>
+			<button type="button" class="btn btn-outline-secondary btn-sm" id="recipients-search-reset">Show all recipients</button>
 		</div>
 	</div>
 </div>

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "justup"
-version = "1.0.2"
+version = "1.0.3"
 description = "justUp! - Lightweight Uptime Monitor"
 requires-python = ">=3.13"
 license = "MIT"
@@ -12,30 +12,31 @@ license = "MIT"
 # cryptography 50.x. Upstream lifted the cap on its release branch (commit e064c2c8,
 # 6.3.1 plus one setup.py line) but has not tagged a release. justUp therefore ships
 # its own, once-built SSLyze wheel, version 6.3.1+justup.1, stored in
-# docker/vendor/wheels/ and pinned by SHA-256 in docker/requirements.lock. Docker and
-# CI install only that wheel (nothing is built from source); provenance, patch and the
+# docker/vendor/wheels/. Docker and CI verify it against docker/vendor/PROVENANCE.json
+# and install only that wheel (nothing is built from source); provenance, patch and the
 # controlled rebuild are in docker/vendor/. A local ("+justup.N") version never exists
 # on PyPI, so the pin cannot be satisfied by anything else. Move back to a PyPI
 # "sslyze>=" requirement once an official release allows cryptography>=50.
 dependencies = [
-    "cryptography==50.0.2",
-    "dnspython==2.9.2",
-    "email-validator==2.3.0",
-    "fastapi==0.162.0",
-    "geoip2==5.3.0",
-    "httpx==0.28.1",
-    "jinja2==3.1.6",
-    "markdown==3.11.2",
-    "matplotlib==3.11.2",
-    "Pillow==13.0.0",
-    "pydantic==2.14.2",
-    "python-multipart==0.0.33",
-    "qrcode==8.2",
-    "reportlab==5.1.0",
+    "cryptography>=50.0.2",
+    "defusedxml>=0.7.1",
+    "dnspython>=2.9.2",
+    "email-validator>=2.3.0",
+    "fastapi>=0.162.3",
+    "geoip2>=5.3.0",
+    "httpx>=0.28.1",
+    "jinja2>=3.1.6",
+    "markdown>=3.11.3",
+    "matplotlib>=3.11.2",
+    "Pillow>=13.0.0",
+    "pydantic>=2.14.3",
+    "python-multipart>=0.0.33",
+    "qrcode>=8.2",
+    "reportlab>=5.1.0",
     "sslyze==6.3.1+justup.1",
-    "starlette==1.10.0",
-    "uharfbuzz==0.57.0",
-    "uvicorn==0.54.0",
+    "starlette>=1.10.0",
+    "uharfbuzz>=0.57.0",
+    "uvicorn>=0.54.0",
 ]
 
 [project.optional-dependencies]
@@ -46,10 +47,10 @@ dependencies = [
 dev = [
     "httpx2==2.16.0",
     "pytest==9.2.0",
-    "pytest-asyncio==1.4.1.post1",
+    "pytest-asyncio==1.5.0",
     "pytest-cov==7.1.0",
     "pytest-xdist==3.8.0",
-    "ruff==0.17.3",
+    "ruff==0.17.5",
 ]
 # Documentation toolchain (MkDocs + Material). Direct dependencies are pinned
 # here; transitive ones are resolved by docs-build.yml, frozen with
@@ -57,8 +58,8 @@ dev = [
 # direct deps.
 docs = [
     "mkdocs==1.6.1",
-    "mkdocs-material==9.8.0",
-    "pymdown-extensions==12.3",
+    "mkdocs-material==9.8.1",
+    "pymdown-extensions==13.1",
 ]
 
 [tool.setuptools.packages.find]
@@ -152,7 +153,7 @@ ignore = [
     "PLR0912",
     "PLR0913",
     "PLR0915",
-    # ping/mtr/signal-cli/whatweb are resolved from PATH on purpose - the image
+    # ping/signal-cli/whatweb/nmap are resolved from PATH on purpose - the image
     # provides them, and hardcoding /usr/bin would break local dev (S607). Every
     # call passes a list argv with a "--" option terminator and no shell (S603).
     "S603",
@@ -194,6 +195,8 @@ extend-immutable-calls = [
 # The startup banner writes to stdout, and its ASCII art is padded with
 # trailing spaces that keep the box aligned.
 "app/utils/banner.py" = ["T20", "W291"]
+# The canonical header path line (`# app/services/ixp_import.py`) parses as code.
+"app/services/ixp_import.py" = ["ERA001"]
 # Assertions are the direct contract checks in pytest cases.
 "tests/*.py" = ["S101"]
 # Repo tooling: writing to stdout is the whole point of these scripts.

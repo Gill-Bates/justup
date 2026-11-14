@@ -9,29 +9,24 @@
 Principles:
 - Deterministic state model
 - No mixed semantics (status vs. flags)
-- O(n) processing where n is the number of hops
+- O(n) processing for n hops
 - Clear separation: detection → interpolation → formatting
-
-Note: Bisect lookups add O(b·log r) where b=blocks, r=responding hops,
-but total complexity is dominated by linear scans → O(n) in practice.
 """
 
 from __future__ import annotations
 
-import bisect
 import copy
 from typing import Any
 
 from app.services.route_timeline import NO_REPLY_LABEL, no_reply_run_label
+from app.services.traceroute_service import STATUS_OK, STATUS_PARTIAL, STATUS_TIMEOUT
+from app.utils.constants import HopStatus
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Constants / Types
 # ──────────────────────────────────────────────────────────────────────────────
 
-STATUS_OK = "ok"
-STATUS_PARTIAL = "partial"
-STATUS_TIMEOUT = "timeout"
-STATUS_INTERPOLATED = "interpolated"
+STATUS_INTERPOLATED = HopStatus.INTERPOLATED
 
 Hop = dict[str, Any]
 
@@ -56,158 +51,30 @@ def interpolate_route(
     *,
     destination_geo: dict[str, Any] | None = None,
 ) -> list[Hop]:
-    """Interpolate ICMP-blocked hops deterministically.
+    """Mark silent hops that lie between answering hops as interpolated (estimated).
 
     Rules:
-    - Only hops with status == timeout are interpolated
-    - Trailing timeouts (no responding hop after them) stay timeout
-    - Interpolated hops get status == interpolated
-    - Latency is linearly interpolated between surrounding responding hops
-    - Selective copy to avoid mutation (only modified hops are copied)
-
-    Complexity: O(n) where n is the number of hops.
-    (Bisect lookups are O(log r) per block, but dominated by linear scans.)
-
-    Warning: Geographic hint is applied to all interpolated hops regardless
-    of plausibility (all get destination coords, not interpolated path).
+    - Only hops with status == timeout are marked
+    - Trailing timeouts (no answering hop after them) stay timeout
+    - Interpolated hops carry no RTT: nothing was measured there
+    - Selective copy to avoid mutating the input
     """
-
     if not hops:
         return hops
-
-    # Shallow copy of list (individual hops copied only when modified)
     hops = list(hops)
-
-    # ------------------------------------------------------------------
-    # 1. Collect responding hops (anchors)
-    # ------------------------------------------------------------------
-    responding: list[tuple[int, float]] = []  # (hop_num, latency)
-
-    for i, h in enumerate(hops):
-        if h.get("status") in (STATUS_OK, STATUS_PARTIAL):
-            hop_num = h.get("hop", i + 1)
-            lat = h.get("latency_ms")
-            avg = None
-
-            if isinstance(lat, dict):
-                avg = lat.get("avg")
-            elif isinstance(lat, (int, float)):
-                avg = float(lat)
-
-            if avg is not None:
-                responding.append((hop_num, float(avg)))
-
-    # Sort responding hops for bisect (assumes hops are usually ordered,
-    # but handles out-of-order probes)
-    responding.sort(key=lambda r: r[0])
-
-    # ------------------------------------------------------------------
-    # 2. Detect timeout blocks
-    # ------------------------------------------------------------------
-    detected_blocks: list[tuple[int, int]] = []
-    block_start: int | None = None
-    last_timeout_hop: int | None = None
-
-    for i, h in enumerate(hops):
-        hop_num = h.get("hop", i + 1)
-        if h.get("status") == STATUS_TIMEOUT:
-            if block_start is None:
-                block_start = hop_num
-            last_timeout_hop = hop_num
-        elif block_start is not None:
-            detected_blocks.append((block_start, last_timeout_hop))  # type: ignore[arg-type]
-            block_start = None
-
-    if block_start is not None and last_timeout_hop is not None:
-        detected_blocks.append((block_start, last_timeout_hop))
-
-    if not detected_blocks:
+    last_answered = max((h.get("hop", i + 1) for i, h in enumerate(hops) if h.get("status") == STATUS_OK), default=None)
+    if last_answered is None:
         return hops
-
-    # ------------------------------------------------------------------
-    # 3. Precompute block anchors (O(log r) lookup with bisect)
-    # ------------------------------------------------------------------
-    block_anchors: dict[int, tuple[float, float]] = {}
-    hop_to_block: dict[int, int] = {}
-
-    # Extract hop numbers for bisect (already sorted above)
-    responding_nums = [r[0] for r in responding]
-
-    # A trailing block has no responding hop after it: nothing was measured there, so it
-    # stays "timeout" instead of getting fabricated latencies.
-    detected_blocks = [b for b in detected_blocks if bisect.bisect_right(responding_nums, b[1]) < len(responding)]
-    if not detected_blocks:
-        return hops
-
-    for block_idx, (start, end) in enumerate(detected_blocks):
-        for h in range(start, end + 1):
-            hop_to_block[h] = block_idx
-
-        # Latency before block (O(log r) with bisect)
-        start_lat = 0.0
-        idx = bisect.bisect_left(responding_nums, start) - 1
-        if idx >= 0:
-            start_lat = responding[idx][1]
-
-        # Latency after block (O(log r) with bisect)
-        # Defaults to start_lat if no responding hop after block
-        end_lat = start_lat
-        idx = bisect.bisect_right(responding_nums, end)
-        if idx < len(responding):
-            end_lat = responding[idx][1]
-
-        block_anchors[block_idx] = (start_lat, end_lat)
-
-    # ------------------------------------------------------------------
-    # 4. Apply interpolation (selective copy to avoid mutation)
-    # ------------------------------------------------------------------
     for i, h in enumerate(hops):
-        hop_num = h.get("hop", i + 1)
-
-        if h.get("status") != STATUS_TIMEOUT:
+        if h.get("status") != STATUS_TIMEOUT or h.get("hop", i + 1) > last_answered:
             continue
-
-        block_idx = hop_to_block.get(hop_num)
-        if block_idx is None:
-            continue
-
-        # Shallow copy the hop before modifying (avoid mutating input)
         hop = copy.copy(h)
-        hops[i] = hop
-
-        block_start, block_end = detected_blocks[block_idx]
-        start_lat, end_lat = block_anchors[block_idx]
-
-        block_len = block_end - block_start + 1
-        position = hop_num - block_start + 1
-
         hop["status"] = STATUS_INTERPOLATED
         hop["_interpolated"] = True
-        hop["loss_pct"] = 100.0
-
-        # Linear interpolation (end_lat is always float, never None)
-        # Position is 1-based index within block (1 to len)
-        # block_len+1 ensures we don't hit end_lat until the hop after the block
-        if block_len > 0:
-            progress = position / (block_len + 1)
-            lat = start_lat + (end_lat - start_lat) * progress
-            hop["latency_ms"] = {
-                "avg": round(lat, 1),
-                "min": None,
-                "max": None,
-                "_interpolated": True,
-            }
-        else:
-            hop["latency_ms"] = {
-                "avg": None,
-                "min": None,
-                "max": None,
-                "_interpolated": True,
-            }
-
+        hop["rtt_ms"] = None
         if destination_geo:
             hop["_geo_hint"] = destination_geo
-
+        hops[i] = hop
     return hops
 
 
@@ -222,7 +89,7 @@ def ensure_destination_hop(
     destination_ip: str | None,
     destination_hostname: str | None = None,
     destination_geo: dict[str, Any] | None = None,
-    final_latency_ms: float | None = None,
+    final_rtt_hint_ms: float | None = None,
 ) -> list[Hop]:
     """Ensure destination hop exists as final entry."""
     if not hops or not destination_ip:
@@ -238,12 +105,11 @@ def ensure_destination_hop(
         "hop": last_hop + 1,
         "ip": destination_ip,
         "hostname": destination_hostname or "-",
-        # The destination never answered MTR: report neither its latency nor its loss. The last
-        # router's latency is kept as a hint only; "partial" avoids claiming a reached target.
-        "latency_ms": None,
-        "loss_pct": None,
+        # The destination never answered: no RTT is reported. The last router's RTT is a hint
+        # only; "partial" avoids claiming a reached target.
+        "rtt_ms": None,
         "status": STATUS_PARTIAL,
-        "_estimated_latency_ms": final_latency_ms,
+        "_estimated_latency_ms": final_rtt_hint_ms,
         "_synthetic_destination": True,
         "_via": "non-icmp",
     }
@@ -262,7 +128,7 @@ def ensure_destination_hop(
 def _make_collapsed_summary(batch: list[Hop]) -> Hop:
     """Create a summary row for consecutive hops without reply (counted from the measured hop numbers)."""
     first = batch[0]
-    last = batch[len(batch) - 1]
+    last = batch[-1]
     count = len(batch)
 
     hop_display = str(first.get("hop")) if count == 1 else f"{first.get('hop')} - {last.get('hop')}"
@@ -272,7 +138,6 @@ def _make_collapsed_summary(batch: list[Hop]) -> Hop:
         "ip_display": "—",
         "hostname_display": NO_REPLY_LABEL if count == 1 else no_reply_run_label(count),
         "latency_display": "—",
-        "loss_display": "—",
         "status": STATUS_INTERPOLATED,
         "status_display": STATUS_TIMEOUT,  # what the user sees: no reply, not an estimate
         "_collapsed": True,

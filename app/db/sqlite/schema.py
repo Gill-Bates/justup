@@ -26,8 +26,102 @@ _log = logging.getLogger("app.db.sqlite")
 _OVERALL_STATUS_SQL = ", ".join(f"'{status.value}'" for status in CheckStatus)
 
 
+def ensure_target_network_ports_table(conn: sqlite3.Connection) -> None:
+    """Create the protocol/port identity table used by network monitoring."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS target_network_ports (
+            target_id INTEGER NOT NULL REFERENCES targets(id) ON DELETE CASCADE,
+            protocol TEXT NOT NULL CHECK (protocol IN ('tcp', 'udp')),
+            port INTEGER NOT NULL CHECK (port BETWEEN 1 AND 65535),
+            source TEXT NOT NULL CHECK (source IN ('manual', 'discovered')),
+            service_name TEXT,
+            service_product TEXT,
+            service_version TEXT,
+            service_method TEXT CHECK (service_method IN ('probed', 'table')),
+            confidence INTEGER CHECK (confidence BETWEEN 0 AND 10),
+            discovered_at timestamp,
+            status TEXT CHECK (status IN ('up', 'down', 'unknown')),
+            checked_at timestamp,
+            last_up_at timestamp,
+            detail TEXT,
+            raw_state TEXT CHECK (raw_state IN (
+                'open', 'closed', 'filtered', 'unfiltered', 'open|filtered', 'closed|filtered', 'unknown'
+            )),
+            service_identity TEXT CHECK (service_identity IN ('identified', 'unknown', 'changed')),
+            identity_changed_at timestamp,
+            latency_ms REAL,
+            PRIMARY KEY (target_id, protocol, port)
+        )
+        """
+    )
+
+
+# A contact channel has content: NULL, the empty string and whitespace-only values (space, tab, CR, LF) are none.
+# Shared by the CHECKs below and the legacy normalisation of the migration (constants, never user input).
+BLANK_CHARS_SQL = "' ' || char(9, 10, 13)"
+HAS_PHONE_SQL = f"(phone IS NOT NULL AND trim(phone, {BLANK_CHARS_SQL}) <> '')"
+HAS_EMAIL_SQL = f"(email IS NOT NULL AND trim(email, {BLANK_CHARS_SQL}) <> '')"
+
+# recipients (version 2): ``user_id`` links a recipient to at most one application user (UNIQUE allows many
+# NULL), and the recipient disappears with its user. A standalone recipient (user_id IS NULL) still needs a
+# contact channel (see above); a user-bound one may have none and is then kept disabled. ``name`` and ``if_not_exists``
+# are DDL constants, never user input.
+_RECIPIENTS_DDL = f"""
+        CREATE TABLE {{if_not_exists}}{{name}} (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            phone TEXT,
+            email TEXT,
+            is_enabled INTEGER NOT NULL DEFAULT 1 CHECK (is_enabled IN (0, 1)),
+            created_at timestamp NOT NULL,
+            updated_at timestamp NOT NULL,
+            enable_for_all_targets INTEGER NOT NULL DEFAULT 0 CHECK (enable_for_all_targets IN (0, 1)),
+            user_id INTEGER UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+            CHECK (user_id IS NOT NULL OR {HAS_PHONE_SQL} OR {HAS_EMAIL_SQL}),
+            CHECK (is_enabled = 0 OR {HAS_PHONE_SQL} OR {HAS_EMAIL_SQL})
+        )
+        """
+
+# Database-side guarantees of the user <-> recipient link, so direct SQL writers cannot break it either:
+# - every new user gets a disabled, channel-less recipient (the application then fills in the channels),
+# - a user's recipient cannot be deleted on its own (it goes with the user; the user row is already gone
+#   when the foreign-key cascade deletes it, so the cascade passes),
+# - ``user_id`` never changes after the insert.
+_RECIPIENT_TRIGGER_DDLS = (
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_users_create_recipient AFTER INSERT ON users
+    BEGIN
+        INSERT INTO recipients(name, phone, email, is_enabled, enable_for_all_targets, created_at, updated_at, user_id)
+        VALUES (NEW.username, NULL, NULL, 0, 0, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), NEW.id);
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_recipients_guard_delete BEFORE DELETE ON recipients
+    WHEN OLD.user_id IS NOT NULL AND EXISTS (SELECT 1 FROM users WHERE id = OLD.user_id)
+    BEGIN
+        SELECT RAISE(ABORT, 'recipient belongs to a user');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_recipients_user_id_immutable BEFORE UPDATE OF user_id ON recipients
+    WHEN OLD.user_id IS NOT NEW.user_id
+    BEGIN
+        SELECT RAISE(ABORT, 'recipients.user_id cannot change');
+    END
+    """,
+)
+
+
+def _ensure_recipient_triggers(conn: sqlite3.Connection) -> None:
+    """Create the user <-> recipient triggers (idempotent; also restores a database that lost them)."""
+    for ddl in _RECIPIENT_TRIGGER_DDLS:
+        conn.execute(ddl)
+
+
 def _create_baseline_schema(conn: sqlite3.Connection) -> None:
-    """Create every table and index of the v1.0.0 baseline schema (idempotent, no transaction handling)."""
+    """Create every table and index of the current schema (SCHEMA_VERSION; idempotent, no transaction handling)."""
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS users (
@@ -86,6 +180,7 @@ def _create_baseline_schema(conn: sqlite3.Connection) -> None:
             enable_http_check INTEGER NOT NULL CHECK (enable_http_check IN (0, 1)),
             enable_cert_expiration INTEGER NOT NULL CHECK (enable_cert_expiration IN (0, 1)),
             enable_tcp_connect INTEGER NOT NULL DEFAULT 0 CHECK (enable_tcp_connect IN (0, 1)),
+            enable_udp_scan INTEGER NOT NULL DEFAULT 0 CHECK (enable_udp_scan IN (0, 1)),
             host TEXT NOT NULL DEFAULT '',
             ping_host TEXT,
             http_url TEXT,
@@ -100,7 +195,9 @@ def _create_baseline_schema(conn: sqlite3.Connection) -> None:
                 ignore_cert_errors INTEGER NOT NULL DEFAULT 0 CHECK (ignore_cert_errors IN (0, 1)),
                 tcp_host TEXT,
                 tcp_ports TEXT DEFAULT '80',
+                udp_ports TEXT NOT NULL DEFAULT '',
                 max_retries INTEGER NOT NULL DEFAULT 5 CHECK (max_retries >= 0),
+                down_alert_delay_minutes INTEGER NOT NULL DEFAULT 5 CHECK (down_alert_delay_minutes > 0),
                 ping_timeout_minutes INTEGER NOT NULL DEFAULT 5 CHECK (ping_timeout_minutes > 0),
                 auto_close_alert INTEGER NOT NULL DEFAULT 1 CHECK (auto_close_alert IN (0, 1)),
                 sla_enabled INTEGER NOT NULL DEFAULT 0 CHECK (sla_enabled IN (0, 1)),
@@ -114,6 +211,8 @@ def _create_baseline_schema(conn: sqlite3.Connection) -> None:
         """
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_targets_group_id ON targets(group_id)")
+
+    ensure_target_network_ports_table(conn)
 
     conn.execute(
         """
@@ -208,25 +307,12 @@ def _create_baseline_schema(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_target_alert_users_user ON target_alert_users(user_id)")
 
     # Alert recipients table (phone contacts for Signal notifications + email)
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS recipients (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            phone TEXT,
-            email TEXT,
-            is_enabled INTEGER NOT NULL DEFAULT 1 CHECK (is_enabled IN (0, 1)),
-            created_at timestamp NOT NULL,
-            updated_at timestamp NOT NULL,
-            enable_for_all_targets INTEGER NOT NULL DEFAULT 0 CHECK (enable_for_all_targets IN (0, 1)),
-            CHECK (phone IS NOT NULL OR email IS NOT NULL)
-        )
-        """
-    )
+    conn.execute(_RECIPIENTS_DDL.format(name="recipients", if_not_exists="IF NOT EXISTS "))
     # Partial unique: several recipients without a phone stay possible, a number exists once.
     conn.execute(_RECIPIENT_PHONE_UNIQUE_DDL)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_recipients_email ON recipients(email)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_recipients_enabled ON recipients(is_enabled)")
+    _ensure_recipient_triggers(conn)
 
     # Many-to-many: targets <-> recipients (which phone numbers get alerted)
     conn.execute(
@@ -270,6 +356,8 @@ def _create_baseline_schema(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_alerts_target_started ON alerts(target_id, started_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_alerts_status_started ON alerts(status, started_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_alerts_started_at ON alerts(started_at)")
+    conn.execute(ALERT_SUMMARY_INDEXES[0])
+    conn.execute(ALERT_SUMMARY_INDEXES[1])
 
     # Monitor quality time series (Quality Gate feature)
     conn.execute(
@@ -317,6 +405,7 @@ def _create_baseline_schema(conn: sqlite3.Connection) -> None:
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_report_jobs_expires ON report_jobs(expires_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_report_jobs_user ON report_jobs(user_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_report_jobs_target ON report_jobs(target_id)")
 
     # POP locations for hostname-based geolocation (Single Source of Truth)
     conn.execute(
@@ -436,6 +525,9 @@ def _create_baseline_schema(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_pop_runs_source ON pop_import_runs(source)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_pop_runs_status ON pop_import_runs(status)")
 
+    for ddl in IXP_TABLE_DDL:
+        conn.execute(ddl)
+
     ensure_notification_queue_table(conn)
     ensure_notifications_tables(conn)
     ensure_alert_dispatch_outbox_table(conn)
@@ -466,9 +558,7 @@ def _create_baseline_schema(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_targets_identity_signature ON targets(identity_signature)")
 
 
-# ---------------------------------------------------------------------------
 # Schema versioning (PRAGMA user_version)
-# ---------------------------------------------------------------------------
 
 _RECIPIENT_PHONE_UNIQUE_DDL = (
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_recipients_phone ON recipients(phone) "
@@ -477,7 +567,7 @@ _RECIPIENT_PHONE_UNIQUE_DDL = (
 
 
 def _ensure_unique_recipient_phone(conn: sqlite3.Connection) -> None:
-    """Upgrade a non-unique ``idx_recipients_phone`` of an earlier v1 database to the unique one.
+    """Upgrade a non-unique ``idx_recipients_phone`` of a restamped former version-10 database to the unique one.
 
     Existing duplicates are only reported; nothing is deleted and the old index stays in place.
     Until they are merged, create_recipient()/update_recipient() still refuse any new duplicate
@@ -504,14 +594,69 @@ def _ensure_unique_recipient_phone(conn: sqlite3.Connection) -> None:
     conn.execute(_RECIPIENT_PHONE_UNIQUE_DDL)
 
 
-# SCHEMA_VERSION 1 is the v1.0.0 baseline: the schema _create_baseline_schema() builds. Pre-release
-# databases (user_version 0 with tables, or the former 2..7 lineage) are NOT migrated; they are
-# refused (IncompatibleSchemaError) and never touched or deleted.
-# A future release bumps SCHEMA_VERSION and appends one Migration (version = the new number) to
-# MIGRATIONS that upgrades a database from ``version - 1``. _create_baseline_schema() must then
-# create the new current schema for fresh databases, so migrations only transform older ones.
-# Migrations run inside init_schema's transaction (an error rolls schema and user_version back).
-SCHEMA_VERSION = 6
+# Version 1 is the baseline of the reset schema history; version 2 links recipients to users (migration 1 -> 2).
+# The former-current stamp 10 has the version-1 layout and is migrated like version 1. Other historical
+# layouts are refused without changes.
+SCHEMA_VERSION = 2
+
+# Dashboard summary (resolved / acknowledged in the last 24 h): range scans on their own timestamps.
+ALERT_SUMMARY_INDEXES = (
+    "CREATE INDEX IF NOT EXISTS idx_alerts_status_ended ON alerts(status, ended_at)",
+    "CREATE INDEX IF NOT EXISTS idx_alerts_acknowledged_at ON alerts(acknowledged_at) WHERE is_acknowledged = 1",
+)
+
+
+# IXP peering-LAN prefixes imported from PeeringDB (ix, ixlan, ixpfx, ixfac, fac). A prefix proves
+# IXP membership, never a router position.
+# Only status "ok" records are stored; a missing record means withdrawn. ``ixp_snapshot`` is the single row
+# of the last complete, validated import.
+IXP_TABLE_DDL = (
+    """
+    CREATE TABLE IF NOT EXISTS ixp_exchanges (
+        ix_id           INTEGER PRIMARY KEY,
+        name            TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND 128),
+        city            TEXT CHECK(city IS NULL OR length(city) <= 64),
+        country         TEXT CHECK(country IS NULL OR length(country) = 2),
+        location_class  TEXT NOT NULL
+            CHECK(location_class IN ('metro', 'distributed', 'conflicting', 'unknown')),
+        ref_city        TEXT CHECK(ref_city IS NULL OR length(ref_city) <= 64),
+        ref_country     TEXT CHECK(ref_country IS NULL OR length(ref_country) = 2),
+        ref_lat         REAL CHECK(ref_lat IS NULL OR ref_lat BETWEEN -90 AND 90),
+        ref_lon         REAL CHECK(ref_lon IS NULL OR ref_lon BETWEEN -180 AND 180),
+        ref_radius_km   REAL CHECK(ref_radius_km IS NULL OR ref_radius_km > 0),
+        facility_count  INTEGER NOT NULL DEFAULT 0 CHECK(facility_count >= 0),
+        source          TEXT NOT NULL,
+        import_run_id   TEXT NOT NULL,
+        updated_at      TEXT NOT NULL,
+        CHECK(location_class != 'metro' OR (
+            ref_city IS NOT NULL AND ref_country IS NOT NULL
+            AND ref_lat IS NOT NULL AND ref_lon IS NOT NULL AND ref_radius_km IS NOT NULL))
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS ixp_prefixes (
+        prefix          TEXT PRIMARY KEY,
+        ip_version      INTEGER NOT NULL CHECK(ip_version IN (4, 6)),
+        prefix_length   INTEGER NOT NULL CHECK(prefix_length BETWEEN 1 AND 128),
+        ix_id           INTEGER NOT NULL REFERENCES ixp_exchanges(ix_id) ON DELETE CASCADE,
+        ixlan_id        INTEGER NOT NULL,
+        source          TEXT NOT NULL,
+        import_run_id   TEXT NOT NULL,
+        updated_at      TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_ixp_prefixes_ix ON ixp_prefixes(ix_id)",
+    """
+    CREATE TABLE IF NOT EXISTS ixp_snapshot (
+        id              INTEGER PRIMARY KEY CHECK(id = 1),
+        import_run_id   TEXT NOT NULL,
+        completed_at    TEXT NOT NULL,
+        exchange_count  INTEGER NOT NULL CHECK(exchange_count >= 0),
+        prefix_count    INTEGER NOT NULL CHECK(prefix_count >= 0),
+        source          TEXT NOT NULL
+    )
+    """,
+)
 
 
 # IncompatibleSchemaError.kind values

@@ -1,7 +1,7 @@
 # Users & Roles
 
-Every access requires sign-in, unless an admin disables authentication under
-Settings > Users (see [Settings](../configuration/settings.md)).
+Every access requires sign-in, unless an admin switches off **Require Authentication** under
+Settings > General > Access & Sessions (see [Settings](../configuration/settings.md)).
 
 ## Roles
 
@@ -13,8 +13,13 @@ Settings > Users (see [Settings](../configuration/settings.md)).
 
 ## User management
 
-- Admins create, change, deactivate, and delete users.
+- Admins create, change, deactivate, and delete users. Admin accounts cannot be deleted (`403`).
 - An admin cannot lock themselves out or remove the last admin.
+- Every user is also a notification recipient (1:1). The user dialogs have a
+  **Notification Channels** section with a Signal and an Email switch, **Recipient Enabled**
+  and **Enable for all Targets**. A recipient without a channel is stored disabled. The
+  recipient also appears in Settings > Recipients and can only be removed by deleting the
+  user (`409` otherwise). See [Notifications](notifications.md#recipients).
 - Each user has a theme (light, dark, system).
 - Admins can revoke another user's sessions in Settings > Users.
 

@@ -14,8 +14,7 @@
 	const timestamp = (value) => {
 		if (value === null || value === undefined || value === '') return NaN;
 		if (typeof value === 'number') return value < 1e12 ? value * 1000 : value;
-		const text = String(value);
-		return Date.parse(/(?:Z|[+-]\d\d:\d\d)$/i.test(text) ? text : text.replace(' ', 'T') + 'Z');
+		return parseUtcTimestamp(value);
 	};
 	// Failed deliveries that still count as current: the server's 24 h window, else every stored failure.
 	const failedCount = (data) => (count(data.failed_recent) ? data.failed_recent : data.failed);
@@ -32,7 +31,7 @@
 		if (failedCount(data) > 0) return ['Handoff failed', 'danger'];
 		if (scheduler.state !== 'running') return ['Worker degraded', 'warning'];
 		if (age >= BACKLOG_MS) return ['Backlog', 'warning'];
-		return data.pending + data.processing > 0 ? ['Processing', 'info'] : ['Queue clear', 'success'];
+		return data.pending + data.processing > 0 ? ['Processing', 'neutral'] : ['Queue clear', 'success'];
 	}
 	window.JuDashboardMonitoring = Object.freeze({ queueState, timestamp });
 	const root = document.getElementById('dashboard-grid');
@@ -62,24 +61,40 @@
 		icon.setAttribute('aria-hidden', 'true');
 		element.append(icon, node('span', name), node('span', value)); body.append(element);
 	}
+	// State rows use the shared dot with a visually hidden state word, never a coloured icon (DC-STATE-1).
+	function stateRow(body, name, value, tone, word) {
+		const element = node('div', undefined, 'dashboard-monitor-row');
+		element.title = name;
+		element.setAttribute('aria-label', `${name}: ${value}, ${word}`);
+		const template = document.createElement('template');
+		template.innerHTML = window.JuStatusDot.html(tone, name);
+		const item = template.content.firstElementChild;
+		item.append(node('span', `: ${word}`, 'visually-hidden'));
+		element.append(item, node('span', value)); body.append(element);
+	}
 	function unavailable(body, label = 'Status unavailable') {
 		row(body, label, '–', 'help_outline');
 	}
 	async function json(url, signal) {
-		const response = await window.apiFetch(url, { signal, headers: { Accept: 'application/json' } });
+		// The timeout settles a hung request so the per-tile pending guard cannot freeze the widget.
+		const bounded = signal ? AbortSignal.any([signal, AbortSignal.timeout(10000)]) : AbortSignal.timeout(10000);
+		const response = await window.apiFetch(url, { signal: bounded, headers: { Accept: 'application/json' } });
 		if (!response.ok) throw new Error('Request failed');
 		return response.json();
 	}
-	// Header status badge shared by every status widget: icon plus text, never colour alone.
-	const STATUS_ICONS = { success: 'check_circle', secondary: 'help_outline', info: 'sync' };
+	// Header status shared by every status widget: coloured dot plus its word, no badge.
 	function setStatus(tile, label, tone) {
-		const badge = tile.querySelector('.dashboard-monitor-status');
-		if (!badge) throw new Error('Widget status badge is missing');
-		const iconName = STATUS_ICONS[tone] || 'warning';
-		const icon = node('span', iconName, 'material-icons');
-		icon.setAttribute('aria-hidden', 'true');
-		badge.className = `dashboard-monitor-status badge ju-status-badge--${tone === 'secondary' ? 'neutral' : tone} ms-auto d-inline-flex align-items-center gap-1`;
-		badge.replaceChildren(icon, node('span', label));
+		const status = tile.querySelector('.dashboard-monitor-status');
+		if (!status) throw new Error('Widget status is missing');
+		// The status sits in a live region: rewriting an unchanged state would re-announce it every refresh.
+		if (status.dataset.label === label && status.dataset.tone === tone) return;
+		status.dataset.label = label;
+		status.dataset.tone = tone;
+		status.removeAttribute('aria-busy');
+		// JuStatusDot.html is the shared dot markup; its children replace the live region's content.
+		const template = document.createElement('template');
+		template.innerHTML = window.JuStatusDot.html(tone === 'secondary' ? 'neutral' : tone, label);
+		status.replaceChildren(...template.content.firstElementChild.childNodes);
 	}
 	// Small values: the number comes first in the DOM and on screen, its label below it.
 	function metrics(body, entries) {
@@ -115,7 +130,8 @@
 				const checked = timestamp(target.status.cert_checked_at);
 				const stale = !Number.isFinite(checked) || Date.now() - checked > DAY_MS || checked > Date.now();
 				const tone = stale ? 'warning' : days <= 7 ? 'danger' : days <= 30 ? 'warning' : 'success';
-				row(body, target.name + (stale ? ': stale result' : ''), `${days} d`, stale ? 'history' : days <= 7 ? 'error_outline' : 'verified_user', tone);
+				const word = stale ? 'Stale result' : days <= 7 ? 'Critical' : days <= 30 ? 'Warning' : 'OK';
+				stateRow(body, target.name, `${days} d`, tone, word);
 			});
 			if (!certificates.length) unavailable(body, 'No certificate measurements');
 		} else if (kind === 'slowest-monitors') {
@@ -131,7 +147,7 @@
 			const unmeasured = enabled.filter((target) => !Number.isFinite(timestamp(target.status.updated_at)));
 			const stale = enabled.filter((target) => Number.isFinite(timestamp(target.status.updated_at)) && Date.now() - timestamp(target.status.updated_at) > Math.max(60000, target.interval_seconds * 3000));
 			number(body, stale.length, 'overdue monitors');
-			stale.slice(0, 3).forEach((target) => row(body, target.name, `${Math.floor((Date.now() - timestamp(target.status.updated_at)) / 60000)} min`, 'schedule', 'warning'));
+			stale.slice(0, 3).forEach((target) => stateRow(body, target.name, `${Math.floor((Date.now() - timestamp(target.status.updated_at)) / 60000)} min`, 'warning', 'Overdue'));
 			row(body, 'Awaiting first check', String(unmeasured.length), 'hourglass_empty');
 			row(body, 'Disabled monitors', String(data.targets.length - enabled.length), 'pause_circle_outline');
 		}
@@ -162,11 +178,11 @@
 			body.replaceChildren(); number(body, latest.score, 'Latest quality score');
 			const wrapper = node('div', undefined, 'dashboard-monitor-chart'); const canvas = node('canvas');
 			canvas.setAttribute('role', 'img'); wrapper.append(canvas); body.append(wrapper);
-		chart = new window.Chart(canvas, {
-			type: 'line',
-			data: { labels, datasets: [{ label: 'Quality score', data: values, borderColor: color, borderWidth: 2, pointRadius: 0, spanGaps: false }] },
-			options: { responsive: true, maintainAspectRatio: false, animation: false, plugins: { legend: { display: false } }, scales: { y: { min: 0, max: 100 } } },
-		});
+			chart = new window.Chart(canvas, {
+				type: 'line',
+				data: { labels, datasets: [{ label: 'Quality score', data: values, borderColor: color, borderWidth: 2, pointRadius: 0, spanGaps: false }] },
+				options: { responsive: true, maintainAspectRatio: false, animation: false, plugins: { legend: { display: false }, tooltip: { callbacks: { label: (item) => `${item.dataset.label}: ${window.formatChartValue('score', item.parsed.y)}` } } }, scales: { y: { min: 0, max: 100, title: { display: true, text: window.CHART_UNITS.score.axisTitle } } } },
+			});
 		}
 		chart.canvas.setAttribute('aria-label', `Quality score over the last 24 hours. Latest: ${latest.score}. Missing measurements are gaps.`);
 	}
@@ -175,7 +191,9 @@
 		const percent = data.uptime_percent;
 		if (data.coverage_percent < 95 || !Number.isFinite(percent) || percent < 0 || percent > 100) unavailable(body, 'Not enough uptime data');
 		else {
-			number(body, `${percent.toFixed(2)}%`, 'Uptime during observed time over the last 24 hours');
+			// Truncate below 100 so 99.996 never rounds up to a claimed 100.00 %.
+			const shown = percent < 100 ? Math.floor(percent * 100 + 1e-9) / 100 : percent;
+			number(body, `${shown.toFixed(2)}%`, 'Uptime during observed time over the last 24 hours');
 			const bar = node('progress'); bar.max = 100; bar.value = percent; bar.setAttribute('aria-label', 'Uptime over the last 24 hours'); body.append(bar);
 		}
 		row(body, 'Measurement coverage over the last 24 hours', `${data.coverage_percent.toFixed(1)}%`, 'data_usage');

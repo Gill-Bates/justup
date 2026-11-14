@@ -19,7 +19,14 @@
 	const termLabel = document.getElementById('targets-search-term');
 	const scopeField = document.getElementById('targets-scope-state');
 	const memory = filter.createExpansionMemory();
+	// Groups the user closed by hand during the search; a live patch or the next keystroke must not reopen them.
+	const closedByHand = new Set();
 	let requestedScope = null;
+
+	// Writing identical text still replaces the text node (a mutation, and a repeated announcement).
+	function setText(element, text) {
+		if (element.textContent !== text) element.textContent = text;
+	}
 
 	function collapseOf(item) {
 		return item.querySelector('.accordion-collapse');
@@ -36,6 +43,7 @@
 	}
 
 	function restoreGroups() {
+		closedByHand.clear();
 		memory.take().forEach(function (entry) {
 			const collapse = container.querySelector('#' + CSS.escape(entry[0]));
 			if (collapse) setOpen(collapse, entry[1]);
@@ -44,7 +52,7 @@
 			element.hidden = false;
 		});
 		container.querySelectorAll('.targets-group-count').forEach(function (badge) {
-			badge.textContent = badge.dataset.total;
+			setText(badge, badge.dataset.total);
 		});
 	}
 
@@ -72,28 +80,24 @@
 		} else {
 			container.querySelectorAll('.accordion-item').forEach(function (item) {
 				const rows = Array.from(item.querySelectorAll('tr[data-search]'));
-				let groupHits = 0;
-				rows.forEach(function (row) {
-					const hit = filter.matches(row.dataset.search, needle);
-					row.hidden = !hit;
-					if (hit) groupHits += 1;
-				});
+				const groupHits = filter.filterRows(rows, needle);
 				rowTotal += rows.length;
 				hits += groupHits;
 				item.hidden = groupHits === 0;
 				const collapse = collapseOf(item);
-				if (collapse && groupHits > 0) {
+				// A group that Bootstrap is closing right now is the user's choice, not a state to override.
+				if (collapse && groupHits > 0 && !collapse.classList.contains('collapsing') && !closedByHand.has(collapse.id)) {
 					memory.remember(collapse.id, collapse.classList.contains('show'));
 					setOpen(collapse, true);
 				}
 				const badge = item.querySelector('.targets-group-count');
-				if (badge) badge.textContent = filter.countLabel(groupHits, rows.length);
+				if (badge) setText(badge, filter.countLabel(groupHits, rows.length));
 			});
 		}
 		const noMatch = searching && rowTotal > 0 && hits === 0;
 		if (emptyState) emptyState.hidden = !noMatch;
-		if (termLabel) termLabel.textContent = noMatch ? '"' + input.value.trim() + '"' : '';
-		if (status) status.textContent = searching && rowTotal > 0 ? filter.statusMessage(hits) : '';
+		if (termLabel) setText(termLabel, noMatch ? '"' + input.value.trim() + '"' : '');
+		if (status) setText(status, searching && rowTotal > 0 ? filter.statusMessage(hits) : '');
 		syncScope(searching);
 	}
 
@@ -116,28 +120,25 @@
 	// A manual toggle during the search is the state to return to afterwards.
 	['shown.bs.collapse', 'hidden.bs.collapse'].forEach(function (name) {
 		container.addEventListener(name, function (event) {
-			if (event.target.id) memory.override(event.target.id, name === 'shown.bs.collapse');
+			if (!event.target.id) return;
+			const shown = name === 'shown.bs.collapse';
+			memory.override(event.target.id, shown);
+			if (input.value === '') return;
+			if (shown) closedByHand.delete(event.target.id);
+			else closedByHand.add(event.target.id);
 		});
-	});
-
-	// A live refresh replaces the whole fragment; WebKit then clamps the scroll position of <main> to the
-	// momentarily shorter content and the list jumps to the top. Restore it for refreshes the fragment
-	// triggered itself (not for the pager buttons, which should start at the top).
-	const scroller = document.getElementById('main-content');
-	let keptScroll = null;
-	document.body.addEventListener('htmx:beforeSwap', function (event) {
-		keptScroll = scroller && event.target === container && event.detail.elt === container ? scroller.scrollTop : null;
 	});
 
 	// Polling and paging replace the fragment: the new DOM carries the stored group state, so re-evaluate it.
 	document.body.addEventListener('htmx:afterSwap', function (event) {
 		if (event.target !== container) return;
-		if (keptScroll !== null && scroller.scrollTop !== keptScroll) scroller.scrollTop = keptScroll;
-		keptScroll = null;
 		requestedScope = null;
 		memory.clear();
 		render();
 	});
+
+	// A live update rewrites cells in place: re-apply the query to the changed rows.
+	container.addEventListener('targets:patched', render);
 
 	if (input.value !== '') render();
 })();

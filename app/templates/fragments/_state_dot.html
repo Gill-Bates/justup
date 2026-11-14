@@ -1,0 +1,32 @@
+{# One status item for a check or endpoint state: a coloured dot in front of the label, no badge (DESIGN.md, section 6.1). #}
+{# The dot is decorative; the word is a visually hidden text alternative and the shape (filled circle, square, diamond, hollow ring) repeats it for users who cannot tell colours apart. #}
+{# Shared state -> (word, tone) mapping; any other status renders as unknown. #}
+{%- set state_look = {'up': ('Up', 'success'), 'down': ('Down', 'danger'), 'unknown': ('Unknown', 'neutral')} -%}
+{%- set known_states = ('up', 'down') -%}
+{# One dot for a tone; any tone outside the whitelist renders neutral (hollow ring). Mirrors JuStatusDot.html in utils/status-badge.js. #}
+{# Dot tones are success, warning, danger and neutral; `info` is not a dot tone (DC-STATE-3). `extra` adds a class to the item. #}
+{% macro status_dot(tone, label, title='', extra='') -%}
+{%- set known_tone = tone if tone in ('success', 'warning', 'danger') else 'neutral' -%}
+<span class="ju-status-item{% if extra %} {{ extra }}{% endif %}"{% if title %} title="{{ title }}"{% endif %}><span class="ju-status-dot ju-status-dot--{{ known_tone }}{% if known_tone == 'neutral' %} ju-status-dot--unknown{% endif %}" aria-hidden="true"></span>{{ label }}</span>
+{%- endmacro %}
+{% macro state_dot(label, status, title='') -%}
+{%- set known = status if status in known_states else 'unknown' -%}
+{%- set look = state_look[known] -%}
+<span class="ju-status-item"{% if title %} title="{{ title }}"{% endif %}><span class="ju-status-dot ju-status-dot--{{ look[1] }} ju-status-dot--{{ known }}" aria-hidden="true"></span>{{ label }}<span class="visually-hidden">: {{ look[0] }}</span></span>
+{%- endmacro %}
+{# Certificate status -> tone; shared by the dot and the expiry text colour. #}
+{% macro cert_level(status) -%}
+{%- if status == 'ok' %}success{% elif status == 'warning' %}warning{% elif status in ('critical', 'expired') %}danger{% else %}neutral{% endif -%}
+{%- endmacro %}
+{% macro cert_dot(label, status) -%}
+{%- set level = cert_level(status) -%}
+<span class="ju-status-item"><span class="ju-status-dot ju-status-dot--{{ level }}{% if level == 'neutral' %} ju-status-dot--unknown{% endif %}" aria-hidden="true"></span>{{ label }}<span class="visually-hidden">: {{ status or 'unknown' }}</span></span>
+{%- endmacro %}
+
+{# Bucket of a check state for the targets table: down, unknown, attention (certificate alert) or up. #}
+{% macro check_bucket(status, is_cert=false) -%}
+{%- if is_cert -%}
+{%- set level = cert_level(status)|trim -%}
+{%- if level == 'success' %}up{% elif level in ('warning', 'danger') %}attention{% else %}unknown{% endif -%}
+{%- elif status == 'down' %}down{% elif status in known_states %}up{% else %}unknown{% endif -%}
+{%- endmacro %}

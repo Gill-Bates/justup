@@ -4,7 +4,7 @@
 # Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 #
 
-"""Parse and validate a TLS scan target; pin the scan to one validated address."""
+"""Parse and validate a TLS scan target; pin the scan to its validated addresses."""
 
 from __future__ import annotations
 
@@ -27,8 +27,13 @@ class TlsTargetError(ValueError):
 class TlsTarget:
     hostname: str  # IDNA/ASCII form; also used as SNI for names
     port: int
-    ip_address: IPAddress  # the validated address the scan connects to
+    ip_address: IPAddress  # the first validated address (preferred candidate)
     is_ip_literal: bool
+    candidates: tuple[IPAddress, ...] = ()  # all validated addresses in resolver order; never re-resolved
+
+    @property
+    def addresses(self) -> tuple[IPAddress, ...]:
+        return self.candidates or (self.ip_address,)
 
 
 def _split_host_port(target: str) -> tuple[str, int]:
@@ -81,4 +86,6 @@ def resolve_target(target: str, *, allow_private: bool = True) -> TlsTarget:
     addresses = resolve_validated(hostname, allow_private=allow_private)
     if not addresses:
         raise TlsTargetError("target is unresolvable or not an allowed scan target")
-    return TlsTarget(hostname=hostname, port=port, ip_address=addresses[0], is_ip_literal=is_ip)
+    return TlsTarget(
+        hostname=hostname, port=port, ip_address=addresses[0], is_ip_literal=is_ip, candidates=tuple(addresses)
+    )

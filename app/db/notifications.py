@@ -171,8 +171,33 @@ def _sent_texts(channel: str) -> tuple[str, str]:
     return f"{label} notifications sent", f"Channel: {label} · sent"
 
 
+def emit_test_delivery_sent(conn: sqlite3.Connection, channel: str, *, queue_id: int) -> None:
+    """Record the success of an explicitly triggered test send (one row per test, never grouped).
+
+    Regular alert deliveries stay silent on success; only failures are events. A test is the exception
+    because the user wants to see its result. No recipient address or content is stored.
+    """
+    label = _channel_label(channel)
+    what = "accepted by SMTP server" if channel == "email" else "sent"
+    emit(
+        conn,
+        event_type=f"delivery.{channel}.sent",
+        category="delivery",
+        severity="success",
+        title=f"{label} test {what}",
+        body=_sent_texts(channel)[1],
+        idempotency_key=f"delivery.{channel}.test.sent:{queue_id}",
+        audience=AUDIENCE_ADMINS,
+        resource_type="queue",
+        resource_id=queue_id,
+    )
+
+
 def emit_delivery_sent(conn: sqlite3.Connection, channel: str, *, now: datetime | None = None) -> None:
-    """Record one successful delivery, grouped per channel and time window to cap the volume."""
+    """Record one successful delivery, grouped per channel and time window to cap the volume.
+
+    Not called for regular sends any more (see ``_record_delivery`` in the spooler); kept for the grouping tests.
+    """
     now = now or utcnow()
     key = f"delivery.{channel}.sent:{int(now.timestamp()) // SENT_GROUP_SECONDS}"
     title, body = _sent_texts(channel)
@@ -665,7 +690,7 @@ def report_incident(
             last = datetime.fromisoformat(state["last_update"])
             state["count"] = int(state.get("count", 1)) + 1
             if (now - last).total_seconds() >= update_after_seconds:
-                _rewrite_incident_row(conn, state, title, body, severity)
+                _rewrite_incident_row(conn, name, state, title, body, severity)
                 state["last_update"] = now.isoformat()
             sqlite_db.set_setting(conn, _incident_state_key(name), state, auto_commit=False)
             return None
@@ -675,13 +700,35 @@ def report_incident(
 
 
 def _rewrite_incident_row(
-    conn: sqlite3.Connection, state: Mapping[str, Any], title: str, body: str, severity: str, *, renotify: bool = False
+    conn: sqlite3.Connection,
+    name: str,
+    state: dict[str, Any],
+    title: str,
+    body: str,
+    severity: str,
+    *,
+    renotify: bool = False,
 ) -> None:
     notification_id = int(state["notification_id"])
-    conn.execute(
+    cur = conn.execute(
         "UPDATE notifications SET title = ?, body = ?, severity = ? WHERE id = ?",
         (_clean(title, TITLE_MAX), _clean(body, BODY_MAX), severity, notification_id),
     )
+    if not cur.rowcount:  # the row vanished (manual delete): recreate it and repoint the state
+        new_id = emit(
+            conn,
+            event_type=f"incident.{name}",
+            category=state.get("category", "delivery"),
+            severity=severity,
+            title=title,
+            body=body,
+            idempotency_key=f"incident.{name}:restored:{notification_id}:{utcnow().timestamp()}",
+            audience=AUDIENCE_ADMINS,
+            resource_type=state.get("resource_type", "queue"),
+        )
+        if new_id is not None:
+            state["notification_id"] = new_id
+        return
     if renotify:  # an escalation must be seen again, also by admins who read or hid the first notice
         conn.execute("DELETE FROM notification_reads WHERE notification_id = ?", (notification_id,))
         conn.execute("DELETE FROM notification_dismissals WHERE notification_id = ?", (notification_id,))
@@ -700,7 +747,8 @@ def update_incident(
             state = get_incident(conn, name)
             if state is None:
                 return False
-            _rewrite_incident_row(conn, state, title, body, severity, renotify=renotify)
+            _rewrite_incident_row(conn, name, state, title, body, severity, renotify=renotify)
+            sqlite_db.set_setting(conn, _incident_state_key(name), state, auto_commit=False)
             return True
     except sqlite3.Error as exc:
         _log.warning("Incident %s could not be updated: %s", name, exc)
@@ -717,19 +765,25 @@ def resolve_incident(
             state = get_incident(conn, name)
             if state is None:
                 return None
-            sqlite_db.delete_setting(conn, _incident_state_key(name))
-            return emit(
+            key = f"incident.{name}.recovered:{state['notification_id']}"
+            new_id = emit(
                 conn,
                 event_type=f"incident.{name}.recovered",
                 category=state.get("category", "delivery"),
                 severity="success",
                 title=title,
                 body=body,
-                idempotency_key=f"incident.{name}.recovered:{state['notification_id']}",
+                idempotency_key=key,
                 audience=AUDIENCE_ADMINS,
                 resource_type=state.get("resource_type", "queue"),
                 created_at=now,
             )
+            # None is fine for a repeated recovery (row exists) but not for a failed insert.
+            exists = conn.execute("SELECT 1 FROM notifications WHERE idempotency_key = ?", (key,)).fetchone()
+            if new_id is None and exists is None:
+                return None
+            sqlite_db.delete_setting(conn, _incident_state_key(name))
+            return new_id
     except sqlite3.Error as exc:
         _log.warning("Incident %s could not be resolved: %s", name, exc)
         return None

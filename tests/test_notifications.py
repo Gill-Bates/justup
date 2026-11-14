@@ -107,6 +107,51 @@ def test_dispatcher_reports_configured_signal_render_failure_for_outbox_retry(db
     assert result.send_results[0].error == "ValueError"
 
 
+def test_alert_context_and_rendering_are_shared_across_channels_and_recipients(db):
+    conn, _ = db
+    target_id = _target(conn, name="Context target")
+    recipients = []
+    for name, phone, email in (
+        ("Signal and email", "+15555550100", "one@example.org"),
+        ("Email only", None, "two@example.org"),
+    ):
+        recipients.append(sqlite_db.create_recipient(conn, name=name, phone=phone, email=email))
+    sqlite_db.set_target_recipients(conn, target_id, recipients)
+    sqlite_db.set_setting(conn, SettingKeys.SIGNAL_CHANNEL_ENABLED, True)
+    sqlite_db.set_setting(conn, SettingKeys.SIGNAL_API_SENDER_NUMBER, "+15555550101")
+    sqlite_db.set_setting(conn, SettingKeys.SMTP_ENABLED, True)
+    dispatcher = NotificationDispatcher(conn, db_conn_factory=lambda: sqlite_db.connect(db[1]))
+    alert = AlertPayload(
+        alert_id="context-shared",
+        target_id=target_id,
+        target_name="Context target",
+        failed_service="PING",
+        status="open",
+        started_at=utcnow(),
+    )
+    queued = []
+    fake_spooler = mock.Mock()
+    fake_spooler.enqueue.side_effect = lambda **kwargs: queued.append(kwargs) or len(queued)
+
+    with (
+        mock.patch.object(dispatcher, "_build_alert_inputs", wraps=dispatcher._build_alert_inputs) as inputs,  # noqa: SLF001
+        mock.patch.object(dispatcher, "_render_signal_message", wraps=dispatcher._render_signal_message) as signal,  # noqa: SLF001
+        mock.patch.object(dispatcher, "_render_email_content", wraps=dispatcher._render_email_content) as email,  # noqa: SLF001
+        mock.patch("app.services.notifications.spooler.get_spooler", return_value=fake_spooler),
+    ):
+        result = dispatcher.dispatch_alert(alert)
+
+    assert result.channels_attempted == result.channels_succeeded == 3
+    assert inputs.call_count == 1
+    assert signal.call_count == email.call_count == 1
+    assert len(queued) == 3
+    signal_messages = [item["payload"]["message"] for item in queued if item["channel_type"] == "signal"]
+    email_payloads = [item["payload"] for item in queued if item["channel_type"] == "email"]
+    assert len(signal_messages) == 1 and "Context target" in signal_messages[0] and "PING" in signal_messages[0]
+    assert len(email_payloads) == 2 and all("Context target" in item["html_body"] for item in email_payloads)
+    assert {item["alert_id"] for item in (item["payload"] for item in queued)} == {"context-shared"}
+
+
 def test_no_notification_when_the_transaction_fails(db):
     conn, _ = db
     admin = _user(conn, "root", admin=True)
@@ -251,35 +296,59 @@ def _enqueue(sp):
     return sp.enqueue("alert", "email", 1, "R", "secret@example.com", {"subject": "s", "body": "private"})
 
 
-def test_sent_only_after_real_delivery_and_retry_is_silent(db, spooler):
+def test_regular_success_is_silent_and_failure_is_an_event(db, spooler):
     conn, _ = db
     admin = _user(conn, "root", admin=True)
     qid = _enqueue(spooler)
-    assert inbox.list_notifications(conn, admin)[1] == 0  # queued is not sent
     spooler.mark_retry(qid, "temporary")
     assert inbox.list_notifications(conn, admin)[1] == 0  # retries are silent
     spooler.mark_sent(qid)
-    spooler.mark_sent(qid)  # repeated call: no second event
+    spooler.mark_sent(qid)
+    assert inbox.list_notifications(conn, admin)[1] == 0  # a successful regular send writes no row
+    failed = _enqueue(spooler)
+    spooler.mark_failed_permanent(failed, "[PERMANENT] rejected")
+    spooler.mark_failed_permanent(failed, "[PERMANENT] rejected")  # repeated call: no second event
     items, _ = inbox.list_notifications(conn, admin)
-    assert [i["event_type"] for i in items] == ["delivery.email.sent"]
+    assert [i["event_type"] for i in items] == ["delivery.email.failed"]
+    assert items[0]["category"] == "delivery" and items[0]["severity"] == "error"
     assert "secret@example.com" not in repr(items) and "private" not in repr(items)
 
 
-@pytest.mark.usefixtures("frozen_window")
-def test_sent_events_are_grouped_per_channel_window(db, spooler):
+@pytest.mark.parametrize(("channel", "address"), [("email", "secret@example.com"), ("signal", "+491110009999")])
+def test_explicit_test_send_reports_success_and_failure(db, spooler, channel, address):
+    conn, _ = db
+    admin = _user(conn, "root", admin=True)
+    payload = {"message": "private"} if channel == "signal" else {"subject": "s", "body": "private"}
+    ok = spooler.enqueue("test", channel, 0, "T", address, payload)
+    spooler.mark_sent(ok)
+    spooler.mark_sent(ok)  # repeated call: no second event
+    bad = spooler.enqueue("test", channel, 0, "T2", address, {**payload, "n": 2})
+    spooler.mark_failed_permanent(bad, "[PERMANENT] rejected")
+    items, total = inbox.list_notifications(conn, admin, category="delivery")
+    assert total == 2
+    assert {(i["event_type"], i["severity"]) for i in items} == {
+        (f"delivery.{channel}.sent", "success"),
+        (f"delivery.{channel}.failed", "error"),
+    }
+    assert inbox.count_unread(conn, admin) == 2
+    assert address not in repr(items) and "private" not in repr(items)
+
+
+@pytest.mark.usefixtures("frozen_window", "spooler")
+def test_sent_events_are_grouped_per_channel_window(db):
     conn, _ = db
     admin = _user(conn, "root", admin=True)
     for _ in range(3):
-        spooler.mark_sent(_enqueue(spooler))
+        inbox.emit_delivery_sent(conn, "email")
     items, total = inbox.list_notifications(conn, admin)
     assert total == 1 and items[0]["event_count"] == 3 and "(3)" in items[0]["title"]
 
 
-@pytest.mark.usefixtures("frozen_window")
-def test_grouped_delivery_after_read_becomes_unread_again(db, spooler):
+@pytest.mark.usefixtures("frozen_window", "spooler")
+def test_grouped_delivery_after_read_becomes_unread_again(db):
     conn, _ = db
     admin = _user(conn, "root", admin=True)
-    spooler.mark_sent(_enqueue(spooler))
+    inbox.emit_delivery_sent(conn, "email")
     item = inbox.list_notifications(conn, admin)[0][0]
     seq_before = inbox.get_summary(conn, admin)["unread_event_seq"]
     assert inbox.mark_read(conn, admin, item["id"])
@@ -287,14 +356,13 @@ def test_grouped_delivery_after_read_becomes_unread_again(db, spooler):
 
     # A further delivery folds into the same grouped row; it must surface as unread again so the
     # bell re-triggers instead of staying silently read.
-    spooler.mark_sent(_enqueue(spooler))
+    inbox.emit_delivery_sent(conn, "email")
     summary = inbox.get_summary(conn, admin)
     assert summary["unread"] == 1
     # The grouped row keeps its id, so latest_unread_id cannot change; the bell must instead
     # re-animate off a monotonic unread-activity sequence that does rise here.
     assert summary["latest_unread_id"] == item["id"]
     assert summary["unread_event_seq"] > seq_before
-    spooler.mark_sent(1)  # repeated transition of an already sent item: no extra count
     assert inbox.list_notifications(conn, admin)[0][0]["event_count"] == 2
     again = inbox.list_notifications(conn, admin)[0][0]
     assert again["id"] == item["id"] and again["event_count"] == 2 and again["is_read"] is False
@@ -373,6 +441,30 @@ def test_download_action_only_on_ready_report_notification(client):
     assert actions["report.completed"]["type"] == "download"
 
 
+def test_action_urls_are_only_internal_paths_or_https_release_pages(db):
+    from urllib.parse import urlsplit
+
+    from app.api.notifications import _action
+    from app.services import release_check
+
+    conn, _ = db
+    admin = _user(conn, "root", admin=True)
+    tid = _target(conn)
+    hostile = ["javascript:alert(1)", "//evil.example/x", "https://evil.example/v1.0.0", "v1.0.0/../x", "v1.0.0\n"]
+    items = [
+        {"resource_type": "target", "resource_id": str(tid), "event_type": "x"},
+        {"resource_type": "queue", "resource_id": "1", "event_type": "x"},
+        {"resource_type": "x", "resource_id": "v1.2.3", "event_type": release_check.EVENT_TYPE},
+        *({"resource_type": "x", "resource_id": h, "event_type": release_check.EVENT_TYPE} for h in hostile),
+    ]
+    urls = [a["url"] for i in items if (a := _action(conn, admin, i)) and "url" in a]
+    assert len(urls) == 3  # hostile tags yield no action at all
+    for url in urls:
+        parts = urlsplit(url)
+        assert (parts.scheme, parts.netloc) in {("", ""), ("https", "github.com")}, url
+        assert parts.scheme or url.startswith("/ui/")
+
+
 def test_summary_endpoint_is_private_and_scoped(client):
     c, tokens = client
     r = c.get("/ui/notifications/summary", headers=_h(tokens, "alice"))
@@ -394,7 +486,7 @@ def test_notifications_page_renders_and_alerts_redirects(client):
     assert legacy.status_code == 302 and legacy.headers["location"].startswith("/ui/notifications?category=monitoring")
 
 
-def test_crash_recovered_item_yields_exactly_one_sent_event(db, spooler):
+def test_crash_recovered_item_yields_no_sent_event(db, spooler):
     conn, _ = db
     admin = _user(conn, "root", admin=True)
     qid = _enqueue(spooler)
@@ -404,7 +496,7 @@ def test_crash_recovered_item_yields_exactly_one_sent_event(db, spooler):
     assert [i.id for i in spooler.get_pending_items()] == [qid]  # recovery re-claims the stuck item
     assert inbox.list_notifications(conn, admin)[1] == 0  # recovery itself is not a delivery
     spooler.mark_sent(qid)
-    assert inbox.list_notifications(conn, admin)[0][0]["event_count"] == 1
+    assert inbox.list_notifications(conn, admin)[1] == 0  # silent on success
 
 
 def test_backup_snapshot_keeps_notifications_and_read_state(db, tmp_path: Path):
@@ -555,6 +647,11 @@ def test_retries_are_silent_until_the_final_permanent_failure(db, spooler):
 
 def test_quiesce_refuses_notification_writes_and_the_triggering_operation(client):
     c, tokens = client
+    conn = sqlite_db.connect(c.app.state.db_path)
+    try:
+        attempts_before = conn.execute("SELECT COUNT(*) FROM login_attempts").fetchone()[0]
+    finally:
+        sqlite_db.close_connection(conn)
     assert sqlite_db.begin_quiesce(timeout=5) is True
     try:
         with pytest.raises(sqlite_db.DatabaseQuiescedError):
@@ -570,6 +667,8 @@ def test_quiesce_refuses_notification_writes_and_the_triggering_operation(client
         sqlite_db.end_quiesce()
     conn = sqlite_db.connect(c.app.state.db_path)
     try:
+        # The refused login must not have been recorded as an attempt either.
+        assert conn.execute("SELECT COUNT(*) FROM login_attempts").fetchone()[0] == attempts_before
         assert (
             conn.execute("SELECT COUNT(*) FROM notifications WHERE event_type='security.login.success'").fetchone()[0]
             == 0
@@ -612,10 +711,10 @@ def test_monitoring_report_and_delivery_events_carry_their_context(db, spooler):
     tid = _target(conn, "T1")
     _alert(conn, tid)
     sqlite_db.create_report_job(conn, "jx", tid, user_id=alice["id"])
-    spooler.mark_sent(_enqueue(spooler))
+    spooler.mark_failed_permanent(_enqueue(spooler), "[PERMANENT] rejected")
     texts = {i["event_type"]: (i["title"], i["body"]) for i in inbox.list_notifications(conn, admin)[0]}
     assert texts["monitoring.alert.opened"] == ("Alert opened: T1", "Check: PING")
-    assert texts["delivery.email.sent"][1].startswith("Channel: Email")
+    assert texts["delivery.email.failed"][1].startswith("Channel: Email")
     assert inbox.list_notifications(conn, alice)[1] == 0  # a pending report job raises no inbox event
 
 
@@ -802,7 +901,6 @@ def test_alert_mail_uses_per_target_sla_threshold(db, actual, sla_enabled):
 def test_certificate_expiry_threshold_creates_inbox_warning(db, days_left, expected_title):
     import asyncio
     from contextlib import contextmanager
-    from unittest import mock
 
     from app.monitor.scheduler import MonitorScheduler, TargetRuntime
 
@@ -811,6 +909,8 @@ def test_certificate_expiry_threshold_creates_inbox_warning(db, days_left, expec
     tid = _target(conn)
 
     sched = MonitorScheduler.__new__(MonitorScheduler)
+    # Thread-call epoch state normally set by __init__.
+    MonitorScheduler._init_thread_call_state(sched)  # noqa: SLF001
     sched._rt = {tid: TargetRuntime(next_due=utcnow())}  # noqa: SLF001
 
     @contextmanager
@@ -818,19 +918,20 @@ def test_certificate_expiry_threshold_creates_inbox_warning(db, days_left, expec
         yield conn
 
     sched._db_conn = _conn  # noqa: SLF001
-    sched._dispatch_alert = mock.AsyncMock()  # noqa: SLF001
 
     asyncio.run(sched._maybe_cert_alert(target_id=tid, target_name="T1", days_left=days_left, cert_host="h"))  # noqa: SLF001
 
     items, _ = inbox.list_notifications(conn, admin)
     if expected_title is None:
         assert items == []
-        sched._dispatch_alert.assert_not_called()  # noqa: SLF001
+        assert conn.execute("SELECT COUNT(*) FROM alert_dispatch_outbox").fetchone()[0] == 0
         return
     assert [i["event_type"] for i in items] == ["monitoring.certificate.warning"]
     assert items[0]["title"].startswith(expected_title)
     assert items[0]["severity"] == "warning"
-    sched._dispatch_alert.assert_awaited_once()  # noqa: SLF001
+    # Delivery is owned by the durable outbox: exactly one pending open event, no direct dispatch.
+    outbox = conn.execute("SELECT event_type, status FROM alert_dispatch_outbox").fetchall()
+    assert [tuple(r) for r in outbox] == [("open", "pending")]
 
 
 # ─── Per-user dismissal ─────────────────────────────────────────────────────
@@ -885,15 +986,15 @@ def test_dismissal_refuses_rows_the_user_may_not_see(db):
     assert inbox.list_notifications(conn, alice)[1] == 1
 
 
-@pytest.mark.usefixtures("frozen_window")
-def test_new_grouped_delivery_resurfaces_after_dismissal(db, spooler):
+@pytest.mark.usefixtures("frozen_window", "spooler")
+def test_new_grouped_delivery_resurfaces_after_dismissal(db):
     conn, _ = db
     admin = _user(conn, "root", admin=True)
-    spooler.mark_sent(_enqueue(spooler))
+    inbox.emit_delivery_sent(conn, "email")
     item = inbox.list_notifications(conn, admin)[0][0]
     assert inbox.dismiss(conn, admin, item["id"]) is True
     assert inbox.list_notifications(conn, admin)[1] == 0
-    spooler.mark_sent(_enqueue(spooler))  # same window: the grouped row is reused
+    inbox.emit_delivery_sent(conn, "email")  # same window: the grouped row is reused
     again = inbox.list_notifications(conn, admin)[0]
     assert [i["id"] for i in again] == [item["id"]] and again[0]["is_read"] is False
 
@@ -1186,3 +1287,48 @@ def test_failed_report_notification_is_short_private_and_links_to_the_target(db)
     assert (item["title"], item["severity"], item["category"]) == ("PDF failed", "error", "reports")
     assert "boom" not in repr(item)
     assert inbox.list_notifications(conn, bob)[1] == 0
+
+
+def _incident_rows(conn):
+    sql = "SELECT id, event_type FROM notifications WHERE event_type LIKE 'incident.%' ORDER BY id"
+    return conn.execute(sql).fetchall()
+
+
+def test_open_incident_row_survives_inbox_retention(db):
+    from app.db.retention import run_retention
+
+    conn, _ = db
+    old = utcnow() - timedelta(days=400)
+    nid = inbox.report_incident(conn, "smtp", title="down", body="b", now=old)
+    assert nid is not None
+    run_retention(conn)
+    assert inbox.get_incident(conn, "smtp")["notification_id"] == nid
+    assert [r["id"] for r in _incident_rows(conn)] == [nid]
+    inbox.resolve_incident(conn, "smtp", title="up", body="b")
+    run_retention(conn)  # the closed incident row is now ordinary history and ages out
+    assert [r["event_type"] for r in _incident_rows(conn)] == ["incident.smtp.recovered"]
+
+
+def test_missing_incident_row_is_recreated_on_refresh(db):
+    conn, _ = db
+    t0 = utcnow() - timedelta(hours=2)
+    nid = inbox.report_incident(conn, "smtp", title="down", body="b", now=t0)
+    conn.execute("DELETE FROM notifications WHERE id = ?", (nid,))
+    conn.commit()
+    assert inbox.report_incident(conn, "smtp", title="still down", body="b2") is None
+    new_id = inbox.get_incident(conn, "smtp")["notification_id"]
+    assert new_id != nid
+    assert [r["id"] for r in _incident_rows(conn)] == [new_id]
+
+
+def test_failed_recovery_insert_keeps_incident_state_and_repeat_is_idempotent(db):
+    conn, _ = db
+    nid = inbox.report_incident(conn, "smtp", title="down", body="b")
+    with mock.patch.object(inbox, "emit", return_value=None):
+        assert inbox.resolve_incident(conn, "smtp", title="up", body="b") is None
+    assert inbox.get_incident(conn, "smtp") is not None  # recovery can still be delivered
+    first = inbox.resolve_incident(conn, "smtp", title="up", body="b")
+    assert first is not None and inbox.get_incident(conn, "smtp") is None
+    assert inbox.resolve_incident(conn, "smtp", title="up", body="b") is None
+    assert [r["event_type"] for r in _incident_rows(conn)].count("incident.smtp.recovered") == 1
+    assert nid is not None

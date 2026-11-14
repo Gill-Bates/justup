@@ -20,6 +20,8 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 
+from .storage_stats import invalidate_segment_cache
+
 
 class MaintenanceActiveError(RuntimeError):
     """A new unit of work was refused because maintenance (restore) is in progress."""
@@ -113,7 +115,9 @@ def confirm_data_replaced() -> int:
         if not _ACTIVE:
             raise RuntimeError("confirm_data_replaced() requires an active maintenance window")
         _GENERATION += 1
-        return _GENERATION
+        generation = _GENERATION
+    invalidate_segment_cache()  # (path, size, mtime) cannot prove restored segments differ from cached ones
+    return generation
 
 
 def end_maintenance() -> None:

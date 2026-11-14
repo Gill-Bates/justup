@@ -3,38 +3,8 @@
 
 {% block styles %}
 <style>
-	.target-edit-tabs {
-		flex-wrap: nowrap;
-		overscroll-behavior-x: contain;
-		-webkit-overflow-scrolling: touch;
-	}
-
-	.target-edit-tabs .nav-item {
-		flex: 0 0 auto;
-	}
-
-	.target-edit-tabs .nav-link {
-		min-height: 44px;
-		white-space: nowrap;
-	}
 
 	/* Check Cards Pattern */
-	.check-card {
-		border: 1px solid var(--bs-border-color);
-		border-radius: 0.5rem;
-		transition: border-color 0.2s, box-shadow 0.2s;
-	}
-
-	.check-card:hover {
-		border-color: var(--bs-primary);
-	}
-
-	.check-card .card-header {
-		background: var(--bs-body-bg);
-		border-bottom: 1px solid var(--bs-border-color);
-		padding: 1rem;
-	}
-
 	.check-card .card-header .form-switch {
 		margin: 0;
 	}
@@ -48,9 +18,6 @@
 		opacity: 0.6;
 	}
 
-	.check-card .check-body.hidden {
-		display: none;
-	}
 
 	/* Section Headers */
 	.section-header {
@@ -65,7 +32,7 @@
 	}
 
 	/* Mobile Optimizations */
-	@media (max-width: 768px) {
+	@media (max-width: 767.98px) {
 		.check-card .card-header {
 			flex-direction: column;
 			align-items: flex-start;
@@ -161,10 +128,6 @@
 		cursor: text;
 	}
 
-	.tcp-ports-container:focus-within {
-		border-color: var(--bs-primary);
-		box-shadow: 0 0 0 0.25rem rgba(var(--bs-primary-rgb), 0.25);
-	}
 
 	.tcp-ports-tags {
 		display: flex;
@@ -201,8 +164,6 @@
 
 	.tcp-port-tag .remove-port:focus-visible {
 		opacity: 1;
-		outline: 2px solid currentColor;
-		outline-offset: 1px;
 	}
 
 	.tcp-port-tag .remove-port .material-icons {
@@ -232,7 +193,8 @@
 {% block content %}
 <div class="ui-page">
 	<!-- Config element (used by JS) -->
-	<div id="js-config" class="d-none" data-is-edit="true" data-target-id="{{ target.id }}"></div>
+	<div id="js-config" class="d-none" data-is-edit="true" data-target-id="{{ target.id }}"
+		data-basic-auth-enabled="{{ 'true' if target.http_basic_auth_enabled else 'false' }}"></div>
 
 	<nav aria-label="breadcrumb">
 		<ol class="breadcrumb">
@@ -255,7 +217,8 @@
 		</div>
 		<div class="card-body">
 			<form id="target-form" autocomplete="off">
-				<ul class="nav nav-tabs target-edit-tabs overflow-x-auto mb-4" id="target-edit-tabs" role="tablist"
+				<p class="ju-modal-note">Fields marked * are required.</p>
+				<ul class="nav nav-pills ju-tabs mb-4" id="target-edit-tabs" role="tablist"
 					aria-label="Target configuration sections">
 					<li class="nav-item" role="presentation">
 						<button class="nav-link active" id="target-general-tab" data-bs-toggle="tab"
@@ -298,12 +261,12 @@
 
 				<div class="row mb-4">
 					<div class="col-md-5 mb-3 mb-md-0">
-						<label for="name" class="form-label">Monitor Name *</label>
+						<label for="name" class="form-label">Monitor Name <span class="ju-required" aria-hidden="true">*</span></label>
 						<input type="text" class="form-control" id="name" name="name" required
 							value="{{ target.name }}" maxlength="200" placeholder="e.g. My Website">
 					</div>
 					<div class="col-md-4 mb-3 mb-md-0">
-						<label for="host-input" class="form-label">Host / Domain *</label>
+						<label for="host-input" class="form-label">Host / Domain <span class="ju-required" aria-hidden="true">*</span></label>
 						<input type="text" class="form-control" name="host" id="host-input" required
 							value="{{ target.host }}" maxlength="255" placeholder="e.g. example.com">
 					</div>
@@ -341,6 +304,16 @@
 							value="{{ target.max_retries }}" min="{{ limits.max_retries.min }}" max="{{ limits.max_retries.max }}">
 					</div>
 					<div class="col-md-2 mb-3 mb-md-0">
+						<label for="down_alert_delay_minutes" class="form-label">Down Alert Delay</label>
+						<div class="input-group">
+							<input type="number" class="form-control" id="down_alert_delay_minutes" name="down_alert_delay_minutes"
+								value="{{ target.down_alert_delay_minutes }}" min="{{ limits.down_alert_delay_minutes.min }}" max="{{ limits.down_alert_delay_minutes.max }}"
+								aria-describedby="down_alert_delay_minutes_hint">
+							<span class="input-group-text">min</span>
+						</div>
+						<div class="form-text" id="down_alert_delay_minutes_hint">A DOWN alert fires at the first measurement after this time. Independent of retries.</div>
+					</div>
+					<div class="col-md-2 mb-3 mb-md-0">
 						<label for="retention_days" class="form-label">Retention</label>
 						<div class="input-group">
 							<input type="number" class="form-control" id="retention_days" name="retention_days"
@@ -348,23 +321,14 @@
 								aria-describedby="retention_days_hint">
 							<span class="input-group-text">days</span>
 						</div>
-						<div class="form-text" id="retention_days_hint">Raw: 30d · 5-min: 180d · hourly: up to limit (max. 10y).</div>
+						<div class="form-text" id="retention_days_hint">Raw: {{ rollup_days.raw }}d · 5-min: {{ rollup_days['5m'] }}d · hourly: up to limit (max. {{ rollup_days.max_years }}y).</div>
 					</div>
-					<div class="col-md-2" role="group" aria-labelledby="is_enabled-group-label">
-						<span class="form-label d-inline-block" id="is_enabled-group-label">Status</span>
-						<div class="form-check form-switch mt-2">
+					<div class="col-md-2">
+						<span class="form-label d-inline-block" id="is_enabled-label">Status</span>
+						<div class="form-check form-switch ju-switch mt-2">
 							<input class="form-check-input" type="checkbox" role="switch" name="is_enabled"
-								id="is_enabled" {{ 'checked' if target.is_enabled else '' }}>
+								aria-describedby="is_enabled-label" id="is_enabled" {{ 'checked' if target.is_enabled else '' }}>
 							<label class="form-check-label" for="is_enabled">Enabled</label>
-						</div>
-					</div>
-					<div class="col-md-2" role="group" aria-labelledby="auto_close_alert-group-label">
-						<span class="form-label d-inline-block" id="auto_close_alert-group-label">Alerts</span>
-						<div class="form-check form-switch mt-2">
-							<input class="form-check-input" type="checkbox" role="switch" name="auto_close_alert"
-								id="auto_close_alert" {{ 'checked' if target.auto_close_alert else ''
-								}}>
-							<label class="form-check-label" for="auto_close_alert">Auto-Close</label>
 						</div>
 					</div>
 				</div>
@@ -387,9 +351,10 @@
 							<strong>HTTP Check</strong>
 							<div class="text-body-secondary small">Website or API availability</div>
 						</div>
-						<div class="form-check form-switch">
-							<input class="form-check-input" type="checkbox" role="switch" aria-label="Enable HTTP check" id="enable_http_check"
+						<div class="form-check form-switch ju-switch">
+							<input class="form-check-input" type="checkbox" role="switch"  id="enable_http_check" aria-controls="http-check-body"
 								name="enable_http_check" {{ 'checked' if target.enable_http_check else '' }}>
+							<label class="visually-hidden" for="enable_http_check">Enable HTTP check</label>
 						</div>
 					</div>
 
@@ -401,31 +366,25 @@
 								value="{{ target.http_url if target.http_url else '' }}"
 								data-default-scheme="{{ 'http' if target.http_url and target.http_url.startswith('http://') else 'https' }}"
 								placeholder="e.g. /health or /api/status" autocomplete="off" data-lpignore="true"
-								data-form-type="other" data-1p-ignore="true" data-bwignore="true">
-							<div class="form-text mt-2">
+								data-form-type="other" data-1p-ignore="true" data-bwignore="true" aria-describedby="http-url-hint">
+							<div class="form-text mt-2" id="http-url-hint">
 								Target: <code id="http-preview-url">---</code>
 							</div>
 						</div>
-
-						{% set http_req_open = (target.http_port or (target.http_success_codes and target.http_success_codes != '200-399') or
-						(target.http_prefer_head is not none and not target.http_prefer_head)) %}
-						{% set http_auth_open = (target.http_basic_auth_enabled or target.http_username or
-						target.has_http_password) %}
-						{% set http_tls_open = (target.ignore_cert_errors or target.enable_cert_expiration or target.cert_port or target.cert_host) %}
 
 						<div class="accordion accordion-flush" id="http-options-accordion">
 							<!-- Request -->
 							<div class="accordion-item">
 								<h2 class="accordion-header" id="http-options-request-h">
-									<button class="accordion-button {{ '' if http_req_open else 'collapsed' }}"
+									<button class="accordion-button collapsed"
 										type="button" data-bs-toggle="collapse" data-bs-target="#http-options-request"
-										aria-expanded="{{ 'true' if http_req_open else 'false' }}"
+										aria-expanded="false"
 										aria-controls="http-options-request">
-										<span class="material-icons me-2" style="font-size: 18px;" aria-hidden="true">tune</span> Request
+										<span class="material-icons ju-icon-18 me-2" aria-hidden="true">tune</span> Request
 									</button>
 								</h2>
 								<div id="http-options-request"
-									class="accordion-collapse collapse {{ 'show' if http_req_open else '' }}"
+									class="accordion-collapse collapse"
 									aria-labelledby="http-options-request-h" data-bs-parent="#http-options-accordion">
 									<div class="accordion-body pt-3 px-3">
 										<div class="row g-3">
@@ -435,27 +394,28 @@
 												<input type="number" class="form-control" id="http_port"
 													name="http_port"
 													value="{{ target.http_port if target.http_port is not none else '' }}"
-													min="1" max="65535" placeholder="80 / 443">
-												<div class="form-text">Overrides the port if the URL has no explicit
+													min="1" max="65535" placeholder="80 / 443" aria-describedby="http_port_hint">
+												<div class="form-text" id="http_port_hint">Overrides the port if the URL has no explicit
 													port.</div>
 											</div>
-											<div class="col-md-4" role="group" aria-labelledby="http_prefer_head-group-label">
-												<span class="form-label d-inline-block" id="http_prefer_head-group-label">Request Method</span>
-												<div class="form-check form-switch">
+											<div class="col-md-4">
+												<span class="form-label d-inline-block" id="http_prefer_head-label">Request Method</span>
+												<div class="form-check form-switch ju-switch">
 													<input class="form-check-input" type="checkbox" role="switch"
-														name="http_prefer_head" id="http_prefer_head" {{ 'checked' if
+														name="http_prefer_head" id="http_prefer_head"
+														aria-describedby="http_prefer_head-label http_prefer_head_hint" {{ 'checked' if
 														target.http_prefer_head else '' }}>
 													<label class="form-check-label" for="http_prefer_head">Use HEAD
 														request</label>
 												</div>
-												<div class="form-text">HEAD is visitor-safe; GET is more compatible.
+												<div class="form-text" id="http_prefer_head_hint">HEAD is visitor-safe; GET is more compatible.
 												</div>
 											</div>
 											<div class="col-md-4">
 												<label for="http_success_codes" class="form-label">Availability
 													Mode</label>
 												<select class="form-select" id="http_success_codes"
-													name="http_success_codes">
+													name="http_success_codes" aria-describedby="http_success_codes_hint">
 													<option value="200-399" {{ 'selected' if (target.http_success_codes in [none, '' , '200-399' ]) else ''
 														}}>
 														Standard (200–399) – 2xx + Redirects
@@ -468,7 +428,7 @@
 													<option value="{{ target.http_success_codes }}" selected>{{ target.http_success_codes }} (current)</option>
 													{% endif %}
 												</select>
-												<div class="form-text">
+												<div class="form-text" id="http_success_codes_hint">
 													<strong>Standard</strong> is recommended for websites without health
 													endpoints (302/redirects are OK).
 													Use <strong>Lenient</strong> if you only care that the server
@@ -483,24 +443,25 @@
 							<!-- Authentication -->
 							<div class="accordion-item">
 								<h2 class="accordion-header" id="http-options-auth-h">
-									<button class="accordion-button {{ '' if http_auth_open else 'collapsed' }}"
+									<button class="accordion-button collapsed"
 										type="button" data-bs-toggle="collapse" data-bs-target="#http-options-auth"
-										aria-expanded="{{ 'true' if http_auth_open else 'false' }}"
+										aria-expanded="false"
 										aria-controls="http-options-auth">
-										<span class="material-icons me-2" style="font-size: 18px;" aria-hidden="true">vpn_key</span>
+										<span class="material-icons ju-icon-18 me-2" aria-hidden="true">vpn_key</span>
 										Authentication
 									</button>
 								</h2>
 								<div id="http-options-auth"
-									class="accordion-collapse collapse {{ 'show' if http_auth_open else '' }}"
+									class="accordion-collapse collapse"
 									aria-labelledby="http-options-auth-h" data-bs-parent="#http-options-accordion">
 									<div class="accordion-body pt-3 px-3">
 										<div class="row g-3">
 											<div class="col-12">
-												<div class="form-check form-switch">
+												<div class="form-check form-switch ju-switch">
 													<input class="form-check-input" type="checkbox" role="switch"
 														name="http_basic_auth_enabled" id="http_basic_auth_enabled"
-														autocomplete="off" data-lpignore="true" {{ 'checked' if
+														aria-controls="http-basic-auth-username-field http-basic-auth-password-field"
+														{% if (target.http_username or target.has_http_password) and not target.http_basic_auth_enabled %}aria-describedby="http_basic_auth_hint" {% endif %}autocomplete="off" data-lpignore="true" {{ 'checked' if
 														target.http_basic_auth_enabled else '' }}>
 													<label class="form-check-label" for="http_basic_auth_enabled">
 														Send HTTP Basic Authentication
@@ -508,25 +469,25 @@
 												</div>
 												{% if (target.http_username or target.has_http_password) and
 												not target.http_basic_auth_enabled %}
-												<div class="form-text text-body-secondary">Credentials are stored but currently
+												<div class="form-text text-body-secondary" id="http_basic_auth_hint">Credentials are stored but currently
 													disabled.</div>
 												{% endif %}
 											</div>
 
 											<!-- BasicAuth Fields (visible when enabled) -->
-											<div class="col-md-5 auth-field" style="display:none;">
+											<div class="col-md-5 auth-field" id="http-basic-auth-username-field" hidden>
 												<label for="http_username" class="form-label">Username</label>
 												<input type="text" class="form-control" id="http_username"
 													name="http_username" autocomplete="off" data-lpignore="true"
 													data-form-type="other"
 													placeholder="{{ 'Stored; leave empty to keep' if target.http_username else '' }}">
 											</div>
-											<div class="col-md-7 auth-field" style="display:none;">
+											<div class="col-md-7 auth-field" id="http-basic-auth-password-field" hidden>
 												<label for="http_password" class="form-label">Password</label>
 												<div class="input-group">
 													<input type="password" class="form-control" id="http_password"
 														name="http_password" autocomplete="new-password"
-														data-lpignore="true" data-form-type="other"
+														data-lpignore="true" data-form-type="other"{% if target.has_http_password %} aria-describedby="http_password_hint"{% endif %}
 														placeholder="{{ '••••••••' if target.has_http_password else '' }}">
 													{% if target.has_http_password %}
 													<button type="button" class="btn btn-outline-danger"
@@ -536,7 +497,7 @@
 													{% endif %}
 												</div>
 												{% if target.has_http_password %}
-												<div class="form-text text-success">
+												<div class="form-text text-success" id="http_password_hint">
 													<span class="material-icons me-1" aria-hidden="true">lock</span> Encrypted. Leave empty
 													to keep.
 												</div>
@@ -550,19 +511,19 @@
 							<!-- TLS / Certificate -->
 							<div class="accordion-item">
 								<h2 class="accordion-header" id="http-options-tls-h">
-									<button class="accordion-button {{ '' if http_tls_open else 'collapsed' }}"
+									<button class="accordion-button collapsed"
 										type="button" data-bs-toggle="collapse" data-bs-target="#http-options-tls"
-										aria-expanded="{{ 'true' if http_tls_open else 'false' }}"
+										aria-expanded="false"
 										aria-controls="http-options-tls">
-										<span class="material-icons me-2" style="font-size: 18px;" aria-hidden="true">verified_user</span>
+										<span class="material-icons ju-icon-18 me-2" aria-hidden="true">verified_user</span>
 										TLS / Certificate
 									</button>
 								</h2>
 								<div id="http-options-tls"
-									class="accordion-collapse collapse {{ 'show' if http_tls_open else '' }}"
+									class="accordion-collapse collapse"
 									aria-labelledby="http-options-tls-h" data-bs-parent="#http-options-accordion">
 									<div class="accordion-body pt-3 px-3">
-										<div class="form-check form-switch mb-3">
+										<div class="form-check form-switch ju-switch mb-3">
 											<input class="form-check-input" type="checkbox" role="switch"
 												name="enable_cert_expiration" id="enable_cert_expiration"
 												{{ 'checked' if target.enable_cert_expiration else '' }}>
@@ -576,8 +537,7 @@
 										</div>
 
 										<div class="small text-uppercase text-warning fw-semibold mb-2 mt-3">
-											<span class="material-icons me-1"
-												style="font-size: 0.875rem;" aria-hidden="true">warning</span> Danger Zone
+											<span class="material-icons ju-icon-14 me-1" aria-hidden="true">warning</span> Danger Zone
 										</div>
 
 										<div class="option-card option-card-warning">
@@ -587,12 +547,12 @@
 													<div class="option-card-desc">Disables TLS validation. Use only for
 														internal or test systems.</div>
 												</div>
-												<div class="form-check form-switch d-flex align-items-center gap-2">
+												<div class="form-check form-switch ju-switch d-flex align-items-center gap-2">
 													<input class="form-check-input" type="checkbox" role="switch"
 														name="ignore_cert_errors" id="ignore_cert_errors" aria-label="Ignore certificate errors" {{ 'checked'
 														if target.ignore_cert_errors else '' }}>
 													<span class="material-icons text-warning" id="ignore_cert_warning"
-														style="display: {{ 'inline' if target.ignore_cert_errors else 'none' }};" aria-hidden="true">warning</span>
+														{{ '' if target.ignore_cert_errors else 'hidden' }} aria-hidden="true">warning</span>
 												</div>
 											</div>
 										</div>
@@ -614,13 +574,14 @@
 				<div class="card mb-3 check-card" data-check="ping">
 					<div class="card-header d-flex align-items-center justify-content-between">
 						<div>
-							<span class="material-icons text-success me-2" aria-hidden="true">signal_cellular_4_bar</span>
+							<span class="material-icons text-body-secondary me-2" aria-hidden="true">signal_cellular_4_bar</span>
 							<strong>Ping (ICMP)</strong>
 							<div class="text-body-secondary small">Host reachability and latency</div>
 						</div>
-						<div class="form-check form-switch">
-							<input class="form-check-input" type="checkbox" role="switch" aria-label="Enable ping check" id="enable_ping"
+						<div class="form-check form-switch ju-switch">
+							<input class="form-check-input" type="checkbox" role="switch"  id="enable_ping" aria-controls="ping-check-body"
 								name="enable_ping" {{ 'checked' if target.enable_ping else '' }}>
+							<label class="visually-hidden" for="enable_ping">Enable ping check</label>
 						</div>
 					</div>
 					<div class="check-body" id="ping-check-body">
@@ -633,14 +594,15 @@
 				<div class="card mb-3 check-card" data-check="tcp">
 					<div class="card-header d-flex align-items-center justify-content-between">
 						<div>
-							<span class="material-icons text-warning me-2" aria-hidden="true">power</span>
+							<span class="material-icons text-body-secondary me-2" aria-hidden="true">power</span>
 							<strong>TCP Connect</strong>
 							<div class="text-body-secondary small">Port availability check</div>
 						</div>
-						<div class="form-check form-switch">
-							<input class="form-check-input" type="checkbox" role="switch" aria-label="Enable TCP connect check" id="enable_tcp_connect"
+						<div class="form-check form-switch ju-switch">
+							<input class="form-check-input" type="checkbox" role="switch"  id="enable_tcp_connect" aria-controls="tcp-check-body"
 								name="enable_tcp_connect" {{ 'checked' if target.enable_tcp_connect else ''
 								}}>
+							<label class="visually-hidden" for="enable_tcp_connect">Enable TCP connect check</label>
 						</div>
 					</div>
 					<div class="check-body" id="tcp-check-body">
@@ -650,7 +612,7 @@
 								<input type="text" id="tcp_host" name="tcp_host" class="form-control" value="{{ target.tcp_host or '' }}" placeholder="Uses target host if empty">
 							</div>
 							<div class="col-md-8">
-								<label for="tcp_ports_input" class="form-label">Ports *</label>
+								<label for="tcp_ports_input" class="form-label">Ports <span class="ju-required" aria-hidden="true">*</span></label>
 								<div class="tcp-ports-container">
 									<div class="tcp-ports-tags" id="tcp-ports-tags">
 										<!-- Port badges will be inserted here -->
@@ -664,6 +626,57 @@
 						</div>
 					</div>
 				</div>
+
+				<div class="card mb-3 check-card" data-check="udp">
+					<div class="card-header d-flex align-items-center justify-content-between">
+						<div>
+							<span class="material-icons text-body-secondary me-2" aria-hidden="true">settings_ethernet</span>
+							<strong>UDP ports</strong>
+							<div class="text-body-secondary small">Open, closed, and uncertain UDP states are kept distinct.</div>
+						</div>
+						<div class="form-check form-switch ju-switch">
+							<input class="form-check-input" type="checkbox" role="switch" aria-controls="udp-check-body"
+								id="enable_udp_scan" name="enable_udp_scan" {{ 'checked' if target.enable_udp_scan else '' }}>
+							<label class="visually-hidden" for="enable_udp_scan">Enable UDP port checks</label>
+						</div>
+					</div>
+					<div class="check-body" id="udp-check-body">
+						<label for="udp_ports" class="form-label">UDP ports <span class="ju-required" aria-hidden="true">*</span></label>
+						<input type="text" id="udp_ports" name="udp_ports" class="form-control" inputmode="numeric"
+							maxlength="200" placeholder="e.g. 53,161" value="{{ target.udp_ports or '' }}" aria-describedby="udp_ports_hint">
+						<div class="form-text" id="udp_ports_hint">Enter port numbers separated by commas, or add ports from a scan.</div>
+					</div>
+				</div>
+
+				{% set scan_prefix = 'edit' %}
+				{% set scan_host_id = 'host-input' %}
+				{% set scan_tcp_id = 'tcp_ports' %}
+				{% set scan_udp_id = 'udp_ports' %}
+				{% set scan_tcp_toggle_id = 'enable_tcp_connect' %}
+				{% set scan_udp_toggle_id = 'enable_udp_scan' %}
+				<div class="card mt-3"><div class="card-body">
+				{% include 'fragments/network_scan_picker.html' %}
+				</div></div>
+				<div class="card mt-3"><div class="card-body">
+				<section id="service-detection" data-target-id="{{ target.id }}" aria-labelledby="service-detection-title">
+					<h3 class="h6" id="service-detection-title">Detect services</h3>
+					<p class="small text-body-secondary mb-2">Re-detects the services of the stored ports. Nothing is stored until you apply the changes.</p>
+					<div class="d-flex flex-wrap align-items-center gap-2">
+						<button type="button" class="btn btn-outline-secondary" data-service-action="preview">Detect services</button>
+						<button type="button" class="btn btn-primary" data-service-action="confirm" hidden>Apply changes</button>
+						<span class="small text-body-secondary" data-service-status role="status"></span>
+					</div>
+					<p class="small text-danger mt-2 mb-0" data-service-error role="alert" hidden></p>
+					<div class="mt-2" data-service-group="service" role="group" aria-labelledby="service-group-service" hidden>
+						<p class="fw-semibold small mb-1" id="service-group-service">Service changed</p>
+						<ul class="list-unstyled small mb-2" data-service-list="service"></ul>
+					</div>
+					<div class="mt-2" data-service-group="version" role="group" aria-labelledby="service-group-version" hidden>
+						<p class="fw-semibold small mb-1" id="service-group-version">Version only</p>
+						<ul class="list-unstyled small mb-2" data-service-list="version"></ul>
+					</div>
+				</section>
+				</div></div>
 
 					</div>
 					<div class="tab-pane fade" id="target-alerts-pane" role="tabpanel"
@@ -681,21 +694,30 @@
 					</div>
 					<div class="form-text">Select which recipients should be notified when this target goes down.</div>
 				</div>
+				<div class="section-header">
+					<span class="material-icons me-1" aria-hidden="true">rule</span> Alert Behavior
+				</div>
+				<div class="form-check form-switch ju-switch mb-4">
+					<input class="form-check-input" type="checkbox" role="switch" name="auto_close_alert"
+						id="auto_close_alert" {{ 'checked' if target.auto_close_alert else '' }}
+						aria-describedby="auto_close_alert_help">
+					<label class="form-check-label" for="auto_close_alert">Auto-Close</label>
+					<div class="form-text" id="auto_close_alert_help">Close an open alert when this target recovers.</div>
+				</div>
 
 				<!-- ═══════════════════════════════════════════════════════════════════
 			     SECTION 6: SLA Targets (Collapsed)
 			     ═══════════════════════════════════════════════════════════════════ -->
 				<div class="section-header d-flex align-items-center justify-content-between">
 					<span><span class="material-icons me-1" aria-hidden="true">trending_up</span> SLA Targets</span>
-					<div class="form-check form-switch mb-0">
+					<div class="form-check form-switch ju-switch mb-0">
 						<input class="form-check-input" type="checkbox" role="switch" name="sla_enabled"
-							id="sla_enabled" {{ 'checked' if target.sla_enabled else '' }}>
+							id="sla_enabled" aria-controls="sla-fields" {{ 'checked' if target.sla_enabled else '' }}>
 						<label class="form-check-label" for="sla_enabled">Enable</label>
 					</div>
 				</div>
 
-				<div id="sla-fields" class="mb-4"
-					style="{{ '' if target.sla_enabled else 'display: none;' }}">
+				<div id="sla-fields" class="mb-4"{{ '' if target.sla_enabled else ' hidden' }}>
 					<div class="alert alert-light border small mb-3 py-2">
 						<span class="material-icons me-1" aria-hidden="true">info</span>
 						Affects <strong>reports & charts only</strong> – does not trigger alerts.
@@ -703,7 +725,7 @@
 					<div class="row g-3">
 						<div class="col-md-4">
 							<label for="sla_availability_pct" class="form-label">
-								<span class="material-icons text-success me-1" aria-hidden="true">check_circle</span> Availability (%)
+								<span class="material-icons text-body-secondary me-1" aria-hidden="true">check_circle</span> Availability (%)
 							</label>
 							<div class="input-group">
 								<input type="number" class="form-control" id="sla_availability_pct"
@@ -727,7 +749,7 @@
 						</div>
 						<div class="col-md-4">
 							<label for="sla_ping_latency_ms" class="form-label">
-								<span class="material-icons text-info me-1" aria-hidden="true">signal_cellular_4_bar</span> Ping Latency
+								<span class="material-icons text-body-secondary me-1" aria-hidden="true">signal_cellular_4_bar</span> Ping Latency
 							</label>
 							<div class="input-group">
 								<input type="number" class="form-control" id="sla_ping_latency_ms"
@@ -745,12 +767,11 @@
 				<!-- ═══════════════════════════════════════════════════════════════════
 			     ACTIONS
 			     ═══════════════════════════════════════════════════════════════════ -->
-				<hr class="my-4">
-				<div class="ui-form-actions d-flex justify-content-between">
+				<div class="ui-form-actions sticky-actions sticky-actions--always d-flex justify-content-between mt-4">
 					<a href="/ui/targets" class="btn btn-outline-secondary">
 						<span class="material-icons" aria-hidden="true">arrow_back</span> Cancel
 					</a>
-					<button type="submit" class="btn btn-primary px-4">
+					<button type="submit" class="btn btn-primary">
 						<span class="material-icons" aria-hidden="true">check</span> Save Target
 					</button>
 				</div>
@@ -761,561 +782,9 @@
 {% endblock %}
 
 {% block scripts %}
-<script>
-	const config = document.getElementById('js-config').dataset;
-	const targetId = parseInt(config.targetId, 10);
-	let clearCredentials = false;
-
-	// ═══════════════════════════════════════════════════════════════════════════════
-	// TCP PORTS TAG INPUT
-	// ═══════════════════════════════════════════════════════════════════════════════
-	(function initTcpPortsInput() {
-		const container = document.querySelector('.tcp-ports-container');
-		const tagsContainer = document.getElementById('tcp-ports-tags');
-		const input = document.getElementById('tcp_ports_input');
-		const hiddenInput = document.getElementById('tcp_ports');
-
-		if (!container || !tagsContainer || !input || !hiddenInput) return;
-
-		let ports = [];
-
-		// Strict parse: digits only, 1-65535; parseInt would turn "80abc" into 80.
-		function parsePort(raw) {
-			const text = String(raw).trim();
-			if (!/^[0-9]+$/.test(text)) return null;
-			const port = Number(text);
-			return port >= 1 && port <= 65535 ? port : null;
-		}
-
-		// Initialize from hidden input value
-		function initFromValue() {
-			const value = hiddenInput.value.trim();
-			if (value) {
-				value.split(',').forEach(p => {
-					if (!p.trim()) return;
-					const port = parsePort(p);
-					if (port === null) {
-						window.justUpToast?.error?.(`Ignored invalid TCP port "${p.trim()}"`);
-					} else if (!ports.includes(port)) {
-						ports.push(port);
-					}
-				});
-			}
-			renderTags();
-		}
-
-		function renderTags() {
-			tagsContainer.innerHTML = '';
-			ports.forEach(port => {
-				const tag = document.createElement('span');
-				tag.className = 'tcp-port-tag';
-				tag.append(String(port));
-				const removeBtn = document.createElement('button');
-				removeBtn.type = 'button';
-				removeBtn.className = 'remove-port';
-				removeBtn.dataset.port = String(port);
-				removeBtn.setAttribute('aria-label', `Remove TCP port ${port}`);
-				const icon = document.createElement('span');
-				icon.className = 'material-icons';
-				icon.setAttribute('aria-hidden', 'true');
-				icon.textContent = 'close';
-				removeBtn.appendChild(icon);
-				tag.appendChild(removeBtn);
-				tagsContainer.appendChild(tag);
-			});
-			updateHiddenInput();
-		}
-
-		function updateHiddenInput() {
-			hiddenInput.value = ports.join(',');
-		}
-
-		function addPort(value) {
-			const port = parsePort(value);
-			if (port === null) {
-				window.justUpToast?.error?.(`Invalid TCP port "${value.trim()}": use a whole number from 1 to 65535`);
-				return false;
-			}
-			if (ports.includes(port)) {
-				return false;
-			}
-			ports.push(port);
-			ports.sort((a, b) => a - b);
-			renderTags();
-			return true;
-		}
-
-		function removePort(port) {
-			ports = ports.filter(p => p !== port);
-			renderTags();
-		}
-
-		// Handle input
-		input.addEventListener('keydown', (e) => {
-			if (e.key === 'Enter' || e.key === ' ' || e.key === ',') {
-				e.preventDefault();
-				const value = input.value.trim().replace(/,/g, '');
-				if (value) {
-					addPort(value);
-					input.value = '';
-				}
-			} else if (e.key === 'Backspace' && !input.value && ports.length > 0) {
-				removePort(ports[ports.length - 1]);
-			}
-		});
-
-		// Handle paste
-		input.addEventListener('paste', (e) => {
-			e.preventDefault();
-			const text = (e.clipboardData || window.clipboardData).getData('text');
-			const parts = text.split(/[,\s]+/);
-			parts.filter(Boolean).forEach(p => addPort(p));
-			input.value = '';
-		});
-
-		// Handle blur - add any remaining input
-		input.addEventListener('blur', () => {
-			const value = input.value.trim().replace(/,/g, '');
-			if (value) {
-				addPort(value);
-				input.value = '';
-			}
-		});
-
-		// Handle remove button clicks
-		tagsContainer.addEventListener('click', (e) => {
-			const removeBtn = e.target.closest('.remove-port');
-			if (removeBtn) {
-				removePort(parseInt(removeBtn.dataset.port, 10));
-			}
-		});
-
-		// Click on container focuses input
-		container.addEventListener('click', () => {
-			input.focus();
-		});
-
-		initFromValue();
-	})();
-
-	// ═══════════════════════════════════════════════════════════════════════════════
-	// CHECK CARD LOGIC (replaces accordion complexity)
-	// ═══════════════════════════════════════════════════════════════════════════════
-	document.querySelectorAll('.check-card').forEach(card => {
-		const toggle = card.querySelector('.card-header .form-check-input');
-		const body = card.querySelector('.check-body');
-
-		if (!toggle || !body) return;
-
-		function updateCardState() {
-			const enabled = toggle.checked;
-			body.classList.toggle('hidden', !enabled);
-			body.querySelectorAll('input, select, button').forEach(el => {
-				// Don't disable the toggle itself
-				if (el !== toggle) el.disabled = !enabled;
-			});
-			card.classList.toggle('disabled', !enabled);
-		}
-
-		toggle.addEventListener('change', updateCardState);
-		updateCardState();
-	});
-
-	// ═══════════════════════════════════════════════════════════════════════════════
-	// SLA TOGGLE
-	// ═══════════════════════════════════════════════════════════════════════════════
-	const slaToggle = document.getElementById('sla_enabled');
-	const slaFields = document.getElementById('sla-fields');
-	if (slaToggle && slaFields) {
-		slaToggle.addEventListener('change', function () {
-			slaFields.style.display = this.checked ? '' : 'none';
-		});
-	}
-
-	// ═══════════════════════════════════════════════════════════════════════════════
-	// BASIC AUTH TOGGLE
-	// ═══════════════════════════════════════════════════════════════════════════════
-	const basicAuthToggle = document.getElementById('http_basic_auth_enabled');
-	const authFields = document.querySelectorAll('.auth-field');
-	const usernameField = document.getElementById('http_username');
-	const passwordField = document.getElementById('http_password');
-
-	function _hasBasicAuthConfigured() {
-		const u = usernameField?.value?.trim?.() || '';
-		const p = passwordField?.value || '';
-		// On edit, password is not prefilled; we signal stored secret via placeholder.
-		const hasStoredPassword = !!(passwordField?.placeholder && passwordField.placeholder.trim());
-		return !!(u || p || hasStoredPassword || usernameField?.placeholder);
-	}
-
-	function _applyBasicAuthUiState(enabled) {
-		if (basicAuthToggle) basicAuthToggle.checked = !!enabled;
-		authFields.forEach(field => {
-			field.style.display = enabled ? '' : 'none';
-		});
-	}
-
-	if (basicAuthToggle && authFields.length) {
-		// Fix browser form-state restore oddities: the checkbox can come back checked
-		// even when no credentials exist (e.g. after reload/navigation).
-		// For new targets (no existing data), always start with auth OFF.
-		{% if target.http_basic_auth_enabled %}
-		_applyBasicAuthUiState(true);
-		{% else %}
-		_applyBasicAuthUiState(false);
-		{% endif %}
-
-		basicAuthToggle.addEventListener('change', function () {
-			_applyBasicAuthUiState(this.checked);
-
-			// Reset clearCredentials flag when auth is re-enabled
-			if (this.checked) {
-				clearCredentials = false;
-			}
-
-			// UX: disabling auth should NOT delete stored credentials.
-			// Only clear the *typed* password value to avoid keeping secrets in hidden inputs.
-			if (!this.checked) {
-				if (passwordField) passwordField.value = '';
-			}
-		});
-
-		// If the browser auto-fills credentials after our initial sync, enable UI.
-		[usernameField, passwordField].forEach(el => {
-			if (!el) return;
-			el.addEventListener('input', () => {
-				if (_hasBasicAuthConfigured()) _applyBasicAuthUiState(true);
-			});
-		});
-	}
-
-	// ═══════════════════════════════════════════════════════════════════════════════
-	// CREDENTIALS HANDLING
-	// ═══════════════════════════════════════════════════════════════════════════════
-	const clearBtn = document.getElementById('clear-credentials-btn');
-	if (clearBtn) {
-		clearBtn.addEventListener('click', async () => {
-			if (await window.confirmAction({ title: 'Clear credentials', message: 'The stored username and password are removed when you save.', confirmLabel: 'Clear' })) {
-				clearCredentials = true;
-				_applyBasicAuthUiState(false);
-				document.getElementById('http_username').value = '';
-				document.getElementById('http_password').value = '';
-				document.getElementById('http_password').placeholder = '';
-				clearBtn.classList.replace('btn-outline-danger', 'btn-danger');
-				clearBtn.innerHTML = '<span class="material-icons" aria-hidden="true">check</span>';
-				clearBtn.disabled = true;
-			}
-		});
-	}
-
-	// ═══════════════════════════════════════════════════════════════════════════════
-	// URL PREVIEW
-	// ═══════════════════════════════════════════════════════════════════════════════
-	const hostInput = document.getElementById('host-input');
-	const httpUrlInput = document.getElementById('http-url-input');
-	const httpPortInput = document.getElementById('http_port');
-	const httpPreviewUrl = document.getElementById('http-preview-url');
-
-	function _applyPortToUrl(url, port) {
-		try {
-			if (!url) return url;
-			const p = parseInt(port, 10);
-			if (!p || p < 1 || p > 65535) return url;
-			const u = new URL(url);
-			if (u.port) return url;
-			const defaultPort = (u.protocol === 'https:') ? 443 : 80;
-			if (p === defaultPort) return url;
-			u.port = String(p);
-			return u.toString();
-		} catch (e) {
-			return url;
-		}
-	}
-
-	function getConfiguredHttpUrl() {
-		const host = hostInput?.value.trim();
-		if (!host) return null;
-		const path = httpUrlInput?.value.trim() || '';
-		if (path.includes('://')) return path;
-		const scheme = httpUrlInput?.dataset.defaultScheme || 'https';
-		const urlHost = host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
-		if (!path) return `${scheme}://${urlHost}/`;
-		return `${scheme}://${urlHost}${path.startsWith('/') ? '' : '/'}${path}`;
-	}
-
-	function updatePreviews() {
-		const fullUrl = _applyPortToUrl(getConfiguredHttpUrl(), httpPortInput?.value) || '---';
-		if (httpPreviewUrl) httpPreviewUrl.textContent = fullUrl;
-	}
-
-	if (hostInput && httpUrlInput) {
-		hostInput.addEventListener('input', updatePreviews);
-		httpUrlInput.addEventListener('input', updatePreviews);
-		httpPortInput?.addEventListener('input', updatePreviews);
-		updatePreviews();
-	}
-
-	// Danger zone warning icon for "ignore cert errors"
-	const ignoreCertToggleUi = document.getElementById('ignore_cert_errors');
-	const ignoreCertWarningIcon = document.getElementById('ignore_cert_warning');
-	if (ignoreCertToggleUi && ignoreCertWarningIcon) {
-		const updateIgnoreCertIcon = () => {
-			ignoreCertWarningIcon.style.display = ignoreCertToggleUi.checked ? 'inline' : 'none';
-		};
-		ignoreCertToggleUi.addEventListener('change', updateIgnoreCertIcon);
-		updateIgnoreCertIcon();
-	}
-
-	// Auto-fill host from monitor name
-	const nameInput = document.getElementById('name');
-	if (nameInput && hostInput) {
-		nameInput.addEventListener('input', function () {
-			if (hostInput.value.trim()) return;
-			let name = this.value.trim();
-			if (!name) return;
-
-			// Extract hostname before any parentheses (e.g., "host.example.com (Web)" -> "host.example.com")
-			const parenIndex = name.indexOf('(');
-			if (parenIndex > 0) {
-				name = name.substring(0, parenIndex).trim();
-			}
-
-			try {
-				const candidate = name.includes('://') ? name : `https://${name}`;
-				const parsed = new URL(candidate);
-				const labels = parsed.hostname.split('.').filter(Boolean);
-				const tld = labels[labels.length - 1] || '';
-				if (tld.length >= 2) {
-					hostInput.value = parsed.hostname;
-					updatePreviews();
-				}
-			} catch (e) { }
-		});
-	}
-
-	// ═══════════════════════════════════════════════════════════════════════════════
-	// FORM SUBMISSION
-	// ═══════════════════════════════════════════════════════════════════════════════
-	document.getElementById('target-form').addEventListener('submit', async (e) => {
-		e.preventDefault();
-		const form = e.target;
-		const submitBtn = form.querySelector('button[type="submit"]');
-		const originalSubmitHtml = submitBtn.innerHTML;
-
-		// Prevent double-submit
-		if (submitBtn.disabled) return;
-		submitBtn.disabled = true;
-		submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span> Saving...';
-
-		const _normText = (v) => {
-			if (v === undefined || v === null) return null;
-			const s = String(v).trim();
-			return s || null;  // Only empty string → null
-		};
-
-		const _normUrl = (v) => {
-			const s = _normText(v);
-			if (!s) return null;
-			if (!s.includes('://')) return `https://${s}`;
-			return s;
-		};
-
-		const computedHttpUrl = getConfiguredHttpUrl();
-
-		const basicAuthEnabled = form.http_basic_auth_enabled?.checked ?? false;
-
-		const data = {
-			name: _normText(form.name.value),
-			group: _normText(form.group.value),
-			host: _normText(form.host.value),
-			interval_seconds: parseInt(form.interval_seconds.value),
-			retention_days: parseInt(form.retention_days.value),
-			max_retries: parseInt(form.max_retries.value),
-			is_enabled: form.is_enabled.checked,
-			auto_close_alert: form.auto_close_alert.checked,
-			enable_ping: form.enable_ping.checked,
-			enable_http_check: form.enable_http_check.checked,
-			http_prefer_head: form.http_prefer_head.checked,
-			http_basic_auth_enabled: basicAuthEnabled,
-			http_port: form.http_port?.value ? parseInt(form.http_port.value) : null,
-			http_success_codes: _normText(form.http_success_codes?.value) || '200-399',
-			enable_tcp_connect: form.enable_tcp_connect.checked,
-			enable_cert_expiration: form.enable_http_check.checked && form.enable_cert_expiration.checked,
-			// Ignore cert errors only when HTTP is enabled
-			ignore_cert_errors: form.enable_http_check.checked && (form.ignore_cert_errors?.checked ?? false),
-			ping_host: _normText(form.ping_host.value),
-			http_url: computedHttpUrl,
-			tcp_host: _normText(form.tcp_host.value),
-			tcp_ports: _normText(form.tcp_ports.value),
-			cert_host: _normText(form.cert_host.value),
-			cert_port: form.cert_port.value ? parseInt(form.cert_port.value) : null,
-			sla_enabled: form.sla_enabled.checked,
-			// Clear SLA values when disabled to avoid dirty data
-			sla_availability_pct: form.sla_enabled.checked && form.sla_availability_pct.value ? parseFloat(form.sla_availability_pct.value) : null,
-			sla_response_time_ms: form.sla_enabled.checked && form.sla_response_time_ms.value ? parseFloat(form.sla_response_time_ms.value) : null,
-			sla_ping_latency_ms: form.sla_enabled.checked && form.sla_ping_latency_ms.value ? parseFloat(form.sla_ping_latency_ms.value) : null
-		};
-
-		// Handle password: new password has ALWAYS priority over clear flag
-		if (basicAuthEnabled && form.http_password.value) {
-			// New password entered → send it (overwrites old)
-			data.http_password = form.http_password.value;
-		} else if (clearCredentials) {
-			// No new password, but explicitly cleared
-			data.clear_http_password = true;
-		}
-		if (basicAuthEnabled && form.http_username.value.trim()) {
-			data.http_username = form.http_username.value.trim();
-		}
-
-		try {
-			const resp = await apiFetch(`/targets/${targetId}`, {
-				method: 'PATCH',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify(data)
-			});
-			if (!resp.ok) {
-				const err = await resp.json();
-				let msg = 'Error saving target';
-				if (typeof err.detail === 'string' && err.detail.trim()) {
-					msg = err.detail;
-				} else if (Array.isArray(err.detail)) {
-					msg = err.detail.map(e => {
-						const loc = Array.isArray(e.loc) ? e.loc.join('.') : '';
-						return `${loc ? loc + ': ' : ''}${e.msg || 'Invalid value'}`;
-					}).join('\n');
-				}
-				throw new Error(msg);
-			}
-			const result = await resp.json();
-
-			// Save alert recipients (returns immediately, notifications sent in background).
-			// Skipped while the list is not fully loaded: PUT [] would wipe existing assignments.
-			let alertResp = null;
-			if (alertRecipientsLoaded) {
-				const selectedRecipients = Array.from(document.querySelectorAll('#alert-users-checkboxes input:checked'))
-					.map(cb => parseInt(cb.value));
-				alertResp = await apiFetch(`/targets/${result.id}/alert-users`, {
-					method: 'PUT',
-					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify(selectedRecipients)
-				});
-
-				if (!alertResp.ok) {
-					throw new Error(`Target saved, but alert recipients could not be saved (${alertResp.status}). Retry Save Target to complete the assignment.`);
-				}
-			}
-
-			window.justUpToast?.success?.('Target updated');
-			if (!alertResp) {
-				window.justUpToast?.warning?.('Alert recipients were not loaded, so their assignment was left unchanged.');
-			}
-
-			// If notifications are being sent, save task info for polling after redirect
-			if (alertResp?.ok) {
-				const alertResult = await alertResp.json();
-				if (alertResult.notification_task_id && alertResult.new_recipient_count > 0) {
-					const taskInfo = {
-						targetId: result.id,
-						taskId: alertResult.notification_task_id,
-						totalCount: alertResult.new_recipient_count,
-						timestamp: Date.now()
-					};
-					sessionStorage.setItem('pendingNotificationTask', JSON.stringify(taskInfo));
-				}
-			}
-
-			// Redirect after short delay to allow toast to be seen
-			setTimeout(() => {
-				window.location.href = `/ui/targets/${result.id}`;
-			}, 800);
-		} catch (err) {
-			window.justUpToast?.error?.(err.message);
-		} finally {
-			submitBtn.disabled = false;
-			submitBtn.innerHTML = originalSubmitHtml;
-		}
-	});
-
-	// ═══════════════════════════════════════════════════════════════════════════════
-	// ALERT RECIPIENTS LOADING
-	// ═══════════════════════════════════════════════════════════════════════════════
-	// True only after recipients and current assignments were both read successfully.
-	let alertRecipientsLoaded = false;
-
-	async function loadAlertUsersCheckboxes() {
-		const container = document.getElementById('alert-users-checkboxes');
-		alertRecipientsLoaded = false;
-		try {
-			const recipientsResp = await apiFetch('/recipients');
-			if (!recipientsResp.ok) throw new Error('Failed to load recipients');
-			const recipients = await recipientsResp.json();
-
-			if (recipients.length === 0) {
-				container.innerHTML = '<div class="text-body-secondary small">No recipients configured. <a href="/ui/settings#recipients">Add recipients in settings</a></div>';
-				alertRecipientsLoaded = true;
-				return;
-			}
-
-			let selectedIds = [];
-			if (targetId) {
-				const selectedResp = await apiFetch(`/targets/${targetId}/alert-users`);
-				if (!selectedResp.ok) throw new Error('Failed to load alert assignments');
-				selectedIds = await selectedResp.json();
-			}
-
-			const tilesHtml = recipients.map(r => {
-				const checked = selectedIds.includes(r.id) ? 'checked' : '';
-				const statusBadge = r.is_enabled
-					? '<span class="badge ju-status-badge--success">Active</span>'
-					: '<span class="badge ju-status-badge--neutral">Disabled</span>';
-
-				const channels = [];
-				if (r.phone) {
-					channels.push(`
-							<span class="alert-recipient-channel" title="${escapeHtml(r.phone)}">
-								<span class="material-icons" aria-hidden="true">sms</span>
-								<span class="alert-recipient-channel-text">${escapeHtml(r.phone)}</span>
-							</span>
-						`);
-				}
-				if (r.email) {
-					channels.push(`
-							<span class="alert-recipient-channel" title="${escapeHtml(r.email)}">
-								<span class="material-icons" aria-hidden="true">email</span>
-								<span class="alert-recipient-channel-text">${escapeHtml(r.email)}</span>
-							</span>
-						`);
-				}
-
-				return `
-						<div class="alert-recipient-tile">
-							<label class="alert-recipient-label" for="alert-recipient-${r.id}">
-								<input class="form-check-input" type="checkbox" value="${r.id}" id="alert-recipient-${r.id}" ${checked}>
-								<span class="alert-recipient-body">
-									<span class="alert-recipient-name-row">
-										<span class="alert-recipient-name">
-											<span class="material-icons" aria-hidden="true">person</span>
-											<span class="alert-recipient-name-text">${escapeHtml(r.name)}</span>
-										</span>
-										<span class="alert-recipient-status">${statusBadge}</span>
-									</span>
-									${channels.length ? `<span class="alert-recipient-channels">${channels.join('')}</span>` : '<span class="alert-recipient-channels"><span class="text-body-secondary">No channels</span></span>'}
-								</span>
-							</label>
-						</div>
-					`;
-			}).join('');
-
-			container.innerHTML = `<div class="alert-recipients-grid">${tilesHtml}</div>`;
-			alertRecipientsLoaded = true;
-		} catch (e) {
-			container.innerHTML = '<div class="text-danger small">Error loading recipients. Alert recipient assignments will not be changed when saving.</div>';
-		}
-	}
-
-
-
-	loadAlertUsersCheckboxes();
-</script>
+<script src="/static/js/utils/optional-groups.js" defer></script>
+<script src="/static/js/target-form.js" defer></script>
+<script src="/static/js/utils/port-scan-core.js" defer></script>
+<script src="/static/js/network-scan-picker.js" defer></script>
+<script src="/static/js/target-detail/service-detection.js" defer></script>
 {% endblock %}

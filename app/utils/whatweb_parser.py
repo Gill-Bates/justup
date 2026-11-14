@@ -397,11 +397,11 @@ def _normalize_stack(entries: list[dict]) -> dict[str, Any]:
 
     programming_language = _detect_programming_language(plugins)
 
-    # Avoid duplication: if CMS starts with programming language, clear the latter
+    # Avoid repeating the programming language when it is already part of the CMS name.
     if cms and programming_language:
         cms_lower = cms.lower()
         lang_lower = programming_language.lower()
-        if cms_lower.startswith(lang_lower) or lang_lower in cms_lower:
+        if lang_lower in cms_lower:
             programming_language = None
 
     security = _analyze_security(plugins, target_url)
@@ -492,10 +492,8 @@ def _analyze_security(plugins: dict, target_url: str) -> dict[str, Any]:
             if isinstance(val, (str, list, dict)):
                 try:
                     s = str(val) if isinstance(val, str) else json.dumps(val)
-                    # Skip if it's a standard trace header (not a security issue)
-                    if _TRACE_EXCLUSIONS.search(s):
-                        continue
-                    if _DEBUG_HEADER_RE.search(s):
+                    # Blank out standard trace headers only; the rest of the value is still checked
+                    if _DEBUG_HEADER_RE.search(_TRACE_EXCLUSIONS.sub(" ", s)):
                         debug_detected = True
                         break
                 except (TypeError, ValueError):
@@ -537,11 +535,11 @@ def _detect_programming_language(plugins: dict) -> str | None:
 
     php = _get_first(plugins, "PHP")
     if php:
-        return f"PHP {php}" if not str(php).lower().startswith("php") else php
+        return f"PHP {php}" if not php.lower().startswith("php") else php
 
     aspnet = _get_first(plugins, "ASP.NET")
     if aspnet:
-        return f"ASP.NET {aspnet}" if not str(aspnet).lower().startswith("asp") else aspnet
+        return f"ASP.NET {aspnet}" if not aspnet.lower().startswith("asp") else aspnet
 
     # NOTE: PoweredBy fallback removed to avoid duplicating CMS detection.
     # If PoweredBy contains runtime info (e.g. "PHP/8.2"), it should be

@@ -10,7 +10,10 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import re
 from urllib.parse import urlsplit
+
+from ..utils.tcp_ports import parse_port
 
 
 def normalize_host(value: str | None) -> str | None:
@@ -39,6 +42,21 @@ def normalize_url(value: str, *, port_override: int | None = None) -> str:
     return f"{scheme}://{authority}{path}{query}"
 
 
+def _identity_ports(value: object) -> list[int]:
+    """Valid ports of a stored port list; entries the shared parser rejects are skipped.
+
+    Input validation belongs to the API. The identity only has to compare what is stored, and rows that
+    predate the validation (out-of-range entries) must still load, deduplicate and report.
+    """
+    ports: set[int] = set()
+    for token in re.split(r"[,\s]+", str(value or "").strip()):
+        try:
+            ports.add(parse_port(token))
+        except ValueError:
+            continue
+    return sorted(ports)
+
+
 def check_identities(data: dict) -> set[tuple[str, str]]:
     result: set[tuple[str, str]] = set()
     host = normalize_host(data.get("host"))
@@ -48,9 +66,11 @@ def check_identities(data: dict) -> set[tuple[str, str]]:
         result.add(("http", normalize_url(str(data["http_url"]), port_override=data.get("http_port"))))
     if data.get("enable_tcp_connect"):
         tcp_host = normalize_host(data.get("tcp_host")) or host or ""
-        for port in str(data.get("tcp_ports") or "").split(","):
-            if port.strip():
-                result.add(("tcp", f"{tcp_host}:{int(port)}"))
+        for port in _identity_ports(data.get("tcp_ports")):
+            result.add(("tcp", f"{tcp_host}:{port}"))
+    if data.get("enable_udp_scan"):
+        for port in _identity_ports(data.get("udp_ports")):
+            result.add(("udp", f"{host or ''}:{port}"))
     return result
 
 

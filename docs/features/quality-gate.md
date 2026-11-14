@@ -20,7 +20,7 @@ Settings > Network, applied without restart:
 
 | Setting | Default | Purpose |
 | --- | --- | --- |
-| Probe Targets | `https://1.1.1.1`, `8.8.8.8`, `9.9.9.9`, `https://www.de-cix.net`, `https://cloudflare.com` | Hosts to probe (3 to 20) |
+| Probe Targets | five public hosts, listed in [Settings](../configuration/settings.md#reference) | Hosts to probe (3 to 20) |
 | Minimum Score | 70 | Below this score checks pause (0-100) |
 | RTT Threshold | 500 ms | Round-trip time at which the latency part of the score reaches zero (1-10000) |
 

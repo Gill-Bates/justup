@@ -125,6 +125,50 @@ def test_welcome_signal_is_skipped_when_backend_fails(mem_conn):
     assert targets_api._resolve_welcome_signal_sender(mem_conn, _Backend([], fail=True)) is None
 
 
+# --- Signal profile update: the configured alert sender is passed to the backend ----------------
+
+
+class _ProfileBackend:
+    def __init__(self, error: Exception | None = None) -> None:
+        self.error = error
+        self.senders: list[str | None] = []
+
+    def update_profile(self, name: str, avatar_path: str | None = None, sender: str | None = None) -> None:  # noqa: ARG002
+        self.senders.append(sender)
+        if self.error:
+            raise self.error
+
+
+def test_signal_profile_update_uses_the_configured_sender(mem_conn, monkeypatch):
+    from app.api import signal as signal_api
+
+    backend = _ProfileBackend()
+    monkeypatch.setattr(signal_api, "get_signal_backend", lambda: backend)
+    sqlite_db.set_setting(mem_conn, SettingKeys.SIGNAL_API_SENDER_NUMBER, "+4915100000002")
+    response = signal_api.signal_update_profile(signal_api.ProfileRequest(name="justUp"), conn=mem_conn)
+    assert response.status_code == 204
+    assert backend.senders == ["+4915100000002"]
+
+
+@pytest.mark.parametrize(
+    ("configured", "detail"),
+    [("+4915100000009", "Configured Signal sender is not registered"), (None, "No Signal account is linked")],
+)
+def test_signal_profile_update_reports_an_unregistered_sender(mem_conn, monkeypatch, configured, detail):
+    from fastapi import HTTPException
+
+    from app.api import signal as signal_api
+    from app.services.notifications.signal_errors import SignalNotRegistered
+
+    monkeypatch.setattr(signal_api, "get_signal_backend", lambda: _ProfileBackend(SignalNotRegistered("x")))
+    if configured:
+        sqlite_db.set_setting(mem_conn, SettingKeys.SIGNAL_API_SENDER_NUMBER, configured)
+    with pytest.raises(HTTPException) as exc:
+        signal_api.signal_update_profile(signal_api.ProfileRequest(name="justUp"), conn=mem_conn)
+    assert exc.value.status_code == 409
+    assert exc.value.detail == detail
+
+
 # --- Runtime settings cache: no stale refill after invalidation ----------------------------------
 
 
@@ -261,6 +305,7 @@ def test_tls_scan_rejects_when_pending_limit_is_reached_and_recovers(monkeypatch
 
     class _Resolved:
         hostname, port, ip_address = "tls.example.com", 443, "192.0.2.10"
+        addresses = (ip_address,)
 
     monkeypatch.setattr(tls_scanner, "resolve_target", lambda _t: _Resolved())
     monkeypatch.setattr(tls_scanner, "_run_sslyze", blocking_scan)

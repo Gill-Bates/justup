@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 from app.db import tsdb
+from app.db import tsdb_segments as seg
 from tests import _support  # noqa: F401
 
 
@@ -69,3 +70,26 @@ def test_rollups_handoff_at_target_retention_boundaries(tmp_path, monkeypatch):
     assert second == {"http_ms@1h_median": 1}
     assert "http_ms5m_median@5m_median" not in tsdb.list_metrics(tmp_path, 7)
     assert len(tsdb.query(tmp_path, target_id=7, metric="http_ms@1h_median")) == 1
+
+
+def test_rollups_reach_1h_for_a_target_without_raw_data(tmp_path, monkeypatch):
+    now = datetime(2026, 6, 1, 12, tzinfo=UTC)
+    monkeypatch.setattr(tsdb, "utcnow", lambda: now)
+    old = datetime(2026, 6, 1, 0, tzinfo=UTC) - timedelta(days=181)
+    _write_series(tmp_path, "http_ms@5m_median", [(old, 10), (old + timedelta(minutes=5), 30)])
+
+    first = tsdb.run_rollups(tmp_path, 7, retention_days=365)
+    tsdb.prune_all_series(tmp_path, 7, 365)
+    second = tsdb.run_rollups(tmp_path, 7, retention_days=365)
+
+    assert first == {"http_ms@1h_median": 1}
+    assert second == {}
+    assert [p.value for p in tsdb.query(tmp_path, target_id=7, metric="http_ms@1h_median")] == [20]
+    assert "http_ms@5m_median@5m_median" not in tsdb.list_metrics(tmp_path, 7)
+
+
+def test_rollup_config_and_segment_resolution_agree():
+    assert {k: v[1] for k, v in tsdb.ROLLUP_CONFIG.items() if k != "1h_median"} == {"raw": 30, "5m_median": 180}
+    for resolution in ("5m_median", "1h_median"):
+        assert seg.resolution_of_stem(f"http_ms@{resolution}".replace("@", "")) == resolution
+    assert seg.resolution_of_stem("http_ms") == "raw"

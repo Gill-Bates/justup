@@ -23,27 +23,33 @@ import math
 import threading
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 from reportlab.lib import colors
 from reportlab.lib.units import mm
+from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.pdfgen.canvas import FILL_EVEN_ODD
 from reportlab.platypus import Flowable
 
+from app.services.geo_resolver import ACCURACY_APPROXIMATE
 from app.services.route_map_rules import (
+    BASEMAP_FILE,
     DASH_ARRAY,
+    LABELS_FILE,
     LINE_HALO_PX,
     LINE_WEIGHT_PX,
     MARKER_GAP_PX,
     MAX_CITY_LABELS,
     MIN_ARROW_SEGMENT_PX,
     PALETTE,
+    polygon_parts,
     select_labels,
 )
 from app.services.route_timeline import logical_hop_count, mapped_hop_numbers, route_start_is_mapped
 from app.services.traceroute_geo import (
+    LOC_APPROXIMATE,
+    LOC_COUNTRY,
     MAP_ROLE_ESTIMATE,
     META_MAP_RADIUS_KM,
     META_MAP_ROLE,
@@ -51,9 +57,7 @@ from app.services.traceroute_geo import (
     route_map_features,
 )
 
-GEO_DIR = Path(__file__).resolve().parent.parent / "static" / "vendor" / "geo"
-BASEMAP_FILE = GEO_DIR / "world-110m.geojson"
-LABELS_FILE = GEO_DIR / "labels.json"
+GEO_DIR = BASEMAP_FILE.parent  # the dataset paths are owned by route_map_rules
 
 MIN_EXTENT_DEG = 3.0  # smallest visible span, so a single region stays recognisable
 KM_PER_DEG_LAT = 111.19
@@ -66,9 +70,10 @@ _PX = 0.75  # points per CSS pixel: the shared line rules are written in pixels
 _THEME = PALETTE["light"]  # a printed report always uses the light palette
 _ROUTE = colors.HexColor(_THEME["route"])
 _HALO = colors.HexColor(_THEME["halo"])
-_INK = colors.HexColor("#12294a")
-_START = colors.HexColor("#146c43")
-_DEST = colors.HexColor("#a14d00")
+_MARKERS = PALETTE["markers"]["print"]  # print marker colours, defined in route_map_rules.PALETTE
+_INK = colors.HexColor(_MARKERS["hop"])
+_START = colors.HexColor(_MARKERS["start"])
+_DEST = colors.HexColor(_MARKERS["end"])
 DESTINATION_COLOR = _DEST  # shared with the network path diagram so both show the same destination marker
 _LAND = colors.HexColor(_THEME["land"])
 _LAND_LINE = colors.HexColor(_THEME["border"])
@@ -82,7 +87,7 @@ Rect = tuple[float, float, float, float]
 def draw_destination_diamond(
     c, cx: float, cy: float, half: float, fill, font_bold: str, font_size: float, glyph: str = "D"
 ) -> None:
-    """Destination marker: a filled diamond with a white glyph, identical on the map, its legend and the path."""
+    """Destination marker: filled diamond with a white glyph, as in the map legend and path diagram."""
     c.saveState()
     c.setDash()
     c.setLineWidth(0.8)
@@ -116,19 +121,10 @@ _basemap: Basemap | None = None
 _basemap_lock = threading.Lock()
 
 
-def _polygon_parts(geometry: dict[str, Any]) -> list[list[list[list[float]]]]:
-    kind, coords = geometry.get("type"), geometry.get("coordinates") or []
-    if kind == "Polygon":
-        return [coords]
-    if kind == "MultiPolygon":
-        return list(coords)
-    return []
-
-
 def _parse_basemap(world: dict[str, Any], labels: dict[str, Any]) -> Basemap:
     polygons = []
     for feature in world.get("features", []):
-        for rings in _polygon_parts(feature.get("geometry") or {}):
+        for rings in polygon_parts(feature.get("geometry") or {}):
             parsed = tuple(tuple((float(p[0]), float(p[1])) for p in ring) for ring in rings if len(ring) >= 3)
             if not parsed:
                 continue
@@ -154,6 +150,11 @@ def load_basemap() -> Basemap:
 # ─── Projection ──────────────────────────────────────────────────────────────────
 
 
+def _lon_scale(lat: float) -> float:
+    """Equirectangular longitude scale; fit and projection must use the same clamped latitude."""
+    return math.cos(math.radians(max(-80.0, min(80.0, lat))))
+
+
 @dataclass(frozen=True)
 class View:
     """Equirectangular view: points per degree of latitude, centred on (lat_c, lon_c)."""
@@ -166,7 +167,7 @@ class View:
 
     @property
     def k(self) -> float:
-        return math.cos(math.radians(max(-80.0, min(80.0, self.lat_c))))
+        return _lon_scale(self.lat_c)
 
     def project(self, lat: float, lon: float) -> tuple[float, float]:
         return (
@@ -189,7 +190,7 @@ def fit_view(
     lons = [c[1] for c in coords]
     lat_c = (min(lats) + max(lats)) / 2
     lon_c = (min(lons) + max(lons)) / 2
-    k = math.cos(math.radians(max(-80.0, min(80.0, lat_c))))
+    k = _lon_scale(lat_c)
     span_x = max((max(lons) - min(lons)) * k, MIN_EXTENT_DEG)
     span_y = max(max(lats) - min(lats), MIN_EXTENT_DEG)
     scale = min((width - 2 * margin_x) / span_x, (height - 2 * margin_y) / span_y)
@@ -240,8 +241,8 @@ def _contains_hop(point: dict[str, Any], hop: int) -> bool:
 def is_approximate(point: dict[str, Any]) -> bool:
     return bool(
         point.get("_approximate")
-        or point.get("accuracy_class") == "approximate"
-        or point.get("loc_precision") in ("approximate", "country")
+        or point.get("accuracy_class") == ACCURACY_APPROXIMATE
+        or point.get("loc_precision") in (LOC_APPROXIMATE, LOC_COUNTRY)
     )
 
 
@@ -425,6 +426,17 @@ def route_segments(points: Sequence[dict[str, Any]]) -> list[tuple[int, int, boo
     """
     return [
         (a, b, points[a].get("segment_to_next") == SEGMENT_DASHED) for a, b in itertools.pairwise(range(len(points)))
+    ]
+
+
+def pdf_arrow_indices(
+    chain: Sequence[tuple[tuple[float, float], tuple[float, float], bool]],
+) -> list[int]:
+    """PDF-only arrow policy: long solid links indicate direction; dashed links remain unarrowed."""
+    return [
+        index
+        for index, (a, b, dashed) in enumerate(chain)
+        if not dashed and math.hypot(b[0] - a[0], b[1] - a[1]) > MIN_ARROW_SEGMENT_PX * _PX
     ]
 
 
@@ -639,6 +651,8 @@ class RouteMap(Flowable):
         c.setFillColor(_LABEL)
         for item in countries:
             name = item["name"]
+            if not self._has_glyphs(name):
+                continue
             x, y = view.project(item["lat"], item["lon"])
             w = stringWidth(name, self.font, 7)
             rect = (x - w / 2, y - 3, x + w / 2, y + 7)
@@ -648,6 +662,21 @@ class RouteMap(Flowable):
                 continue
             c.drawCentredString(x, y, name.upper() if len(name) <= 3 else name)
             placed.append(rect)
+
+    def _has_glyphs(self, text: str) -> bool:
+        """False when the embedded font lacks a glyph; such a name would render as boxes."""
+        font = pdfmetrics.getFont(self.font)
+        glyphs = getattr(font.face, "charToGlyph", None)
+        if glyphs is not None:
+            return all(ord(ch) in glyphs for ch in text)
+
+        # ReportLab's built-in Type 1 fonts use an encoding vector instead of a
+        # Unicode charToGlyph map. Check that vector so fallback fonts work too.
+        encoding = getattr(font, "encoding", None)
+        vector = getattr(encoding, "vector", None)
+        if vector is None:
+            return False
+        return all(ord(ch) < len(vector) and vector[ord(ch)] not in (None, ".notdef") for ch in text)
 
     def _draw_accuracy(self, view: View, groups: Sequence[MarkerGroup]) -> None:
         c = self.canv
@@ -706,9 +735,9 @@ class RouteMap(Flowable):
                 c.line(a[0], a[1], b[0], b[1])
         c.setDash()
         c.setFillColor(_ROUTE)
-        for a, b, dashed in chain:
-            if not dashed and math.hypot(b[0] - a[0], b[1] - a[1]) > MIN_ARROW_SEGMENT_PX * _PX:
-                self._arrow((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, math.atan2(b[1] - a[1], b[0] - a[0]))
+        for index in pdf_arrow_indices(chain):
+            a, b, _dashed = chain[index]
+            self._arrow((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, math.atan2(b[1] - a[1], b[0] - a[0]))
         c.setStrokeColor(_ROUTE)
         c.setLineWidth(0.6)
         c.setDash(1, 2)
@@ -779,6 +808,8 @@ class RouteMap(Flowable):
             if drawn >= MAX_CITY_LABELS:
                 break
             name = item["name"]
+            if not self._has_glyphs(name):
+                continue
             tw = stringWidth(name, self.font, FONT_SIZE)
             group = by_position.get((item["lat"], item["lon"]))
             if group is not None:

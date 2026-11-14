@@ -1,5 +1,3 @@
-<img src="https://raw.githubusercontent.com/Gill-Bates/justup/main/app/static/img/justup_1c.svg" width="220" alt="justUp! logo">
-
 # justUp!
 
 **Self-hosted uptime monitoring with network diagnostics built in.**
@@ -9,12 +7,22 @@ Fewer false alarms. Clearer diagnostics. Reports you can share. All in one conta
 ![Platforms](https://img.shields.io/badge/Platform-linux%2Famd64%20%7C%20linux%2Farm64-lightgrey?logo=linux&logoColor=white)
 
 justUp! brings availability monitoring, network diagnostics, and PDF reporting
-together. Check hosts over ping, HTTP(S), and TCP, and track certificate expiry.
+together. Check hosts over ping, HTTP(S), TCP, and UDP, discover open ports with Nmap, and track certificate expiry.
 When something goes wrong, inspect the network route and share the findings
 without switching tools.
 
 Application state and measurement history stay local. No agents to install on
 monitored hosts, no separate Grafana instance, and no external database to maintain.
+
+## Screenshots
+
+![Dashboard with target counts, monitor quality, delivery queue, alerts and the 24-hour downtime overview](https://raw.githubusercontent.com/Gill-Bates/justup/main/.github/img/screenshot_01.png)
+
+![Target view with uptime, certificate expiry, response time chart, HTTP status codes and availability](https://raw.githubusercontent.com/Gill-Bates/justup/main/.github/img/screenshot_02.png)
+
+![Network diagnostics with traceroute hops, hop table and route map](https://raw.githubusercontent.com/Gill-Bates/justup/main/.github/img/screenshot_03.png)
+
+![SMTP settings with email template editor and alert preview](https://raw.githubusercontent.com/Gill-Bates/justup/main/.github/img/screenshot_04.png)
 
 ## Why justUp!
 

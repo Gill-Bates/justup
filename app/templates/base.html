@@ -24,6 +24,10 @@
 	<script src="/static/js/theme-init.js"></script>
 	<script src="/static/js/utils/csrf.js"></script>
 	<script src="/static/js/utils/escape.js"></script>
+	<script src="/static/js/utils/warning.js"></script>
+	<script src="/static/js/utils/status-badge.js"></script>
+	<script src="/static/js/utils/utc-time.js"></script>
+	<script src="/static/js/utils/api-error.js"></script>
 
 	{% block styles %}{% endblock %}
 	{% block head %}{% endblock %}
@@ -128,6 +132,11 @@
 								</a>
 							</li>
 							{% endif %}
+							<li>
+								<a class="ju-nav-link {% if active_page == 'about' %}active{% endif %}" href="/ui/about"{% if active_page == 'about' %} aria-current="page"{% endif %}>
+									<span class="material-icons" aria-hidden="true">info</span><span class="ju-nav-text">About</span>
+								</a>
+							</li>
 				</ul>
 				<div class="ju-sidebar-controls">
 					<button type="button" class="ju-nav-link ju-sidebar-toggle" id="sidebar-collapse"
@@ -201,84 +210,21 @@
 
 	<script src="/static/js/bootstrap.bundle.min.js"></script>
 	<script src="/static/js/utils/modal-focus.js"></script>
+	<script src="/static/js/utils/tabs-overflow.js"></script>
 	<script src="/static/js/utils/field-errors.js"></script>
 	<script src="/static/js/utils/confirm-dialog.js"></script>
+	<script src="/static/js/utils/htmx-confirm.js"></script>
 	<script src="/static/js/live-events.js"></script>
 	<script src="/static/js/utils/quality-state.js"></script>
 	<script src="/static/js/target-detail/traceroute-cache.js"></script>
 	<script src="/static/js/utils/user-storage.js"></script>
+	<script src="/static/js/utils/downtime-time.js"></script>
 	<script src="/static/js/app.js"></script>
 	<script src="/static/js/pdf-jobs.js"></script>
 	<script src="/static/js/sidebar.js"></script>
 	<script src="/static/js/notifications.js"></script>
 
-	<!-- Onboarding: Pulse Targets nav if no targets exist -->
-	<script>
-		(function () {
-			const navTargets = document.getElementById('nav-targets');
-			if (!navTargets || navTargets.classList.contains('active')) return;
-
-			// Use apiFetch for centralized auth/error handling
-			if (typeof window.apiFetch === 'function') {
-				window.apiFetch('/targets')
-					.then(r => r.ok ? r.json() : null)
-					.then(data => {
-						if (data && Array.isArray(data) && data.length === 0) {
-							navTargets.classList.add('nav-link-pulse');
-						}
-					})
-					.catch(() => { });
-			}
-		})();
-	</script>
-
-	<!-- HTMX: Global error handling to prevent retry storms on 5xx errors -->
-	<script>
-		(function () {
-			document.body.addEventListener('htmx:responseError', function (evt) {
-				const elt = evt.detail.elt;
-				const xhr = evt.detail.xhr;
-
-				// Only handle 5xx errors (server issues) - let 4xx through (auth, validation)
-				if (xhr.status < 500) return;
-
-				const retryCount = parseInt(elt.dataset.htmxRetryCount || '0');
-				const MAX_RETRIES = 3;
-
-				if (retryCount >= MAX_RETRIES) {
-					// Stop polling after 3 consecutive failures
-					const originalTrigger = elt.getAttribute('hx-trigger');
-					if (originalTrigger) {
-						// Save original trigger so it can be restored on page reload
-						elt.dataset.htmxOriginalTrigger = originalTrigger;
-						elt.removeAttribute('hx-trigger');
-						console.warn('HTMX polling stopped after', MAX_RETRIES, 'failures:',
-							evt.detail.pathInfo.requestPath);
-					}
-					return;
-				}
-
-				elt.dataset.htmxRetryCount = (retryCount + 1).toString();
-			});
-
-			document.body.addEventListener('htmx:afterRequest', function (evt) {
-				if (evt.detail.successful) {
-					const elt = evt.detail.elt;
-					if (elt.dataset.htmxRetryCount) {
-						delete elt.dataset.htmxRetryCount;
-					}
-					// Restore trigger if it was disabled by retry limit
-					if (elt.dataset.htmxOriginalTrigger && !elt.getAttribute('hx-trigger')) {
-						elt.setAttribute('hx-trigger', elt.dataset.htmxOriginalTrigger);
-						delete elt.dataset.htmxOriginalTrigger;
-						if (typeof htmx !== 'undefined' && htmx.process) {
-							htmx.process(elt);
-						}
-					}
-				}
-			});
-		})();
-	</script>
+	<script src="/static/js/base-init.js"></script>
 
 	{% block scripts %}{% endblock %}
 </body>

@@ -117,6 +117,7 @@ function updateRangeActiveTick(input) {
 /**
  * Update SMTP status badge based on configuration
  */
+// Mirrors the server-rendered #smtp-status-badge in settings/smtp.html.
 function updateSmtpStatusBadge(data) {
     const badge = DOM.smtpStatusBadge();
     if (!badge) return;
@@ -124,20 +125,10 @@ function updateSmtpStatusBadge(data) {
     const enabled = data.smtp_enabled === true;
     const configured = data.smtp_host && data.smtp_from;
 
-    badge.textContent = '';
-    const pill = document.createElement('span');
-    pill.className = 'badge';
-    if (!enabled) {
-        pill.classList.add('ju-status-badge--neutral');
-        pill.textContent = 'Disabled';
-    } else if (configured) {
-        pill.classList.add('ju-status-badge--success');
-        pill.textContent = 'Configured';
-    } else {
-        pill.classList.add('ju-status-badge--warning');
-        pill.textContent = 'Not Configured';
-    }
-    badge.appendChild(pill);
+    // The helper escapes its label; the markup is static and holds no user data.
+    if (!enabled) badge.innerHTML = JuStatusDot.html('neutral', 'Disabled');
+    else if (configured) badge.innerHTML = JuStatusDot.html('success', 'Configured');
+    else badge.innerHTML = JuStatusDot.html('warning', 'Not Configured');
 }
 
 function setSmtpFieldsetEnabled(enabled) {
@@ -270,6 +261,27 @@ function updateLastBackupDisplay(isoTimestamp) {
     if (infoEl) infoEl.classList.remove('d-none');
 }
 
+/** Refresh tick, visible value (#<name>_value) and aria-valuetext of a range input. */
+function renderRangeValue(input) {
+    updateRangeActiveTick(input);
+    const text = formatRangeValue(input);
+    const display = document.getElementById(input.name + '_value');
+    if (display) display.textContent = text;
+    input.setAttribute('aria-valuetext', text);
+}
+
+/** Update only the last-backup time; loadSettings() would overwrite running saves and edits. */
+async function refreshLastBackup() {
+    try {
+        const resp = await apiFetch(SETTINGS_API.settings);
+        if (!resp.ok) return;
+        const data = await resp.json();
+        updateLastBackupDisplay(data.last_backup_at);
+    } catch (e) {
+        console.warn('Failed to refresh last backup time:', e);
+    }
+}
+
 /**
  * Create and download a backup
  */
@@ -295,8 +307,8 @@ export async function createBackup() {
                 const blob = await resp.blob();
                 downloadBlob(blob, filename);
 
-                // Reload settings to get updated last_backup_at
-                loadSettings();
+                // Only the backup time changed; do not reload the whole form
+                await refreshLastBackup();
             } else {
                 const error = await getErrorMessage(resp);
                 notify('error', error);
@@ -326,6 +338,22 @@ export function restoreBackup(input) {
 
     // Clear input so same file can be selected again
     input.value = '';
+}
+
+/**
+ * Wire the backup tab buttons (no inline handlers: initStorage() re-runs on every HTMX settle).
+ */
+function initBackupControls() {
+    const bind = (id, type, handler) => {
+        const el = document.getElementById(id);
+        const key = `${type}Bound`;
+        if (!el || el.dataset[key] === '1') return;
+        el.dataset[key] = '1';
+        el.addEventListener(type, handler);
+    };
+    bind('backup-btn', 'click', () => createBackup());
+    bind('restore-btn', 'click', () => document.getElementById('restore-file')?.click());
+    bind('restore-file', 'change', (e) => restoreBackup(e.currentTarget));
 }
 
 /**
@@ -405,18 +433,16 @@ export async function executeRestore() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Initialize purge metrics handler
+ * Bind a password-confirmed destructive form (purge dialogs).
+ * `boundKey` guards against double binding: initStorage() re-runs on every HTMX settle.
+ * @param {{form: string, boundKey: string, button: Element, password: Element, error: Element, modal: Element,
+ *   url: string, onSuccess: (resp: Response) => Promise<void>|void}} cfg
  */
-function initPurgeMetrics() {
-    const confirmBtn = DOM.confirmPurgeBtn();
-    const passwordInput = DOM.purgePassword();
-    const errorDiv = DOM.purgeError();
-    const purgeModal = DOM.purgeModal();
-    const form = document.getElementById('purge-form');
-
-    // initStorage() re-runs on every HTMX settle; the modal markup is static
-    if (!form || !confirmBtn || form.dataset.purgeBound === '1') return;
-    form.dataset.purgeBound = '1';
+function bindPasswordPurge(cfg) {
+    const form = document.getElementById(cfg.form);
+    const { button, password: passwordInput, error: errorDiv, modal } = cfg;
+    if (!form || !button || form.dataset[cfg.boundKey] === '1') return;
+    form.dataset[cfg.boundKey] = '1';
 
     form.addEventListener('submit', async (e) => {
         e.preventDefault();
@@ -436,24 +462,21 @@ function initPurgeMetrics() {
         showError(errorDiv, null);
 
         setDestructiveOpBusy(true);
-        await withSpinner(confirmBtn, async () => {
+        await withSpinner(button, async () => {
             try {
-                const resp = await apiFetch(SETTINGS_API.tsdbPurge, {
+                const resp = await apiFetch(cfg.url, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ password })
                 });
 
                 if (resp.ok) {
-                    hideModal(purgeModal);
-                    notify('success', 'TSDB data deleted successfully.');
-                    loadStorageStats();
+                    await cfg.onSuccess(resp);
                 } else {
-                    const error = await getErrorMessage(resp);
-                    showError(errorDiv, error);
+                    showError(errorDiv, await getErrorMessage(resp));
                 }
-            } catch (e) {
-                console.warn('Purge metrics error:', e);
+            } catch (err) {
+                console.warn('Purge error:', err);
                 showError(errorDiv, 'Network error.');
             } finally {
                 setDestructiveOpBusy(false);
@@ -462,88 +485,74 @@ function initPurgeMetrics() {
     });
 
     // Clear modal state when hidden
-    if (purgeModal) {
-        purgeModal.addEventListener('hidden.bs.modal', () => {
+    if (modal) {
+        modal.addEventListener('hidden.bs.modal', () => {
             if (passwordInput) passwordInput.value = '';
             showError(errorDiv, null);
         });
     }
+}
+
+/**
+ * Initialize purge metrics handler
+ */
+function initPurgeMetrics() {
+    const modal = DOM.purgeModal();
+    bindPasswordPurge({
+        form: 'purge-form',
+        boundKey: 'purgeBound',
+        button: DOM.confirmPurgeBtn(),
+        password: DOM.purgePassword(),
+        error: DOM.purgeError(),
+        modal,
+        url: SETTINGS_API.tsdbPurge,
+        onSuccess: () => {
+            hideModal(modal);
+            notify('success', 'TSDB data deleted successfully.');
+            loadStorageStats();
+        },
+    });
 }
 
 /**
  * Initialize purge alerts handler
  */
 function initPurgeAlerts() {
-    const confirmBtn = DOM.confirmPurgeAlertsBtn();
-    const passwordInput = DOM.purgeAlertsPassword();
-    const errorDiv = DOM.purgeAlertsError();
-    const purgeModal = DOM.purgeAlertsModal();
-    const form = document.getElementById('purge-alerts-form');
-
-    if (!form || !confirmBtn || form.dataset.purgeAlertsBound === '1') return;
-    form.dataset.purgeAlertsBound = '1';
-
-    form.addEventListener('submit', async (e) => {
-        e.preventDefault();
-
-        // Prevent concurrent destructive operations
-        if (isDestructiveOpBusy()) {
-            showError(errorDiv, 'Another operation is in progress. Please wait.');
-            return;
-        }
-
-        const password = passwordInput?.value;
-        if (!password) {
-            showError(errorDiv, 'Please enter your password.');
-            return;
-        }
-
-        showError(errorDiv, null);
-
-        setDestructiveOpBusy(true);
-        await withSpinner(confirmBtn, async () => {
-            try {
-                const resp = await apiFetch(SETTINGS_API.alertsPurge, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ password })
-                });
-
-                if (resp.ok) {
-                    const data = await resp.json();
-                    hideModal(purgeModal);
-                    notify('success', `${data.deleted} alerts deleted successfully.`);
-                } else {
-                    const error = await getErrorMessage(resp);
-                    showError(errorDiv, error);
-                }
-            } catch (e) {
-                console.warn('Purge alerts error:', e);
-                showError(errorDiv, 'Network error.');
-            } finally {
-                setDestructiveOpBusy(false);
-            }
-        }, 'Deleting...');
+    const modal = DOM.purgeAlertsModal();
+    bindPasswordPurge({
+        form: 'purge-alerts-form',
+        boundKey: 'purgeAlertsBound',
+        button: DOM.confirmPurgeAlertsBtn(),
+        password: DOM.purgeAlertsPassword(),
+        error: DOM.purgeAlertsError(),
+        modal,
+        url: SETTINGS_API.alertsPurge,
+        onSuccess: async (resp) => {
+            const data = await resp.json().catch(() => null);
+            hideModal(modal);
+            const n = Number.isFinite(data?.deleted) ? data.deleted : null;
+            notify('success', n === null ? 'Alerts deleted successfully.' : `${n} alerts deleted successfully.`);
+        },
     });
-
-    // Clear modal state when hidden
-    if (purgeModal) {
-        purgeModal.addEventListener('hidden.bs.modal', () => {
-            if (passwordInput) passwordInput.value = '';
-            showError(errorDiv, null);
-        });
-    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Auth Toggle
 // ─────────────────────────────────────────────────────────────────────────────
 
+/** Reflect the stored state in the switch and show the warning only while authentication is off. */
+function syncAuthRequired(required) {
+    const checkbox = DOM.authRequired();
+    if (checkbox) checkbox.checked = required;
+    const warning = document.querySelector('#auth_required_hint [data-auth-warning]');
+    if (warning) warning.hidden = required;
+}
+
 /**
  * Initialize auth toggle handler
  */
 function initAuthToggle() {
-    const checkbox = DOM.authDisabled();
+    const checkbox = DOM.authRequired();
     const modal = DOM.authToggleModal();
     const passwordInput = DOM.authTogglePassword();
     const errorDiv = DOM.authToggleError();
@@ -555,17 +564,18 @@ function initAuthToggle() {
 
     checkbox.addEventListener('change', (e) => {
         e.preventDefault();
-        const pendingAuthDisabled = checkbox.checked;
+        // Unchecking the switch turns authentication off
+        const pendingAuthDisabled = !checkbox.checked;
         modal.dataset.pendingDisabled = pendingAuthDisabled ? '1' : '0';
 
         if (pendingAuthDisabled) {
-            messageEl.textContent = 'Are you sure you want to DISABLE authentication? All pages will be publicly accessible!';
+            messageEl.textContent = 'Are you sure you want to turn OFF Require Authentication? All pages will be publicly accessible!';
         } else {
-            messageEl.textContent = 'Are you sure you want to ENABLE authentication?';
+            messageEl.textContent = 'Are you sure you want to turn ON Require Authentication?';
         }
 
         // Revert checkbox until user confirms in modal (prevents premature state change)
-        checkbox.checked = !pendingAuthDisabled;
+        checkbox.checked = pendingAuthDisabled;
 
         showBootstrapModal(modal);
     });
@@ -594,13 +604,8 @@ function initAuthToggle() {
 
                     if (resp.ok) {
                         hideModal(modal);
-                        const currentCheckbox = DOM.authDisabled();
-                        if (currentCheckbox) currentCheckbox.checked = pendingAuthDisabled;
-                        const warningIcon = document.getElementById('auth-disabled-warning');
-                        if (warningIcon) {
-                            warningIcon.style.display = pendingAuthDisabled ? '' : 'none';
-                        }
-                        notify('success', `Authentication ${pendingAuthDisabled ? 'disabled' : 'enabled'} successfully!`);
+                        syncAuthRequired(!pendingAuthDisabled);
+                        notify('success', `Require Authentication turned ${pendingAuthDisabled ? 'off' : 'on'}.`);
                     } else {
                         const error = await getErrorMessage(resp);
                         showError(errorDiv, error);
@@ -664,33 +669,17 @@ export async function loadSettings() {
         setChecked(DOM.purgeEnabled(), Boolean(data.purge_enabled ?? true));
         setChecked(DOM.useUtcDashboard(), data.use_utc_dashboard === true);
         setChecked(DOM.geoipAutoUpdate(), Boolean(data.geoip_auto_update ?? true));
+        setChecked(DOM.pdfExportEnabled(), data.pdf_export_enabled !== false);
         setValue(DOM.pdfPageSize(), data.pdf_page_size || 'a4');
-        setChecked(DOM.authDisabled(), data.auth_disabled === true);
+        if (typeof data.public_hostname === 'string') showPublicHostname(data.public_hostname);
+        if (typeof data.auth_disabled === 'boolean') syncAuthRequired(!data.auth_disabled);
 
-        // Metrics timeout slider
-        const metricsTimeout = data.metrics_timeout_minutes || 5;
-        setValue(DOM.metricsTimeoutMinutes(), metricsTimeout);
-        updateRangeActiveTick(DOM.metricsTimeoutMinutes());
-        const metricsTimeoutDisplay = document.getElementById('metrics_timeout_value');
-        if (metricsTimeoutDisplay) {
-            metricsTimeoutDisplay.textContent = `${metricsTimeout} min`;
-        }
 
         // Session lifetime slider
         const sessionEl = document.getElementById('session_max_days');
         if (sessionEl) {
             setValue(sessionEl, data.session_max_days || 1);
-            updateRangeActiveTick(sessionEl);
-            const text = formatRangeValue(sessionEl);
-            const sessionDisplay = document.getElementById('session_max_days_value');
-            if (sessionDisplay) sessionDisplay.textContent = text;
-            sessionEl.setAttribute('aria-valuetext', text);
-        }
-
-        // Store initial auth state for reload comparison on save
-        const authEl = DOM.authDisabled();
-        if (authEl) {
-            authEl.dataset.initialState = String(data.auth_disabled === true);
+            renderRangeValue(sessionEl);
         }
 
         // Toggle Signal panel based on enabled state
@@ -708,11 +697,6 @@ export async function loadSettings() {
 // Settings Auto-Save
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Open the collapsed settings section that contains `el` so errors are visible. */
-function revealSettingsSection(el) {
-    const details = el?.closest?.('details.settings-details');
-    if (details && !details.open) details.open = true;
-}
 
 /**
  * Switch a write-only secret field (macro `secret_field`) between "stored" and "empty".
@@ -766,30 +750,70 @@ async function sendSetting(key, value) {
         });
 
         if (resp.ok) {
+            if (key === 'public_hostname') {
+                const saved = await resp.json().catch(() => null);
+                if (saved && typeof saved.public_hostname === 'string') showPublicHostname(saved.public_hostname, value);
+                notify('success', 'Public hostname updated');
+                return true;
+            }
             notify('success', 'Settings saved');
 
             // Keep SMTP UI in sync without a full reload
             if (key === 'smtp_enabled' || key === 'smtp_host' || key === 'smtp_from') {
                 updateSmtpUiFromDom();
             }
-
-            // Special handling for auth_disabled - reload page
-            if (key === 'auth_disabled') {
-                const authEl = DOM.authDisabled();
-                const oldAuth = authEl?.dataset.initialState === 'true';
-                if (oldAuth !== value) {
-                    setTimeout(() => location.reload(), 1000);
-                }
-            }
             return true;
         } else {
-            throw new Error('Failed to save setting');
+            const error = new Error('Failed to save setting');
+            // A 422 carries a user-facing validation message (e.g. an invalid public hostname)
+            if (resp.status === 422) {
+                const payload = await resp.json().catch(() => null);
+                if (typeof payload?.detail === 'string') error.userMessage = payload.detail;
+            }
+            throw error;
         }
     } catch (e) {
         console.error('Setting save error:', e);
-        revealSettingsSection(document.querySelector(`[name="${CSS.escape(key)}"]`));
-        notify('error', 'Failed to save setting');
+        notify('error', e.userMessage || 'Failed to save setting');
+        // DC-FORM-12: the toast announces, the field error persists until the field is edited.
+        if (e.userMessage) showFieldError(document.querySelector(`#settings-form [name="${CSS.escape(key)}"]`), e.userMessage);
         return false;
+    }
+}
+
+/**
+ * Show the stored public hostname (as normalised by the server).
+ * `sent` is the value the confirmed request carried: a slower reply must not overwrite what the admin
+ * typed since, so the field is only rewritten while it still shows that value.
+ */
+function showPublicHostname(value, sent) {
+    const input = DOM.publicHostname();
+    if (input) {
+        if (sent === undefined || input.value.trim() === String(sent).trim()) input.value = value;
+        input.defaultValue = value;  // blur auto-save compares against it
+    }
+}
+
+/** Best guess at the public hostname: the address this page is loaded from, IPv6 brackets stripped. */
+function detectPublicHostname() {
+    return String(window.location.hostname || '').replace(/^\[|\]$/g, '');
+}
+
+async function applyDetectedPublicHostname() {
+    const input = DOM.publicHostname();
+    if (!input) return;
+    const detected = detectPublicHostname();
+    if (!detected) {
+        notify('warning', 'Could not detect a hostname from the current address');
+        return;
+    }
+    if (input.value.trim() === detected) return;
+    input.value = detected;
+    const saved = await saveSetting('public_hostname', detected);
+    // Links are always https://<hostname> on the default port, whatever address this page was opened on.
+    if (saved && (window.location.protocol !== 'https:' || window.location.port !== '')) {
+        notify('warning', 'Notification links use https://' + detected + ' without a port. This page is opened via '
+            + window.location.origin + ', so check that the link works.');
     }
 }
 
@@ -842,8 +866,8 @@ function bindAutoSaveForm(form) {
     form.addEventListener('change', async (e) => {
         const t = e.target;
         if (!t.name) return;
-        // auth_disabled is confirmed via modal (initAuthToggle) and saved there
-        if (t.name === 'auth_disabled') return;
+        // auth_required is confirmed via modal (initAuthToggle) and saved there
+        if (t.name === 'auth_required') return;
         if (t.type === 'hidden' && t.hasAttribute('data-tag-input-value')) {
             saveSetting(t.name, t.value);
         } else if (t.type === 'checkbox') {
@@ -852,8 +876,7 @@ function bindAutoSaveForm(form) {
             saveSetting(t.name, parseInt(t.value, 10));
         } else if (t.type === 'number') {
             if (t.value === '' || !t.checkValidity()) {
-                revealSettingsSection(t);
-                t.reportValidity();
+                reportInvalidField(t);
                 return;
             }
             saveSetting(t.name, parseInt(t.value, 10));
@@ -867,8 +890,7 @@ function bindAutoSaveForm(form) {
             if (!clearingApiKey) keyInput.disabled = false;
         } else if (t.type === 'text') {
             if (!t.checkValidity()) {
-                revealSettingsSection(t);
-                t.reportValidity();
+                reportInvalidField(t);
                 return;
             }
             saveSetting(t.name, t.value.trim());
@@ -892,6 +914,21 @@ function bindAutoSaveForm(form) {
             if (keyInput) keyInput.disabled = false;
         });
     }
+}
+
+/** True for fields inside a form or flow that saves itself, so the delegated settings handlers must skip them. */
+function isHandledElsewhere(target) {
+    return Boolean(target.closest('form[data-settings-autosave], #signal-setup-collapse, #signal-flow-link, #signal-flow-register'));
+}
+
+/** Surface the browser's validation message for an invalid field. */
+function reportInvalidField(field) {
+    showFieldError(field, field.validationMessage);
+    field.reportValidity();
+}
+/** Keep a validation message below the field (JuFieldErrors) until the user edits it. */
+function showFieldError(field, message) {
+    if (field && field.id && message && window.JuFieldErrors) window.JuFieldErrors.set(field, message);
 }
 
 /**
@@ -921,11 +958,9 @@ function initSettingsAutoSave() {
         if (target.name === 'smtp_test_recipient') return;
 
         // Skip elements handled elsewhere
-        if (target.closest('form[data-settings-autosave]')) return;
-        if (target.closest('#signal-setup-collapse')) return;
-        if (target.closest('#signal-flow-link')) return;
-        if (target.closest('#signal-flow-register')) return;
-        if (target.name === 'auth_disabled') return;  // Handled by initAuthToggle with modal
+        if (isHandledElsewhere(target)) return;
+        if (target.name === 'auth_required') return;  // Handled by initAuthToggle with modal
+        if (target.name === 'signal_enabled') return;  // Handled by initEnableToggle's signalSaveQueue
 
         // Tag input: the component only fires 'change' for a valid, changed value
         if (target.type === 'hidden' && target.hasAttribute('data-tag-input-value')) {
@@ -960,6 +995,9 @@ function initSettingsAutoSave() {
         }
     });
 
+    form.addEventListener('click', (e) => {
+        if (e.target.closest?.('#public_hostname_detect')) applyDetectedPublicHostname();
+    });
     // Explicit removal of a stored SMTP secret (ip-api key has its own queued handler)
     form.addEventListener('click', async (e) => {
         const button = e.target.closest?.('[data-secret-clear="smtp_password"]');
@@ -975,13 +1013,7 @@ function initSettingsAutoSave() {
         const target = e.target;
         if (target.name === 'smtp_port') syncSmtpTlsControl();
         if (target.type === 'range' && target.name) {
-            updateRangeActiveTick(target);
-            const valueDisplay = document.getElementById(target.name + '_value');
-            const text = formatRangeValue(target);
-            if (valueDisplay) {
-                valueDisplay.textContent = text;
-            }
-            target.setAttribute('aria-valuetext', text);
+            renderRangeValue(target);
         }
     });
 
@@ -994,18 +1026,16 @@ function initSettingsAutoSave() {
         if (target.name === 'smtp_test_recipient') return;
 
         // Skip elements handled elsewhere
-        if (target.closest('form[data-settings-autosave]')) return;
-        if (target.closest('#signal-setup-collapse')) return;
-        if (target.closest('#signal-flow-link')) return;
-        if (target.closest('#signal-flow-register')) return;
+        if (isHandledElsewhere(target)) return;
         // SMTP password: allow setting when user provides a value
         if (target.type === 'password' || target.autocomplete?.includes('password')) {
             if (target.name === 'smtp_password') {
-                const next = (target.value || '').trim();
-                if (next) {
+                // Whitespace is part of the secret; only an all-blank value is skipped
+                const next = target.value || '';
+                if (next.trim()) {
                     const saved = await saveSetting('smtp_password', next);
                     // Clear only after a successful save and if the user did not type meanwhile
-                    if (saved && (target.value || '').trim() === next) {
+                    if (saved && (target.value || '') === next) {
                         setSecretState(target.closest('[data-secret-field]'), true);
                     }
                 }
@@ -1017,6 +1047,11 @@ function initSettingsAutoSave() {
         if (target.type === 'number') {
             const lastValue = lastValues.get(target) ?? target.defaultValue;
             if (target.value !== lastValue) {
+                // An empty or invalid entry must not be saved as the clamped minimum
+                if (target.value === '' || !target.checkValidity()) {
+                    reportInvalidField(target);
+                    return;
+                }
                 // Clamp to valid range
                 const parsedMin = parseInt(target.min, 10);
                 const parsedMax = parseInt(target.max, 10);
@@ -1039,6 +1074,11 @@ function initSettingsAutoSave() {
         if (target.type === 'text' || target.type === 'tel' || target.type === 'email') {
             const lastValue = lastValues.get(target) ?? target.defaultValue;
             if (target.value !== lastValue) {
+                // Patterned fields (Login Rate Limit) must not send an invalid value
+                if (target.pattern && !target.checkValidity()) {
+                    reportInvalidField(target);
+                    return;
+                }
                 const sent = target.value;
                 if (await saveSetting(target.name, sent.trim())) {
                     lastValues.set(target, sent);
@@ -1091,11 +1131,9 @@ export function initStorage() {
     initPurgeMetrics();
     initPurgeAlerts();
     initRestoreModal();
+    initBackupControls();
     initAuthToggle();
 
-    // Expose functions to global scope (for onclick handlers)
-    window.createBackup = createBackup;
-    window.restoreBackup = restoreBackup;
     // Ensure SMTP UI is consistent on initial load / swaps
     updateSmtpUiFromDom();
 }

@@ -4,7 +4,7 @@
 //
 
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -90,8 +90,8 @@ test("source scan bypasses setup-trivy only after checksum-verifying the pinned 
   assert.match(install.run, /sha256sum --check --strict/);
   assert.match(install.run, /releases\/download\/v\$\{TRIVY_VERSION\}\/trivy_\$\{TRIVY_VERSION\}_Linux-64bit\.tar\.gz/);
   assert.match(job.env.TRIVY_SHA256, /^[a-f0-9]{64}$/);
-  assert.equal(job.env.TRIVY_VERSION, "0.70.0");
-  assert.equal(scan.with.version, "v0.70.0");
+  assert.match(job.env.TRIVY_VERSION, /^\d+\.\d+\.\d+$/);
+  assert.equal(scan.with.version, "v${{ env.TRIVY_VERSION }}", "action version references the checksum-verified binary version");
   assert.equal(scan.with["skip-setup-trivy"], "true");
 });
 
@@ -163,5 +163,56 @@ test("runtime image purity step fails closed when the layer verifier rejects the
     assert.match(readFileSync(calls, "utf8"), /tools\/verify-runtime-image\.py layers/);
   } finally {
     rmSync(temp, { recursive: true, force: true });
+  }
+});
+test("every layout spec tag is selected by a CI grep or tests/layout/run.mjs", () => {
+  const layoutDir = new URL("../layout/", import.meta.url);
+  const selectors = readFileSync(new URL("../../.github/workflows/ci.yml", import.meta.url), "utf8")
+    + readFileSync(new URL("run.mjs", layoutDir), "utf8");
+  const tags = new Set();
+  for (const file of readdirSync(layoutDir).filter((name) => name.endsWith(".spec.mjs"))) {
+    for (const match of readFileSync(new URL(file, layoutDir), "utf8").matchAll(/(?:test|describe)\(\s*[`"'][^\n]*?(@[a-z][a-z0-9-]+)[`"']/g)) tags.add(`${file} ${match[1]}`);
+  }
+  assert.ok(tags.size > 20, "the tag scan found the specs");
+  const unselected = [...tags].filter((entry) => !selectors.includes(entry.split(" ")[1]));
+  assert.deepEqual(unselected, [], "a spec whose tag no CI step selects never runs in CI");
+});
+test("browser test groups run independently after a successful setup and still fail the job", () => {
+  const job = ciWorkflow.jobs.browser;
+  assert.equal(job["continue-on-error"], undefined, "a failing group must fail the job");
+  const steps = job.steps;
+  const setupIndex = stepIndex(steps, (step) => step.id === "browsers", "browser installation");
+  const uploadIndex = stepIndex(steps, (step) => step.uses?.startsWith("actions/upload-artifact@"), "report upload");
+  assert.ok(setupIndex < uploadIndex);
+  assert.equal(steps[uploadIndex].if, "always()");
+  const groups = steps.slice(setupIndex + 1, uploadIndex);
+  assert.ok(groups.length >= 9, "the browser test groups are present");
+  for (const step of groups) {
+    assert.equal(step["continue-on-error"], undefined, `${step.name} must not mask a failure`);
+    assert.equal(step.if, "${{ !cancelled() && steps.browsers.outcome == 'success' }}", `${step.name} must run after an earlier failed group, but not after failed setup or cancellation`);
+  }
+});
+test("CI pins one explicit Node.js major in every setup-node step", () => {
+  const versions = Object.values(ciWorkflow.jobs).flatMap((job) => job.steps ?? [])
+    .filter((step) => step.uses?.startsWith("actions/setup-node@")).map((step) => String(step.with["node-version"]));
+  assert.ok(versions.length >= 3, "the frontend, browser and browser-matrix jobs set up Node.js");
+  assert.equal(new Set(versions).size, 1, "all jobs use the same Node.js version");
+  assert.match(versions[0], /^\d+$/, "a Node.js major, not a moving alias such as lts/*");
+});
+test("CI manifest check and release workflow accept exactly the same versions", () => {
+  const pattern = (document, jobName) => {
+    const found = document.jobs[jobName].steps.flatMap((step) => [...(step.run ?? "").matchAll(/grep -qE '([^']+)'/g)].map((match) => match[1]))
+      .filter((regex) => regex.includes("(-"));
+    assert.equal(found.length, 1, `${jobName} has exactly one version regex`);
+    return found[0];
+  };
+  const ciRegex = pattern(ciWorkflow, "manifest");
+  const releaseRegex = pattern(workflow, "meta");
+  assert.equal(ciRegex, releaseRegex, "both gates keep the same release version contract");
+  const valid = ["0.0.0", "1.0.3", "10.20.30", "1.0.3-rc.1", "1.0.3-rc1", "1.0.3-0", "1.0.3-a-b.c"];
+  const invalid = ["", "1", "1.0", "v1.0.3", "1.0.3.4", "1.0.3-", "1.0.3-rc..1", "1.0.3-rc.", "1.0.3+build", "1.0.3 ", "01.x.3"];
+  for (const regex of [new RegExp(ciRegex), new RegExp(releaseRegex)]) {
+    for (const version of valid) assert.ok(regex.test(version), `${version} is accepted`);
+    for (const version of invalid) assert.ok(!regex.test(version), `${JSON.stringify(version)} is rejected`);
   }
 });

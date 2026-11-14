@@ -47,6 +47,7 @@ from app.utils.constants import (
     QUALITY_RTT_THRESHOLD_MS_DEFAULT,
     SettingKeys,
 )
+from app.utils.runtime_fields import split_quality_targets
 from app.utils.runtime_settings import get_runtime_int, get_runtime_setting
 from app.utils.ssrf import redact_url
 
@@ -114,7 +115,7 @@ def get_quality_targets() -> list[str]:
     """
     raw = str(get_runtime_setting(SettingKeys.QUALITY_TARGETS, "") or "")
     if raw.strip():
-        targets = list(dict.fromkeys(t.strip() for t in raw.split(",") if t.strip()))
+        targets = split_quality_targets(raw)
         if len(targets) > QUALITY_MAX_TARGETS:
             # Only a stored list from before the limit gets here; Settings rejects new ones.
             _log.warning("Quality targets: %d entries, using the first %d", len(targets), QUALITY_MAX_TARGETS)
@@ -329,7 +330,7 @@ async def run_quality_probe() -> QualityResult:
     succeeded = len(rtts)
     success_ratio = succeeded / total if total > 0 else 0.0
 
-    # Minimum required successes: at least 2, or 1/3 of targets, whichever is higher
+    # Minimum required successes: the higher of 2 and floor(targets / 3) (integer division rounds down)
     # This ensures statistical validity for median calculation and prevents false positives
     # when most targets are unreachable.
     min_required = max(2, len(targets) // 3)

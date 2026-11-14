@@ -21,7 +21,8 @@
 
 	const desc = (el) => {
 		if (!el || el === document) return "document";
-		const cls = typeof el.className === "string" ? el.className.trim().split(/\s+/).filter(Boolean).slice(0, 3).join(".") : "";
+		const className = el.getAttribute?.("class") || (typeof el.className === "string" ? el.className : "");
+		const cls = className.trim().split(/\s+/).filter(Boolean).slice(0, 3).join(".");
 		return el.tagName.toLowerCase() + (el.id ? "#" + el.id : "") + (cls ? "." + cls : "");
 	};
 	const r2 = (r) => [Math.round(r.left), Math.round(r.top), Math.round(r.right), Math.round(r.bottom)];
@@ -86,7 +87,7 @@
 		if (tr.top < -TOL || tr.bottom > vh + TOL) issue("topbar-outside-viewport", topbar, { rect: r2(tr), vh });
 		if (fr.top < -TOL || fr.bottom > vh + TOL) issue("footer-outside-viewport", footer, { rect: r2(fr), vh });
 		else if (fr.bottom < vh - safeBottom - TOL) issue("footer-above-viewport-bottom", footer, { rect: r2(fr), vh, safeBottom });
-		if (mainExcess > TOL && (!(mainOverflow === "auto" || mainOverflow === "scroll") || cfg.scrollPos === "bottom" && main.scrollTop < mainExcess - TOL)) {
+		if (mainExcess > TOL && (!(mainOverflow === "auto" || mainOverflow === "scroll") || (cfg.scrollPos === "bottom" && main.scrollTop < mainExcess - TOL))) {
 			issue("main-not-scrollable", main, { scrollTop: main.scrollTop, scrollHeight: main.scrollHeight, clientHeight: main.clientHeight, overflowY: mainOverflow });
 		}
 		// Form actions (shared `.ui-form-actions` bars with Save and Cancel; any other visible submit
@@ -152,10 +153,42 @@
 		const overflowY = (cs.overflowY === "auto" || cs.overflowY === "scroll") && el.scrollHeight - el.clientHeight > 1;
 		const overflowX = (cs.overflowX === "auto" || cs.overflowX === "scroll") && el.scrollWidth - el.clientWidth > 1;
 		if (overflowY || overflowX) {
-			issue("widget-scrollbar", el, { scrollHeight: el.scrollHeight, clientHeight: el.clientHeight, scrollWidth: el.scrollWidth, clientWidth: el.clientWidth });
+			issue("widget-scrollbar", el, { declaredBody: el.matches(".dashboard-widget-body"), hero: Boolean(el.closest(".dashboard-hero")), scrollHeight: el.scrollHeight, clientHeight: el.clientHeight, scrollWidth: el.scrollWidth, clientWidth: el.clientWidth });
 		}
 	}
 
+	// 3c. Ghost scroll: a container the user can scroll vertically by a few pixels only (typically `overflow-x: auto`,
+	//     which turns `overflow-y` into `auto` too). Real scrollers (main, the document) are measured separately.
+	for (const el of all) {
+		if (el === main || el.matches("input, textarea, select")) continue;
+		const cs = getComputedStyle(el);
+		const excess = el.scrollHeight - el.clientHeight;
+		if ((cs.overflowY === "auto" || cs.overflowY === "scroll") && excess > 1 && excess <= 8) {
+			issue("ghost-scroll-y", el, { scrollHeight: el.scrollHeight, clientHeight: el.clientHeight, overflowY: cs.overflowY });
+		}
+	}
+
+	// 3d. Vertical scroll-region inventory (DC-SCROLL-2 to DC-SCROLL-5). A region that really scrolls (more than a ghost
+	//     scroll) must be registered in cfg.scrollY, not nest in another one, contain scroll chaining and be reachable
+	//     by keyboard. Dashboard widgets are measured by 3b.
+	const scrolls = (el) => {
+		const cs = getComputedStyle(el);
+		return (cs.overflowY === "auto" || cs.overflowY === "scroll") && el.scrollHeight - el.clientHeight > 8;
+	};
+	const FOCUSABLE = "a[href], button:not([disabled]), input:not([disabled]):not([type=hidden]), select:not([disabled]), textarea:not([disabled]), summary, [tabindex]:not([tabindex='-1'])";
+	for (const el of all) {
+		if (el === main || el.matches("input, textarea, select") || el.closest(".grid-stack-item") || !scrolls(el)) continue;
+		const cs = getComputedStyle(el);
+		out.scrollRegions.push({ node: desc(el), axis: "y", scrollHeight: el.scrollHeight, clientHeight: el.clientHeight });
+		if (!matchesAny(el, cfg.scrollY)) { issue("unregistered-scroll-y", el, { scrollHeight: el.scrollHeight, clientHeight: el.clientHeight }); continue; }
+		if (cs.overscrollBehaviorY !== "contain") issue("scroll-region-chaining", el, { overscrollBehaviorY: cs.overscrollBehaviorY });
+		const hasFocusable = Boolean(el.querySelector(FOCUSABLE));
+		const named = el.hasAttribute("aria-label") || el.hasAttribute("aria-labelledby");
+		if (!hasFocusable && !(el.getAttribute("tabindex") === "0" && named)) issue("scroll-region-keyboard", el, { tabindex: el.getAttribute("tabindex"), named });
+		for (let p = el.parentElement; p && p !== main && p !== document.body; p = p.parentElement) {
+			if (p !== el && scrolls(p)) { issue("nested-scroll-region", el, { ancestor: desc(p) }); break; }
+		}
+	}
 	// 4. Elements wider than the layout box that owns them (content column, card, modal) and that
 	//    no scroll container accounts for. A clipping box hides such a node, so it is measured here.
 	const BOX = ".card, .modal-content, .ui-page, main";
@@ -217,17 +250,60 @@
 	}
 
 	// 7. Controls in the viewport must be hit-testable. Swipe-to-dismiss rows reveal their action
-	//    from underneath on hover/swipe; they are exempt (cfg.revealed). (not covered by another component).
+	//    from underneath on hover/swipe; they are exempt (cfg.revealed). SVG paths probe points on their
+	//    actual geometry, because the centre of their rectangular bounds may lie off the interactive stroke.
 	for (const el of controls) {
 		const v = visibleRect(el);
-		const x = (v.left + v.right) / 2, y = (v.top + v.bottom) / 2;
-		if (v.right - v.left < 2 || v.bottom - v.top < 2 || x < 0 || y < 0 || x > vw || y > vh) continue;
+		if (v.right - v.left < 2 || v.bottom - v.top < 2) continue;
 		if (matchesAny(el, cfg.revealed)) continue;
-		const hit = document.elementFromPoint(x, y);
-		if (hit && !(el === hit || el.contains(hit) || hit.contains(el) || (el.labels && Array.from(el.labels).some((l) => l.contains(hit))))) {
-			if (cfg.scrollPos !== "top" && hit.closest(".ju-topbar")) continue;
-			issue("control-covered", el, { by: desc(hit), at: [Math.round(x), Math.round(y)] });
+		let probes = [[(v.left + v.right) / 2, (v.top + v.bottom) / 2]];
+		if (el.tagName.toLowerCase() === "path" && typeof el.getTotalLength === "function" && typeof el.getScreenCTM === "function") {
+			const length = el.getTotalLength();
+			const matrix = el.getScreenCTM();
+			if (length > 0 && matrix) {
+				probes = [0.25, 0.5, 0.75].map((fraction) => {
+					const local = el.getPointAtLength(length * fraction);
+					const point = el.ownerSVGElement.createSVGPoint();
+					point.x = local.x;
+					point.y = local.y;
+					const screen = point.matrixTransform(matrix);
+					return [screen.x, screen.y];
+				}).filter(([x, y]) => x >= 0 && y >= 0 && x <= vw && y <= vh);
+			}
 		}
+		probes = probes.filter(([x, y]) => x >= 0 && y >= 0 && x <= vw && y <= vh);
+		if (!probes.length) continue;
+		let firstObstruction = null;
+		let reachable = false;
+		for (const [x, y] of probes) {
+			const hit = document.elementFromPoint(x, y);
+			if (!hit || el === hit || el.contains(hit) || hit.contains(el) || (el.labels && Array.from(el.labels).some((l) => l.contains(hit)))) {
+				reachable = true;
+				break;
+			}
+			if (cfg.scrollPos !== "top" && hit.closest(".ju-topbar")) {
+				reachable = true;
+				break;
+			}
+			firstObstruction ||= { by: desc(hit), at: [Math.round(x), Math.round(y)], bar: hit.closest(".ui-form-actions") };
+		}
+		// A persistent action bar (DC-SHELL-4) overlays the lower edge of <main> at rest by design. A control under it
+		// counts as reachable only if scrolling it into view (which honours scroll-padding) puts it clear of the bar.
+		if (!reachable && firstObstruction?.bar && main.contains(firstObstruction.bar)) {
+			const bar = firstObstruction.bar;
+			let persistent = false;
+			for (let p = bar; p && p !== main; p = p.parentElement) if (/^(sticky|fixed)$/.test(getComputedStyle(p).position)) persistent = true;
+			if (persistent) {
+				const saved = main.scrollTop;
+				el.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "instant" });
+				const r = el.getBoundingClientRect();
+				const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+				reachable = !!hit && (el === hit || el.contains(hit) || hit.contains(el) || !!(el.labels && Array.from(el.labels).some((l) => l.contains(hit))));
+				main.scrollTo({ top: saved, behavior: "instant" });
+			}
+		}
+		if (firstObstruction) delete firstObstruction.bar;
+		if (!reachable && firstObstruction) issue("control-covered", el, firstObstruction);
 	}
 
 	const textRects = (el) => {
@@ -239,7 +315,7 @@
 			const range = document.createRange();
 			range.selectNodeContents(walker.currentNode);
 			for (const rect of range.getClientRects()) {
-				let visible = {
+				let clipped = {
 					left: rect.left,
 					top: rect.top,
 					right: rect.right,
@@ -252,10 +328,10 @@
 					if (cs.position === "fixed") break;
 					if (!clipsX(cs) && !clipsY(cs)) continue;
 					const pr = p.getBoundingClientRect();
-					if (clipsX(cs)) { visible.left = Math.max(visible.left, pr.left); visible.right = Math.min(visible.right, pr.right); }
-					if (clipsY(cs)) { visible.top = Math.max(visible.top, pr.top); visible.bottom = Math.min(visible.bottom, pr.bottom); }
+					if (clipsX(cs)) { clipped.left = Math.max(clipped.left, pr.left); clipped.right = Math.min(clipped.right, pr.right); }
+					if (clipsY(cs)) { clipped.top = Math.max(clipped.top, pr.top); clipped.bottom = Math.min(clipped.bottom, pr.bottom); }
 				}
-				if (visible.right - visible.left > 1 && visible.bottom - visible.top > 1) rects.push(visible);
+				if (clipped.right - clipped.left > 1 && clipped.bottom - clipped.top > 1) rects.push(clipped);
 			}
 		}
 		return rects;
@@ -302,7 +378,7 @@
 		}
 		// Controls that share a row must share a centre line, whatever their own height.
 		const controls = Array.from(toolbar.querySelectorAll(
-			"#quick-range, .target-custom-range > summary, #reset-zoom-btn, .target-recipients-summary, .target-recipients-empty, .target-autoclose-switch",
+			"#quick-range, .target-custom-range > summary, #reset-zoom-btn",
 		)).filter(visible).map((el) => ({ el, rect: el.getBoundingClientRect() }));
 		for (let i = 0; i < controls.length; i++) {
 			for (let j = i + 1; j < controls.length; j++) {
@@ -344,7 +420,7 @@
 	const combined = document.getElementById("combined-card");
 	if (combined) {
 		const card = combined.getBoundingClientRect();
-		for (const selector of [".combined-legend", ".target-combined-plot", ".combined-footer", "#combined-status-note", "#combined-summary"]) {
+		for (const selector of [".combined-legend", ".combined-donut-legend", ".target-combined-plot", "#combined-status-note", "#combined-summary"]) {
 			for (const el of combined.querySelectorAll(selector)) {
 				if (!visible(el)) continue;
 				const r = el.getBoundingClientRect();
@@ -353,16 +429,18 @@
 				}
 			}
 		}
-		const footerParts = Array.from(combined.querySelectorAll(".combined-status-key, #combined-status-note, #combined-summary"));
+		const footerParts = Array.from(combined.querySelectorAll("#combined-status-note, #combined-summary"));
 		compareText(footerParts, "combined-footer");
 	}
 
 	for (const selector of [".target-combined-plot", ".target-availability-plot"]) {
+		const minPlot = [cfg.minPlotWidth || 120, cfg.minPlotHeight || 96];
+		const minArea = [cfg.minChartAreaWidth || 120, cfg.minChartAreaHeight || 40];
 		for (const plot of content.querySelectorAll(selector)) {
 			if (!visible(plot)) continue;
 			const r = plot.getBoundingClientRect();
-			if (r.width < (cfg.minPlotWidth || 120) || r.height < (cfg.minPlotHeight || 96)) {
-				issue("chart-plot-too-small", plot, { rect: r2(r), min: [cfg.minPlotWidth || 120, cfg.minPlotHeight || 96] });
+			if (r.width < minPlot[0] || r.height < minPlot[1]) {
+				issue("chart-plot-too-small", plot, { rect: r2(r), min: minPlot });
 			}
 			const body = plot.closest(".card")?.querySelector(":scope > .card-body");
 			if (body) {
@@ -387,8 +465,8 @@
 			}
 			const areaWidth = area.width || area.right - area.left;
 			const areaHeight = area.height || area.bottom - area.top;
-			if (areaWidth < (cfg.minChartAreaWidth || 120) || areaHeight < (cfg.minChartAreaHeight || 40)) {
-				issue("chart-area-too-small", canvas, { chartArea: [areaWidth, areaHeight], min: [cfg.minChartAreaWidth || 120, cfg.minChartAreaHeight || 40] });
+			if (areaWidth < minArea[0] || areaHeight < minArea[1]) {
+				issue("chart-area-too-small", canvas, { chartArea: [areaWidth, areaHeight], min: minArea });
 			}
 			const fitDashboard = innerWidth >= 1200 && innerHeight >= 800;
 			const expectedPosition = fitDashboard || width >= 768 ? "right" : "bottom";
@@ -451,22 +529,24 @@
 		}
 	}
 	// 10. Badge groups (DESIGN.md, "Badges"): every `.ju-badges` / `[data-ju-badges]` container is measured. The
-	//     rows of badges sit vertically centred in the space the group offers, the label is centred in
-	//     each badge box, and no badge overlaps a sibling or leaves (is clipped by) its group.
+	//     badge rows and any in-group expansion control are vertically centred as one flow; badge labels
+	//     are centred in their boxes, and badges do not overlap or leave (get clipped by) their group.
 	const px = (value) => parseFloat(value) || 0;
 	for (const group of content.querySelectorAll(".ju-badges, [data-ju-badges]")) {
 		if (!visible(group)) continue;
-		const badges = [...group.children].filter((el) => el.matches(".badge, [data-ju-badge]") && visible(el));
+		const badges = [...group.children].filter((el) => el.matches(".badge, [data-ju-badge], .ju-status-item") && visible(el));
 		if (!badges.length) continue;
+		const flowItems = [...badges, ...[...group.children].filter((el) => el.matches(".targets-check-toggle") && visible(el))];
 		const gcs = getComputedStyle(group);
 		const box = group.getBoundingClientRect();
 		const rects = badges.map((el) => el.getBoundingClientRect());
+		const flowRects = flowItems.map((el) => el.getBoundingClientRect());
 		const inner = {
 			top: box.top + px(gcs.paddingTop) + px(gcs.borderTopWidth), bottom: box.bottom - px(gcs.paddingBottom) - px(gcs.borderBottomWidth),
 			left: box.left + px(gcs.paddingLeft) + px(gcs.borderLeftWidth), right: box.right - px(gcs.paddingRight) - px(gcs.borderRightWidth),
 		};
-		const rowTop = Math.min(...rects.map((r) => r.top));
-		const rowBottom = Math.max(...rects.map((r) => r.bottom));
+		const rowTop = Math.min(...flowRects.map((r) => r.top));
+		const rowBottom = Math.max(...flowRects.map((r) => r.bottom));
 		const above = rowTop - inner.top;
 		const below = inner.bottom - rowBottom;
 		if (rects.some((r) => r.left < inner.left - TOL || r.right > inner.right + TOL) || above < -TOL || below < -TOL) {
@@ -490,6 +570,26 @@
 				if (overlapX > 1 && overlapY > 1) issue("badge-overlap", el, { other: desc(badges[j]) });
 			}
 		});
+	}
+	// 12. Equal tile height: cards side by side in one grid or flex row end at the same bottom edge.
+	//     GridStack widgets and a subtree marked data-equal-height="off" are exempt.
+	const tiles = [...content.querySelectorAll(".card")].filter((el) => visible(el) && !el.closest(".grid-stack, .modal, [data-equal-height='off']"));
+	const lowest = (a, b) => { for (let p = a.parentElement; p; p = p.parentElement) if (p.contains(b)) return p; return null; };
+	const seenTiles = new Set();
+	for (let i = 0; i < tiles.length; i++) {
+		for (let j = i + 1; j < tiles.length; j++) {
+			const a = tiles[i], b = tiles[j];
+			if (a.contains(b) || b.contains(a)) continue;
+			const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
+			if (Math.abs(ra.top - rb.top) > TOL || Math.min(ra.right, rb.right) - Math.max(ra.left, rb.left) > 0) continue;
+			const row = lowest(a, b);
+			const rcs = row && getComputedStyle(row);
+			if (!rcs || !/grid|flex/.test(rcs.display) || (rcs.display.includes("flex") && rcs.flexDirection.startsWith("column"))) continue;
+			if (Math.abs(ra.height - rb.height) > TOL && !seenTiles.has(b)) {
+				seenTiles.add(b);
+				issue("tiles-unequal-height", b, { with: desc(a), row: desc(row), heights: [Math.round(ra.height), Math.round(rb.height)] });
+			}
+		}
 	}
 	return out;
 }

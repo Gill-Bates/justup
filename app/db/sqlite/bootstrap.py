@@ -16,9 +16,8 @@ from pathlib import Path
 
 from ...models.users import hash_password, verify_password
 from ...utils import bootstrap_credentials
-from ...utils.time import utcnow
 from .connection import transaction
-from .users import get_user_by_username
+from .users import _insert_user_with_recipient, get_user_by_username
 
 # Keep the pre-split logger name: log filters and caplog assertions address app.db.sqlite.
 _log = logging.getLogger("app.db.sqlite")
@@ -107,10 +106,18 @@ def ensure_default_admin(conn: sqlite3.Connection, credentials_path: Path | None
             (count,) = conn.execute("SELECT COUNT(*) FROM users").fetchone()
             if count == 0:
                 password = _generate_pronounceable_password()
-                conn.execute(
-                    "INSERT INTO users(username, password_hash, is_admin, can_close_alerts, is_active, "
-                    "must_change_password, created_at) VALUES (?, ?, 1, 1, 1, 1, ?)",
-                    (BOOTSTRAP_ADMIN_USERNAME, hash_password(password), utcnow()),
+                # The admin has no contact channel yet: its recipient starts disabled and channel-less.
+                _insert_user_with_recipient(
+                    conn,
+                    username=BOOTSTRAP_ADMIN_USERNAME,
+                    password_hash=hash_password(password),
+                    is_admin=True,
+                    can_close_alerts=True,
+                    must_change_password=True,
+                    phone=None,
+                    email=None,
+                    recipient_enabled=False,
+                    enable_for_all_targets=False,
                 )
                 # Written before the commit: a file without a committed account is stale and ignored.
                 bootstrap_credentials.store(BOOTSTRAP_ADMIN_USERNAME, password, credentials_path)

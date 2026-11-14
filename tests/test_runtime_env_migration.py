@@ -22,7 +22,7 @@ from app.models.settings import Settings, SettingsUpdate
 from app.services.notifications.signal_cli_backend import SignalCliBackend
 from app.services.notifications.signal_errors import SignalNotRegistered
 from app.utils import crypto, runtime_settings
-from app.utils.constants import QUALITY_MAX_TARGETS, SettingKeys
+from app.utils.constants import DEFAULT_ONLINE_GEO_FALLBACK_ENABLED, QUALITY_MAX_TARGETS, SettingKeys
 from app.utils.crypto import decrypt_secret, encrypt_secret
 from app.utils.runtime_fields import load_runtime_fields, validate_quality_targets
 from tests import _support  # noqa: F401 - imported for its sys.path side effect
@@ -35,17 +35,32 @@ ALLOWED_ENV_NAMES = {
     "SECRET_KEY",
     "SECRET_KEYS",
     "LOG_LEVEL",
-    "UPMON_TRUSTED_PROXIES",
+    "TRUSTED_PROXIES",
     "JUSTUP_DATA_DIR",
     "DATA_DIR",
     "CACHE_DIR",
     "JUSTUP_HOST",
     "JUSTUP_PORT",
     "JUSTUP_BACKUP_HMAC_SECRET",
+    # Read only to report that HTTP monitors may leave through a proxy (Settings > Network, public egress).
+    "HTTPS_PROXY",
+    "https_proxy",
+    "HTTP_PROXY",
+    "http_proxy",
+    "ALL_PROXY",
+    "all_proxy",
     "SIGNAL_CLI_PATH",
     "SIGNAL_DATA_DIR",
     "TESTING",
     "PYTEST_CURRENT_TEST",
+    # Local Nmap worker: socket, status file and parent pid are set by the entrypoint or the parent
+    # process, never by the UI; PATH, LANG and NMAPDIR are forwarded into its scrubbed environment.
+    "JUSTUP_NMAP_SOCKET",
+    "JUSTUP_NMAP_STATUS",
+    "JUSTUP_NMAP_PARENT_PID",
+    "NMAPDIR",
+    "PATH",
+    "LANG",
 }
 
 
@@ -302,12 +317,12 @@ def _unreadable(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(runtime_settings, "_read", broken)
 
 
-def test_online_fallback_default_applies_only_when_the_store_was_read(conn) -> None:
+def test_enhanced_accuracy_default_applies_only_when_the_store_was_read(conn) -> None:
     key = SettingKeys.ONLINE_GEO_FALLBACK_ENABLED
-    assert runtime_settings.get_runtime_bool_fail_closed(key, True) is True  # fresh install: readable, no value
-    sqlite_db.set_setting(conn, key, False)
+    assert runtime_settings.get_runtime_bool_fail_closed(key, DEFAULT_ONLINE_GEO_FALLBACK_ENABLED) is False
+    sqlite_db.set_setting(conn, key, True)  # fresh install: readable, no value, so off until chosen
     runtime_settings.clear_runtime_cache()
-    assert runtime_settings.get_runtime_bool_fail_closed(key, True) is False
+    assert runtime_settings.get_runtime_bool_fail_closed(key, DEFAULT_ONLINE_GEO_FALLBACK_ENABLED) is True
 
 
 def test_opt_out_survives_an_unreadable_store_and_no_provider_call_is_made(
@@ -352,7 +367,7 @@ def test_a_settings_write_drops_the_last_known_value(conn, monkeypatch: pytest.M
     sqlite_db.set_setting(conn, key, True)
     runtime_settings.clear_runtime_cache()
     assert runtime_settings.get_runtime_bool_fail_closed(key, False) is True
-    runtime_settings.clear_runtime_cache()  # e.g. the admin just switched the setting
+    sqlite_db.set_setting(conn, key, False)  # a real write must drop the cache and the last known value
     _unreadable(monkeypatch)
     assert runtime_settings.get_runtime_bool_fail_closed(key, True) is False  # stale True must not be used
 

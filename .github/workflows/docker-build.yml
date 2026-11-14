@@ -47,11 +47,14 @@ jobs:
       archs: ${{ steps.matrix.outputs.archs }}
       python_base: ${{ steps.rolling.outputs.python_base }}
       signal_cli_version: ${{ steps.rolling.outputs.signal_cli_version }}
+      nmap_version: ${{ steps.rolling.outputs.nmap_version }}
+      nmap_source_sha256: ${{ steps.rolling.outputs.nmap_source_sha256 }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
+          persist-credentials: false
           # Full history for the main-ancestry check below.
           fetch-depth: 0
 
@@ -150,14 +153,46 @@ jobs:
             exit 1
           fi
 
+          nmap_version="$(python3 tools/nmap-release.py latest)"
+          if [[ ! "$nmap_version" =~ ^[0-9]+(\.[0-9]+)+$ ]]; then
+            echo "ERROR: could not resolve the official stable Nmap release (got '${nmap_version}')" >&2
+            exit 1
+          fi
+
+          # Verify the release against the pinned Nmap signing key once, before any build
+          # starts; a failed signature aborts the release. Both architecture builds receive
+          # the archive hash and must download exactly that archive.
+          verify_dir="${RUNNER_TEMP}/nmap-verify"
+          python3 tools/nmap-release.py fetch "$nmap_version" "$verify_dir"
+          nmap_source_sha256="$(sed -n 's/^source_sha256=//p' "${verify_dir}/provenance.txt")"
+          if [[ ! "$nmap_source_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "ERROR: Nmap source hash missing after verification" >&2
+            exit 1
+          fi
+
           {
             echo "python_base=${python_base}"
             echo "signal_cli_version=${signal_cli_version}"
+            echo "nmap_version=${nmap_version}"
+            echo "nmap_source_sha256=${nmap_source_sha256}"
           } >> "$GITHUB_OUTPUT"
 
           echo "Resolved once for every architecture:"
           echo "  python base      : ${python_base}"
           echo "  signal-cli       : ${signal_cli_version}"
+          echo "  nmap             : ${nmap_version}, source sha256 ${nmap_source_sha256}"
+          # The exact verified files the images are built from; they become release assets
+          # (create-release re-verifies them) and never enter the runtime image.
+          mkdir -p "${RUNNER_TEMP}/nmap-source"
+          cp "${verify_dir}/nmap-${nmap_version}.tar.bz2" "${verify_dir}/nmap-${nmap_version}.tar.bz2.asc" \
+            "${verify_dir}/nmap_gpgkeys.txt" "${RUNNER_TEMP}/nmap-source/"
+      - name: Upload verified Nmap source archive
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: nmap-source
+          path: ${{ runner.temp }}/nmap-source/
+          if-no-files-found: error
+          retention-days: 7
 
       # The only place architectures are declared: build, create-manifest,
       # release-newest.py and the release notes all derive from it. Native
@@ -221,6 +256,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
+          persist-credentials: false
           fetch-depth: 1
 
       # libsignal is compiled from source and the cache export is close to a
@@ -266,6 +302,8 @@ jobs:
             --cache-to type=gha,mode=max,scope=${{ matrix.cache_scope }} \
             --build-arg "PYTHON_BASE=${{ needs.meta.outputs.python_base }}" \
             --build-arg "SIGNAL_CLI_VERSION=${{ needs.meta.outputs.signal_cli_version }}" \
+            --build-arg "NMAP_VERSION=${{ needs.meta.outputs.nmap_version }}" \
+            --build-arg "NMAP_SOURCE_SHA256=${{ needs.meta.outputs.nmap_source_sha256 }}" \
             --build-arg "APP_VERSION=${{ needs.meta.outputs.tag }}" \
             --build-arg "BUILD_DATE=${{ needs.meta.outputs.build_date }}" \
             --build-arg "VCS_REF=${{ github.sha }}" \
@@ -317,6 +355,154 @@ jobs:
           docker ps -a -f name="${{ matrix.container_name }}"
           exit 1
 
+      - name: Verify Nmap TCP and UDP in the runtime image (${{ matrix.arch }})
+        env:
+          EXPECTED_NMAP_VERSION: ${{ needs.meta.outputs.nmap_version }}
+          EXPECTED_NMAP_SOURCE_SHA256: ${{ needs.meta.outputs.nmap_source_sha256 }}
+          TEST_IMAGE: ${{ matrix.test_image }}
+          PLATFORM: ${{ matrix.platform }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          actual="$(docker run --rm --platform "$PLATFORM" --entrypoint /usr/bin/nmap "$TEST_IMAGE" --version \
+            | sed -n 's/^Nmap version \([^ ]*\).*/\1/p')"
+          if [[ "$actual" != "$EXPECTED_NMAP_VERSION" ]]; then
+            echo "ERROR: Nmap version ${actual} differs from resolved ${EXPECTED_NMAP_VERSION}" >&2
+            exit 1
+          fi
+          echo "NMAP_ACTUAL_VERSION=${actual}" >> "$GITHUB_ENV"
+
+          docker run --rm --platform "$PLATFORM" --user 1000:1000 \
+            --entrypoint /usr/bin/nmap "$TEST_IMAGE" \
+            -sT -Pn -n -p 9 --max-retries 0 --host-timeout 10s -oX - 127.0.0.1 \
+            > "${RUNNER_TEMP}/nmap-tcp-${ARCH}.xml"
+
+          # The worker's steady-state UID is non-root with only ambient NET_RAW.
+          docker run --rm --platform "$PLATFORM" --cap-drop ALL \
+            --cap-add NET_RAW --cap-add SETUID --cap-add SETGID \
+            --security-opt no-new-privileges:true --entrypoint /usr/bin/setpriv "$TEST_IMAGE" \
+            --inh-caps +net_raw --ambient-caps +net_raw \
+            --reuid 1000 --regid 1000 --clear-groups \
+            /usr/bin/nmap --privileged -sU -Pn -n -p 9 \
+            --max-retries 0 --host-timeout 10s -oX - 127.0.0.1 \
+            > "${RUNNER_TEMP}/nmap-udp-${ARCH}.xml"
+
+          python3 - "$ARCH" "$RUNNER_TEMP" <<'PY'
+          import sys
+          from pathlib import Path
+          from xml.etree import ElementTree
+
+          arch, directory = sys.argv[1], Path(sys.argv[2])
+          for protocol in ("tcp", "udp"):
+              root = ElementTree.parse(directory / f"nmap-{protocol}-{arch}.xml").getroot()
+              assert root.tag == "nmaprun"
+              assert root.find("scaninfo").get("protocol") == protocol
+              assert root.find(".//port").get("portid") == "9"
+          PY
+
+          docker run --rm --platform "$PLATFORM" --entrypoint cat "$TEST_IMAGE" \
+            /usr/share/doc/nmap/PROVENANCE.txt > "nmap-provenance-${ARCH}.txt"
+          grep -qx "nmap_version=${actual}" "nmap-provenance-${ARCH}.txt"
+          # Same signed source as the one verified once in meta.
+          grep -qx "source_sha256=${EXPECTED_NMAP_SOURCE_SHA256}" "nmap-provenance-${ARCH}.txt"
+          grep -qx "architecture=${ARCH}" "nmap-provenance-${ARCH}.txt"
+          grep -qx 'signing_key_fingerprint=436D66AB9A798425FDA0E3F801AF9F036B9355D0' "nmap-provenance-${ARCH}.txt"
+          grep -qx 'build_method=verified-source' "nmap-provenance-${ARCH}.txt"
+          # The recorded binary hash is the hash of the binary the image actually ships.
+          shipped="$(docker run --rm --platform "$PLATFORM" --entrypoint sha256sum "$TEST_IMAGE" /usr/bin/nmap | cut -d' ' -f1)"
+          grep -qx "binary_sha256=${shipped}" "nmap-provenance-${ARCH}.txt"
+          grep -q '^runtime_dependencies=' "nmap-provenance-${ARCH}.txt"
+          # Composition: bundled libraries (invisible to Trivy) and the Debian packages Trivy does cover.
+          grep -Eq '^bundled_libraries=libdnet=[0-9.]+,liblinear=[0-9.]+,libpcap=[0-9.]+$' "nmap-provenance-${ARCH}.txt"
+          grep -q '^bundled_libraries_origin=' "nmap-provenance-${ARCH}.txt"
+          grep -Eq '^system_libraries=.*libpcre2-8-0=' "nmap-provenance-${ARCH}.txt"
+          grep -Eq '^system_libraries=.*zlib1g=' "nmap-provenance-${ARCH}.txt"
+          docker run --rm -i --platform "$PLATFORM" --entrypoint python "$TEST_IMAGE" - binary "$ARCH" < tools/verify-nmap-worker.py
+          docker run --rm --platform "$PLATFORM" --entrypoint sh "$TEST_IMAGE" \
+            -c 'test -s /usr/share/doc/nmap/LICENSE && test -s /usr/share/doc/nmap/NOTICE.txt'
+
+      # The shipped startup path: the container runs with the compose hardening, the entrypoint
+      # starts the Nmap worker, and the scan goes through the web user's client to the worker
+      # socket against this container's own address (a local test target only).
+      - name: Verify Nmap worker privilege separation and scans (${{ matrix.arch }})
+        env:
+          TEST_IMAGE: ${{ matrix.test_image }}
+          PLATFORM: ${{ matrix.platform }}
+          CONTAINER: nmap-worker-${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          trap 'docker rm -f "$CONTAINER" >/dev/null 2>&1 || true' EXIT
+          docker run -d --name "$CONTAINER" --platform "$PLATFORM" --init \
+            --cap-drop ALL --cap-add CHOWN --cap-add FOWNER --cap-add SETUID --cap-add SETGID --cap-add NET_RAW \
+            --security-opt no-new-privileges:true \
+            -e SECRET_KEY="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" "$TEST_IMAGE"
+          for _ in $(seq 1 45); do
+            docker exec -u justup "$CONTAINER" test -S /run/justup/nmap.sock 2>/dev/null && break
+            sleep 1
+          done
+          docker exec -u justup "$CONTAINER" test -S /run/justup/nmap.sock
+          docker exec -i "$CONTAINER" python - capabilities < tools/verify-nmap-worker.py
+          docker exec -i -u justup "$CONTAINER" python - scan < tools/verify-nmap-worker.py
+          # Traceroute as the web user through the worker socket under the NET_RAW-only profile.
+          docker exec -i -u justup "$CONTAINER" python - trace < tools/verify-nmap-worker.py
+          docker exec -i "$CONTAINER" python - status < tools/verify-nmap-worker.py
+          # A killed worker is restarted by the supervisor and scans work again.
+          worker_pid="$(docker top "$CONTAINER" -eo pid,args | awk '/app\.services\.nmap_worker/ && !/awk/ {print $1; exit}')"
+          [[ -n "$worker_pid" ]]
+          sudo kill -9 "$worker_pid"
+          for _ in $(seq 1 60); do
+            if docker exec -u justup "$CONTAINER" test -S /run/justup/nmap.sock 2>/dev/null \
+                && docker exec -i "$CONTAINER" python - status < tools/verify-nmap-worker.py >/dev/null 2>&1; then
+              break
+            fi
+            sleep 1
+          done
+          docker exec -i "$CONTAINER" python - status < tools/verify-nmap-worker.py
+          docker exec -i -u justup "$CONTAINER" python - scan < tools/verify-nmap-worker.py
+          docker exec -i -u justup "$CONTAINER" python - trace < tools/verify-nmap-worker.py
+          # Traceroute runs through Nmap; the mtr tools must be gone from the image.
+          if docker exec "$CONTAINER" sh -c 'command -v mtr || command -v mtr-packet || test -e /usr/bin/mtr'; then
+            echo "ERROR: mtr is still present in the runtime image" >&2
+            exit 1
+          fi
+
+      - name: Upload Nmap provenance (${{ matrix.arch }})
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: nmap-provenance-${{ matrix.arch }}
+          path: nmap-provenance-${{ matrix.arch }}.txt
+          retention-days: 14
+          if-no-files-found: error
+
+      # Trivy cannot see Nmap or the libraries compiled into it. SBOM from the image provenance,
+      # then the NVD CVE API for every component with a CPE; a CRITICAL CVE (exit 1) or an NVD
+      # failure (exit 3, fail closed) stops the release before anything is pushed.
+      # libdnet and liblinear have no NVD CPE: the report lists them as NOT COVERED.
+      - name: Nmap SBOM and NVD gate (${{ matrix.arch }})
+        env:
+          ARCH: ${{ matrix.arch }}
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+        run: |
+          set -euo pipefail
+          python3 tools/nvd-gate.py sbom "nmap-provenance-${ARCH}.txt" "nmap-sbom-${ARCH}.cdx.json"
+          set +e
+          python3 tools/nvd-gate.py check "nmap-sbom-${ARCH}.cdx.json" --ignore .nvdignore \
+            --report "nmap-nvd-${ARCH}.json" | tee -a "$GITHUB_STEP_SUMMARY"
+          status="${PIPESTATUS[0]}"
+          set -e
+          exit "$status"
+
+      - name: Upload Nmap SBOM and NVD report (${{ matrix.arch }})
+        if: ${{ !cancelled() && hashFiles(format('nmap-sbom-{0}.cdx.json', matrix.arch)) != '' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: nmap-nvd-${{ matrix.arch }}
+          path: |
+            nmap-sbom-${{ matrix.arch }}.cdx.json
+            nmap-nvd-${{ matrix.arch }}.json
+          retention-days: 14
+          if-no-files-found: warn
+
       # Packaging, ELF header and a dlopen of the library (--load); JNI_OnLoad inside the JVM
       # and a real Signal send stay a manual gate.
       - name: Verify libsignal native library (${{ matrix.arch }})
@@ -361,6 +547,15 @@ jobs:
           signal_cli_version="$(docker run --rm --platform "${{ matrix.platform }}" \
             --entrypoint signal-cli "${{ matrix.test_image }}" --version)"
           printf 'signal_cli=%s\n' "$signal_cli_version" >> "toolchain/${{ matrix.image_suffix }}.txt"
+          printf 'nmap=%s\n' "$NMAP_ACTUAL_VERSION" >> "toolchain/${{ matrix.image_suffix }}.txt"
+          # Taken from the image, not from the build args: a stale layer cannot hide a different archive.
+          nmap_source_sha256="$(docker run --rm --platform "${{ matrix.platform }}" --entrypoint cat \
+            "${{ matrix.test_image }}" /usr/share/doc/nmap/PROVENANCE.txt | sed -n 's/^source_sha256=//p')"
+          printf 'nmap_source_sha256=%s\n' "$nmap_source_sha256" >> "toolchain/${{ matrix.image_suffix }}.txt"
+          # Compiled into the binary from the same signed source, so identical on every architecture.
+          nmap_bundled_libraries="$(docker run --rm --platform "${{ matrix.platform }}" --entrypoint cat \
+            "${{ matrix.test_image }}" /usr/share/doc/nmap/PROVENANCE.txt | sed -n 's/^bundled_libraries=//p')"
+          printf 'nmap_bundled_libraries=%s\n' "$nmap_bundled_libraries" >> "toolchain/${{ matrix.image_suffix }}.txt"
 
           # COMPONENTS.txt mixes formats, so each value is extracted on its own.
           # Only arch-independent values belong here; library names and hashes differ by design.
@@ -380,6 +575,18 @@ jobs:
           fi
           printf 'java_version=%s\nlibsignal_client=%s\n' \
             "$java_version" "$libsignal_client" >> "toolchain/${{ matrix.image_suffix }}.txt"
+
+          # The jlink runtime is copied from the builder, so its Debian package is absent here.
+          temurin_package_version="$(docker run --rm --platform "${{ matrix.platform }}" \
+            --entrypoint cat "${{ matrix.test_image }}" /opt/java/.temurin-package-version)"
+          test -n "$temurin_package_version"
+          printf 'temurin_package_version=%s\n' "$temurin_package_version" >> "toolchain/${{ matrix.image_suffix }}.txt"
+
+          # Preserve the full per-architecture dpkg inventory without requiring identical Debian revisions.
+          debian_packages="$(docker run --rm --platform "${{ matrix.platform }}" \
+            --entrypoint dpkg-query "${{ matrix.test_image }}" -W -f='${binary:Package}=${Version}\n' | sort | paste -sd, -)"
+          test -n "$debian_packages"
+          printf 'debian_packages=%s\n' "$debian_packages" >> "toolchain/${{ matrix.image_suffix }}.txt"
 
           echo "--- ${{ matrix.image_suffix }} ---"
           cat "toolchain/${{ matrix.image_suffix }}.txt"
@@ -442,6 +649,24 @@ jobs:
           retention-days: 14
           if-no-files-found: warn
 
+      # The verified Nmap source archive that becomes a release asset must be prepared and equal the
+      # archive this image was built from before any registry write; otherwise nothing is pushed.
+      - name: Download verified Nmap source archive
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: nmap-source
+          path: nmap-source/
+
+      - name: Verify prepared Nmap source archive before the push (${{ matrix.arch }})
+        env:
+          ARCH: ${{ matrix.arch }}
+          NMAP_VERSION: ${{ needs.meta.outputs.nmap_version }}
+          NMAP_SOURCE_SHA256: ${{ needs.meta.outputs.nmap_source_sha256 }}
+        run: |
+          set -euo pipefail
+          python3 tools/release-publish.py source nmap-source "$NMAP_VERSION" "$NMAP_SOURCE_SHA256" \
+            "nmap-provenance-${ARCH}.txt"
+
       - name: Log in to Docker Hub (push)
         uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4
         with:
@@ -491,12 +716,16 @@ jobs:
     if: needs.build.result == 'success'
     runs-on: ubuntu-26.04
     timeout-minutes: 15
+    outputs:
+      index_digest: ${{ steps.index.outputs.index_digest }}
     env:
       VERSION: ${{ needs.meta.outputs.version }}
       CANDIDATE_TAG: ${{ needs.meta.outputs.candidate_tag }}
       IMAGE_NAME: ${{ format('{0}/justup', secrets.DOCKERHUB_USERNAME) }}
       MOVES_LATEST: ${{ needs.meta.outputs.moves_latest }}
       EXPECTED_ARCHS: ${{ needs.meta.outputs.archs }}
+      NMAP_VERSION: ${{ needs.meta.outputs.nmap_version }}
+      NMAP_SOURCE_SHA256: ${{ needs.meta.outputs.nmap_source_sha256 }}
     permissions:
       contents: read
 
@@ -569,6 +798,15 @@ jobs:
       - name: Verify architectures carry identical versions
         run: python3 tools/toolchain-parity.py toolchain --pyproject pyproject.toml
 
+      # Parity proves the architectures agree; this proves they carry the one version meta resolved.
+      - name: Verify every architecture carries the resolved Nmap version
+        run: |
+          set -euo pipefail
+          for file in toolchain/*.txt; do
+            grep -qxF "nmap=${NMAP_VERSION}" "$file" || { echo "ERROR: ${file} lacks nmap=${NMAP_VERSION}" >&2; exit 1; }
+            grep -qxF "nmap_source_sha256=${NMAP_SOURCE_SHA256}" "$file" || { echo "ERROR: ${file} lacks the resolved Nmap source hash" >&2; exit 1; }
+          done
+
       # Candidate first: the index is built from the pushed digests under a run-specific
       # temporary tag, so a failed verification never touches a public version tag.
       - name: Create candidate index
@@ -606,9 +844,37 @@ jobs:
           echo "INDEX_DIGEST=${index_digest}" >> "$GITHUB_ENV"
 
       # Only the verified index digest is published; nothing is rebuilt or re-resolved.
+      # A published version tag is immutable: if it exists, this run may only confirm it
+      # (its platform digests equal the ones built here); a rebuild with newly resolved
+      # components must ship as a new version, never overwrite the tag.
       - name: Publish version tag
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
           set -euo pipefail
+          state="$(python3 tools/dockerhub.py exists "$VERSION")"
+          if [[ "$state" == "present" ]]; then
+            docker buildx imagetools inspect --raw "${IMAGE_NAME}:${VERSION}" > manifest-existing.json
+            if ! python3 tools/verify-manifest.py verify manifest-existing.json digests; then
+              echo "ERROR: ${IMAGE_NAME}:${VERSION} is already published with different content." >&2
+              echo "A version tag is immutable. Release the changed components as a new justUp version." >&2
+              exit 1
+            fi
+            existing_digest="$(docker buildx imagetools inspect "${IMAGE_NAME}:${VERSION}" \
+              --format '{{.Manifest.Digest}}')"
+            case "$existing_digest" in
+              sha256:*) ;;
+              *) echo "ERROR: could not resolve the digest of ${IMAGE_NAME}:${VERSION}" >&2; exit 1 ;;
+            esac
+            echo "INDEX_DIGEST=${existing_digest}" >> "$GITHUB_ENV"
+            echo "Confirmed: ${IMAGE_NAME}:${VERSION} already carries these images (${existing_digest}); not republished"
+            exit 0
+          fi
+          if [[ "$state" != "absent" ]]; then
+            echo "ERROR: unexpected tag state '${state}'" >&2
+            exit 1
+          fi
           docker buildx imagetools create --tag "${IMAGE_NAME}:${VERSION}" "${IMAGE_NAME}@${INDEX_DIGEST}"
           docker buildx imagetools inspect --raw "${IMAGE_NAME}:${VERSION}" > manifest-version.json
           python3 tools/verify-manifest.py verify manifest-version.json digests
@@ -617,6 +883,9 @@ jobs:
       # 'latest' moves only after the candidate passed verification, and only for the
       # newest stable release (moves_latest). It points at the same verified digest.
       - name: Promote latest
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
           set -euo pipefail
 
@@ -629,11 +898,29 @@ jobs:
             exit 0
           fi
 
+          # The meta decision may be hours old: re-read the registry right before moving 'latest'.
+          work="$(mktemp -d)"
+          trap 'rm -rf "$work"' EXIT
+          python3 tools/dockerhub.py list > "$work/tags.txt"
+          # shellcheck disable=SC2086 # EXPECTED_ARCHS is a space-separated list
+          python3 tools/release-newest.py "$work/tags.txt" "$VERSION" $EXPECTED_ARCHS > "$work/decision.txt"
+          if ! grep -qxF 'moves_latest=true' "$work/decision.txt"; then
+            echo "ERROR: a newer stable release was published since the start of this run; 'latest' stays put." >&2
+            exit 1
+          fi
+
           docker buildx imagetools create --tag "${IMAGE_NAME}:latest" "${IMAGE_NAME}@${INDEX_DIGEST}"
           echo "Pushed manifest: ${IMAGE_NAME}:latest -> ${INDEX_DIGEST}"
 
           docker buildx imagetools inspect --raw "${IMAGE_NAME}:latest" > manifest-latest.json
           python3 tools/verify-manifest.py verify manifest-latest.json digests
+      # The verified index digest, for the release record of the Nmap source archive.
+      - name: Export index digest
+        id: index
+        run: |
+          set -euo pipefail
+          [[ "$INDEX_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "ERROR: no index digest" >&2; exit 1; }
+          echo "index_digest=${INDEX_DIGEST}" >> "$GITHUB_OUTPUT"
 
   # always(): a failed or cancelled build or manifest leaves temporary tags on Docker
   # Hub that nothing else would remove. The tags are derived from the version, the
@@ -709,6 +996,7 @@ jobs:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
           VERSION: ${{ needs.meta.outputs.version }}
+          ARCHS: ${{ needs.meta.outputs.archs }}
         run: |
           set -euo pipefail
           work="$(mktemp -d)"
@@ -718,6 +1006,14 @@ jobs:
 
           # The complete listing is read first; a failed page exits before anything is deleted.
           python3 tools/dockerhub.py list > "$work/before.txt"
+
+          # The meta decision may be hours old: re-check against this fresh listing before deleting.
+          # shellcheck disable=SC2086 # ARCHS is a space-separated list
+          python3 tools/release-newest.py "$work/before.txt" "$VERSION" $ARCHS > "$work/decision.txt"
+          if ! grep -qxF 'is_newest=true' "$work/decision.txt"; then
+            echo "ERROR: a newer release was published since the start of this run; nothing is deleted." >&2
+            exit 1
+          fi
 
           # Release policy: keep the current version and 'latest', delete the rest.
           # grep exits 1 when nothing is left to delete, which is fine.
@@ -752,14 +1048,20 @@ jobs:
     name: Create GitHub Release
     # Documents the verified manifest. Deliberately not after cleanup-dockerhub-tags:
     # tag pruning failing must not hide an already published, verified release.
+    # Atomic: draft, upload every asset, verify size and SHA-256, then publish.
     needs: [meta, create-manifest]
     runs-on: ubuntu-26.04
-    timeout-minutes: 10
+    timeout-minutes: 20
     env:
       VERSION: ${{ needs.meta.outputs.version }}
       IMAGE_NAME: ${{ format('{0}/justup', secrets.DOCKERHUB_USERNAME) }}
       MOVES_LATEST: ${{ needs.meta.outputs.moves_latest }}
       ARCHS: ${{ needs.meta.outputs.archs }}
+      NMAP_VERSION: ${{ needs.meta.outputs.nmap_version }}
+      NMAP_SOURCE_SHA256: ${{ needs.meta.outputs.nmap_source_sha256 }}
+      INDEX_DIGEST: ${{ needs.create-manifest.outputs.index_digest }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
     permissions:
       contents: write
       actions: read
@@ -768,6 +1070,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
+          persist-credentials: false
           fetch-depth: 1
 
       - name: Download Trivy findings
@@ -785,6 +1088,32 @@ jobs:
           path: toolchain/
           merge-multiple: true
 
+      - name: Download Nmap provenance
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          pattern: nmap-provenance-*
+          path: nmap-provenance/
+          merge-multiple: true
+
+      - name: Download Nmap SBOM and NVD reports
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          pattern: nmap-nvd-*
+          path: nmap-nvd/
+          merge-multiple: true
+
+      - name: Download verified Nmap source archive
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: nmap-source
+          path: nmap-source/
+      # Same archive as in the image build: its hash must equal the one the images were built with
+      # and the one in every architecture's PROVENANCE.txt; the signature is checked again.
+      - name: Verify and prepare the Nmap source release assets
+        run: |
+          set -euo pipefail
+          python3 tools/nmap-release.py release-assets "$NMAP_VERSION" nmap-source nmap-release-assets \
+            "$NMAP_SOURCE_SHA256" "${IMAGE_NAME}@${INDEX_DIGEST}" nmap-provenance/*.txt
       # The release body links to the reports: each must exist and be a valid report
       # of a recognized image (tools/trivy-report.py) before a public release is created.
       - name: Validate Trivy findings
@@ -797,7 +1126,7 @@ jobs:
             echo "${arch}: $(cat "${RUNNER_TEMP}/trivy-status-${arch}.txt")"
           done
 
-      - name: Create or update GitHub Release
+      - name: Build release notes
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
@@ -805,6 +1134,7 @@ jobs:
             const path = require('node:path');
             const version = process.env.VERSION;
             const imageName = process.env.IMAGE_NAME;
+            const nmapVersion = process.env.NMAP_VERSION;
             const isPrerelease = version.includes('-');
             // Mirrors create-manifest: do not document a 'latest' this run left alone.
             const movedLatest = !isPrerelease && process.env.MOVES_LATEST === 'true';
@@ -863,10 +1193,22 @@ jobs:
             const assetBase = `https://github.com/${context.repo.owner}/${context.repo.repo}/releases/download/${tagName}`;
             const trivyRows = archs.map(arch =>
               `| ${arch} | ${trivyStatus(arch)} | [trivy-${arch}.json](${assetBase}/trivy-${arch}.json) |`);
+            // Written by the image build (PROVENANCE.txt); a missing file or field fails the job.
+            function nmapField(arch, field) {
+              const text = fs.readFileSync(path.join('nmap-provenance', `nmap-provenance-${arch}.txt`), 'utf8');
+              const line = text.split('\n').find(l => l.startsWith(field + '='));
+              if (!line) {
+                throw new Error(`nmap-provenance-${arch}.txt lacks ${field}`);
+              }
+              return line.slice(field.length + 1).replace(/,/g, ', ');
+            }
+            const nmapRows = archs.map(arch =>
+              `| ${arch} | ${nmapField(arch, 'bundled_libraries')} | ${nmapField(arch, 'system_libraries')} |`);
 
             // The release title already carries the version, so the body starts with the image.
             const body = [
               '**Docker Image:** `docker pull ' + imageName + ':' + version + '`',
+              '**Nmap:** ' + nmapVersion + ' (verified upstream release)',
               '',
               '### Available Tags',
               ...tags,
@@ -880,71 +1222,146 @@ jobs:
               '',
               '> Scanned with [Trivy](https://trivy.dev/) for HIGH and CRITICAL severity vulnerabilities (unfixed CVEs ignored).',
               '',
+              '### Nmap composition',
+              '',
+              'Nmap is built from the signature-verified source, so Trivy sees only the Debian packages below. ' +
+                'The bundled libraries are compiled into the binary and are not covered by the Trivy scan. ' +
+                'Nmap and libpcap are checked against NVD by CPE (CRITICAL blocks the release; SBOM and report are attached); ' +
+                'libdnet and liblinear have no NVD CPE and are not scanned: review their CVEs against these versions.',
+              '',
+              'The exact Nmap source archive (' + `nmap-${nmapVersion}.tar.bz2` + ', licence: NPSL, https://nmap.org/npsl/), its signature and ' +
+                '`nmap-source-manifest.txt` (URL, SHA-256, image digest) are attached to this release; the image does not contain the archive.',
+              '',
+              '| Architecture | Bundled libraries (not scanned) | Debian packages (scanned) |',
+              '|---|---|---|',
+              ...nmapRows,
+              '',
               '### Changelog',
               changelogSection || '_No matching CHANGELOG entry found for this version._',
               '',
               '**Source:** [justUp! Repository](https://github.com/' + context.repo.owner + '/' + context.repo.repo + ')'
             ].join('\n');
 
-            const releaseFields = {
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              tag_name: tagName,
-              name: 'justUp! ' + version,
-              body: body,
-              draft: false,
-              prerelease: isPrerelease
-            };
+            fs.writeFileSync('release-notes.md', body + '\n');
+            console.log(`Wrote the release notes for ${tagName} (${body.length} characters)`);
 
-            // Look up first instead of treating every 422 as "already exists".
-            let release = null;
-            try {
-              ({ data: release } = await github.rest.repos.getReleaseByTag({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                tag: tagName
-              }));
-            } catch (e) {
-              if (e.status !== 404) throw e;
-            }
+      # One directory holds exactly the expected assets. A missing, empty or additional file stops
+      # the job here, before any release exists.
+      - name: Collect release assets
+        run: |
+          set -euo pipefail
+          mkdir release-files
+          nmap_source="nmap-${NMAP_VERSION}.tar.bz2"
+          names=("$nmap_source" "${nmap_source}.asc" nmap-source-manifest.txt)
+          cp "nmap-release-assets/${nmap_source}" "nmap-release-assets/${nmap_source}.asc" \
+            nmap-release-assets/nmap-source-manifest.txt release-files/
+          read -ra archs <<< "$ARCHS"
+          for arch in "${archs[@]}"; do
+            cp "trivy-reports/trivy-findings-${arch}/trivy-${arch}.json" "toolchain/${arch}.txt" \
+              "nmap-provenance/nmap-provenance-${arch}.txt" "nmap-nvd/nmap-sbom-${arch}.cdx.json" \
+              "nmap-nvd/nmap-nvd-${arch}.json" release-files/
+            mv "release-files/${arch}.txt" "release-files/toolchain-${arch}.txt"
+            names+=("trivy-${arch}.json" "toolchain-${arch}.txt" "nmap-provenance-${arch}.txt" \
+              "nmap-sbom-${arch}.cdx.json" "nmap-nvd-${arch}.json")
+          done
+          python3 tools/release-publish.py manifest expected-assets.json release-files "${names[@]}"
+          cat expected-assets.json
 
-            if (release) {
-              ({ data: release } = await github.rest.repos.updateRelease({
-                ...releaseFields,
-                release_id: release.id
-              }));
-              console.log('Updated release ' + tagName);
-            } else {
-              ({ data: release } = await github.rest.repos.createRelease(releaseFields));
-              console.log('Created release ' + tagName);
-            }
+      # Decide from the published state of the tag: create a draft, resume an unpublished draft, or
+      # leave a complete release alone. A published release with missing or different assets fails
+      # here and is never edited, deleted or re-tagged.
+      - name: Plan the release
+        id: plan
+        env:
+          TAG: ${{ needs.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh api --paginate --slurp "repos/${GH_REPO}/releases?per_page=100" > releases.json
+          python3 tools/release-publish.py plan releases.json "$TAG" expected-assets.json > release-plan.json
+          cat release-plan.json
+          {
+            echo "state=$(jq -r '.state' release-plan.json)"
+            echo "release_id=$(jq -r '.release_id // empty' release-plan.json)"
+          } >> "$GITHUB_OUTPUT"
 
-            // Attach the scan reports and the installed-dependency manifests (the release body links to
-            // the reports; run artifacts expire). Any failure here fails the job.
-            const assets = archs.flatMap(arch => [
-              [`trivy-${arch}.json`, path.join('trivy-reports', `trivy-findings-${arch}`, `trivy-${arch}.json`), 'application/json'],
-              [`toolchain-${arch}.txt`, path.join('toolchain', `${arch}.txt`), 'text/plain'],
-            ]);
-            for (const [assetName, file, contentType] of assets) {
-              const data = fs.readFileSync(file);
-              const existing = (release.assets || []).find(a => a.name === assetName);
-              if (existing) {
-                await github.rest.repos.deleteReleaseAsset({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  asset_id: existing.id
-                });
-              }
-              await github.rest.repos.uploadReleaseAsset({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                release_id: release.id,
-                name: assetName,
-                data: data,
-                headers: {
-                  'content-type': contentType,
-                  'content-length': data.length
-                }
-              });
-              console.log('Attached ' + assetName);
-            }
+      - name: Create the draft release
+        id: draft
+        if: steps.plan.outputs.state == 'create'
+        env:
+          TAG: ${{ needs.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # The tag is pushed by the maintainer; never let a release create it implicitly.
+          gh api "repos/${GH_REPO}/git/ref/tags/${TAG}" --jq '.object.sha' > /dev/null
+          prerelease=false
+          [[ "$VERSION" == *-* ]] && prerelease=true
+          id="$(gh api -X POST "repos/${GH_REPO}/releases" -f tag_name="$TAG" -f name="justUp! ${VERSION}" \
+            -F body=@release-notes.md -F draft=true -F prerelease="$prerelease" --jq '.id')"
+          [[ "$id" =~ ^[0-9]+$ ]] || { echo "ERROR: no release id returned" >&2; exit 1; }
+          echo "release_id=${id}" >> "$GITHUB_OUTPUT"
+
+      - name: Refresh the unpublished draft
+        if: steps.plan.outputs.state == 'draft'
+        run: |
+          set -euo pipefail
+          prerelease=false
+          [[ "$VERSION" == *-* ]] && prerelease=true
+          gh api -X PATCH "repos/${GH_REPO}/releases/${{ steps.plan.outputs.release_id }}" \
+            -f name="justUp! ${VERSION}" -F body=@release-notes.md -F draft=true -F prerelease="$prerelease" > /dev/null
+
+      # Only assets of the still unpublished draft are replaced.
+      - name: Upload the release assets to the draft
+        if: steps.plan.outputs.state != 'published-complete'
+        env:
+          RELEASE_ID: ${{ steps.draft.outputs.release_id || steps.plan.outputs.release_id }}
+        run: |
+          set -euo pipefail
+          jq -r '.delete[] | .id' release-plan.json | while read -r asset_id; do
+            gh api -X DELETE "repos/${GH_REPO}/releases/assets/${asset_id}"
+          done
+          jq -r '.upload[]' release-plan.json | while read -r name; do
+            case "$name" in
+              *.bz2) type="application/x-bzip2" ;;
+              *.asc) type="application/pgp-signature" ;;
+              *.json) type="application/json" ;;
+              *) type="text/plain" ;;
+            esac
+            gh api -X POST "https://uploads.github.com/repos/${GH_REPO}/releases/${RELEASE_ID}/assets?name=${name}" \
+              -H "Content-Type: ${type}" --input "release-files/${name}" > /dev/null
+            echo "Uploaded ${name}"
+          done
+
+      # The bytes GitHub stores are read back and hashed; size and digest from the API must agree.
+      - name: Verify the draft assets
+        if: steps.plan.outputs.state != 'published-complete'
+        env:
+          RELEASE_ID: ${{ steps.draft.outputs.release_id || steps.plan.outputs.release_id }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${GH_REPO}/releases/${RELEASE_ID}" > release-draft.json
+          mkdir release-downloads
+          jq -r '.assets[] | "\(.id) \(.name)"' release-draft.json | while read -r asset_id name; do
+            [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || continue
+            gh api -H "Accept: application/octet-stream" "repos/${GH_REPO}/releases/assets/${asset_id}" \
+              > "release-downloads/${name}"
+          done
+          python3 tools/release-publish.py verify release-draft.json expected-assets.json --draft \
+            --downloads release-downloads
+
+      - name: Publish the verified release
+        if: steps.plan.outputs.state != 'published-complete'
+        env:
+          RELEASE_ID: ${{ steps.draft.outputs.release_id || steps.plan.outputs.release_id }}
+        run: |
+          set -euo pipefail
+          make_latest=false
+          [[ "$VERSION" != *-* && "$MOVES_LATEST" == "true" ]] && make_latest=true
+          gh api -X PATCH "repos/${GH_REPO}/releases/${RELEASE_ID}" -F draft=false -f make_latest="$make_latest" > /dev/null
+          gh api "repos/${GH_REPO}/releases/${RELEASE_ID}" > release-published.json
+          python3 tools/release-publish.py verify release-published.json expected-assets.json --published \
+            --downloads release-downloads
+          echo "Published v${VERSION} with $(jq '.assets | length' release-published.json) verified assets"
+
+      - name: Release already published
+        if: steps.plan.outputs.state == 'published-complete'
+        run: echo "v${VERSION} is already published with exactly the expected assets; nothing changed"

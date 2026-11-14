@@ -41,12 +41,12 @@ function reply({ status = 200, html = '<p>route</p>', measuredAt, headers = {} }
 }
 
 /** One page: loader plus recorders. `responses` is consumed in order by the fake fetch. */
-function page({ storage, clock, user = 'u1', target = 't1', hidden = false, active = true, locks = null, responses = [] } = {}) {
+function page({ storage, clock, user = 'u1', target = 't1', geo, hidden = false, active = true, locks = null, responses = [] } = {}) {
   const rec = { calls: [], renders: [], statuses: [], busy: [], loadErrors: [], redirects: [], timers: [], loading: 0 };
   const state = { hidden, active };
   const store = Cache.createStore({ storage, now: () => clock.t });
   const loader = Cache.createLoader({
-    url: URL_, scope: { user, target, build: 'b1' }, store,
+    url: URL_, scope: geo === undefined ? { user, target, build: 'b1' } : { user, target, build: 'b1', geo }, store,
     now: () => clock.t,
     fetchFn: async (url) => {
       rec.calls.push(url);
@@ -155,6 +155,9 @@ test('HTTP 429 blocks further manual requests until Retry-After has passed', asy
   await p.loader.refresh();
   await p.loader.refresh();
   assert.equal(p.rec.calls.length, 2, 'the blocked click sends nothing');
+  clock.t = T0 + 17_000;
+  await p.loader.refresh();
+  assert.equal(p.rec.calls.length, 2, 'Retry-After (20 s) outlasts the 15 s fallback');
   clock.t = T0 + 21_000;
   await p.loader.refresh();
   assert.equal(p.rec.calls.length, 3);
@@ -211,7 +214,7 @@ test('corrupt, incompatible, oversized and future entries are discarded', () => 
   const clock = { t: T0 };
   const scope = { user: 'u1', target: 't1', build: 'b1' };
   const key = 'justup.traceroute.v1.e.u1.t1';
-  const good = { schemaVersion: 2, build: 'b1', user: 'u1', target: 't1', measuredAt: T0, html: '<p>x</p>' };
+  const good = { schemaVersion: 3, build: 'b1', user: 'u1', target: 't1', measuredAt: T0, html: '<p>x</p>' };
   const cases = {
     garbage: '{not json',
     schema: JSON.stringify({ ...good, schemaVersion: 1 }),
@@ -368,7 +371,7 @@ test('a response stamped in the future is clamped to the client clock', async ()
 
 test('an unsuccessful fragment (no X-Measured-At) is shown but never cached', async () => {
   const storage = new FakeStorage(); const clock = { t: T0 };
-  const p = page({ storage, clock, responses: [reply({ html: '<p>MTR returned no hops</p>' })] });
+  const p = page({ storage, clock, responses: [reply({ html: '<p>trace returned no hops</p>' })] });
   await p.loader.show();
   assert.equal(p.rec.renders.length, 1);
   assert.equal(stored(storage).length, 0);
@@ -394,6 +397,14 @@ test('a session redirect is forwarded and stores nothing', async () => {
   assert.equal(p.rec.renders.length, 0);
 });
 
+test('an off-origin redirect target is never followed', async () => {
+  for (const target of ['//evil.example', '/\\evil.example', 'https://evil.example/']) {
+    const storage = new FakeStorage(); const clock = { t: T0 };
+    const p = page({ storage, clock, responses: [reply({ headers: { 'hx-redirect': target }, status: 500 })] });
+    await p.loader.show();
+    assert.deepEqual(p.rec.redirects, [], target);
+  }
+});
 test('two tabs with Web Locks coalesce the automatic scan into one request', async () => {
   const storage = new FakeStorage(); const clock = { t: T0 };
   seed(storage, clock, T0);
@@ -460,7 +471,49 @@ test('without Web Locks a second tab on its first load adopts the result of the 
   await running;
   clock.t += 31_000;
   await tabB.rec.timers.at(-1).fn(); // the fallback timer, or the storage event, rechecks
-  assert.equal(tabB.rec.calls.length, 0, 'no MTR request of its own');
+  assert.equal(tabB.rec.calls.length, 0, 'no trace request of its own');
   assert.equal(tabB.rec.renders.at(-1).html, '<p>from A</p>');
   assert.equal(tabB.loader.isLoaded(), true);
+});
+
+// Geo key: a changed IXP data set must never replay locations from the old one.
+const seedGeo = (storage, clock, geo, measuredAt, html = '<p>old locations</p>') =>
+  Cache.createStore({ storage, now: () => clock.t }).write({ user: 'u1', target: 't1', build: 'b1', geo }, { html, measuredAt });
+test('an entry is stored with the geo key of the page and replayed while the key is unchanged', async () => {
+  const storage = new FakeStorage(); const clock = { t: T0 };
+  await page({ storage, clock, geo: 'g1', responses: [reply({ measuredAt: T0 - 1000 })] }).loader.show();
+  assert.equal(stored(storage)[0].geo, 'g1');
+  clock.t = T0 + 60_000;
+  const reloaded = page({ storage, clock, geo: 'g1' });
+  await reloaded.loader.show();
+  assert.equal(reloaded.rec.calls.length, 0);
+  assert.equal(plain(reloaded.rec.renders[0]).html, '<p>route</p>');
+});
+test('a changed geo key drops the entry and loads the re-rendered result without a forced scan', async () => {
+  const storage = new FakeStorage(); const clock = { t: T0 };
+  seedGeo(storage, clock, 'g1', T0 - 3_600_000);
+  const reloaded = page({ storage, clock, geo: 'g2', responses: [reply({ html: '<p>new locations</p>', measuredAt: T0 - 3_600_000 })] });
+  await reloaded.loader.show();
+  assert.deepEqual(reloaded.rec.calls, [URL_]); // plain request: the server answers from its stored route
+  assert.equal(plain(reloaded.rec.renders.at(-1)).html, '<p>new locations</p>');
+  const [entry] = stored(storage);
+  assert.equal(entry.geo, 'g2');
+  assert.equal(entry.measuredAt, T0 - 3_600_000); // the measurement time is the original one
+  const again = page({ storage, clock, geo: 'g2' });
+  await again.loader.show();
+  assert.equal(again.rec.calls.length, 0);
+});
+test('an entry without a geo key is not replayed on a page that carries one', async () => {
+  const storage = new FakeStorage(); const clock = { t: T0 };
+  seedGeo(storage, clock, undefined, T0 - 1000);
+  const reloaded = page({ storage, clock, geo: 'g1', responses: [reply({ html: '<p>fresh</p>', measuredAt: T0 - 1000 })] });
+  await reloaded.loader.show();
+  assert.equal(reloaded.rec.calls.length, 1);
+  assert.equal(plain(reloaded.rec.renders.at(-1)).html, '<p>fresh</p>');
+});
+test('a malformed geo key is refused instead of being stored', () => {
+  const storage = new FakeStorage(); const clock = { t: T0 };
+  const store = Cache.createStore({ storage, now: () => clock.t });
+  assert.equal(store.write({ user: 'u1', target: 't1', build: 'b1', geo: 'bad key!' }, { html: '<p>x</p>', measuredAt: T0 }), false);
+  assert.equal(stored(storage).length, 0);
 });

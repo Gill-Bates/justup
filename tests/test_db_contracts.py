@@ -5,11 +5,6 @@
 #
 
 # ruff: noqa: S106
-#!/usr/bin/env python3
-#
-# tests/test_db_contracts.py
-# Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
-#
 
 """SQLite DAL contracts: scheduler bookkeeping durability and token lookup write behaviour."""
 
@@ -26,30 +21,23 @@ from app.utils.time import utcnow
 from tests import _support  # noqa: F401 - imported for its sys.path side effect
 
 
-@pytest.fixture
-def db_path(tmp_path: Path) -> Path:
-    path = tmp_path / "db" / "justup.db"
-    conn = sqlite_db.connect(path)
-    sqlite_db.init_schema(conn)
-    sqlite_db.close_connection(conn)
-    return path
-
-
 def _fresh(path: Path) -> sqlite3.Connection:
     conn = sqlite_db.connect(path)
     conn.execute("PRAGMA foreign_keys=OFF")  # lock rows are exercised without target fixtures
     return conn
 
 
-def test_heartbeat_is_durable_after_connection_close(db_path: Path):
+def test_heartbeat_is_durable_after_connection_close(db_path: Path, monkeypatch: pytest.MonkeyPatch):
     c = _fresh(db_path)
     sqlite_db.register_scheduler_run(c, "run-a")
     before = c.execute("SELECT heartbeat_at FROM scheduler_runs WHERE run_id='run-a'").fetchone()[0]
+    later = utcnow() + timedelta(minutes=5)
+    monkeypatch.setattr("app.db.sqlite.scheduler_runs.utcnow", lambda: later)
     sqlite_db.update_scheduler_heartbeat(c, "run-a")
     sqlite_db.close_connection(c)
     c2 = _fresh(db_path)
     after = c2.execute("SELECT heartbeat_at FROM scheduler_runs WHERE run_id='run-a'").fetchone()[0]
-    assert after >= before
+    assert after > before  # the update was committed, not merely re-read
     sqlite_db.close_connection(c2)
 
 
@@ -569,3 +557,19 @@ def test_fresh_schema_accepts_boundary_values_and_null(db_path: Path):
     conn.execute("INSERT INTO target_status(target_id, updated_at) VALUES (?, ?)", (tid, utcnow()))
     conn.execute("UPDATE target_status SET ping_up = 1, http_up = 0, tcp_up = NULL, overall_status = 'partial'")
     sqlite_db.close_connection(conn)
+
+
+@pytest.mark.parametrize("lookup", ["get_user_for_token", "get_user_for_token_readonly"])
+def test_token_lookups_reject_inactive_user_and_exhausted_session_lifetime(db_path: Path, lookup: str):
+    c = _fresh(db_path)
+    find = getattr(sqlite_db, lookup)
+    now = utcnow()
+    h = _user_with_token(c, expires_in=timedelta(hours=1), max_in=timedelta(hours=2))
+    assert find(c, token_hash=h) is not None
+    c.execute("UPDATE users SET is_active = 0")
+    assert find(c, token_hash=h) is None  # deactivated user
+    c.execute("UPDATE users SET is_active = 1")
+    c.execute("UPDATE auth_tokens SET max_expires_at = ?", (now - timedelta(seconds=5),))
+    assert find(c, token_hash=h) is None  # absolute lifetime exhausted although expires_at is in the future
+    assert find(c, token_hash="unknown") is None
+    sqlite_db.close_connection(c)

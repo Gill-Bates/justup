@@ -5,11 +5,6 @@
 #
 
 # ruff: noqa: S106
-#!/usr/bin/env python3
-#
-# tests/test_models_and_settings.py
-# Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
-#
 
 """Input normalisation of user/group models and the settings API round-trip."""
 
@@ -29,6 +24,7 @@ from app.api import settings as settings_api
 from app.api.auth import require_admin
 from app.db import sqlite as sqlite_db
 from app.models.groups import Group, GroupCreate, GroupUpdate
+from app.models.settings import SettingsUpdate
 from app.models.users import LoginRequest, UserCreate, UserUpdate
 from app.utils.deps import get_conn
 from app.utils.runtime_fields import load_runtime_fields
@@ -82,12 +78,13 @@ def test_settings_default_and_patch_roundtrip(client):
     assert again["geoip_auto_update"] is False
 
 
-def test_online_geo_fallback_switch_defaults_on_and_roundtrips(client):
-    assert client.get("/settings").json()["online_geo_fallback_enabled"] is True
-    assert client.patch("/settings", json={"online_geo_fallback_enabled": False}).status_code == 200
+def test_online_geo_fallback_switch_defaults_off_and_roundtrips(client):
     assert client.get("/settings").json()["online_geo_fallback_enabled"] is False
+    assert client.patch("/settings", json={"online_geo_fallback_enabled": True}).status_code == 200
+    assert client.get("/settings").json()["online_geo_fallback_enabled"] is True
     assert client.patch("/settings", json={"online_geo_fallback_enabled": None}).status_code == 422
-    assert client.patch("/settings", json={"online_geo_fallback_enabled": True}).json()["online_geo_fallback_enabled"]
+    off = client.patch("/settings", json={"online_geo_fallback_enabled": False})
+    assert off.json()["online_geo_fallback_enabled"] is False
 
 
 def test_legacy_online_geo_name_stays_invalid_for_patch(client):
@@ -95,12 +92,12 @@ def test_legacy_online_geo_name_stays_invalid_for_patch(client):
     assert client.patch("/settings", json={"online_geo_enabled": False}).status_code == 422
 
 
-def test_fresh_install_has_no_stored_value_so_the_default_on_applies(tmp_path):
+def test_fresh_install_has_no_stored_value_so_the_default_off_applies(tmp_path):
     conn = sqlite_db.connect(tmp_path / "fresh" / "justup.db")
     try:
         sqlite_db.init_schema(conn)
         assert sqlite_db.get_setting(conn, "online_geo_fallback_enabled", None) is None
-        assert load_runtime_fields(conn)["online_geo_fallback_enabled"] is True
+        assert load_runtime_fields(conn)["online_geo_fallback_enabled"] is False
     finally:
         sqlite_db.close_connection(conn)
 
@@ -142,7 +139,7 @@ def test_session_max_days_requires_admin(tmp_path: Path):
 
 
 def test_settings_template_has_labelled_session_slider():
-    html = (Path(__file__).resolve().parent.parent / "app/templates/settings/users.html").read_text(encoding="utf-8")
+    html = (Path(__file__).resolve().parent.parent / "app/templates/settings/general.html").read_text(encoding="utf-8")
     assert 'for="session_max_days"' in html
     assert 'type="range" class="form-range" name="session_max_days"' in html
     assert "aria-valuetext=" in html and 'aria-describedby="session_max_days_hint"' in html
@@ -172,10 +169,10 @@ def test_general_settings_have_unique_form_ids_and_keep_all_fields():
     expected_fields = {
         "use_utc_dashboard",
         "pdf_page_size",
+        "pdf_export_enabled",
         "geoip_auto_update",
         "purge_enabled",
-        "metrics_timeout_minutes",
-        "auth_disabled",
+        "auth_required",
         "rate_limit_auth",
         "session_max_days",
         "quality_targets",
@@ -185,12 +182,14 @@ def test_general_settings_have_unique_form_ids_and_keep_all_fields():
         "provider_lookup_cache_ttl_seconds",
     }
     assert all(f'name="{field}"' in html for field in expected_fields)
+    assert "metrics_timeout_minutes" not in html  # the down alert delay is a per-target setting now
     # The ip-api key is a write-only secret field rendered by the shared macro.
     assert 'secret_field("ip_api_key", "ip_api_key"' in html
     # The online geolocation fallback switch lives in the Geolocation card next to the privacy line.
     assert 'name="online_geo_fallback_enabled"' in html
     assert 'name="online_geo_enabled"' not in html
-    assert "online_geo_privacy_hint" in html and "public IPs are sent to ip-api / ipwho.is" in html
+    assert "online_geo_privacy_hint" in html and "Enhanced Accuracy" in html
+    assert "agree to have public IP addresses shared with third parties" in html
     # The removed POP refresh settings must not reappear in any settings template.
     assert 'name="pop_refresh_interval_seconds"' not in html
     assert 'name="pop_refresh_initial_delay_seconds"' not in html
@@ -229,9 +228,12 @@ def test_general_settings_have_unique_form_ids_and_keep_all_fields():
             if tag == "form":
                 autosave = "data-settings-autosave" in attr or attr.get("id") == "general-settings-form"
                 self.form_stack.append(autosave)
-            elif tag in {"input", "select"} and attr.get("name") in expected_fields:
-                if not (self.form_stack and self.form_stack[-1]):
-                    self.orphans.append(attr["name"])
+            elif (
+                tag in {"input", "select"}
+                and attr.get("name") in expected_fields
+                and not (self.form_stack and self.form_stack[-1])
+            ):
+                self.orphans.append(attr["name"])
 
         def handle_endtag(self, tag):
             if tag == "form":
@@ -241,6 +243,17 @@ def test_general_settings_have_unique_form_ids_and_keep_all_fields():
         ownership = FormOwnership()
         ownership.feed(fragment)
         assert ownership.orphans == []
+
+
+def test_access_sessions_card_lives_on_general_and_users_keeps_only_the_list():
+    root = Path(__file__).resolve().parent.parent / "app/templates/settings"
+    general = (root / "general.html").read_text(encoding="utf-8")
+    users = (root / "users.html").read_text(encoding="utf-8")
+    assert "Access &amp; Sessions" in general and "Require Authentication" in general
+    assert "Your instance is publicly accessible!" in general
+    assert 'aria-describedby="auth_required_hint"' in general and 'role="status"' in general
+    assert "<form" not in users and "Access" not in users and "auth_" not in users
+    assert "session_max_days" not in users and "rate_limit_auth" not in users
 
 
 def test_settings_tabs_are_one_strip_for_all_viewports_and_match_panes():
@@ -260,11 +273,35 @@ def test_ip_api_key_clear_action_is_explicit_and_untouched_field_stays_empty():
 
 
 def test_about_page_hides_third_party_design_and_uses_theme_text_color():
-    html = (Path(__file__).resolve().parent.parent / "app/templates/about.html").read_text(encoding="utf-8")
+    root = Path(__file__).resolve().parent.parent
+    html = (root / "app/templates/about.html").read_text(encoding="utf-8")
+    # The About rules live in ui.css (N36), not in an inline <style> block of the template.
+    css = (root / "app/static/css/ui.css").read_text(encoding="utf-8")
     assert "Third-party design" not in html
-    assert ".about-meta-value" in html
-    assert "color: var(--bs-body-color);" in html
-    assert ".dependencies-table code" in html
+    assert ".about-meta-value" in css
+    assert "color: var(--bs-body-color);" in css
+    assert ".dependencies-table code" in css
+
+
+def test_about_static_files_are_cached_together(tmp_path, monkeypatch):
+    from app.api import frontend
+
+    api_dir = tmp_path / "app" / "api"
+    api_dir.mkdir(parents=True)
+    (tmp_path / "LICENSE").write_text("Example License\n", encoding="utf-8")
+    (tmp_path / "CHANGELOG.md").write_text("First release\n", encoding="utf-8")
+    monkeypatch.setattr(frontend, "__file__", str(api_dir / "frontend.py"))
+    about_static_text = frontend._about_static_text  # noqa: SLF001 - cache under test
+    about_static_text.cache_clear()
+    try:
+        initial = about_static_text()
+        (tmp_path / "LICENSE").write_text("Changed License\n", encoding="utf-8")
+        (tmp_path / "CHANGELOG.md").write_text("Second release\n", encoding="utf-8")
+        assert about_static_text() == initial
+        about_static_text.cache_clear()
+        assert about_static_text() == ("Changed License\n", "Changed License", "Second release\n")
+    finally:
+        about_static_text.cache_clear()
 
 
 def test_auth_toggle_bindings_are_idempotent_across_htmx_swaps():
@@ -272,7 +309,7 @@ def test_auth_toggle_bindings_are_idempotent_across_htmx_swaps():
     assert "checkbox.dataset.authToggleBound === '1'" in source
     assert "form.dataset.authToggleBound !== '1'" in source
     assert "modal.dataset.authToggleHiddenBound !== '1'" in source
-    assert "const currentCheckbox = DOM.authDisabled();" in source
+    assert "const checkbox = DOM.authRequired();" in source
 
 
 def test_group_response_model_accepts_legacy_blank_name() -> None:
@@ -318,12 +355,51 @@ def test_network_settings_template_matches_tag_input_js_contract():
         "data-tag-input-entry",
         "data-tag-input-value",
         "data-tag-input-status",
-        "data-tag-input-error",
         "data-tag-input-reset",
     ):
         assert hook in html
         assert hook in js
     # Label, hint and error are bound to the entry for assistive technology.
     assert 'for="quality_targets_entry"' in html
-    assert 'aria-describedby="quality_targets_hint quality_targets_error"' in html
+    assert 'aria-describedby="quality_targets_hint"' in html
+    assert "data-tag-input-error" not in html
     assert 'role="status" aria-live="polite" data-tag-input-status' in html
+
+
+@pytest.mark.parametrize("value", ["1/second", "10/minute", "999999/day", "5/hour"])
+def test_rate_limit_auth_accepts_valid_units(value):
+    assert SettingsUpdate(rate_limit_auth=value).rate_limit_auth == value
+
+
+@pytest.mark.parametrize(
+    "value", ["0/minute", "05/minute", "1000000/day", "5/week", "5/minutes", "5 / minute", "", "5", "5/minute\n"]
+)
+def test_rate_limit_auth_rejects_invalid_values(value):
+    with pytest.raises(ValidationError):
+        SettingsUpdate(rate_limit_auth=value)
+
+
+def test_rate_limit_pattern_is_shared_with_parser():
+    from app.utils.rate_limit import parse_limit
+
+    for value in ("1/second", "999999/day", "0/minute", "05/minute", "1000000/day"):
+        try:
+            parse_limit(value)
+            parser_ok = True
+        except ValueError:
+            parser_ok = False
+        try:
+            SettingsUpdate(rate_limit_auth=value)
+            model_ok = True
+        except ValidationError:
+            model_ok = False
+        assert parser_ok == model_ok, value
+
+
+def test_login_request_length_limits():
+    assert LoginRequest(username="u" * 64, password="p" * 256)
+    assert LoginRequest(username="u", password="p")
+    with pytest.raises(ValidationError):
+        LoginRequest(username="u" * 65, password="p")
+    with pytest.raises(ValidationError):
+        LoginRequest(username="u", password="p" * 257)

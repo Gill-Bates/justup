@@ -235,7 +235,7 @@ def test_parallel_deliveries_are_all_counted(tmp_path):
     sqlite_db.init_schema(boot)
     now = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
     key = f"delivery.signal.sent:{int(now.timestamp()) // inbox.SENT_GROUP_SECONDS}"
-    barrier = threading.Barrier(4)
+    barrier = threading.Barrier(4, timeout=10)
 
     def work():
         c = sqlite_db.connect(path)
@@ -247,7 +247,8 @@ def test_parallel_deliveries_are_all_counted(tmp_path):
     for t in threads:
         t.start()
     for t in threads:
-        t.join()
+        t.join(timeout=15)
+    assert not any(t.is_alive() for t in threads)
     assert _count_of(boot, key) == 4
     sqlite_db.close_connection(boot)
 
@@ -304,3 +305,65 @@ def test_empty_port_value_means_default_in_model_and_scheduler():
 
     assert normalize_ports("", default="80") == "80"
     assert _stored_tcp_ports("") == _stored_tcp_ports(None) == [80]
+
+
+# ─── target_status.last_down_at / port status parity ──────────────────────────────────────
+def _snapshot(conn, tid, status):
+    sqlite_db.set_target_status_snapshot(
+        conn,
+        tid,
+        ping_up=None,
+        ping_latency_ms=None,
+        http_up=None,
+        http_status=None,
+        http_latency_ms=None,
+        tcp_up=None,
+        tcp_latency_ms=None,
+        cert_days_left=None,
+        uptime_percent=None,
+        overall_status=status,
+    )
+    return sqlite_db.get_target_status(conn, tid)["last_down_at"]
+
+
+@pytest.mark.parametrize("prev", ["up", "unknown", "partial", "error", "disabled"])
+def test_last_down_at_set_on_every_transition_to_down(mem, prev):
+    tid = sqlite_db.create_target(
+        mem, {"name": "T", "host": "t.example.com", "interval_seconds": 60, "retention_days": 30}
+    )
+    mem.execute("UPDATE target_status SET last_down_at = NULL WHERE target_id = ?", (tid,))
+    _snapshot(mem, tid, prev)
+    mem.execute("UPDATE target_status SET last_down_at = '2000-01-01 00:00:00' WHERE target_id = ?", (tid,))
+    assert _snapshot(mem, tid, "down") != "2000-01-01 00:00:00"
+
+
+def test_last_down_at_kept_while_down_and_after_recovery(mem):
+    tid = sqlite_db.create_target(
+        mem, {"name": "T", "host": "t.example.com", "interval_seconds": 60, "retention_days": 30}
+    )
+    first = _snapshot(mem, tid, "down")
+    assert first is not None
+    assert _snapshot(mem, tid, "down") == first
+    assert _snapshot(mem, tid, "up") == first
+
+
+def test_network_port_status_values_match_schema_check(mem):
+    tid = sqlite_db.create_target(
+        mem, {"name": "T", "host": "t.example.com", "interval_seconds": 60, "retention_days": 30}
+    )
+    mem.execute(
+        "INSERT INTO target_network_ports(target_id, protocol, port, source) VALUES (?, 'tcp', 80, 'manual')",
+        (tid,),
+    )
+    for value in ("up", "down", "unknown", "partial", "error", "disabled", ""):
+        try:
+            mem.execute("UPDATE target_network_ports SET status = ? WHERE target_id = ?", (value, tid))
+            in_schema = True
+        except sqlite3.IntegrityError:
+            in_schema = False
+        try:
+            sqlite_db.update_network_port_status(mem, tid, "tcp", 80, value)
+            in_function = True
+        except ValueError:
+            in_function = False
+        assert in_schema == in_function, value

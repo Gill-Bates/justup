@@ -22,20 +22,7 @@
 	 * Use this instead of raw fetch() in templates to avoid auth/CSRF drift.
 	 */
 	window.apiFetch = function apiFetch(url, options) {
-		var opts = options ? Object.assign({}, options) : {};
-		var headers = new Headers(opts.headers || {});
-
-		var csrf = getCsrfToken();
-		if (csrf && !headers.has('X-CSRF-Token')) {
-			headers.set('X-CSRF-Token', csrf);
-		}
-
-		if (!opts.credentials) {
-			opts.credentials = 'same-origin';
-		}
-
-		opts.headers = headers;
-		return fetch(url, opts);
+		return fetch(url, withCsrf(options));
 	};
 
 	// ─────────────────────────────────────────────────────────────────────────
@@ -114,7 +101,7 @@
 			// CSRF Token
 			var csrfToken = getCsrfToken();
 			if (csrfToken) {
-				evt.detail.headers['X-CSRF-Token'] = csrfToken;
+				evt.detail.headers[CSRF_HEADER] = csrfToken;
 			}
 		});
 
@@ -129,13 +116,14 @@
 			el.setAttribute('role', variant === 'danger' ? 'alert' : 'status');
 			el.setAttribute('aria-live', variant === 'danger' ? 'assertive' : 'polite');
 			el.style.cssText = 'position:fixed;top:' + offset + 'rem;right:1rem;z-index:3000;max-width:420px;' +
-				'padding:0.75rem 1rem;border-radius:0.5rem;box-shadow:0 12px 30px rgba(0,0,0,.25);' +
+				'padding:0.75rem 1rem;border-radius:0.5rem;box-shadow:var(--ju-shadow-raised);' +
 				'backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);' +
 				'border:1px solid rgba(255,255,255,.2);background:rgba(33,37,41,.92);color:#fff;';
 			if (variant === 'danger') el.style.background = 'rgba(220,53,69,.92)';
-			if (variant === 'warning') el.style.background = 'rgba(255,193,7,.92)';
+			if (variant === 'warning') { el.style.background = 'rgba(255,193,7,.92)'; el.style.color = '#212529'; }
 			if (variant === 'success' || variant === 'info') el.style.background = 'rgba(25,135,84,.92)';
-			el.textContent = String(message);
+			if (variant === 'warning') window.JuWarning.append(el, message);
+			else el.textContent = String(message);
 			document.body.appendChild(el);
 			setTimeout(function () {
 				el.style.transition = 'opacity .25s ease';
@@ -156,14 +144,16 @@
 				return;
 			}
 
-			// Normalize variant: info -> success (no cyan toasts)
-			var v = (variant === 'info') ? 'success' : (variant || 'success');
-			toastEl.classList.remove('text-bg-success', 'text-bg-danger', 'text-bg-warning');
+			// info is neutral (DC-STATE-3): secondary, never the success colour
+			var v = (variant === 'info') ? 'secondary' : (variant || 'success');
+			toastEl.classList.remove('text-bg-success', 'text-bg-danger', 'text-bg-warning', 'text-bg-secondary');
 			toastEl.classList.add('text-bg-' + v);
 
 			// Prevent HTML injection: build DOM nodes, set textContent
 			bodyEl.replaceChildren();
-			if (iconName) {
+			if (variant === 'warning') {
+				window.JuWarning.append(bodyEl, message);
+			} else if (iconName) {
 				var icon = document.createElement('span');
 				icon.className = 'material-icons me-2';
 				icon.style.fontSize = '20px';
@@ -180,25 +170,17 @@
 		}
 
 		window.justUpToast = {
+			show: function (msg, type) {
+				var tone = type === 'danger' ? 'error' : (type || 'success');
+				var show = this[tone] || this.success;
+				if (show) show(String(msg));
+			},
 			success: function (msg) { showToast(msg, 'success', 'check_circle'); },
 			error: function (msg) { showToast(msg, 'danger', 'error'); },
-			info: function (msg) { showToast(msg, 'success', 'check_circle'); },  // info -> success (green)
+			info: function (msg) { showToast(msg, 'info', 'info'); },
 			warning: function (msg) { showToast(msg, 'warning', 'warning'); }
 		};
 
-		(function () {
-			var urlParams = new URLSearchParams(window.location.search);
-			var toastMsg = urlParams.get('toast');
-			if (toastMsg) {
-				var safMsg = toastMsg.length > 200 ? toastMsg.substring(0, 200) + '…' : toastMsg;
-				setTimeout(function () { showToast(safMsg, 'success', 'check_circle'); }, 100);
-				urlParams.delete('toast');
-				var newUrl = urlParams.toString()
-					? window.location.pathname + '?' + urlParams.toString() + window.location.hash
-					: window.location.pathname + window.location.hash;
-				window.history.replaceState({}, '', newUrl);
-			}
-		})();
 
 		// Server Offline Detection
 
@@ -242,7 +224,6 @@
 
 		(function () {
 			var toggle = document.getElementById('theme-toggle');
-			var themeChanged = false;
 			var themes = ['system', 'light', 'dark'];
 			var selectedTheme = document.documentElement.getAttribute('data-user-theme') || 'system';
 			if (themes.indexOf(selectedTheme) === -1) selectedTheme = 'system';
@@ -270,7 +251,6 @@
 
 			if (toggle) {
 				toggle.addEventListener('click', function () {
-					themeChanged = true;
 					var next = themes[(themes.indexOf(selectedTheme) + 1) % themes.length];
 					selectedTheme = next;
 					if (window.setTheme) window.setTheme(next);
@@ -278,22 +258,6 @@
 				});
 			}
 
-			function loadThemeFromDb() {
-				window.apiFetch('/me/theme').then(function (resp) {
-					if (resp.status === 401 || resp.status === 403) return null;
-					if (!resp.ok) throw new Error('Theme lookup failed: ' + resp.status);
-					return resp.json();
-				}).then(function (data) {
-					if (!themeChanged && data && themes.indexOf(data.theme) !== -1) {
-						selectedTheme = data.theme;
-						if (window.setTheme) window.setTheme(selectedTheme);
-					}
-				}).catch(function (e) {
-					console.warn('Failed to load theme from DB:', e);
-				});
-			}
-
-			loadThemeFromDb();
 		})();
 
 		// HTMX Fragment Initialization (local-time formatting & accordion state)
@@ -319,6 +283,22 @@
 				});
 			}
 
+			// Shared with scripts that render .local-time elements themselves (e.g. the users list)
+			window.JuLocalTime = { init: initLocalTimes };
+
+			// Mirror a Bootstrap collapse state onto its panel and its toggle button.
+			function setAccordionExpanded(collapse, button, expanded) {
+				collapse.classList.toggle('show', expanded);
+				if (button) {
+					button.classList.toggle('collapsed', !expanded);
+					button.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+				}
+			}
+			function storeAccordionState(key, state) {
+				try {
+					localStorage.setItem(key, state);
+				} catch (e) { /* localStorage unavailable */ }
+			}
 			function initAccordionState(root) {
 				(root || document).querySelectorAll('.accordion-collapse:not([data-state-init])').forEach(function (collapse) {
 					collapse.setAttribute('data-state-init', '1');
@@ -329,39 +309,17 @@
 						try {
 							saved = localStorage.getItem(key);
 						} catch (e) { /* localStorage unavailable */ }
-						if (saved === 'collapsed' && !forceExpanded) {
-							collapse.classList.remove('show');
-							var button = document.querySelector('[data-group-key="' + CSS.escape(key) + '"].accordion-button');
-							if (button) {
-								button.classList.add('collapsed');
-								button.setAttribute('aria-expanded', 'false');
-							}
-						}
+						var button = document.querySelector('[data-group-key="' + CSS.escape(key) + '"].accordion-button');
+						if (saved === 'collapsed' && !forceExpanded) setAccordionExpanded(collapse, button, false);
 						if (forceExpanded) {
-							collapse.classList.add('show');
-							var button2 = document.querySelector('[data-group-key="' + CSS.escape(key) + '"].accordion-button');
-							if (button2) {
-								button2.classList.remove('collapsed');
-								button2.setAttribute('aria-expanded', 'true');
-							}
-							try {
-								localStorage.setItem(key, 'expanded');
-							} catch (e) { /* localStorage unavailable */ }
+							setAccordionExpanded(collapse, button, true);
+							storeAccordionState(key, 'expanded');
 						}
-						collapse.addEventListener('shown.bs.collapse', function () {
-							try {
-								localStorage.setItem(key, 'expanded');
-							} catch (e) { /* localStorage unavailable */ }
-						});
-						collapse.addEventListener('hidden.bs.collapse', function () {
-							try {
-								localStorage.setItem(key, 'collapsed');
-							} catch (e) { /* localStorage unavailable */ }
-						});
+						collapse.addEventListener('shown.bs.collapse', function () { storeAccordionState(key, 'expanded'); });
+						collapse.addEventListener('hidden.bs.collapse', function () { storeAccordionState(key, 'collapsed'); });
 					}
 				});
 			}
-
 			function initFragment(root) {
 				initLocalTimes(root);
 				initAccordionState(root);
@@ -393,6 +351,7 @@
 				overflowBadge.className = 'badge quality-target quality-target-overflow';
 				overflowBadge.hidden = true;
 				var layoutFrame = 0;
+				// Same pinned flag-icons URL as traceroute_map.html; CSP img-src and the layout contract test cover this CDN.
 				var flagIconBase = 'https://cdn.jsdelivr.net/npm/flag-icons@7.3.2/flags/4x3/';
 				function fitsTargets() {
 					var bounds = targetsEl.getBoundingClientRect();
@@ -457,7 +416,6 @@
 						badge.setAttribute('aria-label', text.label);
 						if (text.title) badge.title = text.title;
 						badge.appendChild(flag);
-						if (item.country) badge.appendChild(document.createTextNode(item.country + ' '));
 						badge.appendChild(document.createTextNode(address));
 						return badge;
 					});
@@ -485,16 +443,16 @@
 						var resp = await window.apiFetch('/quality/current', { signal: controller.signal });
 						if (!resp.ok) {
 							consecutiveFailures++;
-						if (consecutiveFailures >= failureLimit) showQualityUnavailable();
-						return;
+							if (consecutiveFailures >= failureLimit) showQualityUnavailable();
+							return;
 						}
 						var data = await resp.json();
 
 						var view = window.QualityState.describe(data);
 						scoreEl.textContent = view.scoreText;
 						scoreEl.className = view.scoreClass;
-						badgeEl.className = 'badge ' + view.badgeClass;
-						badgeEl.textContent = view.badgeText;
+						badgeEl.innerHTML = window.JuStatusDot.html(view.badgeTone, view.badgeText);
+						badgeEl.removeAttribute('aria-busy');
 						labelEl.textContent = view.label;
 						consecutiveFailures = 0;
 						renderTargets(data);
@@ -513,8 +471,8 @@
 					var view = window.QualityState.describe({ state: 'unknown' });
 					scoreEl.textContent = view.scoreText;
 					scoreEl.className = view.scoreClass;
-					badgeEl.className = 'badge ' + view.badgeClass;
-					badgeEl.textContent = view.badgeText;
+					badgeEl.innerHTML = window.JuStatusDot.html(view.badgeTone, view.badgeText);
+					badgeEl.removeAttribute('aria-busy');
 					labelEl.textContent = 'Data unavailable';
 					scheduleTargetFit();
 				}
@@ -549,15 +507,11 @@
 				var acc = (root || document).querySelector && (root || document).querySelector('#targets-accordion');
 				if (!acc) return;
 				if (acc.getAttribute('data-mobile-collapsed') === '1') return;
-				if (window.innerWidth >= 768) return;
+				// Compact viewport only: the 576 px compact-header breakpoint of DC-BP-1 (width <= 576px).
+				if (window.innerWidth > 576) return;
 				acc.setAttribute('data-mobile-collapsed', '1');
 				acc.querySelectorAll('.accordion-collapse.show').forEach(function (el) {
-					el.classList.remove('show');
-					var btn = acc.querySelector('[data-bs-target="#' + el.id + '"]');
-					if (btn) {
-						btn.classList.add('collapsed');
-						btn.setAttribute('aria-expanded', 'false');
-					}
+					setAccordionExpanded(el, acc.querySelector('[data-bs-target="#' + el.id + '"]'), false);
 				});
 			}
 
@@ -569,35 +523,22 @@
 				var rangeEl = card.querySelector('[data-range-label]');
 				var headerLabel = document.getElementById('downtime-header-label');
 				if (headerLabel && rangeEl && rangeEl.dataset.rangeLabel) {
-					headerLabel.textContent = 'Downtimes (' + rangeEl.dataset.rangeLabel + ')';
+					headerLabel.textContent = rangeEl.dataset.rangeLabel;
 				}
 
-				var isMobile = window.innerWidth < 576;
-				card.querySelectorAll('.local-time').forEach(function (el) {
-					var utcStr = el.dataset.utc;
-					var useUtc = el.dataset.useUtc === 'true';
-					if (!utcStr) return;
-					var dt = new Date(utcStr);
-					if (isNaN(dt.getTime())) return;
-
-					if (useUtc) {
-						if (isMobile) {
-							el.textContent = dt.toISOString().substring(5, 16).replace('T', ' ');
-						} else {
-							el.textContent = dt.toISOString().replace('T', ' ').substring(0, 19) + ' UTC';
-						}
-					} else {
-						if (isMobile) {
-							el.textContent = dt.toLocaleString(undefined, {
-								month: '2-digit',
-								day: '2-digit',
-								hour: '2-digit',
-								minute: '2-digit'
-							});
-						} else {
-							el.textContent = dt.toLocaleString();
-						}
-					}
+				card.querySelectorAll('.downtime-when').forEach(function (el) {
+					var utc = el.dataset.useUtc === 'true';
+					var range = formatDowntimeRange(el.dataset.start, el.dataset.end, { utc: utc });
+					if (!range) return;
+					var text = el.querySelector('.downtime-when-text');
+					var precise = formatDowntimePrecise(el.dataset.start, el.dataset.end, { utc: utc });
+					var exact = el.querySelector('.downtime-when-precise');
+					var serverPrecise = exact ? exact.textContent : '';
+					text.textContent = range;
+					// Keep the server's duration suffix; only the timestamps depend on the zone.
+					var duration = serverPrecise.indexOf(' · ') >= 0 ? serverPrecise.slice(serverPrecise.indexOf(' · ')) : '';
+					text.title = precise + duration;
+					if (exact) exact.textContent = precise + duration;
 				});
 			}
 
@@ -643,7 +584,7 @@
 						return;
 					}
 					attempts++;
-					window.apiFetch('/targets/' + targetId + '/notification-status/' + taskId).then(function (resp) {
+					window.apiFetch('/targets/' + encodeURIComponent(targetId) + '/notification-status/' + encodeURIComponent(taskId)).then(function (resp) {
 						if (!resp.ok) {
 							var error = new Error('HTTP ' + resp.status);
 							error.status = resp.status;
@@ -653,7 +594,11 @@
 					}).then(function (status) {
 						if (!status) return;
 
-						if (status.status === 'completed') {
+						if (status.status === 'completed' && !status.success && status.skipped > 0) {
+							if (window.justUpToast) window.justUpToast.warning(
+								'No notification sent: ' + status.skipped + ' recipient(s) skipped (no usable channel).'
+							);
+						} else if (status.status === 'completed') {
 							if (window.justUpToast) window.justUpToast.success(status.success + ' recipient(s) notified successfully');
 						} else if (status.status === 'completed_with_queued') {
 							// Some notifications queued for later - this is NOT an error

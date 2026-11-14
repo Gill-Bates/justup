@@ -13,6 +13,7 @@ import logging
 import secrets
 import sqlite3
 import uuid
+from typing import NoReturn
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -28,6 +29,8 @@ from ..models.users import (
     TokenResponse,
     UserCreate,
     UserPublic,
+    UserRecipientConfig,
+    UserRecipientPublic,
     UserUpdate,
     hash_password,
     hash_token,
@@ -40,6 +43,7 @@ from ..utils.client_ip import normalize_ip_bucket, request_is_https, resolve_tru
 from ..utils.deps import get_conn
 from ..utils.rate_limit import rate_limit_auth
 from .auth import get_current_user, require_admin
+from .recipients import _normalize_phone_or_400
 
 _security = HTTPBearer(auto_error=False)
 _log = logging.getLogger(__name__)
@@ -70,8 +74,49 @@ def _is_rfc1918(ip: str) -> bool:
     return addr.version == 4 and any(addr in net for net in _RFC1918_NETWORKS)
 
 
-def _row_to_public(row) -> UserPublic:
-    """Convert a SQLite user row into the public response model."""
+def _recipient_to_public(recipient) -> UserRecipientPublic | None:
+    """Channel information of a user's recipient (None for a user without one, e.g. created by raw SQL)."""
+    if recipient is None:
+        return None
+    return UserRecipientPublic(
+        id=int(recipient["id"]),
+        phone=recipient["phone"] or None,
+        email=recipient["email"] or None,
+        is_enabled=bool(recipient["is_enabled"]),
+        enable_for_all_targets=bool(recipient["enable_for_all_targets"]),
+    )
+
+
+def _recipient_for(conn, user_id: int):
+    """The recipient row of a user; a missing one (database changed behind the application) is repaired, not hidden."""
+    row = sqlite_db.get_user_recipient(conn, user_id)
+    if row is None:
+        created = sqlite_db.ensure_user_recipients(conn)
+        _log.warning("USER_RECIPIENT_REPAIRED user_id=%d created=%d", user_id, created)
+        row = sqlite_db.get_user_recipient(conn, user_id)
+    return row
+
+
+def _channels(config: UserRecipientConfig | None) -> tuple[str | None, str | None]:
+    """Normalised (phone, email) of a submitted recipient configuration; ``None`` means the channel is off."""
+    if config is None:
+        return None, None
+    phone = _normalize_phone_or_400(config.phone) if config.phone else None
+    return phone, (str(config.email) if config.email else None)
+
+
+def _raise_user_conflict(exc: sqlite3.IntegrityError) -> NoReturn:
+    """Map a unique-constraint violation of the combined user and recipient write to its 409."""
+    message = str(exc)
+    if "users.username" in message:
+        raise HTTPException(status_code=409, detail="Username already exists") from exc
+    if "phone" in message and "UNIQUE" in message:
+        raise HTTPException(status_code=409, detail="Phone number already exists") from exc
+    raise exc
+
+
+def _row_to_public(row, recipient=None) -> UserPublic:
+    """Convert a SQLite user row (and optionally its recipient row) into the public response model."""
     # sqlite3.Row supports dict-like indexing but not .get() - use try/except for optional fields
     try:
         is_active = bool(row["is_active"])
@@ -103,6 +148,7 @@ def _row_to_public(row) -> UserPublic:
         created_at=row["created_at"],
         last_login_at=last_login_at,
         last_login_ip=last_login_ip,
+        recipient=_recipient_to_public(recipient),
     )
 
 
@@ -228,9 +274,9 @@ def login(request: Request, payload: LoginRequest, conn=Depends(get_conn)):
 
 
 @router.get("/me", response_model=UserPublic)
-def me(user_row=Depends(get_current_user)):
-    """Return the currently authenticated user."""
-    return _row_to_public(user_row)
+def me(user_row=Depends(get_current_user), conn=Depends(get_conn)):
+    """Return the currently authenticated user, including the recipient bound to the account."""
+    return _row_to_public(user_row, _recipient_for(conn, int(user_row["id"])))
 
 
 @router.post("/me/password", dependencies=[Depends(rate_limit_auth())])
@@ -343,31 +389,44 @@ def update_user_theme(payload: dict, user=Depends(get_current_user), conn=Depend
 
 @router.post("/users", response_model=UserPublic)
 def create_user(payload: UserCreate, conn=Depends(get_conn), _admin=Depends(require_admin)):
-    """Create a new user (admin-only)."""
-    if sqlite_db.get_user_by_username(conn, payload.username) is not None:
-        raise HTTPException(status_code=409, detail="Username already exists")
+    """Create a new user together with its notification recipient (admin-only, one transaction)."""
+    config = payload.recipient
+    phone, email = _channels(config)
+    password_hash = hash_password(payload.password)
     try:
-        with sqlite_db.transaction(conn):
+        # IMMEDIATE: the username and phone checks and the inserts share one write lock.
+        with sqlite_db.transaction(conn, immediate=True):
+            if sqlite_db.get_user_by_username(conn, payload.username) is not None:
+                raise HTTPException(status_code=409, detail="Username already exists")
             user_id = sqlite_db.create_user(
                 conn,
                 username=payload.username,
-                password_hash=hash_password(payload.password),
+                password_hash=password_hash,
                 is_admin=bool(payload.is_admin),
                 can_close_alerts=bool(payload.can_close_alerts),
+                phone=phone,
+                email=email,
+                recipient_enabled=config.is_enabled if config else None,
+                enable_for_all_targets=bool(config and config.enable_for_all_targets),
             )
             notifications.notify_user_created(conn, user_id=user_id, username=payload.username.lower(), actor=_admin)
+    except sqlite_db.DuplicatePhoneError as exc:
+        raise HTTPException(status_code=409, detail="Phone number already exists") from exc
     except sqlite3.IntegrityError as exc:
-        # A concurrent request inserted the same username after the pre-check.
-        raise HTTPException(status_code=409, detail="Username already exists") from exc
-    row = sqlite_db.get_user_by_id(conn, user_id)
-    return _row_to_public(row)
+        # A concurrent request inserted the same username or number after the pre-check.
+        _raise_user_conflict(exc)
+    return _row_to_public(sqlite_db.get_user_by_id(conn, user_id), _recipient_for(conn, user_id))
 
 
 @router.get("/users", response_model=list[UserPublic])
 def list_users(conn=Depends(get_conn), _admin=Depends(require_admin)):
-    """List all users (admin-only)."""
+    """List all users with their recipient and channel information (admin-only)."""
     rows = sqlite_db.get_all_users(conn)
-    return [_row_to_public(row) for row in rows]
+    recipients = sqlite_db.get_recipients_by_user(conn)
+    if any(int(row["id"]) not in recipients for row in rows):
+        _log.warning("USER_RECIPIENT_REPAIRED created=%d", sqlite_db.ensure_user_recipients(conn))
+        recipients = sqlite_db.get_recipients_by_user(conn)
+    return [_row_to_public(row, recipients.get(int(row["id"]))) for row in rows]
 
 
 @router.put("/users/{user_id}", response_model=UserPublic)
@@ -389,9 +448,11 @@ def update_user(user_id: int, payload: UserUpdate, conn=Depends(get_conn), admin
     new_hash = hash_password(payload.new_password) if payload.new_password else None
     # An admin-set password is temporary: the user must choose their own at next login.
     is_admin_target = bool(row["is_admin"]) or bool(payload.is_admin)
-    # Attributes, optional password reset and token revocation commit or roll back together.
+    config = payload.recipient
+    phone, email = _channels(config)
+    # Attributes, recipient channels, optional password reset and token revocation commit or roll back together.
     try:
-        with sqlite_db.transaction(conn):
+        with sqlite_db.transaction(conn, immediate=True):
             sqlite_db.update_user(
                 conn,
                 user_id,
@@ -399,6 +460,15 @@ def update_user(user_id: int, payload: UserUpdate, conn=Depends(get_conn), admin
                 is_admin=bool(payload.is_admin),
                 can_close_alerts=bool(payload.can_close_alerts),
             )
+            if config is not None:
+                sqlite_db.update_user_recipient(
+                    conn,
+                    user_id,
+                    phone=phone,
+                    email=email,
+                    is_enabled=config.is_enabled,
+                    enable_for_all_targets=config.enable_for_all_targets,
+                )
             if new_hash is not None:
                 sqlite_db.update_user_password(conn, user_id, new_hash, must_change_password=True)
                 sqlite_db.revoke_tokens_for_user(conn, user_id)
@@ -410,13 +480,17 @@ def update_user(user_id: int, payload: UserUpdate, conn=Depends(get_conn), admin
                         event_key=uuid.uuid4().hex,
                         reset_by=admin,
                     )
+    except sqlite_db.DuplicatePhoneError as exc:
+        raise HTTPException(status_code=409, detail="Phone number already exists") from exc
+    except LookupError as exc:  # the user was deleted after the pre-check
+        raise HTTPException(status_code=404, detail="User not found") from exc
     except sqlite3.IntegrityError as exc:
-        # A concurrent request inserted the same username after the pre-check.
-        raise HTTPException(status_code=409, detail="Username already exists") from exc
+        # A concurrent request inserted the same username or number after the pre-check.
+        _raise_user_conflict(exc)
     if new_hash is not None:
         _log.warning("PASSWORD_RESET user_id=%d reset_by=%s tokens_revoked=true", user_id, admin["username"])
     updated = sqlite_db.get_user_by_id(conn, user_id)
-    return _row_to_public(updated)
+    return _row_to_public(updated, _recipient_for(conn, user_id))
 
 
 class SetUserActiveRequest(BaseModel):
@@ -434,9 +508,9 @@ def set_user_active(user_id: int, payload: SetUserActiveRequest, conn=Depends(ge
     if not row:
         raise HTTPException(status_code=404, detail="User not found")
 
-    # Prevent deactivating yourself
+    # Admins may not change their own active state (lockout protection)
     if int(admin["id"]) == int(user_id):
-        raise HTTPException(status_code=403, detail="Cannot deactivate your own account")
+        raise HTTPException(status_code=403, detail="Cannot change your own active state")
 
     # Prevent deactivating admin accounts (avoid lockout)
     if row["is_admin"]:
@@ -451,7 +525,7 @@ def set_user_active(user_id: int, payload: SetUserActiveRequest, conn=Depends(ge
         _log.info("USER_ACTIVATED user_id=%d by=%s", user_id, admin["username"])
 
     updated = sqlite_db.get_user_by_id(conn, user_id)
-    return _row_to_public(updated)
+    return _row_to_public(updated, _recipient_for(conn, user_id))
 
 
 @router.post("/users/{user_id}/revoke-sessions")
@@ -482,7 +556,11 @@ def delete_user(user_id: int, conn=Depends(get_conn), admin=Depends(require_admi
     if user_id == admin["id"]:
         raise HTTPException(status_code=403, detail="Cannot delete your own account")
 
-    deleted = sqlite_db.delete_user(conn, user_id)
+    try:
+        # The role is checked again inside the delete transaction: the check above may be stale by now.
+        deleted = sqlite_db.delete_non_admin_user(conn, user_id)
+    except sqlite_db.AdminUserError as exc:
+        raise HTTPException(status_code=403, detail="Cannot delete admin users") from exc
     if not deleted:
         raise HTTPException(status_code=404, detail="User not found")
 

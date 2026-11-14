@@ -11,7 +11,8 @@ This module provides functionality to geolocate IP addresses from traceroute
 results. It only produces geo/route data; there is no server-side map
 rendering. The Web UI draws the route client-side with the vendored Leaflet
 (app/static/js/traceroute-map.js) on a local Natural Earth basemap, and the
-PDF report shows the hops as a table.
+PDF report shows the hops as a table and as an offline route map
+(app/services/pdf_route_map.py).
 """
 
 from __future__ import annotations
@@ -33,12 +34,16 @@ from pathlib import Path
 from threading import Lock
 from typing import Any, TypedDict
 
+from app.db.pop_locations import valid_coordinates
 from app.services import geo_resolver as gr
+from app.services import ixp_index
 from app.services.geo_resolver import MAX_CITY_RADIUS_KM
 from app.services.ip_lookup import lookup_online_sources, public_ip
 from app.services.pop_codes import lookup_pop_code, observe_unknown_pop
+from app.services.traceroute_service import NO_IP_MARKERS, STATUS_OK, STATUS_PARTIAL, STATUS_TIMEOUT
 from app.utils.constants import (
     DEFAULT_ONLINE_GEO_FALLBACK_ENABLED,
+    GEOIP_ASN_DB_RELPATH,
     GEOIP_DB_RELPATH,
     PROVIDER_LOOKUP_CACHE_TTL_DEFAULT,
     PROVIDER_LOOKUP_CACHE_TTL_MAX,
@@ -53,19 +58,16 @@ from app.utils.runtime_settings import get_ip_api_key, get_runtime_bool_fail_clo
 
 _log = logging.getLogger(__name__)
 
-# --- Re-export segment types for backward compatibility ---
+# Re-export segment types for backward compatibility
 # Use SegmentType.SOLID/.DASHED directly where possible
 SEGMENT_SOLID = SegmentType.SOLID
 SEGMENT_DASHED = SegmentType.DASHED
 
-# --- Re-export hop status for backward compatibility ---
+# Re-export hop status for backward compatibility
 # Use HopStatus.OK/.TIMEOUT/.INTERPOLATED directly where possible
-STATUS_OK = HopStatus.OK
-STATUS_PARTIAL = "partial"  # Not in HopStatus (aggregate concept)
-STATUS_TIMEOUT = HopStatus.TIMEOUT
 STATUS_INTERPOLATED = HopStatus.INTERPOLATED
 
-# --- Metadata key constants (avoid magic strings) ---
+# Metadata key constants (avoid magic strings)
 META_PRIVATE_IP = "_private_ip"
 META_IS_PUBLIC = "_is_public"
 META_DESTINATION = "_destination"
@@ -81,13 +83,13 @@ META_SEGMENT_NOTE = "segment_note"  # hops the segment to the next point crosses
 META_MAP_RADIUS_KM = "map_radius_km"  # accuracy radius a renderer may draw around an approximate position
 MAX_MAP_RADIUS_KM = 250.0  # larger radii would cover the map and are not drawn
 
-# --- IPv6 specific constants ---
+# IPv6 specific constants
 # IPv6 addresses are long and cause layout issues in PDFs/tables
 # We shorten them for display while keeping the full address for tooltips
 IPV6_DISPLAY_MAX_LENGTH = 24  # Optimal for PDF column width
 IPV6_TRUNCATION_SUFFIX = "\u2026"  # Ellipsis character
 
-# --- Confidence levels for geolocation ---
+# Confidence levels for geolocation
 # These values indicate HOW a location was determined.
 # UI can use these for: tooltips, legend, debug overlay, trust indicators.
 # Higher precision: hostname > geoip > online > fallback > interpolated
@@ -97,12 +99,13 @@ CONFIDENCE_INTERPOLATED = "interpolated"  # Forward-filled from previous hop
 CONFIDENCE_DESTINATION = "destination"  # Injected destination point
 CONFIDENCE_FALLBACK = "fallback"  # Last known location used as fallback
 CONFIDENCE_ONLINE = "online"  # HTTPS lookup; provider is carried in source
+CONFIDENCE_IXP = "ixp"  # PeeringDB IXP prefix: exchange region (or membership only), never a router fix
 META_DECISION = "_decision"  # explainable resolver decision (sources, winner, reason)
 
-# --- Deduplication config ---
+# Deduplication config
 GEO_DEDUP_DECIMALS = 4  # 4 decimals ≈ 11m precision (configurable for campus/DC)
 
-# --- IPv6 Helper Functions ---
+# IPv6 Helper Functions
 
 
 def is_ipv6_address(ip: str) -> bool:
@@ -115,7 +118,7 @@ def is_ipv6_address(ip: str) -> bool:
     Returns:
         True if IPv6, False if IPv4 or invalid
     """
-    if not ip or ip in ("*", "-", "—"):
+    if not ip or ip in NO_IP_MARKERS:
         return False
     try:
         return isinstance(ipaddress.ip_address(ip), ipaddress.IPv6Address)
@@ -204,6 +207,11 @@ def _db_stamp(path: Path) -> tuple[int, int, int] | None:
     return (st.st_mtime_ns, st.st_ino, st.st_size)
 
 
+def geoip_signature() -> tuple[int, int, int] | None:
+    """Identity (mtime, inode, size) of the GeoLite2 file, or None without one; changes when it is replaced."""
+    return _db_stamp(_get_geoip_path())
+
+
 def _get_reader() -> Any | None:
     """
     Get or initialize the GeoIP reader (lazy-init pattern, thread-safe).
@@ -285,8 +293,11 @@ _MAX_READER_ATTEMPTS = 3
 def _cache_put(ip: str, value: GeoLocation | None, generation: int) -> None:
     """Cache a result unless the database was swapped since it was read."""
     with _geo_cache_lock:
-        if generation == _reader_generation and len(_geo_cache) < _geo_cache_max_size:
-            _geo_cache[ip] = value
+        if generation != _reader_generation:
+            return
+        if ip not in _geo_cache and len(_geo_cache) >= _geo_cache_max_size:
+            _geo_cache.pop(next(iter(_geo_cache)))  # evict the oldest so a full cache keeps serving new hops
+        _geo_cache[ip] = value
 
 
 def _read_record(reader: Any, ip: str) -> tuple[int, dict[str, Any] | None]:
@@ -336,16 +347,20 @@ def _to_geo_location(ip: str, record: dict[str, Any]) -> GeoLocation | None:
         "lon": float(lon),
         "city": city or subdivision,
         "country": record["country"],
-        "accuracy_radius_km": (
-            float(radius)
-            if isinstance(radius, (int, float))
-            and not isinstance(radius, bool)
-            and math.isfinite(radius)
-            and radius >= 0
-            else None
-        ),
+        "accuracy_radius_km": (float(radius) if _finite_number(radius) and radius >= 0 else None),
         "city_is_region": city is None and subdivision is not None,
     }
+
+
+def _not_in_geoip(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """Non-routable addresses (private incl. CGN, loopback, link-local, reserved, multicast) are never looked up."""
+    return (
+        address.is_private
+        or address.is_loopback
+        or address.is_link_local
+        or address.is_reserved
+        or address.is_multicast
+    )
 
 
 def geolocate_ip(ip: str) -> GeoLocation | None:
@@ -368,7 +383,7 @@ def geolocate_ip(ip: str) -> GeoLocation | None:
     except ValueError:
         _log.debug("Invalid IP format for geolocation: %s", ip)
         return None
-    if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local or ip_obj.is_reserved or ip_obj.is_multicast:
+    if _not_in_geoip(ip_obj):
         return None
 
     for _attempt in range(_MAX_READER_ATTEMPTS):
@@ -412,13 +427,7 @@ def geolocate_country(ip: str) -> str | None:
         address = ipaddress.ip_address(ip)
     except ValueError:
         return None
-    if (
-        address.is_private
-        or address.is_loopback
-        or address.is_link_local
-        or address.is_reserved
-        or address.is_multicast
-    ):
+    if _not_in_geoip(address):
         return None
     for _attempt in range(_MAX_READER_ATTEMPTS):
         reader = _get_reader()
@@ -434,6 +443,81 @@ def geolocate_country(ip: str) -> str | None:
         code = record.get("country") if record else None
         return code.upper() if isinstance(code, str) and code.upper() in _ISO_COUNTRY_CODES else None
     return None
+
+
+# Local GeoLite2-ASN lookup. Same lifecycle as the City reader (lazy open, reopen when the file is
+# replaced, previous reader kept when the new file is unreadable), with its own small state. The
+# path is fixed inside the geoip data dir; it never comes from a setting or a request.
+_asn_reader: Any | None = None
+_asn_stamp: tuple[int, int, int] | None = None
+_asn_failed_stamp: tuple[int, int, int] | None = None  # unreadable file already reported; not retried until it changes
+_asn_lock = Lock()  # serialises (re)loading and queries (the C extension may not be thread-safe)
+_ASN_ORG_MAX = 120
+
+
+def _get_asn_path() -> Path:
+    """Path of the GeoLite2-ASN file; beside the City file, inside the geoip directory."""
+    return _get_geoip_path().parent / GEOIP_ASN_DB_RELPATH.name
+
+
+def asn_signature() -> tuple[int, int, int] | None:
+    """Identity (mtime, inode, size) of the GeoLite2-ASN file, or None without one."""
+    return _db_stamp(_get_asn_path())
+
+
+def _asn_reader_locked() -> Any | None:
+    """Current ASN reader; call with ``_asn_lock`` held."""
+    global _asn_reader, _asn_stamp, _asn_failed_stamp
+    if not _HAS_GEOIP:
+        return None
+    path = _get_asn_path()
+    stamp = _db_stamp(path)
+    if _asn_reader is not None and stamp == _asn_stamp:
+        return _asn_reader
+    if stamp is None or stamp == _asn_failed_stamp:
+        return _asn_reader  # a deleted or known-unreadable file keeps the opened reader usable
+    try:
+        fresh = geoip2.database.Reader(str(path))
+    except Exception as exc:  # noqa: BLE001 - corrupt or unreadable file degrades to no result
+        _asn_failed_stamp = stamp
+        _log.warning("Failed to initialize GeoIP ASN reader from %s: %s", path, type(exc).__name__)
+        return _asn_reader
+    previous, _asn_reader, _asn_stamp = _asn_reader, fresh, stamp
+    if previous is not None:
+        with contextlib.suppress(Exception):
+            previous.close()
+    return _asn_reader
+
+
+def geolocate_asn(ip: str) -> tuple[str | None, str | None]:
+    """ASN (``"AS3320"``) and organisation of a public address from the local GeoLite2-ASN file.
+
+    Never raises and never contacts anything: a missing or corrupt file, a private or reserved
+    address, an address not in the database or a record without a number all give (None, None).
+    """
+    try:
+        address = ipaddress.ip_address(ip)
+    except ValueError:
+        return None, None
+    if _not_in_geoip(address) or not address.is_global:  # also CGN (100.64/10) and documentation ranges
+        return None, None
+    try:
+        with _asn_lock:
+            reader = _asn_reader_locked()
+            if reader is None:
+                return None, None
+            try:
+                record = reader.asn(ip)
+                number = record.autonomous_system_number
+                org = record.autonomous_system_organization
+            except _AddressNotFoundError:
+                return None, None
+    except Exception as exc:  # noqa: BLE001 - ASN enrichment must never break its caller
+        _log.debug("GeoIP ASN lookup failed for %s: %s", ip, type(exc).__name__)
+        return None, None
+    asn = f"AS{number}" if isinstance(number, int) and not isinstance(number, bool) and number > 0 else None
+    org_text = org.strip()[:_ASN_ORG_MAX] if isinstance(org, str) and org.strip() else None
+    return asn, org_text
 
 
 def infer_location_from_hostname(hostname: str | None) -> dict[str, Any] | None:
@@ -455,6 +539,7 @@ _SOURCE_CONFIDENCE = {
     gr.SRC_POP: CONFIDENCE_HOSTNAME,
     gr.SRC_IP_API_PRO: CONFIDENCE_ONLINE,
     gr.SRC_IPWHO: CONFIDENCE_ONLINE,
+    gr.SRC_IXP: CONFIDENCE_IXP,
 }
 
 
@@ -465,6 +550,13 @@ def _online_ttl_seconds() -> int:
         minimum=PROVIDER_LOOKUP_CACHE_TTL_MIN,
         maximum=PROVIDER_LOOKUP_CACHE_TTL_MAX,
     )
+
+
+_EXTRA_IXP = "_ixp"
+
+
+def _ixp_of(extras: Mapping[str, Any]) -> gr.IxpEvidence | None:
+    return (extras.get(_EXTRA_IXP) or {}).get("evidence")
 
 
 def _local_candidates(
@@ -507,10 +599,15 @@ def _local_candidates(
         if candidate:
             candidates.append(candidate)
             extras[gr.SRC_POP] = pop
+
+    # Verified prefix membership of an IXP peering LAN; offline, one in-memory probe, public IPs only.
+    ixp = ixp_index.lookup(ip) if public_ip(ip) else None
+    if ixp is not None:
+        extras[_EXTRA_IXP] = {"evidence": ixp}  # not a source key, so it never leaks into a location dict
     return candidates, considered, extras
 
 
-# --- Online fallback (only when the local sources are not precise enough) ---
+# Online fallback (only when the local sources are not precise enough)
 OnlineResult = tuple[tuple[str, ...], Mapping[str, Any]]
 _NO_ONLINE: OnlineResult = ((), {})
 # Distinct IPs of one route are looked up concurrently; the whole online phase of a route is capped.
@@ -523,6 +620,16 @@ _route_online: ContextVar[dict[str, OnlineResult] | None] = ContextVar("route_on
 def _online_fallback_enabled() -> bool:
     """Read per lookup, so toggling applies without a restart; an unreadable store means off."""
     return get_runtime_bool_fail_closed(SettingKeys.ONLINE_GEO_FALLBACK_ENABLED, DEFAULT_ONLINE_GEO_FALLBACK_ENABLED)
+
+
+def online_fallback_enabled() -> bool:
+    """Public view of the Enhanced Accuracy switch for callers outside the route code."""
+    return _online_fallback_enabled()
+
+
+def online_cache_ttl_seconds() -> int:
+    """Public view of the provider lookup cache TTL setting."""
+    return _online_ttl_seconds()
 
 
 def _query_online(public: str, api_key: str, ttl_seconds: int) -> OnlineResult:
@@ -556,7 +663,8 @@ def _prefetch_online(hops: list[dict]) -> dict[str, OnlineResult]:
             continue
         if hop.get(META_INTERPOLATED):
             continue
-        if gr.needs_online_fallback(_local_candidates(public, hop.get("hostname"))[0]):
+        local, _considered, local_extras = _local_candidates(public, hop.get("hostname"))
+        if gr.needs_online_fallback(local, ixp=_ixp_of(local_extras)):
             targets[public] = None
     if len(targets) < 2:  # a single lookup is already bounded by the provider timeout
         return {}
@@ -596,7 +704,7 @@ def _collect_candidates(
     """Local sources first; online sources only for a public IP without sufficient local quality."""
     candidates, considered, extras = _local_candidates(ip, hostname)
     public = public_ip(ip)  # private and non-global addresses never leave the host
-    if public and gr.needs_online_fallback(candidates) and _online_fallback_enabled():
+    if public and gr.needs_online_fallback(candidates, ixp=_ixp_of(extras)) and _online_fallback_enabled():
         attempted, online = _online_for(public)
         considered.extend(attempted)
         for source, info in online.items():
@@ -620,7 +728,7 @@ def resolve_location(ip: str, hostname: str | None = None) -> tuple[gr.GeoDecisi
     except ValueError:
         return gr.select([], []), {}
     candidates, considered, extras = _collect_candidates(ip, hostname)
-    return gr.select(candidates, considered), extras
+    return gr.select(candidates, considered, ixp=_ixp_of(extras)), extras
 
 
 def geolocate_with_hostname_hint(
@@ -631,7 +739,23 @@ def geolocate_with_hostname_hint(
     decision, extras = resolve_location(ip, hostname)
     chosen = decision.selected
     if chosen is None:
-        return None
+        if decision.ixp is None:
+            return None
+        # IXP membership without an evidenced position: the table may name the exchange. ``country`` is
+        # the facility-evidenced one (None for a multi-country exchange), never the exchange's admin seat.
+        return {
+            "lat": None,
+            "lon": None,
+            "city": None,
+            "position_city": None,
+            "country": decision.ixp.country,
+            "accuracy_radius_km": None,
+            "city_is_region": False,
+            META_CONFIDENCE: CONFIDENCE_IXP,
+            "accuracy_class": gr.ACCURACY_UNKNOWN,
+            "ixp": decision.ixp.as_dict(),
+            META_DECISION: decision.as_dict(),
+        }
     return {
         **extras.get(chosen.source, {}),
         "lat": chosen.latitude,
@@ -645,11 +769,12 @@ def geolocate_with_hostname_hint(
         "place_text_source": decision.place.source if decision.place else None,
         META_CONFIDENCE: _SOURCE_CONFIDENCE[chosen.source],
         "accuracy_class": decision.accuracy_class,
+        "ixp": decision.ixp.as_dict() if decision.ixp else None,
         META_DECISION: decision.as_dict(),
     }
 
 
-# --- Shared business route model (single source of truth for web UI and PDF) ---
+# Shared business route model (single source of truth for web UI and PDF)
 # Node keys (stable contract consumed by frontend.py, pdf_report.py, and the
 # map renderer). Confidence/source stay separate so the UI can distinguish real
 # geolocation, hostname/POP inference, coarse GeoIP, and a missing location.
@@ -671,6 +796,7 @@ MAP_ROLE_ESTIMATE = "estimate"  # approximate position: a chain node drawn hollo
 MAP_ROLE_NONE = "none"  # nothing to draw (no usable position)
 
 _SOURCE_LABEL = {
+    CONFIDENCE_IXP: gr.IXP_SOURCE_LABEL,
     CONFIDENCE_GEOIP: "GeoIP",
     CONFIDENCE_HOSTNAME: "hostname hint",
     CONFIDENCE_ONLINE: "online lookup",
@@ -680,26 +806,22 @@ _CONFIDENCE_TO_SOURCE = {
     CONFIDENCE_HOSTNAME: GeoSource.HOSTNAME,
     CONFIDENCE_GEOIP: GeoSource.GEOIP,
     CONFIDENCE_ONLINE: GeoSource.ONLINE,
+    CONFIDENCE_IXP: GeoSource.IXP,
     CONFIDENCE_DESTINATION: GeoSource.GEOIP,
 }
 
 
 def _coarse_source(source: GeoSource) -> GeoSource:
-    return GeoSource.ONLINE if source == GeoSource.ONLINE else GeoSource.GEOIP_COARSE
+    return source if source in (GeoSource.ONLINE, GeoSource.IXP) else GeoSource.GEOIP_COARSE
 
 
 def _has_coords(loc: dict[str, Any]) -> bool:
-    lat, lon = loc.get("lat"), loc.get("lon")
-    return (
-        isinstance(lat, (int, float))
-        and not isinstance(lat, bool)
-        and isinstance(lon, (int, float))
-        and not isinstance(lon, bool)
-        and math.isfinite(lat)
-        and math.isfinite(lon)
-        and -90 <= lat <= 90
-        and -180 <= lon <= 180
-    )
+    return valid_coordinates(loc.get("lat"), loc.get("lon"))
+
+
+def _finite_number(value: object) -> bool:
+    """True for a real, finite int/float; booleans, NaN and infinities are rejected."""
+    return isinstance(value, int | float) and not isinstance(value, bool) and math.isfinite(value)
 
 
 def _classify_location(loc: dict[str, Any] | None) -> tuple[GeoSource, GeoAccuracy]:
@@ -713,11 +835,13 @@ def _classify_location(loc: dict[str, Any] | None) -> tuple[GeoSource, GeoAccura
 
     has_coords = _has_coords(loc)
     source = _CONFIDENCE_TO_SOURCE.get(loc.get(META_CONFIDENCE), GeoSource.GEOIP)
+    if source == GeoSource.IXP:
+        return source, GeoAccuracy.APPROXIMATE  # an exchange region is never promoted to a router position
 
     if not has_coords:
-        return (GeoSource.ONLINE if source == GeoSource.ONLINE else GeoSource.GEOIP_COARSE), GeoAccuracy.APPROXIMATE
+        return _coarse_source(source), GeoAccuracy.APPROXIMATE
     if not loc.get("city") or loc.get("city_is_region"):
-        return (GeoSource.ONLINE if source == GeoSource.ONLINE else GeoSource.GEOIP_COARSE), GeoAccuracy.APPROXIMATE
+        return _coarse_source(source), GeoAccuracy.APPROXIMATE
     explicit = loc.get("accuracy_class")
     if explicit is not None:  # the resolver already weighed evidence and contradictions
         if explicit == gr.ACCURACY_PRECISE:
@@ -726,15 +850,9 @@ def _classify_location(loc: dict[str, Any] | None) -> tuple[GeoSource, GeoAccura
     if source == GeoSource.HOSTNAME:
         return source, GeoAccuracy.PRECISE
     radius = loc.get("accuracy_radius_km")
-    if (
-        source == GeoSource.GEOIP
-        and isinstance(radius, (int, float))
-        and not isinstance(radius, bool)
-        and math.isfinite(radius)
-        and 0 <= radius <= MAX_CITY_RADIUS_KM
-    ):
+    if source == GeoSource.GEOIP and _finite_number(radius) and 0 <= radius <= MAX_CITY_RADIUS_KM:
         return source, GeoAccuracy.PRECISE
-    return (GeoSource.ONLINE if source == GeoSource.ONLINE else GeoSource.GEOIP_COARSE), GeoAccuracy.APPROXIMATE
+    return _coarse_source(source), GeoAccuracy.APPROXIMATE
 
 
 LOC_PRECISE = "precise"  # city, country and map position share one evidenced candidate
@@ -751,21 +869,25 @@ def location_view(loc: dict[str, Any] | None) -> dict[str, Any]:
     a region or country-only result names no city.
     """
     if not loc:
-        return {"city": None, "country": None, "precision": LOC_NONE}
+        return {"city": None, "country": None, "precision": LOC_NONE, "ixp": None}
     country = loc.get("country") or None
+    ixp = loc.get("ixp")
+    ixp_name = ixp.get("name") if isinstance(ixp, dict) else None
     if _classify_location(loc)[1] == GeoAccuracy.PRECISE:
-        return {"city": loc.get("city") or None, "country": country, "precision": LOC_PRECISE}
+        return {"city": loc.get("city") or None, "country": country, "precision": LOC_PRECISE, "ixp": ixp_name}
     city = loc.get("position_city") or None
     if city:
-        return {"city": city, "country": country, "precision": LOC_APPROXIMATE}
-    return {"city": None, "country": country, "precision": LOC_COUNTRY if country else LOC_NONE}
+        return {"city": city, "country": country, "precision": LOC_APPROXIMATE, "ixp": ixp_name}
+    return {"city": None, "country": country, "precision": LOC_COUNTRY if country else LOC_NONE, "ixp": ixp_name}
 
 
 @functools.lru_cache(maxsize=256)
 def country_center(country: str) -> tuple[float, float] | None:
     """Area centroid of the country's largest Natural Earth land polygon."""
-    path = Path(__file__).resolve().parent.parent / "static" / "vendor" / "geo" / "world-110m.geojson"
-    world = json.loads(path.read_text(encoding="utf-8"))
+    # Deferred import: route_map_rules imports this module at load time.
+    from app.services.route_map_rules import BASEMAP_FILE
+
+    world = json.loads(BASEMAP_FILE.read_text(encoding="utf-8"))
     for feature in world.get("features", []):
         if (feature.get("properties") or {}).get("iso") != country.upper():
             continue
@@ -797,6 +919,8 @@ def country_center(country: str) -> tuple[float, float] | None:
 def _map_location(loc: dict[str, Any] | None) -> dict[str, Any] | None:
     if not loc or location_view(loc)["precision"] != LOC_COUNTRY:
         return loc
+    if loc.get(META_CONFIDENCE) == CONFIDENCE_IXP:
+        return loc  # a country behind an IXP is a table fact, not a place to draw
     center = country_center(str(loc["country"]))
     if center is None:
         return loc
@@ -806,7 +930,7 @@ def _map_location(loc: dict[str, Any] | None) -> dict[str, Any] | None:
         "lon": center[1],
         "city": None,
         "position_city": None,
-        "accuracy_class": "approximate",
+        "accuracy_class": gr.ACCURACY_APPROXIMATE,
         "accuracy_radius_km": None,
         "_country_center": True,
     }
@@ -837,9 +961,16 @@ def location_note(loc: dict[str, Any] | None) -> str | None:
         return None
     if loc.get("_country_center"):
         return "Country center; exact location unknown"
+    if loc.get(META_CONFIDENCE) == CONFIDENCE_IXP:
+        ixp = loc.get("ixp") if isinstance(loc.get("ixp"), dict) else {}
+        note = f"{ixp.get('name') or 'IXP'}, source {_SOURCE_LABEL[CONFIDENCE_IXP]}"
+        radius = loc.get("accuracy_radius_km")
+        if _finite_number(radius) and radius > 0:
+            note += f", exchange region radius about {radius:g} km"
+        return note + "; exact router location unknown"
     note = f"{_SOURCE_LABEL.get(loc.get(META_CONFIDENCE), 'Location')} estimate"
     radius = loc.get("accuracy_radius_km")
-    if isinstance(radius, int | float) and not isinstance(radius, bool) and math.isfinite(radius) and radius > 0:
+    if _finite_number(radius) and radius > 0:
         note += f", radius about {radius:g} km"
     return note
 
@@ -884,10 +1015,18 @@ def _route_node(
 
 
 def _normalize_hop_status(ip: str | None, status: str) -> str:
-    """Return a known hop status; a missing or unknown one is inferred from the IP (broken parsers)."""
-    if status in (STATUS_OK, STATUS_PARTIAL, STATUS_TIMEOUT, STATUS_INTERPOLATED):
+    """Return a known hop status; a hop without an address is never a response.
+
+    An interpolated gap stays interpolated even though it carries the placeholder of the
+    timeout it replaced. A missing or unknown status is inferred from the IP (broken parsers).
+    """
+    if status == STATUS_INTERPOLATED:
         return status
-    return STATUS_OK if ip and ip not in ("*", "-", "???") else STATUS_TIMEOUT
+    if not ip or ip in NO_IP_MARKERS:
+        return STATUS_TIMEOUT
+    if status in (STATUS_OK, STATUS_PARTIAL, STATUS_TIMEOUT):
+        return status
+    return STATUS_OK
 
 
 def _destination_disposition(hops: list[dict], destination_ip: str | None) -> tuple[int, bool]:
@@ -895,7 +1034,7 @@ def _destination_disposition(hops: list[dict], destination_ip: str | None) -> tu
 
     Returns ``(last_hop_number, reached)`` where ``reached`` is True when the last
     responding hop's IP equals the destination. Both ``build_route_model`` and
-    ``mtr_hops_to_geo_points`` use this so the web UI and PDF cannot disagree on
+    ``route_hops_to_geo_points`` use this so the web UI and PDF cannot disagree on
     whether a destination was reached.
     """
     last_hop = max((h.get("hop", 0) for h in hops), default=0)
@@ -912,27 +1051,27 @@ def build_route_model(
 ) -> list[dict[str, Any]]:
     """Build the shared business route model consumed by the web UI and the PDF.
 
-    One node per traced hop, in MTR order, with original hop numbers preserved.
+    One node per traced hop, in traceroute order, with original hop numbers preserved.
     Each node distinguishes real geolocation, hostname/POP inference, coarse
     country/region GeoIP, and a missing location (see ``_classify_location``).
     Unknown and approximate nodes carry no coordinates and are never mappable, so
     no renderer can place them or bridge a fabricated precise link across them.
 
-    This model and ``mtr_hops_to_geo_points`` share the destination reached/
+    This model and ``route_hops_to_geo_points`` share the destination reached/
     synthetic decision via ``_destination_disposition`` so the sequence/PDF view
-    and the map view cannot disagree. This function changes no MTR measurement,
+    and the map view cannot disagree. This function changes no measurement,
     hop status, or IP info; it is a read-only projection of the hops.
 
     Integration status: this is the explicit shared surface for the four-state
     geo classification (``GeoSource``/``GeoAccuracy``). The shipped web UI and PDF
-    render from ``mtr_hops_to_geo_points`` and the enriched hops; both take the
+    render from ``route_hops_to_geo_points`` and the enriched hops; both take the
     drawing role of a hop from ``map_role`` (``RM_MAP_ROLE`` here, ``map_role`` on
     the geo points), so a hop's role cannot differ between the two views.
     """
     nodes: list[dict[str, Any]] = []
     if not hops:
         return nodes
-
+    locations = route_hop_locations(hops, destination_ip, destination_geo)
     for h in hops:
         status = h.get("status") or ""
         ip = h.get("ip", "*")
@@ -946,7 +1085,7 @@ def build_route_model(
         if status == STATUS_INTERPOLATED or h.get(META_INTERPOLATED):
             nodes.append(_route_node(hop_num, ip, hostname, STATUS_INTERPOLATED, None))
             continue
-        if status == STATUS_TIMEOUT or ip in ("*", "-", "???"):
+        if status == STATUS_TIMEOUT or ip in NO_IP_MARKERS:
             nodes.append(_route_node(hop_num, ip, hostname, STATUS_TIMEOUT, None))
             continue
         if status not in (STATUS_OK, STATUS_PARTIAL):
@@ -954,11 +1093,11 @@ def build_route_model(
             continue
 
         is_dest = bool(destination_ip and ip == destination_ip)
-        loc = destination_geo if is_dest and destination_geo else geolocate_with_hostname_hint(ip, hostname)
+        loc = destination_geo if is_dest and destination_geo else locations.get(ip)
         nodes.append(_route_node(hop_num, ip, hostname, status, loc, is_destination=is_dest))
 
     # Destination handling shares the reached/synthetic decision with
-    # mtr_hops_to_geo_points via _destination_disposition.
+    # route_hops_to_geo_points via _destination_disposition.
     has_destination = any(n[RM_DESTINATION] for n in nodes)
     if destination_ip and not has_destination:
         last_hop, reached = _destination_disposition(hops, destination_ip)
@@ -981,7 +1120,7 @@ def build_route_model(
 
 def _hop_ranges(hops: list[int]) -> str:
     """ "9–12, 14" for the hop numbers a segment crosses."""
-    parts: list[str] = []
+    parts: list[list[int]] = []
     for hop in sorted(set(hops)):
         if parts and parts[-1][1] == hop - 1:
             parts[-1][1] = hop
@@ -1002,14 +1141,110 @@ def _link(tail: dict, gap: bool, next_approximate: bool, skipped: list[int]) -> 
         tail[META_SEGMENT_NOTE] = f"Hops {_hop_ranges(skipped)} not on the map"
 
 
+# Fiber carries a signal at about two thirds of c: 200 km per millisecond, one way.
+FIBER_KM_PER_MS = 200.0
+_FIRST_PRINCIPLES_SOURCES = (CONFIDENCE_GEOIP, CONFIDENCE_ONLINE)  # estimates a route may contradict
+
+
+def _hop_rtt_ms(hop: dict) -> float | None:
+    rtt = hop.get("rtt_ms")
+    return float(rtt) if _finite_number(rtt) and rtt >= 0 else None
+
+
+def _separation_km(a: dict[str, Any], b: dict[str, Any]) -> float:
+    """Great-circle distance of two located hops minus both uncertainty radii (never negative)."""
+    p1, p2 = math.radians(a["lat"]), math.radians(b["lat"])
+    h = (
+        math.sin((p2 - p1) / 2) ** 2
+        + math.cos(p1) * math.cos(p2) * math.sin(math.radians(b["lon"] - a["lon"]) / 2) ** 2
+    )
+    gap = 6371.0 * 2 * math.asin(min(1.0, math.sqrt(h)))
+    radii = sum(r for r in (a.get("accuracy_radius_km"), b.get("accuracy_radius_km")) if _finite_number(r))
+    return max(0.0, gap - radii)
+
+
+def _implausible_ips(entries: list[tuple[str, float, dict[str, Any], bool]]) -> set[str]:
+    """IPs whose estimated position the measured latencies of the route rule out.
+
+    ``entries`` are (ip, rtt_ms, location, replaceable) in hop order. A probe that reached a later
+    hop also passed the earlier one, so the later round trip covers at least twice the distance
+    between both positions. A pair that breaks this physical bound has one wrong position. The hop
+    that breaks it against the most others, and more often than each of its partners, is the outlier;
+    only a replaceable GeoIP/online estimate is dropped, never a POP, hostname or IXP position.
+    """
+    active = list(range(len(entries)))
+    dropped: set[int] = set()
+    while True:
+        partners: dict[int, set[int]] = {i: set() for i in active}
+        for pos, i in enumerate(active):
+            for j in active[pos + 1 :]:
+                bound = FIBER_KM_PER_MS * entries[j][1] / 2
+                if _separation_km(entries[i][2], entries[j][2]) > bound:
+                    partners[i].add(j)
+                    partners[j].add(i)
+        outliers = [
+            i
+            for i in active
+            if entries[i][3]
+            and partners[i]
+            and all(len(partners[i]) > len(partners[j]) or not entries[j][3] for j in partners[i])
+        ]
+        if not outliers:
+            return {entries[i][0] for i in dropped}
+        worst = max(outliers, key=lambda i: len(partners[i]))
+        dropped.add(worst)
+        active.remove(worst)
+
+
 @_batched_online
-def mtr_hops_to_geo_points(
+def route_hop_locations(
     hops: list[dict],
     destination_ip: str | None = None,
     destination_geo: dict | None = None,
+) -> dict[str, dict | None]:
+    """One location decision per answering IP of the route, checked against the measured latencies.
+
+    Table, map points and PDF read this mapping, so they cannot disagree. A GeoIP/online position
+    that the round-trip times make physically impossible (an address 15 ms from Frankfurt placed
+    in Tel Aviv, typical for an exchange LAN missing from the IXP snapshot) is replaced by None:
+    no location is shown or drawn rather than a wrong one. Positions without latency are kept.
+    """
+    located: dict[str, dict | None] = {}
+    entries: list[tuple[str, float, dict[str, Any], bool]] = []
+    seen_rtt: set[str] = set()
+    for h in hops:
+        ip = h.get("ip", "*")
+        status = _normalize_hop_status(ip, h.get("status") or "")
+        if h.get(META_INTERPOLATED) or ip in NO_IP_MARKERS or status not in (STATUS_OK, STATUS_PARTIAL):
+            continue
+        if ip not in located:
+            is_destination = bool(destination_ip and ip == destination_ip)
+            located[ip] = (
+                destination_geo
+                if is_destination and destination_geo
+                else geolocate_with_hostname_hint(ip, h.get("hostname"))
+            )
+        loc, rtt = located[ip], _hop_rtt_ms(h)
+        if loc is None or rtt is None or ip in seen_rtt or not public_ip(ip) or not _has_coords(loc):
+            continue
+        seen_rtt.add(ip)
+        replaceable = loc.get(META_CONFIDENCE) in _FIRST_PRINCIPLES_SOURCES and ip != destination_ip
+        entries.append((ip, rtt, loc, replaceable))
+    for ip in _implausible_ips(entries):
+        _log.info("Location of %s dropped: its round-trip time contradicts the position", ip)
+        located[ip] = None
+    return located
+
+
+@_batched_online
+def route_hops_to_geo_points(
+    hops: list[dict],
+    destination_ip: str | None = None,
+    destination_geo: dict | None = None,
+    locations: Mapping[str, dict | None] | None = None,
 ) -> list[dict]:
     """
-    Convert MTR hops to the geo points both the web map and the PDF draw.
+    Convert traceroute hops to the geo points both the web map and the PDF draw.
 
     The points are the nodes of ONE chain from the first mappable hop to the destination, in hop
     order. Every point carries a ``map_role`` (``route`` = reliable, ``estimate`` = approximate, drawn
@@ -1019,9 +1254,10 @@ def mtr_hops_to_geo_points(
     A real geographic back-jump stays visible; no coordinate is invented for a skipped hop.
 
     Args:
-        hops: List of MTR hop dicts (with status: ok/partial/timeout/interpolated)
+        hops: List of traceroute hop dicts (with status: ok/partial/timeout/interpolated)
         destination_ip: Target IP for destination matching
         destination_geo: Pre-resolved geo data for destination
+        locations: Per-IP decisions from ``route_hop_locations``; computed here when omitted
 
     Returns:
         Geo points in hop order. Hops without a usable position produce no point and are never
@@ -1030,6 +1266,8 @@ def mtr_hops_to_geo_points(
     points: list[dict] = []
     if not hops:
         return points
+    if locations is None:
+        locations = route_hop_locations(hops, destination_ip, destination_geo)
     destination_geo = _map_location(destination_geo)
 
     route_key = hashlib.sha256(
@@ -1049,7 +1287,7 @@ def mtr_hops_to_geo_points(
     for h in hops:
         status = h.get("status") or ""
         ip = h.get("ip", "*")
-        hostname = h.get("hostname")  # rDNS hostname from MTR
+        hostname = h.get("hostname")  # rDNS hostname
         hop_num = h.get("hop", 0)
 
         normalized = _normalize_hop_status(ip, status)
@@ -1064,7 +1302,7 @@ def mtr_hops_to_geo_points(
         if isinstance(hop_num, int):
             prev_hop = hop_num
 
-        if h.get(META_INTERPOLATED) or ip in ("*", "-", "???") or status not in (STATUS_OK, STATUS_PARTIAL):
+        if h.get(META_INTERPOLATED) or ip in NO_IP_MARKERS or status not in (STATUS_OK, STATUS_PARTIAL):
             gap = True  # silent, interpolated or unusable hops never get a location
             if isinstance(hop_num, int):
                 skipped.append(hop_num)
@@ -1074,8 +1312,9 @@ def mtr_hops_to_geo_points(
         is_destination_hop = bool(destination_ip and ip == destination_ip)
         if is_destination_hop and destination_geo:
             loc = destination_geo
+        elif ip in locations:
+            loc = locations[ip]  # hostname hint, GeoIP and IXP decision, checked against the latencies
         else:
-            # Hostname hint takes priority for known carriers.
             loc = geolocate_with_hostname_hint(ip, hostname)
         if hostname:
             try:
@@ -1157,6 +1396,7 @@ def mtr_hops_to_geo_points(
                 "country": destination_view["country"],
                 "accuracy_class": destination_geo.get("accuracy_class"),
                 "accuracy_radius_km": destination_geo.get("accuracy_radius_km"),
+                "ixp": destination_geo.get("ixp"),
                 META_DESTINATION: True,
                 META_IS_TERMINAL: True,
                 META_IS_PUBLIC: True,
@@ -1175,19 +1415,16 @@ def mtr_hops_to_geo_points(
     # Merge co-located consecutive hops of the chain for a cleaner map (same role only).
     if len(points) > 2:
         points = _deduplicate_geo_points(points)
-    for point in points:
-        radius = point.get("accuracy_radius_km")
-        if point.get("_approximate") and isinstance(radius, int | float) and 0 < radius <= MAX_MAP_RADIUS_KM:
-            point[META_MAP_RADIUS_KM] = float(radius)
+    _attach_map_radii(points)
     return points
 
 
-def _first_hop(point: dict) -> int:
-    """First hop number a point stands for (start of its `_hop_range`), for hop-order sorting."""
-    try:
-        return int(str(point.get(META_HOP_RANGE) or point.get("hop")).split("-", 1)[0])
-    except ValueError:
-        return 0
+def _attach_map_radii(points: list[dict]) -> None:
+    """Set the drawn uncertainty radius on approximate points whose radius is usable and fits the map."""
+    for point in points:
+        radius = point.get("accuracy_radius_km")
+        if point.get("_approximate") and _finite_number(radius) and 0 < radius <= MAX_MAP_RADIUS_KM:
+            point[META_MAP_RADIUS_KM] = float(radius)
 
 
 def route_map_features(points: list[dict]) -> dict[str, bool]:
@@ -1256,10 +1493,7 @@ def _deduplicate_geo_points(points: list[dict]) -> list[dict]:
                 radii = [
                     pt["accuracy_radius_km"]
                     for pt in approximate
-                    if isinstance(pt.get("accuracy_radius_km"), int | float)
-                    and not isinstance(pt["accuracy_radius_km"], bool)
-                    and math.isfinite(pt["accuracy_radius_km"])
-                    and pt["accuracy_radius_km"] >= 0
+                    if _finite_number(pt.get("accuracy_radius_km")) and pt["accuracy_radius_km"] >= 0
                 ]
                 if radii:
                     point["accuracy_radius_km"] = max(radii)

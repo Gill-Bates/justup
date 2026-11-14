@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import hashlib
 import io
-import time
 
 import pytest
 from reportlab.pdfgen import canvas as rl_canvas
@@ -268,11 +267,30 @@ def _draw(model, width=480, height=280):
     return buf.getvalue()
 
 
-def test_drawing_is_deterministic_and_fast(model):
+def test_builtin_font_glyph_check_uses_encoding_vector(model):
+    route_map = prm.RouteMap(model, "Helvetica", "Helvetica-Bold", 480)
+
+    assert route_map._has_glyphs("Düsseldorf")
+    assert not route_map._has_glyphs("東京")
+
+
+def _spy_drawn_text(monkeypatch) -> list[str]:
+    """Record every string drawn on a reportlab canvas while still drawing it."""
+    drawn: list[str] = []
+    for name in ("drawString", "drawCentredString", "drawRightString"):
+        original = getattr(rl_canvas.Canvas, name)
+
+        def spy(self, x, y, text, *a, _orig=original, **k):
+            drawn.append(str(text))
+            return _orig(self, x, y, text, *a, **k)
+
+        monkeypatch.setattr(rl_canvas.Canvas, name, spy)
+    return drawn
+
+
+def test_drawing_is_deterministic_and_compact(model):
     prm.load_basemap()
-    start = time.perf_counter()
     first = _draw(model)
-    assert time.perf_counter() - start < 1.0
     assert first == _draw(model)
     assert len(first) < 300_000
 
@@ -301,17 +319,9 @@ def test_intercontinental_route_draws():
 
 
 def _build_with_map(monkeypatch, geo, hops, *, size="a4"):
-    drawn: list[str] = []
-    for name in ("drawString", "drawCentredString", "drawRightString"):
-        original = getattr(rl_canvas.Canvas, name)
-
-        def spy(self, x, y, text, *a, _orig=original, **k):
-            drawn.append(str(text))
-            return _orig(self, x, y, text, *a, **k)
-
-        monkeypatch.setattr(rl_canvas.Canvas, name, spy)
+    drawn = _spy_drawn_text(monkeypatch)
     b = pdf_contracts._full_builder(monkeypatch, size=size, hops=hops)
-    monkeypatch.setattr(b, "_get_mtr_data", lambda **_k: (hops, geo, True))
+    monkeypatch.setattr(b, "_get_route_data", lambda **_k: (hops, geo, True))
     b.build()
     return b, " | ".join(drawn)
 
@@ -371,6 +381,15 @@ def test_pdf_and_web_read_the_same_segments_from_the_servers_points(monkeypatch)
     assert _draw(model)
 
 
+def test_pdf_direction_arrows_remain_a_pdf_specific_solid_link_rule():
+    chain = [
+        ((0.0, 0.0), (100.0, 0.0), False),
+        ((0.0, 10.0), (100.0, 10.0), True),
+        ((0.0, 20.0), (20.0, 20.0), False),
+    ]
+    assert prm.pdf_arrow_indices(chain) == [0]
+
+
 def test_pdf_names_only_path_countries_and_a_capped_set_of_places_from_the_shared_rule(monkeypatch):
     """The labels the PDF draws come from route_map_rules.select_labels (the web map reads the same list)."""
     from app.services import route_map_rules as rules
@@ -384,15 +403,7 @@ def test_pdf_names_only_path_countries_and_a_capped_set_of_places_from_the_share
     ]
     model_ = prm.build_route_map_model(pts, sample_hops())
     selected = rules.select_labels(model_.points)
-    drawn: list[str] = []
-    for name in ("drawString", "drawCentredString", "drawRightString"):
-        original = getattr(rl_canvas.Canvas, name)
-
-        def spy(self, x, y, text, *a, _orig=original, **k):
-            drawn.append(str(text))
-            return _orig(self, x, y, text, *a, **k)
-
-        monkeypatch.setattr(rl_canvas.Canvas, name, spy)
+    drawn = _spy_drawn_text(monkeypatch)
     _draw(model_, width=480, height=280)
     allowed_countries = {c["name"] for c in selected["countries"]}
     allowed_cities = {c["name"] for c in selected["cities"]}

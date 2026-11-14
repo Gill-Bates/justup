@@ -4,9 +4,6 @@
 //
 
 /**
- * app/static/js/utils/confirm-dialog.js
- * Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
- *
  * Shared confirmation dialog for destructive actions (replaces native confirm()).
  *
  *   if (!(await window.confirmAction({ title, message, confirmLabel }))) return;
@@ -110,6 +107,37 @@
 			parentEl = parent;
 			if (parent) handOver(parent);
 			else window.bootstrap.Modal.getOrCreateInstance(modalEl).show();
+		});
+	};
+
+	/**
+	 * Promise wrapper for a dedicated confirmation modal that is already in the page (for example the
+	 * Settings dialogs that need their own button style). Resolves true only on an explicit confirm.
+	 * @param {{modalId: string, confirmId: string, nameId: string, name: string}} spec
+	 * @returns {Promise<boolean>}
+	 */
+	window.confirmViaModal = function confirmViaModal(spec) {
+		var el = document.getElementById(spec.modalId);
+		var confirmBtn = document.getElementById(spec.confirmId);
+		var nameEl = document.getElementById(spec.nameId);
+		if (!el || !confirmBtn || !nameEl || !window.bootstrap || !window.bootstrap.Modal) return Promise.resolve(false);
+		if (el.dataset && el.dataset.juConfirmBusy === '1') return Promise.resolve(false); // one answer per dialog (DC-MODAL-14)
+		if (el.dataset) el.dataset.juConfirmBusy = '1';
+		nameEl.textContent = '"' + spec.name + '"';
+		var modal = window.bootstrap.Modal.getOrCreateInstance(el);
+		return new Promise(function (resolve) {
+			var confirmed = false;
+			function onConfirm() {
+				confirmed = true;
+				modal.hide();
+			}
+			confirmBtn.addEventListener('click', onConfirm, { once: true });
+			el.addEventListener('hidden.bs.modal', function () {
+				confirmBtn.removeEventListener('click', onConfirm);
+				if (el.dataset) delete el.dataset.juConfirmBusy;
+				resolve(confirmed);
+			}, { once: true });
+			modal.show();
 		});
 	};
 })();

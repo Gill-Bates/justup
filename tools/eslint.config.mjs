@@ -18,7 +18,7 @@ export default [
     rules: { "no-unused-vars": "off", "no-undef": "off", "no-empty": ["error", { allowEmptyCatch: true }] },
   },
   {
-    files: ["app/static/js/settings.signal-actions.js", "app/static/js/settings.storage.js", "app/static/js/settings.signal.js", "app/static/js/settings.signal-core.js", "app/static/js/settings.signal-status.js", "app/static/js/settings.signal-registration.js", "app/static/js/settings.main.js", "app/static/js/settings.core.js", "app/static/js/utils/blob-download.js", "app/static/js/utils/tag-input.js", "app/static/js/utils/tag-input-core.js"],
+    files: ["app/static/js/settings.signal-actions.js", "app/static/js/settings.storage.js", "app/static/js/settings.signal.js", "app/static/js/settings.signal-core.js", "app/static/js/settings.signal-status.js", "app/static/js/settings.signal-registration.js", "app/static/js/settings.main.js", "app/static/js/settings.public-egress.js", "app/static/js/settings.core.js", "app/static/js/utils/blob-download.js", "app/static/js/utils/tag-input.js", "app/static/js/utils/tag-input-core.js"],
     languageOptions: { sourceType: "module" },
   },
 ];

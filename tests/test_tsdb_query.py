@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import threading
-import time
+import tracemalloc
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -85,11 +85,14 @@ def test_matches_reference_with_filters(tmp_path, latest, limit, window):
     assert got == _reference(p, since, until, limit, latest)
 
 
-def test_large_file_early_stop_reads_few_lines(tmp_path):
-    p = _write(tmp_path, [_line(i) for i in range(20_000)])
+def test_large_file_early_stop_reads_few_lines(tmp_path, monkeypatch):
+    _write(tmp_path, [_line(i) for i in range(20_000)])
+    parsed: list[int] = []
+    real = tsdb._parse_point
+    monkeypatch.setattr(tsdb, "_parse_point", lambda *a: parsed.append(1) or real(*a))
     got = _q(tmp_path, since=BASE, limit=3)
     assert [v for _, v in got] == [0, 1, 2]
-    assert p.exists()
+    assert len(parsed) <= 10  # a full scan would parse all 20 000 lines
 
 
 def test_missing_file_and_nonpositive_limit(tmp_path):
@@ -245,7 +248,7 @@ def test_cycles_are_unchanged_by_compaction_into_segments(tmp_path):
     assert tsdb.count_availability(tmp_path, target_id=1, metrics=metrics) == before
 
 
-def test_availability_aggregation_streams_a_large_series_in_bounded_time(tmp_path):
+def test_availability_aggregation_streams_a_large_series_in_bounded_memory(tmp_path, monkeypatch):
     cycles = 20000
     start = datetime.now(UTC).replace(microsecond=0) - timedelta(days=20)
     for metric in ("http_up", "ping_up"):
@@ -255,7 +258,27 @@ def test_availability_aggregation_streams_a_large_series_in_bounded_time(tmp_pat
             for i in range(cycles):
                 ts = (start + timedelta(seconds=60 * i)).isoformat()
                 f.write(json.dumps({"ts": ts, "value": int(i % 10 != 0 or metric == "http_up")}) + "\n")
-    began = time.perf_counter()
-    result = tsdb.count_availability(tmp_path, target_id=1, metrics=("http_up", "ping_up"))
+    target_files = {tsdb._series_path(tmp_path, 1, metric) for metric in ("http_up", "ping_up")}
+    real_read_text = Path.read_text
+    real_read_bytes = Path.read_bytes
+
+    def reject_materialized_read(path, *args, **kwargs):
+        if path in target_files:
+            pytest.fail(f"availability streaming must not materialize {path.name}")
+        return real_read_text(path, *args, **kwargs)
+
+    def reject_materialized_bytes(path, *args, **kwargs):
+        if path in target_files:
+            pytest.fail(f"availability streaming must not materialize {path.name}")
+        return real_read_bytes(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", reject_materialized_read)
+    monkeypatch.setattr(Path, "read_bytes", reject_materialized_bytes)
+    tracemalloc.start()
+    try:
+        result = tsdb.count_availability(tmp_path, target_id=1, metrics=("http_up", "ping_up"))
+        _, peak_bytes = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
     assert result == (cycles - cycles // 10, cycles)
-    assert time.perf_counter() - began < 10
+    assert peak_bytes < 4 * 1024 * 1024

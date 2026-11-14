@@ -30,6 +30,7 @@
 	--ui-space-header: 2.25rem;
 	--ui-card-padding: 1.25rem;
 	--ui-stat-gap: 0.25rem;
+	--ui-control-gap: 0.5rem;
 
 	/* App-specific colors (light mode) */
 	--ui-muted-bg: #f1f3f5;
@@ -48,8 +49,8 @@
 	--ui-modal-gap-sm: 0.375rem;
 	--ui-modal-gap-md: 0.5rem;
 	--ui-modal-gap-lg: 0.75rem;
-	--ui-modal-width-confirm: 28rem;
-	--ui-modal-width-form: 32rem;
+	--ui-modal-width-compact: 28rem;
+	--ui-modal-width-standard: 32rem;
 	--ui-modal-width-wide: 40rem;
 	--ui-modal-title-size: 1.125rem;
 	--ui-modal-title-line-height: 1.3;
@@ -63,9 +64,12 @@
 	--ui-modal-border-emphasis: 0.25rem;
 	--ui-modal-radius: var(--bs-border-radius-lg);
 	--ui-modal-border: var(--ju-panel-line, #dee2e6);
-	--ui-modal-shadow: 0 0.5rem 1.5rem rgb(0 0 0 / 20%);
+	--ui-modal-shadow: var(--ju-shadow-raised);
 	--ui-icon-inline: 1.125rem;
 	--ui-target-min: 1.5rem;
+	--ui-tab-gap: 0.5rem;
+	--ui-tab-min-height: 2.75rem;
+	--ui-tab-pad-x: 0.875rem;
 
 	/* Table row sizing - central control */
 	--table-row-padding-y: 0.75rem;
@@ -198,7 +202,7 @@ body {
 	display: grid;
 	grid-template-columns: minmax(0, 1fr);
 	grid-auto-flow: row;
-	align-items: start;
+	align-items: stretch;
 	gap: var(--ui-space-tile);
 	min-width: 0;
 }
@@ -239,9 +243,185 @@ textarea.smtp-editor-frame {
 	font-size: 1rem;
 }
 
+/* Settings > Network: keep long IPv6 values inside the compact card. */
+.egress-card .card-body {
+	gap: 0.75rem;
+	padding-block: 0.875rem;
+}
+
+.egress-list {
+	--egress-control: max(36px, var(--ui-target-min));
+
+	display: grid;
+	gap: 0.5rem;
+	container-type: inline-size;
+}
+
+/* Narrow: label left, status on top, address and copy button below. Wide: four fixed columns. */
+.egress-row {
+	display: grid;
+	grid-template-columns: 2.75rem minmax(0, 1fr);
+	align-items: start;
+	gap: 0.5rem;
+	min-width: 0;
+}
+
+.egress-label {
+	font-weight: 600;
+	line-height: var(--egress-control);
+}
+
+.egress-value {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	grid-template-areas: "status status" "address copy" "geo geo" "detail detail";
+	align-items: center;
+	gap: 0 0.5rem;
+	margin: 0;
+	min-width: 0;
+}
+
+.egress-value .ju-status-item {
+	grid-area: status;
+	min-height: var(--egress-control);
+}
+
+.egress-address {
+	grid-area: address;
+	min-width: 0;
+	overflow-wrap: anywhere;
+	font-size: 0.875rem;
+	color: var(--bs-body-color);
+}
+
+/* Detail text in the address slot: muted, one line, ellipsis (full text in the title attribute). */
+.egress-message {
+	grid-area: address;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: 0.875rem;
+	color: var(--bs-secondary-color);
+}
+
+.egress-message[hidden] {
+	display: none;
+}
+
+/* Flag, ASN and place under the address: small, muted, one line, ellipsis (full text in the title). */
+.egress-geo {
+	grid-area: geo;
+	display: flex;
+	align-items: center;
+	gap: 0.35rem;
+	min-width: 0;
+	font-size: 0.75rem;
+	line-height: 1.25rem;
+	color: var(--bs-secondary-color);
+}
+
+.egress-geo[hidden] {
+	display: none;
+}
+
+.egress-flag {
+	display: inline-flex;
+	flex: 0 0 auto;
+	align-items: center;
+}
+
+.egress-flag img {
+	display: block;
+	width: 1rem;
+	height: 0.75rem;
+	border-radius: 0.12rem;
+	box-shadow: inset 0 0 0 1px var(--ju-flag-edge);
+}
+
+.egress-flag-code {
+	font-weight: 600;
+}
+
+.egress-geo-text {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.egress-value [data-egress-copy] {
+	grid-area: copy;
+}
+
+@container (min-width: 28rem) {
+	.egress-value {
+		grid-template-columns: minmax(0, 1fr) 8rem auto;
+		grid-template-areas: "address status copy" "geo geo geo" "detail detail detail";
+	}
+
+	.egress-value .ju-status-item {
+		min-height: 0;
+	}
+}
+
+.egress-value [data-egress-detail] {
+	grid-area: detail;
+	display: block;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.egress-value [data-egress-detail]:empty {
+	display: none;
+}
+
+.egress-actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0.25rem 0.5rem;
+	border-top: 1px solid var(--bs-border-color);
+	padding-top: 0.75rem;
+}
+
+.egress-actions .btn {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.25rem;
+}
+
+.egress-actions .material-icons {
+	font-size: 1rem;
+}
+
+.egress-value .btn-icon {
+	width: var(--egress-control);
+	height: var(--egress-control);
+	min-width: var(--egress-control);
+	min-height: var(--egress-control);
+}
+
+.egress-value .btn-icon .material-icons {
+	font-size: 1.125rem;
+}
+
+.egress-doc-link {
+	margin-left: auto;
+	font-size: 0.875rem;
+	color: var(--bs-secondary-color);
+}
+
+.egress-card [aria-disabled="true"] {
+	cursor: progress;
+}
+
 /* Compact vertical rhythm inside settings cards. */
 .settings-compact {
 	display: grid;
+	align-content: start; /* rows keep content height when the card stretches to its row neighbour */
 	gap: 0.75rem;
 }
 
@@ -260,7 +440,7 @@ textarea.smtp-editor-frame {
 /* Desktop fill mode for the SMTP editor: main is viewport-bound (gentelella-layout.css), both
    cards end at the footer and scroll inside their body. Below the media condition the normal
    scrolling layout above applies. */
-@media (width >=992px) and (height >=600px) {
+@media (width >=992px) and (height >=800px) {
 	.ju-content:has(#smtp-pane.active .settings-editor--fill)>main {
 		display: grid;
 		grid-template-rows: minmax(0, 1fr);
@@ -294,6 +474,7 @@ textarea.smtp-editor-frame {
 		flex: 1 1 auto;
 		min-height: 0;
 		overflow-y: auto;
+		overscroll-behavior-y: contain;
 	}
 
 	/* Template card: subject and actions keep their height, the active editor pane takes the rest. */
@@ -340,7 +521,7 @@ textarea.smtp-editor-frame {
 	gap: 0.75rem;
 }
 
-@media (width >=576px) {
+@media (width >576px) {
 	.settings-field-row {
 		grid-template-columns: repeat(2, minmax(0, 1fr));
 	}
@@ -356,46 +537,6 @@ textarea.smtp-editor-frame {
 
 	.settings-card .btn {
 		min-height: 2.5rem;
-	}
-}
-
-.settings-details>summary {
-	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	cursor: pointer;
-	list-style: none;
-}
-
-.settings-details>summary::-webkit-details-marker {
-	display: none;
-}
-
-.settings-details>summary::after {
-	content: "";
-	flex: none;
-	width: 0.5rem;
-	height: 0.5rem;
-	margin-bottom: 0.2rem;
-	border: solid currentcolor;
-	border-width: 0 2px 2px 0;
-	transform: rotate(45deg);
-	transition: transform 0.15s;
-}
-
-.settings-details[open]>summary::after {
-	transform: rotate(225deg);
-	margin-bottom: -0.2rem;
-}
-
-.settings-details>summary:focus-visible {
-	outline: 2px solid var(--ju-focus-ring);
-	outline-offset: -2px;
-}
-
-@media (prefers-reduced-motion: reduce) {
-	.settings-details>summary::after {
-		transition: none;
 	}
 }
 
@@ -446,7 +587,8 @@ textarea.smtp-editor-frame {
 	vertical-align: middle;
 }
 
-/* Material icons in buttons should inherit button color */
+/* Material icons in buttons should inherit button color.
+   !important beats the icon-font color utilities (.text-*) set on the icon itself. */
 .btn .material-icons {
 	color: inherit !important;
 }
@@ -505,6 +647,11 @@ textarea.smtp-editor-frame {
 	--bs-card-cap-padding-y: calc(var(--ui-card-padding) * 0.72);
 }
 
+/* Bootstrap's shadow-sm would draw a fourth, theme-blind level; cards keep the card token (DC-TOK-5). */
+.card.shadow-sm {
+	box-shadow: var(--ju-shadow) !important;
+}
+
 .ui-card {
 	padding: var(--ui-card-padding);
 	display: flex;
@@ -538,31 +685,79 @@ textarea.smtp-editor-frame {
 	margin-bottom: 0;
 }
 
-.ui-page .nav-tabs {
-	gap: 0.35rem;
-	border-bottom-color: var(--ju-panel-line);
+/* =============================================
+   TABS (DESIGN.md, "Tabs")
+   One component for every tab strip: <ul class="nav nav-pills ju-tabs">. Pages add
+   no tab colour, size or scrollbar rule; tokens: --ui-tab-*, --bs-primary, --ju-primary-contrast.
+   ============================================= */
+.ju-tabs {
+	--bs-nav-pills-link-active-bg: var(--bs-primary);
+	--bs-nav-pills-link-active-color: var(--ju-primary-contrast);
+
+	flex-wrap: nowrap;
+	gap: var(--ui-tab-gap);
+	min-width: 0;
+	max-width: 100%;
+	overflow: auto hidden;
+	overscroll-behavior-x: contain;
+	-webkit-overflow-scrolling: touch;
+	scroll-padding-inline: 1rem;
+	padding-block-end: 0.5rem;
 }
 
-.ui-page .nav-tabs .nav-link {
-	padding: 0.7rem 1rem;
-	border-radius: var(--bs-border-radius) var(--bs-border-radius) 0 0;
-	color: var(--bs-secondary-color);
+.ju-tabs .nav-item {
+	flex: 0 0 auto;
+}
+
+/* Overflow hint: tabs fade out at an edge that can still be scrolled (classes set by utils/tabs-overflow.js). */
+.ju-tabs.has-overflow {
+	--ui-tab-fade-start: 1.5rem;
+	--ui-tab-fade-end: 1.5rem;
+
+	mask-image: linear-gradient(to right, transparent, black var(--ui-tab-fade-start), black calc(100% - var(--ui-tab-fade-end)), transparent);
+}
+
+.ju-tabs.has-overflow.is-at-start {
+	--ui-tab-fade-start: 0rem;
+}
+
+.ju-tabs.has-overflow.is-at-end {
+	--ui-tab-fade-end: 0rem;
+}
+
+.ju-tabs .nav-link {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.375rem;
+	min-height: var(--ui-tab-min-height);
+	padding: 0.5rem var(--ui-tab-pad-x);
+	border: 1px solid transparent;
+	white-space: nowrap;
 	font-weight: 600;
 }
 
-.ui-page .nav-tabs .nav-link.active {
-	border-color: var(--ju-panel-line) var(--ju-panel-line) var(--ju-panel-bg);
-	background: var(--ju-panel-bg);
-	color: var(--ju-title);
+.ju-tabs .nav-link:not(.active, .disabled, :disabled, [aria-disabled="true"]):hover {
+	background: var(--ui-muted-bg);
 }
 
-.ui-page .nav-pills {
-	gap: 0.4rem;
+/* Disabled (DC-TAB-7, DC-TAB-9): the semantics are native `disabled` or a link without href; Bootstrap's muted colour is only the look. */
+.ju-tabs .nav-link:is(.disabled, :disabled, [aria-disabled="true"]) {
+	cursor: not-allowed;
 }
 
-.ui-page .nav-pills .nav-link {
-	border-radius: var(--bs-border-radius);
-	font-weight: 600;
+.ju-tabs .nav-link .material-icons {
+	font-size: 1.25rem;
+}
+
+@media (forced-colors: active) {
+	.ju-tabs .nav-link:is(.disabled, :disabled, [aria-disabled="true"]) {
+		color: GrayText;
+	}
+
+	.ju-tabs .nav-link.active {
+		border-color: Highlight;
+		text-decoration: underline;
+	}
 }
 
 /* Table negative margins only on desktop - see media queries below */
@@ -572,7 +767,8 @@ textarea.smtp-editor-frame {
 	z-index: 1080;
 }
 
-/* Mobile: center toast with consistent width and rounded corners */
+/* Mobile: center toast with consistent width and rounded corners.
+   !important beats the Bootstrap position utilities (.end-0, .p-3) on the container. */
 @media (width <=576px) {
 	.ui-toast-container {
 		left: 50% !important;
@@ -672,12 +868,9 @@ textarea.smtp-editor-frame {
 	box-shadow: none;
 }
 
-.form-range:focus-visible::-webkit-slider-thumb {
-	box-shadow: 0 0 0 1px var(--ju-focus-ring), 0 0 0 0.25rem var(--ju-panel-bg), 0 0 0 0.375rem var(--ju-focus-ring);
-}
-
-.form-range:focus-visible::-moz-range-thumb {
-	box-shadow: 0 0 0 1px var(--ju-focus-ring), 0 0 0 0.25rem var(--ju-panel-bg), 0 0 0 0.375rem var(--ju-focus-ring);
+.form-range:focus-visible {
+	outline: var(--ju-focus-outline-width) solid var(--ju-focus-ring);
+	outline-offset: var(--ju-focus-outline-offset);
 }
 
 .form-range:disabled::-webkit-slider-thumb {
@@ -695,14 +888,20 @@ textarea.smtp-editor-frame {
 }
 
 @media (prefers-reduced-motion: reduce) {
-	.form-range::-webkit-slider-thumb,
+	.form-range::-webkit-slider-thumb {
+		transition: none;
+	}
+
 	.form-range::-moz-range-thumb {
 		transition: none;
 	}
 }
 
 @media (forced-colors: active) {
-	.form-range::-webkit-slider-thumb,
+	.form-range::-webkit-slider-thumb {
+		background-color: Highlight;
+	}
+
 	.form-range::-moz-range-thumb {
 		background-color: Highlight;
 	}
@@ -860,7 +1059,8 @@ textarea.smtp-editor-frame {
 	line-height: 1;
 	flex: 0 0 auto;
 
-	/* Minimal look: no visible "frame" around icon buttons */
+	/* Minimal look: no visible "frame" around icon buttons.
+	   !important beats the .btn-outline-* border-color/width in the markup. */
 	border: 0 !important;
 
 	--bs-btn-border-width: 0;
@@ -881,24 +1081,13 @@ textarea.smtp-editor-frame {
 	border: 0 !important;
 	background-color: rgb(var(--bs-secondary-rgb), 0.12);
 	text-decoration: none !important;
-	box-shadow: var(--bs-box-shadow-sm);
+	box-shadow: var(--ui-shadow-subtle);
 }
 
 .btn-icon:active {
 	border: 0 !important;
 }
 
-.btn-icon:focus,
-.btn-icon:focus-visible {
-	border: 0 !important;
-	text-decoration: none !important;
-	box-shadow: var(--bs-box-shadow-sm);
-}
-
-.btn-icon:focus-visible {
-	outline: 2px solid var(--ju-focus-ring);
-	outline-offset: 2px;
-}
 
 /* Keep variant colors, but use subtle hover backgrounds instead of outline frames */
 
@@ -969,6 +1158,17 @@ textarea.smtp-editor-frame {
 	flex: 0 0 32px;
 	border: 0 !important;
 	box-shadow: var(--ui-shadow-subtle);
+}
+
+@media (pointer: coarse) {
+	.btn-icon,
+	.table .btn-icon {
+		width: var(--ui-target-min);
+		height: var(--ui-target-min);
+		min-width: var(--ui-target-min);
+		min-height: var(--ui-target-min);
+		flex-basis: var(--ui-target-min);
+	}
 }
 
 /* Material Icons: neutralize internal line-height */
@@ -1070,12 +1270,8 @@ textarea.smtp-editor-frame {
 	position: relative;
 	max-width: 100%;
 	overflow-x: auto;
+	overscroll-behavior-x: contain;
 	-webkit-overflow-scrolling: touch;
-}
-
-.ju-table-viewport:focus-visible {
-	outline: 2px solid var(--ju-focus-ring);
-	outline-offset: -2px;
 }
 
 .ju-data-table {
@@ -1126,7 +1322,7 @@ textarea.smtp-editor-frame {
 	}
 
 	.rtable tbody tr:hover {
-		background-color: var(--bs-table-hover-bg, rgb(0 0 0 / 7.5%));
+		background-color: var(--bs-table-hover-bg, var(--ju-panel-hover));
 	}
 
 	.ui-page .ju-data-table .ju-cell-icon {
@@ -1327,7 +1523,7 @@ textarea.smtp-editor-frame {
 	width: 2.5rem;
 	height: 2.5rem;
 	border-radius: var(--bs-border-radius);
-	background: rgb(var(--bs-primary-rgb) / 12%);
+	background: rgb(var(--bs-primary-rgb), 0.12);
 	color: var(--bs-primary);
 }
 
@@ -1452,12 +1648,167 @@ textarea.smtp-editor-frame {
 	}
 }
 
+/* ----- Spooler Channel Status ----- */
+
+.spooler-channels__heading,
+.spooler-channels__main {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	flex-wrap: wrap;
+	gap: 0.5rem 1rem;
+}
+
+.spooler-channels__heading {
+	margin-bottom: 0.75rem;
+}
+
+.spooler-channels__list {
+	border: 1px solid var(--bs-border-color);
+	border-radius: var(--bs-border-radius);
+}
+
+.spooler-channels__row {
+	min-width: 0;
+	padding: 0.75rem;
+}
+
+.spooler-channels__row + .spooler-channels__row {
+	border-top: 1px solid var(--bs-border-color);
+}
+
+.spooler-channels__name,
+.spooler-channels__counts,
+.spooler-channels__times {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 0.35rem 0.75rem;
+	min-width: 0;
+}
+
+.spooler-channels__name {
+	font-weight: 600;
+}
+
+.spooler-channels__name .material-icons {
+	font-size: 1rem;
+}
+
+.spooler-channels__times {
+	margin-top: 0.5rem;
+	overflow-wrap: anywhere;
+}
+
+.spooler-channels__times[hidden] {
+	display: none;
+}
+
 /* ----- Spooler Notification Log ----- */
 
-/* A dense log: no card layout, the table contract scrolls it locally and wraps long values. */
+/* A dense log: a table in a wide container, one card per entry in a narrow one (table contract, .rtable). */
 .spooler-log td[data-label="Error"] {
 	font-size: 0.875rem;
 	line-height: 1.3;
+}
+
+/* Loading and empty rows are one centred message, never a label/value card row. In table mode the cell
+   stays a table cell so colspan spans every column; only the card query below makes it a block. */
+.ui-page .spooler-log tbody td.spooler-log__state {
+	padding: 2.5rem 1rem;
+	text-align: center;
+}
+
+.spooler-log tbody td.spooler-log__state::before {
+	content: none;
+}
+
+/* Toolbar: title row (title, Refresh), filter row, management row. The 40rem threshold matches the table contract. */
+.spooler-toolbar {
+	container: spooler-toolbar / inline-size;
+}
+
+.spooler-toolbar__grid {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	grid-template-areas:
+		"title refresh"
+		"filters filters"
+		"actions actions";
+	align-items: center;
+	gap: 0.75rem;
+}
+
+.spooler-toolbar__title {
+	grid-area: title;
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	column-gap: 0.5rem;
+	min-width: 0;
+}
+
+.spooler-toolbar__refresh {
+	grid-area: refresh;
+}
+
+.spooler-toolbar__filters {
+	grid-area: filters;
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 0.75rem;
+}
+
+.spooler-toolbar__field {
+	min-width: 0;
+}
+
+.spooler-toolbar__actions {
+	grid-area: actions;
+	display: flex;
+	justify-content: flex-end;
+	gap: 0.5rem;
+}
+
+@container spooler-toolbar (width >=40rem) {
+	.spooler-toolbar__grid {
+		grid-template-areas:
+			"title refresh"
+			"filters actions";
+		align-items: end;
+	}
+
+	.spooler-toolbar__filters {
+		grid-template-columns: repeat(2, minmax(8rem, 12rem));
+	}
+}
+
+/* The channel is an icon in the table; the card row shows its name next to the icon. */
+@container ju-table (width <40rem) {
+	/* Beats the card layout's flex cell (.ui-page .rtable tbody td) so the message is one block, not a label/value row. */
+	.ui-page .spooler-log tbody td.spooler-log__state {
+		display: block;
+	}
+
+	/* One label size for every card row, independent of the value's own size (Status badge, Error text). */
+	.spooler-log tbody td::before {
+		font-size: 0.875rem;
+	}
+
+	.spooler-log td[data-label="Channel"] {
+		justify-content: space-between;
+	}
+
+	.spooler-log td[data-label="Channel"] .visually-hidden {
+		position: static !important;
+		width: auto !important;
+		height: auto !important;
+		margin: 0 0 0 0.35rem !important;
+		overflow: visible !important;
+		clip: auto !important;
+		clip-path: none !important;
+		white-space: nowrap;
+	}
 }
 
 @media (width >=768px) {
@@ -1478,11 +1829,6 @@ textarea.smtp-editor-frame {
 	align-items: center;
 	justify-content: center;
 	line-height: 1.1;
-}
-
-.badge .material-icons {
-	font-size: 16px;
-	line-height: 1;
 }
 
 .ju-status-badge--success {
@@ -1508,6 +1854,190 @@ textarea.smtp-editor-frame {
 .ju-status-badge--neutral {
 	background-color: var(--bs-secondary);
 	color: var(--bs-white);
+}
+
+/* Port-scan result badge (network-scan-picker.js): a finding, not a monitoring status; unclear results keep a dashed edge. */
+.ju-state-badge {
+	border: 1px solid transparent;
+}
+
+.ju-state-badge--unknown {
+	border: 1px dashed currentcolor;
+}
+
+@media (forced-colors: active) {
+	.ju-state-badge {
+		border: 1px solid CanvasText;
+	}
+
+	.ju-state-badge--unknown {
+		border-style: dashed;
+	}
+}
+
+/* Status dot (DESIGN.md, "State taxonomy, status dots and badges", section 6.1): the one place that colours a status marker. Tone comes from the Bootstrap
+   semantic tokens; shape repeats the state (circle up, square down, diamond warning, hollow ring unknown) so colour is never the only cue. */
+.ju-status-item {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--ui-control-gap, 0.5rem);
+	white-space: nowrap;
+}
+
+.ju-status-dot {
+	--ju-dot-color: var(--bs-secondary);
+
+	flex: none;
+	box-sizing: border-box;
+	width: 0.625rem;
+	height: 0.625rem;
+	border: 2px solid var(--ju-dot-color);
+	border-radius: 50%;
+	background: var(--ju-dot-color);
+}
+.ju-status-dot--success { --ju-dot-color: var(--bs-success); }
+
+.ju-status-dot--warning {
+	--ju-dot-color: var(--bs-warning);
+
+	/* Dark edge: yellow alone on a light surface is about 1.6:1 (WCAG 1.4.11). */
+	border-color: var(--bs-warning-text-emphasis);
+	border-radius: 1px;
+	transform: rotate(45deg);
+}
+
+.ju-status-dot--danger {
+	--ju-dot-color: var(--bs-danger);
+
+	border-radius: 1px;
+}
+
+/* Quality score value: state text colours from the DESIGN.md status palette (contrast on the card surface). */
+:root {
+	--ju-text-success: #146c43;
+	--ju-text-warning: #8a5a00;
+	--ju-text-danger: #b02a37;
+}
+.quality-score--success { color: var(--ju-text-success); }
+.quality-score--warning { color: var(--ju-text-warning); }
+.quality-score--danger { color: var(--ju-text-danger); }
+
+[data-bs-theme="dark"] .quality-score--success { color: var(--bs-success-text-emphasis); }
+[data-bs-theme="dark"] .quality-score--warning { color: var(--bs-warning-text-emphasis); }
+[data-bs-theme="dark"] .quality-score--danger { color: var(--bs-danger-text-emphasis); }
+.ju-status-dot--unknown { background: transparent; }
+
+/* S9 warning message marker (DESIGN.md DC-WARN-1): a decorative sign plus unchanged message text. */
+.ju-warning {
+	display: inline-flex;
+	align-items: baseline;
+	gap: 0.375rem;
+	color: var(--bs-warning-text-emphasis);
+}
+
+.ju-warning > .material-icons {
+	flex: none;
+	font-size: 1em;
+	line-height: inherit;
+}
+
+@media (forced-colors: active) {
+	.ju-status-dot {
+		forced-color-adjust: none;
+		border-color: CanvasText;
+		background: CanvasText;
+	}
+
+	.ju-status-dot--unknown {
+		background: transparent;
+	}
+
+	.ju-warning > .material-icons {
+		color: CanvasText;
+	}
+}
+
+/* Port picker (DESIGN.md DC-PICK-1, section 9): one manual input with chips, optional collapsed Nmap discovery,
+   compact results. Nothing here scrolls on its own; the page or wizard step owns the only vertical scroll. */
+.ju-port-picker .tag-input__list {
+	margin-top: 0.5rem;
+}
+
+.ju-port-discover {
+	margin-top: 0.75rem;
+	padding-top: 0.5rem;
+	border-top: 1px solid var(--bs-border-color);
+}
+
+.ju-port-discover>summary,
+.ju-port-other>summary {
+	padding-block: 0.375rem;
+	font-weight: 600;
+	cursor: pointer;
+}
+
+.ju-port-discover>summary .material-icons {
+	margin-inline-end: 0.4rem;
+	color: var(--bs-primary);
+	font-size: 1.2rem;
+	vertical-align: middle;
+}
+
+.ju-port-discover__body {
+	display: grid;
+	gap: 0.75rem;
+	padding-block: 0.5rem;
+}
+
+.ju-port-discover__options {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: flex-end;
+	gap: 0.75rem 1rem;
+}
+
+.ju-port-results {
+	display: grid;
+	gap: 0.75rem;
+	margin-top: 0.75rem;
+}
+
+.ju-port-list {
+	display: grid;
+	gap: 0.125rem;
+	margin: 0 0 0.5rem;
+	padding: 0;
+	list-style: none;
+}
+
+.ju-port-choice {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0.25rem 0.75rem;
+	min-height: var(--ui-target-min);
+	cursor: pointer;
+	overflow-wrap: anywhere;
+}
+
+.ju-port-choice .form-check-input {
+	flex: none;
+	width: var(--ui-target-min);
+	height: var(--ui-target-min);
+	margin: 0;
+}
+
+.ju-port-name {
+	font-weight: 600;
+}
+
+.ju-port-service {
+	color: var(--bs-secondary-color);
+}
+
+/* A port-table hint is a guess from the port number, so it reads differently from a detected service. */
+.ju-port-service--hint {
+	font-style: italic;
 }
 
 /* Compact badges in tables */
@@ -1550,11 +2080,14 @@ textarea.smtp-editor-frame {
 	cursor: text;
 }
 
-.tag-input__field:focus-within {
-	outline: 2px solid var(--ju-focus-ring);
-	outline-offset: 2px;
+.tag-input__field:focus-within,
+.tcp-ports-container:focus-within {
+	outline: var(--ju-focus-outline-width) solid var(--ju-focus-ring);
+	outline-offset: var(--ju-focus-outline-offset);
 }
 
+.tcp-ports-container:has(.is-invalid),
+.tag-input__field:has(.is-invalid),
 .tag-input.has-error .tag-input__field {
 	border-color: var(--bs-danger);
 }
@@ -1590,7 +2123,7 @@ textarea.smtp-editor-frame {
 }
 
 .tag-input__item.is-pending-removal {
-	outline: 2px solid var(--ju-focus-ring);
+	outline: var(--ju-focus-outline-width) solid var(--ju-focus-ring);
 	outline-offset: 1px;
 }
 
@@ -1637,11 +2170,6 @@ textarea.smtp-editor-frame {
 	box-shadow: none;
 }
 
-.tag-input__error {
-	margin-top: 0.25rem;
-	color: var(--bs-danger-text-emphasis);
-	font-size: 0.875rem;
-}
 
 .tag-input__reset {
 	min-height: 1.75rem;
@@ -1759,6 +2287,11 @@ textarea.smtp-editor-frame {
 	box-shadow: var(--ui-shadow-subtle);
 }
 
+.targets-check-summary,
+.targets-check-toggle {
+	display: none;
+}
+
 /* Secondary badges: slightly darker grey (global) */
 .badge.bg-secondary {
 	--bs-secondary-rgb: 73, 80, 87;
@@ -1778,12 +2311,12 @@ textarea.smtp-editor-frame {
 	box-shadow: var(--ui-shadow-subtle);
 	max-height: 260px;
 	overflow: auto;
-	scrollbar-gutter: stable both-edges;
+	overscroll-behavior: contain;
 }
 
 .alert-recipients-grid {
 	display: grid;
-	grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+	grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
 	gap: var(--ui-space-tile-compact);
 }
 
@@ -1875,10 +2408,6 @@ textarea.smtp-editor-frame {
 @media (width <=576px) {
 	.alert-recipients-picker {
 		max-height: 320px;
-	}
-
-	.alert-recipients-grid {
-		grid-template-columns: repeat(2, minmax(0, 1fr));
 	}
 
 	.alert-recipient-channel .alert-recipient-channel-text {
@@ -2015,11 +2544,58 @@ textarea.smtp-editor-frame {
 	/* Sticky Actions */
 	.sticky-actions {
 		position: sticky;
-		bottom: env(safe-area-inset-bottom, 0);
+		bottom: calc(0px + env(safe-area-inset-bottom, 0px));
 		background: var(--bs-body-bg);
 		padding: 0.75rem;
 		border-top: 1px solid var(--bs-border-color);
 		z-index: 10;
+	}
+}
+
+/* Persistent action bar at every width (DC-SHELL-4): sticks to the bottom edge of <main>, directly above the footer.
+ * Below 400px of viewport height (200% zoom of a 720px window and beyond) the page header and the tabs leave the form no room above the bar,
+ * so it could not stick and would cover most of the scroll area; there it stays at the end of the content. */
+@media (height >=400px) {
+	.sticky-actions--always {
+		--ui-action-bar-h: 4.5rem;
+
+		position: sticky;
+		bottom: 0;
+		z-index: 10;
+		box-sizing: border-box;
+		align-items: center;
+		min-height: var(--ui-action-bar-h);
+		padding: 0.75rem 0;
+		background: var(--bs-body-bg);
+		border-top: 1px solid var(--bs-border-color);
+	}
+
+	/* The labels never wrap, so the bar keeps the height of the token above. */
+	.sticky-actions--always .btn {
+		white-space: nowrap;
+	}
+
+	.sticky-actions--always .btn-primary {
+		padding-inline: 1.5rem;
+	}
+
+	/* Focus targets and scroll-into-view stop above the bar, not under it. */
+	.ju-content>main:has(.sticky-actions--always) {
+		--ui-action-bar-h: 4.5rem;
+
+		scroll-padding-bottom: calc(var(--ui-action-bar-h) + 0.5rem);
+	}
+}
+
+@media (height >=400px) and (width <=400px) {
+	.sticky-actions--always .btn-primary {
+		padding-inline: 1rem;
+	}
+}
+
+@media (height <400px) {
+	.sticky-actions--always {
+		position: static;
 	}
 }
 
@@ -2048,6 +2624,7 @@ textarea.smtp-editor-frame {
 	.table-responsive,
 	.table-responsive-md {
 		overflow-x: auto;
+		overscroll-behavior-x: contain;
 		-webkit-overflow-scrolling: touch;
 	}
 
@@ -2086,7 +2663,8 @@ textarea.smtp-editor-frame {
 		flex-wrap: wrap;
 	}
 
-	.ui-page .d-flex.gap-2>.btn {
+	/* Icon-only buttons, including those whose label hides below sm, keep their square size */
+	.ui-page .d-flex.gap-2>.btn:not(.btn-icon, :has(> .d-none.d-sm-inline)) {
 		flex: 1 1 100%;
 	}
 }
@@ -2112,10 +2690,10 @@ textarea.smtp-editor-frame {
 @media (width <=360px) {
 	/* Smaller icon buttons, still square */
 	.btn-icon {
-		width: 32px;
-		height: 32px;
-		min-width: 32px;
-		min-height: 32px;
+		width: max(32px, var(--ui-target-min));
+		height: max(32px, var(--ui-target-min));
+		min-width: max(32px, var(--ui-target-min));
+		min-height: max(32px, var(--ui-target-min));
 	}
 }
 
@@ -2125,20 +2703,23 @@ textarea.smtp-editor-frame {
 
 /* Signal app icon box */
 .signal-app-icon {
+	/* The Signal app icon is a white tile in both themes (brand asset). */
+	--signal-icon-bg: var(--bs-white);
+	--signal-icon-edge: rgb(0 0 0 / 20%);
+
 	display: flex;
 	align-items: center;
 	justify-content: center;
 	width: 50px;
 	height: 50px;
-	background: #fff;
+	background: var(--signal-icon-bg);
 	border-radius: 10px;
-	border: 1px solid rgb(0 0 0 / 20%);
-	box-shadow: 0 1px 3px rgb(0 0 0 / 8%);
+	border: 1px solid var(--signal-icon-edge);
+	box-shadow: var(--ui-shadow-subtle);
 }
 
 [data-bs-theme="dark"] .signal-app-icon {
-	background: #fff;
-	border-color: transparent;
+	--signal-icon-edge: transparent;
 }
 
 /* Step states for wizard-like flow */
@@ -2151,9 +2732,6 @@ textarea.smtp-editor-frame {
 
 .signal-step:last-of-type {
 	margin-top: 0;
-}
-
-.signal-step:last-of-type {
 	margin-bottom: 0;
 }
 
@@ -2232,96 +2810,13 @@ textarea.smtp-editor-frame {
    SETTINGS PAGE TABS
    ============================================= */
 
-/* Placeholder collapse toggle icon rotation */
-[data-bs-toggle="collapse"] .material-icons {
+/* Collapse toggle chevron rotation; opt-in so non-chevron icons are never turned upside down */
+[data-bs-toggle="collapse"] .ju-collapse-chevron {
 	transition: transform 0.2s ease;
 }
 
-[data-bs-toggle="collapse"]:not(.collapsed) .material-icons {
+[data-bs-toggle="collapse"]:not(.collapsed) .ju-collapse-chevron {
 	transform: rotate(180deg);
-}
-
-#settingsTabs .nav-link {
-	color: var(--bs-body-color);
-	border-color: transparent;
-	border-bottom: 2px solid transparent;
-	transition: all 0.2s ease;
-	display: flex;
-	align-items: center;
-	gap: 0.25rem;
-	padding: 0.75rem 1rem;
-}
-
-#settingsTabs .nav-link:hover {
-	border-color: transparent;
-	border-bottom-color: var(--bs-primary);
-	background-color: var(--ui-muted-bg);
-}
-
-#settingsTabs .nav-link.active {
-	color: var(--bs-primary);
-	background-color: transparent;
-	border-color: transparent;
-	border-bottom-color: var(--bs-primary);
-	font-weight: 500;
-}
-
-#settingsTabs .nav-link .material-icons {
-	font-size: 18px;
-}
-
-/* Desktop: active tab slightly bolder */
-#settingsTabs .nav-link.active {
-	font-weight: 600;
-}
-
-/* Settings tab strip: single row, swipe/scroll horizontally when it does not fit */
-.settings-tabs {
-	flex-wrap: nowrap;
-	overflow: auto hidden;
-	overscroll-behavior-x: contain;
-	scrollbar-width: none;
-	-webkit-overflow-scrolling: touch;
-	scroll-padding-inline: 1rem;
-	padding-inline: env(safe-area-inset-left) env(safe-area-inset-right);
-}
-
-.settings-tabs::-webkit-scrollbar {
-	display: none;
-}
-
-.settings-tabs .nav-item {
-	flex: 0 0 auto;
-}
-
-.settings-tabs .nav-link {
-	white-space: nowrap;
-	margin-bottom: 0;
-	min-height: 44px;
-}
-
-#settingsTabs .nav-link:focus-visible {
-	outline: 2px solid var(--ju-focus-ring);
-	outline-offset: -2px;
-}
-
-/* Fade both edges while more tabs are reachable; JS drops the fade at a reached edge */
-@media (width < 992px) {
-	.settings-tabs {
-		mask-image: linear-gradient(to right, transparent, #000 20px, #000 calc(100% - 20px), transparent);
-	}
-
-	.settings-tabs.is-at-start {
-		mask-image: linear-gradient(to right, #000, #000 calc(100% - 20px), transparent);
-	}
-
-	.settings-tabs.is-at-end {
-		mask-image: linear-gradient(to right, transparent, #000 20px, #000);
-	}
-
-	.settings-tabs.is-at-start.is-at-end {
-		mask-image: none;
-	}
 }
 
 /* =============================================
@@ -2390,7 +2885,7 @@ textarea.smtp-editor-frame {
 	border-radius: 18px;
 	overflow: hidden;
 	background: var(--bs-body-bg);
-	box-shadow: 0 10px 26px rgb(0 0 0 / 12%);
+	box-shadow: var(--ju-shadow);
 }
 
 .ios-preview-statusbar {
@@ -2421,11 +2916,14 @@ textarea.smtp-editor-frame {
 .ios-preview-body {
 	min-height: 160px;
 	padding: 12px;
-	background: linear-gradient(180deg, rgb(255 255 255 / 60%), rgb(255 255 255 / 0%));
+
+	--signal-preview-top: rgb(255 255 255 / 60%);
+
+	background: linear-gradient(180deg, var(--signal-preview-top), transparent);
 }
 
 [data-bs-theme="dark"] .ios-preview-body {
-	background: linear-gradient(180deg, rgb(255 255 255 / 6%), rgb(255 255 255 / 0%));
+	--signal-preview-top: rgb(255 255 255 / 6%);
 }
 
 .ios-chat {
@@ -2439,18 +2937,24 @@ textarea.smtp-editor-frame {
 }
 
 .ios-chat-bubble {
+	--signal-bubble-in-bg: rgb(255 255 255 / 92%);
+	--signal-bubble-in-border: rgb(0 0 0 / 6%);
+
 	max-width: 100%;
-	background: rgb(255 255 255 / 92%);
-	border: 1px solid rgb(0 0 0 / 6%);
+	background: var(--signal-bubble-in-bg);
+	border: 1px solid var(--signal-bubble-in-border);
 	border-radius: 16px;
 	padding: 10px 12px;
-	box-shadow: 0 10px 20px rgb(0 0 0 / 12%);
+	box-shadow: var(--ui-shadow-subtle);
 	position: relative;
 }
 
 [data-bs-theme="dark"] .ios-chat-bubble {
-	background: rgb(31 41 55 / 82%);
-	border-color: rgb(255 255 255 / 6%);
+	--signal-bubble-in-bg: rgb(31 41 55 / 82%);
+	--signal-bubble-in-border: rgb(255 255 255 / 6%);
+
+	background: var(--signal-bubble-in-bg);
+	border-color: var(--signal-bubble-in-border);
 }
 
 .ios-chat-bubble-right {
@@ -2459,7 +2963,7 @@ textarea.smtp-editor-frame {
 
 	margin-left: auto;
 	background: var(--signal-bubble-bg);
-	color: #fff;
+	color: var(--bs-white);
 	border-color: var(--signal-bubble-border);
 	z-index: 0;
 }
@@ -2490,15 +2994,15 @@ textarea.smtp-editor-frame {
 
 @keyframes nav-pulse {
 	0% {
-		box-shadow: 0 0 0 0 rgb(13 110 253 / 70%);
+		box-shadow: 0 0 0 0 rgb(var(--bs-primary-rgb) / 70%);
 	}
 
 	70% {
-		box-shadow: 0 0 0 10px rgb(13 110 253 / 0%);
+		box-shadow: 0 0 0 10px rgb(var(--bs-primary-rgb) / 0%);
 	}
 
 	100% {
-		box-shadow: 0 0 0 0 rgb(13 110 253 / 0%);
+		box-shadow: 0 0 0 0 rgb(var(--bs-primary-rgb) / 0%);
 	}
 }
 
@@ -2506,6 +3010,12 @@ textarea.smtp-editor-frame {
 	animation: nav-pulse 2s ease-out;
 	animation-iteration-count: 3;
 	border-radius: 4px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.nav-link-pulse {
+		animation: none;
+	}
 }
 
 /* =============================================
@@ -2518,41 +3028,14 @@ textarea.smtp-editor-frame {
 }
 
 :root {
-	--status-up: var(--bs-success);
-	--status-down: var(--bs-danger);
 	--status-degraded: var(--bs-orange);
-	--status-warning: #d4a006;
 	--status-unknown: var(--bs-secondary-color);
 	--status-disabled: var(--bs-tertiary-color);
-	--footer-height: calc(48px + env(safe-area-inset-bottom, 0px));
 }
 
-.ju-logo {
-	height: auto;
-}
-
-.status-up {
-	color: var(--status-up);
-}
-
-.status-down {
-	color: var(--status-down);
-}
-
-.status-degraded {
-	color: var(--status-degraded);
-}
-
-.status-warning {
-	color: var(--status-warning);
-}
 
 .status-unknown {
 	color: var(--status-unknown);
-}
-
-.status-disabled {
-	color: var(--status-disabled);
 }
 
 .card-status {
@@ -2580,10 +3063,10 @@ textarea.smtp-editor-frame {
 	@container ju-table (width <40rem) {
 		.ui-page .targets-table>tbody>tr {
 			display: grid;
-			grid-template-columns: 1.375rem minmax(0, 1fr) minmax(0, 1fr);
+			grid-template-columns: 1.375rem minmax(0, 1fr) auto;
 			grid-template-areas:
-				"status name name"
-				"checks checks uptime"
+				"status name uptime"
+				"checks checks checks"
 				"actions actions actions";
 			gap: 0.375rem 0.5rem;
 			padding: 0.625rem;
@@ -2621,7 +3104,60 @@ textarea.smtp-editor-frame {
 
 		.ui-page .targets-table td[data-label="Checks"] {
 			grid-area: checks;
-			justify-content: flex-start;
+			display: block;
+			min-width: 0;
+			border-top: 1px solid var(--bs-border-color);
+			margin-top: 0.375rem;
+			padding-top: 0.625rem;
+		}
+
+		.ui-page .targets-table td[data-label="Checks"]::before,
+		.ui-page .targets-table td[data-label="Uptime"]::before {
+			display: none;
+		}
+
+		.ui-page .targets-table .targets-check-summary {
+			display: flex;
+			flex-wrap: wrap;
+			gap: 0.25rem 0.75rem;
+			margin-bottom: 0.5rem;
+			font-size: 0.75rem;
+		}
+
+		.ui-page .targets-table .targets-check-summary span:first-child {
+			margin-right: auto;
+		}
+
+		.ui-page .targets-table .targets-check-summary span:not(:first-child) {
+			color: var(--bs-secondary-color);
+		}
+
+		/* Preview of three checks; must match `visible_checks` in fragments/targets_table.html */
+		.ui-page .targets-table .check-badges :is(.badge, .ju-status-item):nth-child(n+4) {
+			display: none;
+		}
+
+		.ui-page .targets-table .targets-checks-expanded .check-badges :is(.badge, .ju-status-item):nth-child(n+4) {
+			display: inline-flex;
+		}
+
+		.ui-page .targets-table .targets-check-toggle {
+			display: inline-flex;
+			align-items: center;
+			min-height: var(--ui-target-min);
+			padding: 0.125rem 0.375rem;
+			border: 1px solid var(--bs-border-color);
+			border-radius: var(--bs-border-radius-pill);
+			background: var(--bs-tertiary-bg);
+			color: var(--bs-secondary-color);
+			font-size: 0.75rem;
+			font-weight: 500;
+			line-height: 1;
+		}
+
+		.ui-page .targets-table .targets-check-toggle:hover {
+			background: var(--bs-secondary-bg);
+			color: var(--bs-body-color);
 		}
 
 		.ui-page .targets-table td[data-label="Uptime"] {
@@ -2645,15 +3181,14 @@ textarea.smtp-editor-frame {
 
 	@container ju-table (width <288px) {
 		.ui-page .targets-table td[data-label="Checks"] {
-			flex-direction: column;
-			align-items: flex-start;
+			text-align: center;
 		}
 
 		.ui-page .targets-table .check-badges {
-			width: 100%;
+			place-content: center;
 		}
 
-		.ui-page .targets-table .check-badges .badge {
+		.ui-page .targets-table .check-badges :is(.badge, .ju-status-item) {
 			min-width: 0;
 			max-width: 100%;
 			white-space: normal;
@@ -2705,7 +3240,7 @@ body.server-offline #app-shell {
 	position: fixed;
 	inset: 0;
 	z-index: 2000;
-	background: rgb(0 0 0 / 45%);
+	background: var(--ju-scrim);
 	backdrop-filter: blur(10px) saturate(140%);
 }
 
@@ -2714,7 +3249,7 @@ body.server-offline #server-offline-overlay {
 }
 
 #server-offline-overlay .card {
-	--bs-card-bg: rgb(var(--bs-body-bg-rgb) / 72%);
+	--bs-card-bg: rgb(var(--bs-body-bg-rgb), 0.72);
 
 	width: min(560px, calc(100vw - 2rem));
 	backdrop-filter: blur(14px) saturate(160%);
@@ -2742,50 +3277,6 @@ body.server-offline #server-offline-overlay {
 	height: 1.75rem;
 }
 
-/* Footer sits at the bottom of the content column (see .ju-content). */
-.ju-footer {
-	display: flex;
-	box-sizing: border-box;
-	min-height: var(--footer-height);
-	align-items: center;
-	justify-content: center;
-	padding: 0.75rem calc(1.5rem + env(safe-area-inset-right, 0px)) calc(0.75rem + env(safe-area-inset-bottom, 0px)) calc(1.5rem + env(safe-area-inset-left, 0px));
-	text-align: center;
-	font-size: 0.75rem;
-	line-height: 1.25;
-	color: var(--bs-secondary-color);
-}
-
-/* The hairline spans only the footer text, not the full content width. */
-.ju-footer-content {
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	flex-wrap: wrap;
-	gap: 0.15rem 0;
-	padding: 0.5rem 1rem 0;
-	border-top: 1px solid var(--ju-panel-line);
-}
-
-.ju-footer-link {
-	display: inline-flex;
-	align-items: center;
-	gap: 0.3rem;
-	color: inherit;
-	line-height: inherit;
-}
-
-.ju-footer-link:hover,
-.ju-footer-link:focus,
-.ju-footer-link:active,
-.ju-footer-link:visited {
-	color: inherit;
-}
-
-.ju-footer-link-icon {
-	display: block;
-	flex: 0 0 14px;
-}
 
 @media (width <=991.98px) {
 	.btn-sm {
@@ -2814,10 +3305,9 @@ body.server-offline #server-offline-overlay {
 /* Light theme: the Bootstrap orange/amber tints fall below 3:1 on white. */
 :root:not([data-bs-theme="dark"]) {
 	--status-degraded: #b34a00;
-	--status-warning: #8a6500;
 }
 
-/* Focus indication (DESIGN.md "Focus indication"): tokens live in gentelella-layout.css. */
+/* Focus indication (DESIGN.md DC-FOCUS-1..7, section 5.5): tokens live in gentelella-layout.css. */
 .form-control:focus,
 .form-select:focus,
 .signal-code-box:focus {
@@ -2873,13 +3363,20 @@ summary:focus-visible,
 	outline-offset: var(--ju-focus-outline-offset);
 }
 
+/* V3 inset (DESIGN.md DC-FOCUS-6): the scroll viewport clips an outer outline. Keep this after the group above, which has equal specificity. */
+.ju-table-viewport:focus-visible {
+	outline-offset: calc(-1 * var(--ju-focus-outline-width));
+}
+
 /* Switch: the off thumb and track edge must stay visible on any surface (WCAG 1.4.11). */
 .form-switch .form-check-input:not(:checked) {
 	background-image: var(--ju-switch-thumb-off);
 }
 
-/* Operable controls show a hand, disabled toggles not-allowed, text fields keep the I-beam. */
+
+/* Operable controls show a hand, disabled toggles and selects not-allowed, text fields keep the I-beam. */
 a[href],
+select:not(:disabled),
 summary,
 [role="tab"],
 .form-check-input:not(:disabled),
@@ -2888,6 +3385,7 @@ summary,
 	cursor: pointer;
 }
 
+select:disabled,
 .form-check-input:disabled,
 .form-check-input:disabled ~ .form-check-label {
 	cursor: not-allowed;
@@ -2895,11 +3393,12 @@ summary,
 
 /* Bootstrap's amber text is 1.5:1 on the light warning tint. */
 :root:not([data-bs-theme="dark"]) .text-warning {
-	color: var(--status-warning) !important;
+	color: var(--bs-warning-text-emphasis) !important;
 }
 
 /* Programmatic skip-link target; not a control, so no ring. */
-main:focus {
+main:focus,
+main[tabindex]:focus-visible {
 	outline: none;
 }
 
@@ -2907,7 +3406,7 @@ main:focus {
 .modal {
 	height: 100vh;
 	height: 100dvh;
-	padding: env(safe-area-inset-top, 0) env(safe-area-inset-right, 0) env(safe-area-inset-bottom, 0) env(safe-area-inset-left, 0);
+	padding: calc(0px + env(safe-area-inset-top, 0px)) calc(0px + env(safe-area-inset-right, 0px)) calc(0px + env(safe-area-inset-bottom, 0px)) calc(0px + env(safe-area-inset-left, 0px));
 }
 
 /* Backdrop clicks are ignored (static backdrop): no scale bump that hints at dismissal. */
@@ -2917,6 +3416,9 @@ main:focus {
 
 .modal-content {
 	min-width: 0;
+
+	/* Bootstrap 5.3 declares --bs-modal-box-shadow but no rule reads it; a dialog is a floating panel (DC-TOK-5). */
+	box-shadow: var(--bs-modal-box-shadow);
 }
 
 .modal-body {
@@ -2931,7 +3433,8 @@ main:focus {
 #server-offline-overlay {
 	outline: none;
 	overflow-y: auto;
-	padding: env(safe-area-inset-top, 0) env(safe-area-inset-right, 0) env(safe-area-inset-bottom, 0) env(safe-area-inset-left, 0);
+	overscroll-behavior: contain;
+	padding: calc(0px + env(safe-area-inset-top, 0px)) calc(0px + env(safe-area-inset-right, 0px)) calc(0px + env(safe-area-inset-bottom, 0px)) calc(0px + env(safe-area-inset-left, 0px));
 }
 
 @media (width <=576px) {
@@ -2987,7 +3490,7 @@ main:focus {
 	.form-select:focus-visible,
 	.form-check-input:focus-visible,
 	.btn:focus-visible {
-		outline: 2px solid Highlight;
+		outline: var(--ju-focus-outline-width) solid Highlight;
 	}
 
 	#server-offline-overlay {
@@ -2996,30 +3499,31 @@ main:focus {
 	}
 }
 
-/* Shared accent scrollbar; add to any overflow container. Thin, no layout shift. */
-.ju-scrollbar-accent {
+/* Shared accent scrollbar; add to any overflow container, built into .ju-tabs. Thin, no layout shift. */
+.ju-scrollbar-accent,
+.ju-tabs {
 	scrollbar-width: thin;
 	scrollbar-color: var(--bs-primary) transparent;
 }
 
 /* Engines without scrollbar-color (older Safari/WebKit) use the pseudo-elements. */
 @supports not (scrollbar-color: auto) {
-	.ju-scrollbar-accent::-webkit-scrollbar {
+	:is(.ju-scrollbar-accent, .ju-tabs)::-webkit-scrollbar {
 		height: 5px;
 		width: 5px;
 	}
 
-	.ju-scrollbar-accent::-webkit-scrollbar-track {
+	:is(.ju-scrollbar-accent, .ju-tabs)::-webkit-scrollbar-track {
 		background: transparent;
 	}
 
-	.ju-scrollbar-accent::-webkit-scrollbar-thumb {
+	:is(.ju-scrollbar-accent, .ju-tabs)::-webkit-scrollbar-thumb {
 		background-color: var(--bs-primary);
 		border-radius: 999px;
 	}
 
-	.ju-scrollbar-accent::-webkit-scrollbar-thumb:hover {
-		background-color: color-mix(in srgb, var(--bs-primary) 80%, white);
+	:is(.ju-scrollbar-accent, .ju-tabs)::-webkit-scrollbar-thumb:hover {
+		background-color: color-mix(in srgb, var(--bs-primary) 80%, var(--bs-white));
 	}
 }
 
@@ -3030,7 +3534,7 @@ main:focus {
    defines its own look; markup only picks a variant and these classes.
    ============================================= */
 .modal {
-	--bs-modal-width: var(--ui-modal-width-form);
+	--bs-modal-width: var(--ui-modal-width-standard);
 	--bs-modal-padding: var(--ui-modal-pad-x);
 	--bs-modal-header-padding-x: var(--ui-modal-pad-x);
 	--bs-modal-header-padding-y: var(--ui-modal-pad-y);
@@ -3046,16 +3550,25 @@ main:focus {
 	overscroll-behavior: contain;
 }
 
+/* Intent (meaning) sets only the default width; an explicit size class below wins (DC-MODAL-4, DC-MODAL-5). */
 .ju-modal--form {
-	--bs-modal-width: var(--ui-modal-width-form);
+	--bs-modal-width: var(--ui-modal-width-standard);
 }
 
 .ju-modal--confirm,
 .ju-modal--critical {
-	--bs-modal-width: var(--ui-modal-width-confirm);
+	--bs-modal-width: var(--ui-modal-width-compact);
 }
 
-.ju-modal--wide {
+.ju-modal-size--compact {
+	--bs-modal-width: var(--ui-modal-width-compact);
+}
+
+.ju-modal-size--standard {
+	--bs-modal-width: var(--ui-modal-width-standard);
+}
+
+.ju-modal-size--wide {
 	--bs-modal-width: var(--ui-modal-width-wide);
 }
 
@@ -3238,6 +3751,12 @@ main:focus {
 	border: 0;
 }
 
+/* Separate recipient-wide options from channel-specific configuration. */
+.ju-recipient-settings {
+	padding-top: var(--ui-modal-gap);
+	border-top: var(--ui-modal-border-width) solid var(--ui-modal-border);
+}
+
 .ju-fieldset>*+* {
 	margin-top: var(--ui-modal-gap-lg);
 }
@@ -3261,8 +3780,28 @@ main:focus {
 	margin: 0;
 }
 
-.ju-switch .form-check-input {
-	margin-top: calc((var(--ui-target-min) - 1em) / 2);
+/* Keep every switch label visibly separated from its track, including outside modal rows. */
+.form-check.form-switch {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--ui-control-gap);
+	padding-left: 0;
+}
+
+.form-check.form-switch .form-check-input {
+	float: none;
+	flex: none;
+	margin: 0;
+}
+
+.form-check.form-switch .form-check-label {
+	margin: 0;
+}
+
+/* Help text inside a switch row starts its own line below the track and label. */
+.form-check.form-switch > .form-text {
+	flex-basis: 100%;
 }
 
 .ju-switch .form-check-label {
@@ -3328,7 +3867,208 @@ main:focus {
 @media (forced-colors: active) {
 	.ju-modal-consequence,
 	.ju-modal-error,
-	.ju-channel {
+	.ju-channel,
+	.ju-recipient-settings {
 		border-color: CanvasText;
 	}
+}
+
+/* Fixed icon sizes and small helpers that replace inline style attributes in templates. */
+.material-icons.ju-icon-14 { font-size: 14px; }
+
+.material-icons.ju-icon-16 { font-size: 16px; }
+
+.material-icons.ju-icon-18 { font-size: 18px; }
+
+.material-icons.ju-icon-20 { font-size: 20px; }
+.material-icons.ju-icon-48 { font-size: 48px; }
+
+.material-icons.ju-icon-middle { vertical-align: middle; }
+
+.ju-font-13 { font-size: 13px; }
+
+.ju-cursor-pointer { cursor: pointer; }
+
+.ju-scroll-520 {
+	max-height: 520px;
+	overflow-y: auto;
+	overscroll-behavior: contain;
+}
+
+.ju-select-auto {
+	width: auto;
+	min-width: 110px;
+}
+
+.ju-signal-logo {
+	width: 44px;
+	height: 44px;
+}
+
+/* ===== About page (moved from the inline \3c style> of about.html, DC-EXT-6) ===== */
+
+/* About page layout: tiles are spaced by the shared tile gap */
+.about-layout {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr);
+	gap: var(--ui-space-tile);
+	min-height: 0;
+}
+
+.about-accent-icon {
+	color: var(--bs-primary);
+}
+
+.about-cell-label {
+	width: 6rem;
+}
+
+.about-divider {
+	height: 1px;
+	background-color: var(--bs-border-color);
+	margin: var(--ui-space-tile) 0;
+}
+
+.about-doc-link {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 0.375rem;
+	line-height: 1.2;
+}
+
+.about-external-icon {
+	font-size: 1rem;
+}
+
+.about-meta-value {
+	display: inline-block;
+	font-size: 0.8rem;
+	font-weight: 500;
+	color: var(--bs-body-color);
+	background-color: var(--bs-tertiary-bg);
+	padding: 0.1rem 0.35rem;
+	border-radius: 3px;
+}
+
+.dependencies-table code {
+	color: var(--bs-body-color);
+}
+
+.dependencies-scroll {
+	overflow-y: auto;
+	overscroll-behavior: contain;
+	padding: var(--ui-space-tile-compact) var(--ui-card-padding) var(--ui-card-padding);
+}
+
+.dependencies-table thead th {
+	background-color: var(--bs-tertiary-bg);
+	border-bottom: 1px solid var(--bs-border-color);
+}
+
+/* Desktop: equal-height top cards, scrolling dependency list */
+@media (width >=992px) {
+	.ju-content > main:has(.about-page) {
+		display: flex;
+		flex-direction: column;
+	}
+
+	.about-page {
+		grid-template-rows: auto minmax(0, 1fr);
+		flex: 1 1 0;
+		min-height: 400px;
+	}
+
+	.about-layout {
+		grid-template-rows: auto minmax(0, 1fr);
+	}
+
+	.about-deps-card {
+		contain: size;
+		min-height: 14rem;
+	}
+
+	.about-deps-card .card-body {
+		flex: 1 1 0;
+		min-height: 0;
+	}
+
+	.about-deps-card .dependencies-scroll {
+		flex: 1 1 0;
+		min-height: 0;
+	}
+
+	.about-changelog-row,
+	.about-changelog-row>.card {
+		height: 100%;
+		min-height: 0;
+	}
+
+	.about-changelog-row .card-body {
+		min-height: 0;
+		overflow-y: auto;
+		overscroll-behavior-y: contain;
+	}
+}
+
+/* Mobile: auto height, page scrolls */
+@media (width <=991.98px) {
+	.about-deps-card .dependencies-scroll {
+		max-height: 18rem;
+	}
+}
+
+/* Changelog markdown styling */
+.changelog-content h2 {
+	font-size: 1rem;
+	font-weight: 600;
+	color: var(--bs-primary);
+	border-bottom: 1px solid var(--bs-border-color);
+	padding-bottom: 0.5rem;
+	margin-top: 1rem;
+	margin-bottom: 0.75rem;
+}
+
+.changelog-content h2:first-child {
+	margin-top: 0;
+}
+
+.changelog-content ul {
+	padding-left: 1.25rem;
+	margin-bottom: 0.5rem;
+}
+
+.changelog-content li {
+	font-size: 0.875rem;
+	margin-bottom: 0.25rem;
+	color: var(--bs-body-color);
+}
+
+.changelog-content code {
+	font-size: 0.8rem;
+	background: var(--bs-tertiary-bg);
+	padding: 0.1rem 0.3rem;
+	border-radius: 3px;
+}
+
+.changelog-content details {
+	margin-top: 1rem;
+	border-top: 1px solid var(--bs-border-color);
+	padding-top: 0.75rem;
+}
+
+.changelog-content summary {
+	cursor: pointer;
+	font-weight: 500;
+	color: var(--bs-secondary);
+	font-size: 0.875rem;
+	margin-bottom: 0.5rem;
+}
+
+.changelog-content summary:hover {
+	color: var(--bs-primary);
+}
+
+.changelog-content details[open] summary {
+	margin-bottom: 1rem;
 }

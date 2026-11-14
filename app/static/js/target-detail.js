@@ -14,13 +14,15 @@
  *   2. utils/with-alpha.js
  *   3. charts/chart-config.js
  *   4. charts/chart-sampling.js
- *   5. charts/chart-builder.js
- *   6. charts/chart-theme.js
- *   7. target-detail/date-range.js
- *   8. target-detail/metrics.js
- *   9. target-detail/pdf-export.js
- *  10. target-detail/test-alert.js
- *  11. target-detail/auto-close.js
+ *   5. charts/chart-reset.js
+ *   6. charts/chart-builder.js
+ *   7. charts/combined-chart-data.js
+ *   8. charts/combined-chart.js
+ *   9. charts/chart-theme.js
+ *  10. target-detail/date-range.js
+ *  11. target-detail/metrics.js
+ *  12. target-detail/pdf-export.js
+ *  13. target-detail/test-alert.js
  *  (base.html, before app.js: target-detail/traceroute-cache.js -> window.TracerouteCache)
  *
  * @module target-detail
@@ -50,6 +52,7 @@ let pageConfig = {
 	targetId: null,
 	useUtc: false,
 	pdfPageSize: 'a4',
+	rawRetentionDays: 30,
 	tcpPorts: [],
 	slaConfig: { enabled: false, availabilityPct: 99.9, responseTimeMs: 500, pingLatencyMs: 100 },
 	// Feature flags (set by Jinja2 data-attributes)
@@ -77,6 +80,7 @@ function _readPageConfig() {
 	pageConfig.targetId = parseInt(d.targetId) || null;
 	pageConfig.useUtc = d.useUtc === 'true';
 	pageConfig.pdfPageSize = d.pdfPageSize || 'a4';
+	pageConfig.rawRetentionDays = parseInt(d.rawRetentionDays, 10) || pageConfig.rawRetentionDays;
 	pageConfig.tcpPorts = (d.tcpPorts || '80').split(',').map(p => p.trim()).filter(Boolean);
 
 	pageConfig.slaConfig = {
@@ -160,7 +164,7 @@ function _setupNetworkDiagnostics() {
 		const message = document.createElement('div');
 		message.className = 'alert alert-warning mb-0';
 		message.setAttribute('role', 'alert');
-		message.textContent = text || 'Network diagnostics could not be loaded.';
+		message.append(window.JuWarning.create(text || 'Network diagnostics could not be loaded.'));
 		container.replaceChildren(message);
 	};
 	// Server-rendered, autoescaped fragment (live or from the browser cache): parse inertly,
@@ -184,7 +188,7 @@ function _setupNetworkDiagnostics() {
 	store.prune();
 	const loader = cacheApi.createLoader({
 		url: container.dataset.url,
-		scope: { user: container.dataset.cacheUser, target: container.dataset.cacheTarget, build: container.dataset.cacheBuild },
+		scope: { user: container.dataset.cacheUser, target: container.dataset.cacheTarget, build: container.dataset.cacheBuild, geo: container.dataset.cacheGeo },
 		store,
 		fetchFn: (url, init) => fetch(url, init),
 		locks: navigator.locks || null,
@@ -281,7 +285,7 @@ function _downtimeSkeleton() {
 	const wrap = document.createElement('div');
 	wrap.className = 'target-skeleton';
 	wrap.setAttribute('role', 'status');
-	for (let i = 0; i < 3; i++) {
+	for (let i = 0; i < 2; i++) {
 		const line = document.createElement('span');
 		line.className = 'target-skeleton-line';
 		wrap.appendChild(line);
@@ -293,23 +297,16 @@ function _downtimeSkeleton() {
 	return wrap;
 }
 
-/** Replace the downtime panel body with a designed error state. */
+/** Replace the downtime panel body with a compact error state. */
 function _showDowntimeError() {
 	const bodyEl = document.getElementById('downtime-history-body');
 	if (!bodyEl) return;
-	const box = document.createElement('div');
-	box.className = 'target-empty-state';
+	const box = document.createElement('p');
+	box.className = 'downtime-empty downtime-empty--error';
 	box.setAttribute('role', 'alert');
-	const icon = document.createElement('span');
-	icon.className = 'target-empty-icon target-empty-icon--error';
-	icon.innerHTML = '<i class="material-icons" aria-hidden="true">error_outline</i>';
-	const title = document.createElement('p');
-	title.className = 'target-empty-title';
+	const title = document.createElement('strong');
 	title.textContent = 'Downtimes could not be loaded';
-	const text = document.createElement('p');
-	text.className = 'target-empty-text';
-	text.textContent = 'Try another range or reload the page.';
-	box.append(icon, title, text);
+	box.append(title, 'Try another range or reload the page.');
 	bodyEl.replaceChildren(box);
 }
 
@@ -323,6 +320,7 @@ function _showDowntimeError() {
 async function loadCharts({ silent = false } = {}) {
 	const tid = pageConfig.targetId;
 	if (!tid) return;
+	const plotWidth = currentMetricPlotWidth();
 
 	// Token-based guard against overlapping loads
 	const loadToken = Symbol('loadCharts');
@@ -338,41 +336,41 @@ async function loadCharts({ silent = false } = {}) {
 	const btn = silent ? null : document.getElementById('load-range-btn');
 	if (btn) {
 		btn.disabled = true;
-		btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+		btn.innerHTML = '<span class="spinner-border spinner-border-sm" aria-hidden="true"></span><span class="visually-hidden">Loading…</span>';
 	}
 
 	const isStale = () => appState.currentLoadToken !== loadToken;
 	if (!silent) _setPanelsBusy(true);
 
 	// Guarded fetch shorthand (returns null when stale)
-	const fetch = (metric) => fetchMetricGuarded(tid, metric, loadToken, signal);
+	const fetchGuarded = (metric) => fetchMetricGuarded(tid, metric, loadToken, signal, plotWidth);
 
 	try {
 		// Kick off all fetches in parallel
 		const fetches = {};
 
 		if (pageConfig.enableHttp) {
-			fetches.httpUp = fetch('http_up');
-			fetches.httpMs = fetch('http_ms');
-			fetches.httpStatus = fetch('http_status');
+			fetches.httpUp = fetchGuarded('http_up');
+			fetches.httpMs = fetchGuarded('http_ms');
+			fetches.httpStatus = fetchGuarded('http_status');
 		}
 
 		if (pageConfig.enablePing) {
-			fetches.pingUp = fetch('ping_up');
-			fetches.pingMs = fetch('ping_ms');
+			fetches.pingUp = fetchGuarded('ping_up');
+			fetches.pingMs = fetchGuarded('ping_ms');
 		}
 
 		if (pageConfig.enableTcp) {
-			fetches.tcpUp = fetch('tcp_up');
+			fetches.tcpUp = fetchGuarded('tcp_up');
 			if (pageConfig.tcpPorts.length > 1) {
-				fetches.tcpPorts = pageConfig.tcpPorts.map((port) => fetch(`tcp_ms_${port}`));
+				fetches.tcpPorts = pageConfig.tcpPorts.map((port) => fetchGuarded(`tcp_ms_${port}`));
 			} else {
-				fetches.tcpMs = fetch('tcp_ms');
+				fetches.tcpMs = fetchGuarded('tcp_ms');
 			}
 		}
 
 		if (pageConfig.enableCert) {
-			fetches.certDays = fetch('cert_days_left');
+			fetches.certDays = fetchGuarded('cert_days_left');
 		}
 
 		// Await results and build charts
@@ -394,7 +392,7 @@ async function loadCharts({ silent = false } = {}) {
 			let aggregate = tcpMs;
 			// Per-port series without any data fall back to the aggregate tcp_ms metric.
 			if (tcpPorts && !tcpPorts.some((r) => r?.points?.length)) {
-				aggregate = await fetch('tcp_ms');
+				aggregate = await fetchGuarded('tcp_ms');
 				if (isStale()) return;
 			}
 			buildCombinedChart('chart-combined', {
@@ -457,7 +455,7 @@ async function loadCharts({ silent = false } = {}) {
 			if (_livePending) _scheduleLiveRefresh();
 			if (btn) {
 				btn.disabled = false;
-				btn.innerHTML = '<span class="material-icons">refresh</span> Load';
+				btn.innerHTML = '<i class="material-icons" aria-hidden="true">refresh</i> Load';
 			}
 		}
 	}
@@ -563,11 +561,9 @@ function _stopLiveRefresh() {
 
 function resetAllZoom() {
 	appState.charts.forEach(ch => {
-		if (ch && ch.resetZoom) {
-			ch.resetZoom();
-			if (ch._reloadVisible) ch._reloadVisible();
-			setTimeout(() => updateChartSampling(ch), 0);
-		}
+		if (!ch) return;
+		window.JuChartReset.resetChartView(ch);
+		setTimeout(() => updateChartSampling(ch), 0);
 	});
 	if (_livePending) _scheduleLiveRefresh();
 }
@@ -602,9 +598,9 @@ function _cleanup() {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 document.addEventListener('DOMContentLoaded', () => {
-	_setupNetworkDiagnostics();
-
+	// Config first: the cached diagnostics render reads pageConfig.useUtc.
 	_readPageConfig();
+	_setupNetworkDiagnostics();
 
 	if (!pageConfig.targetId) {
 		console.error('target-detail.js: no targetId configured');
@@ -628,7 +624,27 @@ document.addEventListener('DOMContentLoaded', () => {
 	_startLiveRefresh();
 
 	// The KPI cards are swapped by HTMX on live events; keep the certificate value the charts computed.
-	document.getElementById('target-info-cards')?.addEventListener('htmx:afterSwap', () => {
+	const infoCards = document.getElementById('target-info-cards');
+	// WebKit has no scroll anchoring: replacing the cards above the charts jumped the scrolled
+	// main area (about 280 px at 1024x768). Restore the offset synchronously, before the next paint.
+	let scrollHost = null;
+	let scrollTopBeforeSwap = 0;
+	// DC-SCROLL-7 / DC-LIVE-1: an answer equal to what the cards already show is not swapped, so nodes, scroll position and
+	// the certificate value patched in below stay untouched. Whitespace is ignored; the first answer is compared with the page.
+	const normaliseMarkup = (html) => String(html).replace(/\s+/g, ' ').trim();
+	let shownCards = infoCards ? normaliseMarkup(infoCards.innerHTML) : '';
+	infoCards?.addEventListener('htmx:beforeSwap', (evt) => {
+		const answer = normaliseMarkup(evt.detail.serverResponse);
+		if (answer === shownCards) {
+			evt.detail.shouldSwap = false;
+			return;
+		}
+		shownCards = answer;
+		scrollHost = document.getElementById('main-content');
+		scrollTopBeforeSwap = scrollHost ? scrollHost.scrollTop : 0;
+	});
+	infoCards?.addEventListener('htmx:afterSwap', () => {
+		if (scrollHost && scrollHost.scrollTop !== scrollTopBeforeSwap) scrollHost.scrollTop = scrollTopBeforeSwap;
 		if (appState.certDays === null) return;
 		const certEl = document.getElementById('cert-days-value');
 		if (certEl) certEl.textContent = appState.certDays + ' days';
@@ -717,13 +733,6 @@ document.addEventListener('DOMContentLoaded', () => {
 			sendTestAlert(pageConfig.targetId);
 		});
 	}
-
-	// Auto-close alert toggle
-	const autoCloseToggle = document.getElementById('auto-close-alert-toggle');
-	if (autoCloseToggle) {
-		autoCloseToggle.addEventListener('change', () => saveAutoCloseAlert(autoCloseToggle, pageConfig.targetId));
-	}
-
 
 	window.addEventListener('beforeunload', _cleanup);
 

@@ -50,6 +50,13 @@ if [[ "$PUID" =~ ^0+$ || "$PGID" =~ ^0+$ ]]; then
     exit 1
 fi
 
+# Fixed identity of the Nmap worker (docker/Dockerfile); the web user must never share it.
+NMAP_ID=10001
+if [ "$PUID" = "$NMAP_ID" ] || [ "$PGID" = "$NMAP_ID" ]; then
+    echo "Error: PUID and PGID must differ from the reserved Nmap worker id $NMAP_ID" >&2
+    exit 1
+fi
+
 if ! command -v gosu > /dev/null 2>&1; then
     echo "Error: gosu is required to drop privileges" >&2
     exit 1
@@ -116,6 +123,17 @@ fi
 echo ""
 echo "🚀 Starting justUp! on ${JUSTUP_HOST:-0.0.0.0}:${JUSTUP_PORT:-8000}"
 echo ""
+
+# ------------------------------------------------------------------
+# Nmap worker: the only process holding CAP_NET_RAW (UDP scans)
+# ------------------------------------------------------------------
+# docker/nmap-worker.sh starts it under its own UID with net_raw as the only capability,
+# checks readiness, restarts it with bounded backoff and publishes its state in
+# /run/justup-nmap.status. A worker failure is logged and never stops the web process,
+# which runs below without raw-socket rights.
+export JUSTUP_NMAP_SOCKET=${JUSTUP_NMAP_SOCKET:-/run/justup/nmap.sock}
+/usr/local/bin/nmap-worker.sh &
+echo "🔎 Nmap worker supervisor started (status: /run/justup-nmap.status)"
 
 # ------------------------------------------------------------------
 # Drop privileges and exec

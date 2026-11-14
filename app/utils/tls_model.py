@@ -126,11 +126,11 @@ class TlsScanResult:
     def weak_protocols(self) -> Check:
         """INSECURE if any legacy protocol is offered, UNKNOWN if one could not be tested, else SECURE."""
         legacy = [p for p in self.protocols if p.legacy]
+        offered = [p.name for p in legacy if p.supported]
+        if offered:  # a confirmed weak protocol outranks missing or unfinished checks
+            return Check(Verdict.INSECURE, ", ".join(offered))
         if not set(LEGACY_PROTOCOL_NAMES) <= {p.name for p in legacy}:  # missing means not tested
             return Check.unknown("legacy protocol results missing")
-        offered = [p.name for p in legacy if p.supported]
-        if offered:
-            return Check(Verdict.INSECURE, ", ".join(offered))
         if any(p.supported is None for p in legacy):
             return Check.unknown()
         return Check(Verdict.SECURE)

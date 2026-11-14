@@ -24,6 +24,7 @@ import {
     setError,
     setWarning,
     clearStatus,
+    showError,
     showModal,
     hideModal
 } from './settings.core.js';
@@ -32,6 +33,7 @@ import {
     SIGNAL_API,
     isSignalBusy,
     setSignalBusy,
+    syncSignalPanel,
     toggleSignalPanel
 } from './settings.signal-core.js';
 
@@ -39,8 +41,9 @@ import { loadSignalStatus } from './settings.signal-status.js';
 
 // Use global apiFetch for authenticated API calls
 const apiFetch = window.apiFetch;
+let signalActionsBound = false;
 
-function refreshStatus() { loadSignalStatus(); }
+function refreshStatus() { return loadSignalStatus({ forceRefresh: true }); }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Test Message
@@ -88,7 +91,7 @@ export async function sendTestMessage() {
             notify('success', data.message || 'Test message queued');
         } else {
             const data = await resp.json().catch(() => ({}));
-            const msg = data.detail || 'Send failed';
+            const msg = window.JuApiError.fromBody(data, 'Send failed');
             notify('error', msg);
         }
     } catch (e) {
@@ -152,6 +155,7 @@ function initUnlinkDeviceModal() {
 
         if (errorEl) errorEl.classList.add('d-none');
 
+        let unlinked = false;
         setSignalBusy(true);
         try {
             await withSpinner(confirmBtn, async () => {
@@ -165,7 +169,7 @@ function initUnlinkDeviceModal() {
                     hideModal(DOM.unlinkDeviceModal());
                     notify('success', 'Local Signal device data removed. Revoke the device from your primary Signal phone.');
 
-                    refreshStatus();
+                    unlinked = true;
                 } else {
                     const data = await resp.json().catch(() => ({}));
                     const error = formatErrorDetail(data.detail) || 'Failed to unlink device';
@@ -183,6 +187,7 @@ function initUnlinkDeviceModal() {
             }
         } finally {
             setSignalBusy(false);
+            if (unlinked) refreshStatus();
         }
     });
 
@@ -215,11 +220,12 @@ export async function unregisterPhone() {
     const errorEl = DOM.unregisterPhoneError();
     const btn = DOM.confirmUnregisterPhoneBtn();
     if (!password) {
-        setError(errorEl, 'Password is required');
+        showError(errorEl, 'Password is required');
         return;
     }
 
-    clearStatus(errorEl);
+    showError(errorEl, null);
+    let unregistered = false;
     setSignalBusy(true);
 
     try {
@@ -234,31 +240,18 @@ export async function unregisterPhone() {
                 hideModal(DOM.unregisterPhoneModal());
                 notify('success', 'Signal account unregistered');
 
-                refreshStatus();
+                unregistered = true;
             } else {
-                const error = await getErrorMessage(resp);
-
-                const isNotRegistered = error && (
-                    error.toLowerCase().includes('not registered') ||
-                    error.toLowerCase().includes('not found') ||
-                    error.toLowerCase().includes('unknown number')
-                );
-
-                if (isNotRegistered) {
-                    hideModal(DOM.unregisterPhoneModal());
-                    notify('info', 'Device was already unlinked');
-
-                    refreshStatus();
-                } else {
-                    setError(errorEl, error);
-                }
+                // The server answers 200 for an already unregistered account, so any error is real
+                showError(errorEl, await getErrorMessage(resp));
             }
         }, 'Unregistering...');
     } catch (e) {
         console.warn('Unregister phone error:', e);
-        setError(errorEl, 'Network error: ' + e.message);
+        showError(errorEl, 'Network error: ' + e.message);
     } finally {
         setSignalBusy(false);
+        if (unregistered) refreshStatus();
     }
 }
 
@@ -384,12 +377,12 @@ function initEnableToggle() {
     enableToggleAbort = new AbortController();
 
     if (panel) {
+        // Optional field group (DC-CARD-3): `hidden` on the panel, owned by the enable switch.
+        syncSignalPanel(enabledEl, panel);
         if (enabledEl.checked) {
-            panel.classList.add('show');
             if (badges) badges.style.display = 'flex';
             refreshStatus();
         } else {
-            panel.classList.remove('show');
             if (badges) badges.style.display = 'none';
         }
     }
@@ -440,15 +433,11 @@ function initEnableToggle() {
 // Signal Template Preview
 // ─────────────────────────────────────────────────────────────────────────────
 
-const TEMPLATE_PLACEHOLDERS = new Set([
-    'target.name', 'target.host', 'target.group', 'target.check_type',
-    'alert.status', 'alert.started_at', 'alert.resolved_at', 'alert.duration', 'alert.reason',
-    'status.emoji', 'status.color', 'status.text',
-    'downtime.minutes', 'downtime.human',
-    'sla.threshold', 'sla.actual',
-    'system.name', 'system.url', 'system.timestamp', 'system.github_url',
-]);
+// The sample context is the only client-side placeholder list: keys missing from it render empty,
+// like the server's whitelist does for unknown names.
 const PLACEHOLDER_RE = /\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}/g;
+// Mirrors the server's named conditional blocks ({{#if flag}}...{{/if flag}}), which the default templates use.
+const CONDITIONAL_RE = /\{\{#if\s+([a-zA-Z0-9_]+)\s*\}\}(.*?)\{\{\/if\s+\1\s*\}\}/gs;
 
 function pad2(n) {
     return String(n).padStart(2, '0');
@@ -458,7 +447,7 @@ function fmtUtc(d) {
     return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())} ${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}:${pad2(d.getUTCSeconds())} UTC`;
 }
 
-function sampleContext(variant) {
+export function sampleContext(variant) {
     const now = new Date();
     const started = new Date(now.getTime() - 12 * 60 * 1000);
     const resolved = new Date(now.getTime() - 1 * 60 * 1000);
@@ -468,13 +457,18 @@ function sampleContext(variant) {
         status: {
             emoji: isUp ? '🟢' : '🔴',
             color: isUp ? '#16a34a' : '#dc2626',
+            accent_color: isUp ? '#198754' : '#dc3545',
+            foreground_color: '#ffffff',
+            text_color: isUp ? '#146c43' : '#b02a37',
             text: isUp ? 'Service RESOLVED' : 'Service DOWN',
+            label: isUp ? 'RESOLVED' : 'DOWN',
         },
         target: {
             name: 'Example API',
             host: 'api.example.com',
             group: 'Production',
             check_type: 'HTTP',
+            check_badges: 'HTTP',
         },
         alert: {
             status: isUp ? 'RESOLVED' : 'OPEN',
@@ -497,6 +491,8 @@ function sampleContext(variant) {
             timestamp: fmtUtc(now),
             github_url: 'https://github.com/Gill-Bates/justup',
         },
+        logo_url: '/static/img/justup_email_logo.png',
+        flags: { sla: true, cta: true, resolved: isUp, group: true },
     };
 }
 
@@ -507,14 +503,17 @@ function getPlaceholderValue(ctx, dottedKey) {
         if (value && typeof value === 'object' && part in value) value = value[part];
         else return '';
     }
-    return value == null ? '' : String(value);
+    return value == null || typeof value === 'object' ? '' : String(value);
 }
 
-function renderTemplatePreview(template, ctx) {
+export function renderTemplatePreview(template, ctx) {
     if (!template || template.indexOf('{{') === -1) return template || '';
-    return String(template).replace(PLACEHOLDER_RE, (_, key) => {
+    const flags = ctx?.flags || {};
+    const kept = String(template).replace(CONDITIONAL_RE, (_, name, body) => (flags[name] ? body : ''));
+    return kept.replace(PLACEHOLDER_RE, (_, key) => {
         const p = String(key || '').trim();
-        if (!TEMPLATE_PLACEHOLDERS.has(p)) return '';
+        // Conditional flags are not placeholders on the server either.
+        if (p === 'flags' || p.startsWith('flags.')) return '';
         return getPlaceholderValue(ctx, p);
     });
 }
@@ -558,7 +557,7 @@ async function saveSignalTemplates() {
                 notify('success', 'Signal templates saved');
             } else {
                 const data = await resp.json().catch(() => ({}));
-                notify('error', data.detail || data.error || 'Failed to save templates');
+                notify('error', window.JuApiError.fromBody(data, 'Failed to save templates'));
             }
         }, 'Saving...');
     } catch (e) {
@@ -583,7 +582,7 @@ async function resetSignalTemplates() {
 
             if (!resp.ok) {
                 const data = await resp.json().catch(() => ({}));
-                notify('error', data.detail || data.error || 'Failed to reset templates');
+                notify('error', window.JuApiError.fromBody(data, 'Failed to reset templates'));
                 return;
             }
 
@@ -683,4 +682,25 @@ export async function initSignal() {
     window.sendSignalTestMessage = sendTestMessage;  // Alias for onclick
     window.unregisterPhone = unregisterPhone;
     window.signalUnlink = signalUnlink;
+
+    // Delegated handler for the data-signal-action buttons (replaces inline onclick attributes)
+    const actions = {
+        'select-mode': (el) => registration.signalSelectMode(el.dataset.mode),
+        'back': registration.signalBackToModeSelection,
+        'generate-qr': registration.signalGenerateQrCode,
+        'confirm-link': registration.signalConfirmLink,
+        'set-profile-link': registration.signalSetProfileNameLink,
+        'register': registration.signalRegister,
+        'set-profile': registration.signalSetProfileName,
+        'skip-profile': registration.signalSkipProfile,
+        'send-test': sendTestMessage,
+    };
+    if (signalActionsBound) return;
+    document.addEventListener('click', (event) => {
+        const el = event.target.closest('[data-signal-action]');
+        if (!el || el.disabled) return;
+        const run = actions[el.dataset.signalAction];
+        if (run) run(el);
+    });
+    signalActionsBound = true;
 }

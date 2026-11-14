@@ -9,19 +9,77 @@
  * @module target-detail/date-range
  */
 
+/** Longest range accepted from the URL and from the manual inputs (2 years). */
+const MAX_RANGE_DAYS = 730;
+const RANGE_URL_PARAMS = ["range", "from", "to"];
+// Strict UTC ISO-8601: seconds and milliseconds are optional, no offsets, no free-form dates.
+const ISO_UTC_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?Z$/;
+
 /**
- * Initialize date range inputs to last 24 hours.
- * Sets both DOM inputs and appState.range.
- * Ensures newly created targets show data immediately.
+ * Parse an ISO-8601 UTC timestamp strictly; rolled-over dates (31 Feb) are rejected.
+ * @private
+ * @param {string|null} value
+ * @returns {Date|null}
+ */
+function _parseIsoUtc(value) {
+  if (typeof value !== "string" || value.length > 30 || !ISO_UTC_RE.test(value)) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  const [y, m, d] = value.split("T")[0].split("-").map(Number);
+  const exact = date.getUTCFullYear() === y && date.getUTCMonth() === m - 1 && date.getUTCDate() === d;
+  return exact ? date : null;
+}
+
+/**
+ * Read the time range a link carries: `?range=<preset>` or `?from=<ISO UTC>&to=<ISO UTC>`.
+ * Anything missing or invalid yields null (caller falls back to the 24 h default); raw values
+ * are never echoed.
+ * @param {string} search - location.search
+ * @returns {{ from: Date, to: Date, preset: string }|null} preset is "" for an explicit range
+ */
+function parseRangeFromSearch(search) {
+  let params;
+  try {
+    params = new URLSearchParams(search || "");
+  } catch {
+    return null;
+  }
+  const preset = params.get("range");
+  if (preset !== null) {
+    // The shape check keeps arbitrary input away from the resolver.
+    const range = /^[a-z0-9]{1,8}$/.test(preset) ? getQuickRangeDate(preset) : null;
+    return range ? { ...range, preset } : null;
+  }
+  const from = _parseIsoUtc(params.get("from"));
+  const to = _parseIsoUtc(params.get("to"));
+  if (!from || !to || from >= to) return null;
+  if ((to - from) / (24 * 60 * 60 * 1000) > MAX_RANGE_DAYS) return null;
+  return { from, to, preset: "" };
+}
+
+/** Remove the range parameters from the address bar so a later reload does not override the user's choice. */
+function _dropRangeFromUrl() {
+  if (typeof location === "undefined" || typeof history === "undefined") return;
+  try {
+    const url = new URL(location.href);
+    if (!RANGE_URL_PARAMS.some((name) => url.searchParams.has(name))) return;
+    RANGE_URL_PARAMS.forEach((name) => url.searchParams.delete(name));
+    history.replaceState(history.state, "", url.pathname + url.search + url.hash);
+  } catch {
+    // Cosmetic only; the range is already applied.
+  }
+}
+
+/**
+ * Initialize date range inputs: the range carried by the URL (see parseRangeFromSearch), else the
+ * last 24 hours. Sets the DOM inputs, the preset select and appState.range, so it must run before
+ * the first chart load.
  *
+ * @param {string} [search] - Query string to read; defaults to location.search
  * @requires DOM elements: #range-from, #range-to
  * @requires appState.range (from target-detail.js)
  */
-function initDateInputs() {
-  const now = new Date();
-  // Default to last 24 hours instead of "today since midnight"
-  const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-
+function initDateInputs(search) {
   const fromInput = document.getElementById("range-from");
   const toInput = document.getElementById("range-to");
 
@@ -30,8 +88,22 @@ function initDateInputs() {
     return;
   }
 
-  toInput.value = formatDateForInput(now, true); // Round up seconds
-  fromInput.value = formatDateForInput(yesterday); // Round down (default)
+  const query = search !== undefined ? search : typeof location !== "undefined" ? location.search : "";
+  const fromUrl = parseRangeFromSearch(query);
+  const range = fromUrl || { ...getQuickRangeDate("24h"), preset: "24h" };
+
+  toInput.value = formatDateForInput(range.to, true); // Round up seconds
+  fromInput.value = formatDateForInput(range.from); // Round down (default)
+
+  if (fromUrl) {
+    const quick = document.getElementById("quick-range");
+    if (quick) quick.value = fromUrl.preset;
+    const custom = document.getElementById("target-custom-range");
+    if (custom) custom.open = fromUrl.preset === "";
+  }
+  // Strip valid and invalid range overrides alike. A stale or malformed link must not keep
+  // overriding the range after the page has selected its safe default.
+  _dropRangeFromUrl();
 
   if (typeof appState === "undefined") {
     console.error(
@@ -40,8 +112,8 @@ function initDateInputs() {
     return;
   }
 
-  appState.range.from = yesterday;
-  appState.range.to = now;
+  appState.range.from = range.from;
+  appState.range.to = range.to;
 }
 
 /**
@@ -64,6 +136,9 @@ function formatDateForInput(date, roundUp = false) {
   return `${year}-${month}-${day}T${hours}:${minutes}`;
 }
 
+function _usesUtc() {
+  return typeof pageConfig !== "undefined" && pageConfig.useUtc === true;
+}
 /**
  * First instant of the current month or year, in UTC when pageConfig.useUtc is set.
  * @private
@@ -71,9 +146,6 @@ function formatDateForInput(date, roundUp = false) {
  * @param {boolean} wholeYear - true for January 1st, false for the 1st of the month
  * @returns {Date}
  */
-function _usesUtc() {
-  return typeof pageConfig !== "undefined" && pageConfig.useUtc === true;
-}
 
 function _calendarStart(now, wholeYear) {
   const utc = _usesUtc();
@@ -162,12 +234,20 @@ function _parseDatetimeLocal(val) {
  * @returns {{ from: Date, to: Date }|null} Validated range, or null on error
  */
 function readAndValidateDateInputs() {
-  const fromVal = document.getElementById("range-from")?.value;
-  const toVal = document.getElementById("range-to")?.value;
+  const fromEl = document.getElementById("range-from");
+  const toEl = document.getElementById("range-to");
+  const fromVal = fromEl?.value;
+  const toVal = toEl?.value;
+  window.JuFieldErrors?.clear(fromEl);
+  window.JuFieldErrors?.clear(toEl);
+  const fail = (el, message) => {
+    window.JuFieldErrors?.set(el, message);
+    el?.focus();
+    return null;
+  };
 
   if (!fromVal || !toVal) {
-    window.justUpToast?.error?.("Please select both start and end date.");
-    return null;
+    return fail(fromVal ? toEl : fromEl, "Please select both start and end date.");
   }
 
   // Parse as local time (consistent with datetime-local input)
@@ -175,25 +255,17 @@ function readAndValidateDateInputs() {
   const to = _parseDatetimeLocal(toVal);
 
   if (!from || !to) {
-    window.justUpToast?.error?.(
-      "Invalid date or time (it may not exist in your time zone).",
-    );
-    return null;
+    return fail(from ? toEl : fromEl, "Invalid date or time (it may not exist in your time zone).");
   }
 
   if (from >= to) {
-    window.justUpToast?.error?.("Start date must be before end date.");
-    return null;
+    return fail(toEl, "Start date must be before end date.");
   }
 
   // Maximum range validation (prevent server overload and browser slowness)
-  const MAX_RANGE_DAYS = 730; // 2 years
   const rangeDays = (to - from) / (1000 * 60 * 60 * 24);
   if (rangeDays > MAX_RANGE_DAYS) {
-    window.justUpToast?.error?.(
-      `Date range too large (${Math.round(rangeDays)} days). Maximum is ${MAX_RANGE_DAYS} days.`,
-    );
-    return null;
+    return fail(toEl, `Date range too large (${Math.round(rangeDays)} days). Maximum is ${MAX_RANGE_DAYS} days.`);
   }
 
   return { from, to };

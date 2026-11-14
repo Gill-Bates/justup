@@ -9,7 +9,7 @@
  *   -max-length, -max-total; children [data-tag-input-list] (ul),
  *   [data-tag-input-entry] (text input), [data-tag-input-value] (hidden input that carries
  *   the comma-separated value), [data-tag-input-status] (polite live region),
- *   [data-tag-input-error], optional [data-tag-input-reset] (button).
+ *   optional [data-tag-input-reset] (button).
  * A bubbling "change" event on the hidden input signals a valid, changed value.
  * @module utils/tag-input
  */
@@ -38,7 +38,6 @@ function setupTagInput(root) {
 	const entry = root.querySelector("[data-tag-input-entry]");
 	const hidden = root.querySelector("[data-tag-input-value]");
 	const statusEl = root.querySelector("[data-tag-input-status]");
-	const errorEl = root.querySelector("[data-tag-input-error]");
 	const resetBtn = root.querySelector("[data-tag-input-reset]");
 	if (!listEl || !entry || !hidden) return;
 
@@ -84,11 +83,8 @@ function setupTagInput(root) {
 		});
 		const hasError = !result.valid;
 		root.classList.toggle("has-error", hasError);
-		entry.setAttribute("aria-invalid", hasError ? "true" : "false");
-		if (errorEl) {
-			errorEl.textContent = result.message;
-			errorEl.hidden = !hasError;
-		}
+		if (hasError) window.JuFieldErrors?.set(entry, result.message);
+		else window.JuFieldErrors?.clear(entry);
 		if (resetBtn) {
 			const atDefaults = result.usingDefaults && !result.isEmpty;
 			resetBtn.disabled = atDefaults && committed === "";

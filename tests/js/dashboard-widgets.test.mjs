@@ -10,8 +10,10 @@ import vm from 'node:vm';
 
 const window = {};
 vm.runInNewContext(readFileSync(new URL('../../app/static/js/dashboard-widgets.js', import.meta.url), 'utf8'), { window });
+vm.runInNewContext(readFileSync(new URL('../../app/static/js/utils/utc-time.js', import.meta.url), 'utf8'), { window });
+const parseUtcTimestamp = window.parseUtcTimestamp;
 vm.runInNewContext(readFileSync(new URL('../../app/static/js/dashboard-monitoring.js', import.meta.url), 'utf8'), {
-  window, document: { getElementById: () => null },
+  window, parseUtcTimestamp, document: { getElementById: () => null },
 });
 const { queueState } = window.JuDashboardMonitoring;
 const now = Date.parse('2026-11-01T12:00:00Z');
@@ -26,11 +28,38 @@ test('factory layouts retain six originals and expose only allowed defaults', ()
   assert.equal(normal.find(entry => entry.id === 'quality').defaultSize.h, 3);
   assert.equal(admin.find(entry => entry.id === 'delivery-queue').defaultSize.h, 3);
   assert.equal(admin.find(entry => entry.id === 'delivery-queue').minH, 3);
+  // Three metric columns of whole words need about 10rem; with fewer than 4 of 12 columns the tile is narrower.
+  assert.equal(admin.find(entry => entry.id === 'delivery-queue').minW, 4);
   const alerts = admin.find(entry => entry.id === 'alerts-open');
   assert.equal(alerts.label, 'Alerts');
   const queue = admin.find(entry => entry.id === 'delivery-queue');
-  assert.equal(alerts.defaultX, queue.defaultX);
-  assert.equal(alerts.defaultY, queue.defaultY + queue.defaultSize.h);
+  // Admin factory arrangement: quality, delivery queue and alerts are three equal cards in one row,
+  // the downtime table spans the full width below them.
+  const placed = id => { const e = admin.find(entry => entry.id === id); return [e.defaultX, e.defaultY, e.defaultSize.w, e.defaultSize.h]; };
+  assert.deepEqual(placed('quality'), [0, 2, 4, 3]);
+  assert.deepEqual(placed('delivery-queue'), [4, 2, 4, 3]);
+  assert.deepEqual(placed('alerts-open'), [8, 2, 4, 3]);
+  assert.deepEqual(placed('downtime'), [0, 5, 12, 4]);
+});
+test('factory layout without the delivery queue fills the middle row with quality and alerts', () => {
+  const normal = window.JuDashboardRegistry.forRole(false);
+  const placed = id => { const e = normal.find(entry => entry.id === id); return [e.defaultX, e.defaultY, e.defaultSize.w, e.defaultSize.h]; };
+  assert.deepEqual(placed('quality'), [0, 2, 6, 3]);
+  assert.deepEqual(placed('alerts-open'), [6, 2, 6, 3]);
+  assert.deepEqual(placed('downtime'), [0, 5, 12, 4]);
+});
+test('factory layout has no overlapping visible widgets for either role', () => {
+  for (const isAdmin of [false, true]) {
+    const visible = window.JuDashboardRegistry.forRole(isAdmin).filter(entry => entry.defaultVisible);
+    for (const [i, a] of visible.entries()) {
+      assert.ok(a.defaultX >= 0 && a.defaultX + a.defaultSize.w <= 12, `${a.id} stays inside the 12 columns`);
+      for (const b of visible.slice(i + 1)) {
+        const apart = a.defaultX + a.defaultSize.w <= b.defaultX || b.defaultX + b.defaultSize.w <= a.defaultX
+          || a.defaultY + a.defaultSize.h <= b.defaultY || b.defaultY + b.defaultSize.h <= a.defaultY;
+        assert.ok(apart, `${a.id} and ${b.id} overlap (admin=${isAdmin})`);
+      }
+    }
+  }
 });
 
 test('queue distinguishes backlog from failed history and unavailable data', () => {
@@ -40,7 +69,7 @@ test('queue distinguishes backlog from failed history and unavailable data', () 
   // Older failures outside the 24 h window no longer turn an empty queue red.
   assert.equal(queueState({ ...clear, failed: 3, failed_recent: 0 }, now)[0], 'Queue clear');
   const pending = { ...clear, pending: 1, oldest_pending: new Date(now - 60000).toISOString() };
-  assert.equal(queueState(pending, now)[0], 'Processing');
+  assert.deepEqual([...queueState(pending, now)], ['Processing', 'neutral']);
   assert.equal(queueState({ ...pending, oldest_pending: new Date(now - 300000).toISOString() }, now)[0], 'Backlog');
   assert.equal(queueState({ ...pending, oldest_pending: new Date(now - 1800000).toISOString() }, now)[0], 'Stalled');
   assert.equal(queueState({ ...clear, stuck_processing: 1 }, now)[0], 'Stalled');
@@ -49,4 +78,15 @@ test('queue distinguishes backlog from failed history and unavailable data', () 
   assert.equal(queueState({ ...clear, pending: undefined }, now)[0], 'Status unavailable');
   assert.equal(queueState({ ...clear, services: {} }, now)[0], 'Status unavailable');
   assert.equal(queueState({ ...clear, stuck_processing: 1, services: { monitor_scheduler: { state: 'degraded' } } }, now)[0], 'Stalled');
+});
+
+test('dashboard template carries no grid geometry; the registry is the single source', () => {
+  const html = readFileSync(new URL('../../app/templates/dashboard.html', import.meta.url), 'utf8');
+  const items = html.match(/<div class="grid-stack-item[ "][^>]*>/g) || [];
+  assert.equal(items.length, window.JuDashboardRegistry.registry.length);
+  for (const tag of items) {
+    assert.match(tag, /gs-id="/);
+    assert.match(tag, /data-widget-id="/);
+    assert.doesNotMatch(tag, /gs-[xywh]=/);
+  }
 });

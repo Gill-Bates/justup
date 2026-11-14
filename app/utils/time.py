@@ -21,6 +21,11 @@ __all__ = ["assume_utc", "ensure_utc", "parse_utc", "utcnow"]
 _log = logging.getLogger(__name__)
 
 
+def elapsed_seconds(start: datetime, end: datetime) -> int:
+    """Whole seconds from ``start`` to ``end``, truncated toward zero (the one downtime duration rule)."""
+    return int((end - start).total_seconds())
+
+
 def utcnow() -> datetime:
     """
     Get the current time in UTC, timezone-aware.

@@ -10,7 +10,7 @@ All state is in one data directory (`JUSTUP_DATA_DIR`).
 | `tsdb/` | Measurements per target and metric |
 | `pdf_reports/` | Generated PDF reports |
 | `signal/` | signal-cli account and state |
-| `geoip/` | GeoLite2 database |
+| `geoip/` | GeoLite2 City and ASN databases |
 
 ## Retention
 

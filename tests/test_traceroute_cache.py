@@ -5,7 +5,7 @@
 #
 
 # ruff: noqa: SLF001, S106
-"""The authenticated traceroute fragment reuses recent MTR results."""
+"""The authenticated traceroute fragment reuses recent trace results."""
 
 from __future__ import annotations
 
@@ -13,15 +13,17 @@ import re
 import time
 from pathlib import Path
 
+import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
 from app.api import frontend as frontend_api
 from app.db import sqlite as sqlite_db
 from app.models.users import hash_token, new_token
-from app.services import mtr_run, route_interpolator, traceroute_geo
+from app.services import route_interpolator, traceroute_geo, traceroute_service
 from app.utils import crypto
 from tests import _support  # noqa: F401 - imported for its sys.path side effect
+from tests.traceroute_helpers import patch_trace
 
 
 def test_traceroute_fragment_reuses_authorized_recent_result(tmp_path: Path, monkeypatch) -> None:
@@ -89,9 +91,8 @@ def test_traceroute_fragment_reuses_authorized_recent_result(tmp_path: Path, mon
             "_destination": True,
         },
     ]
-    monkeypatch.setattr(mtr_run, "resolve_target_ip", lambda _host: "203.0.113.2")
-    monkeypatch.setattr(mtr_run, "run_mtr", lambda *args, **_kwargs: calls.append(args) or hops)
-    monkeypatch.setattr(mtr_run, "analyze_route", lambda *_args: {"destination_reached": True})
+    patch_trace(monkeypatch, hops, resolved="203.0.113.2", calls=calls)
+    monkeypatch.setattr(traceroute_service, "analyze_route", lambda *_args: {"destination_reached": True})
     monkeypatch.setattr(route_interpolator, "interpolate_route", lambda route, **_kwargs: route)
     monkeypatch.setattr(route_interpolator, "collapse_interpolated_hops", lambda route: route)
     monkeypatch.setattr(
@@ -99,7 +100,7 @@ def test_traceroute_fragment_reuses_authorized_recent_result(tmp_path: Path, mon
         "geolocate_with_hostname_hint",
         lambda ip, _hint=None: next((point for point in geo_points if point["ip"] == ip), None),
     )
-    monkeypatch.setattr(traceroute_geo, "mtr_hops_to_geo_points", lambda *_args, **_kwargs: geo_points)
+    monkeypatch.setattr(traceroute_geo, "route_hops_to_geo_points", lambda *_args, **_kwargs: geo_points)
 
     client = TestClient(app)
     client.get("/ui/login")
@@ -135,7 +136,7 @@ def test_traceroute_fragment_reuses_authorized_recent_result(tmp_path: Path, mon
     assert unauthorized.headers["hx-redirect"] == "/ui/login"
     assert len(calls) == 2
 
-    key = (str(app.state.db_path), target_id, "replacement.example.net")
+    key = _cache_key(app, target_id, "replacement.example.net")
     with frontend_api._traceroute_fragment_cache_lock:
         _expires_at, body, measured_at = frontend_api._traceroute_fragment_cache[key]
         frontend_api._traceroute_fragment_cache[key] = (time.monotonic() - 1, body, measured_at)
@@ -165,8 +166,10 @@ def _timeout_hop(hop: int) -> dict:
     return {"hop": hop, "ip": "*", "hostname": "-", "latency_ms": None, "loss_pct": 100.0, "status": "timeout"}
 
 
-def _diagnostics_client(tmp_path: Path, monkeypatch, hops: list[dict], *, target_ip: str, geo_points: list[dict]):
-    """Authenticated client whose MTR/geo layer is stubbed; real interpolation and collapsing run."""
+def _diagnostics_client(
+    tmp_path: Path, monkeypatch, hops: list[dict], *, target_ip: str, geo_points: list[dict], stub_geo: bool = True
+):
+    """Authenticated client whose trace layer is stubbed (and the geo layer unless ``stub_geo`` is off)."""
     monkeypatch.setenv("SECRET_KEY", Fernet.generate_key().decode("ascii"))
     monkeypatch.setenv("JUSTUP_DATA_DIR", str(tmp_path))
     monkeypatch.setattr(crypto, "_primary_key", None)
@@ -188,19 +191,20 @@ def _diagnostics_client(tmp_path: Path, monkeypatch, hops: list[dict], *, target
     sqlite_db.close_connection(conn)
     with frontend_api._traceroute_fragment_cache_lock:
         frontend_api._traceroute_fragment_cache.clear()
+        frontend_api._traceroute_routes.clear()
     with frontend_api._traceroute_refresh_lock:
         frontend_api._traceroute_refresh_inflight.clear()
         frontend_api._traceroute_refresh_finished.clear()
 
     calls: list[tuple] = []
-    monkeypatch.setattr(mtr_run, "resolve_target_ip", lambda _host: target_ip)
-    monkeypatch.setattr(mtr_run, "run_mtr", lambda *args, **_kwargs: calls.append(args) or [dict(h) for h in hops])
-    monkeypatch.setattr(
-        traceroute_geo,
-        "geolocate_with_hostname_hint",
-        lambda ip, _hint=None: next((p for p in geo_points if p["ip"] == ip), None),
-    )
-    monkeypatch.setattr(traceroute_geo, "mtr_hops_to_geo_points", lambda *_args, **_kwargs: geo_points)
+    patch_trace(monkeypatch, hops, resolved=target_ip, calls=calls)
+    if stub_geo:
+        monkeypatch.setattr(
+            traceroute_geo,
+            "geolocate_with_hostname_hint",
+            lambda ip, _hint=None: next((p for p in geo_points if p["ip"] == ip), None),
+        )
+        monkeypatch.setattr(traceroute_geo, "route_hops_to_geo_points", lambda *_args, **_kwargs: geo_points)
 
     client = TestClient(app)
     client.get("/ui/login")
@@ -224,35 +228,33 @@ def test_destination_kpis_use_measured_values_and_never_default_to_zero() -> Non
         {
             "hop": 2,
             "ip": "203.0.113.9",
-            "latency_ms": {"avg": 15.74},
-            "loss_pct": 0.0,
+            "rtt_ms": 15.74,
             "city": "Frankfurt",
             "country": "DE",
         },
     ]
     kpis = frontend_api._destination_kpis(reached, "203.0.113.9", None)
-    assert (kpis["hop_count"], kpis["latency_display"], kpis["loss_display"]) == (2, "15.7 ms", "0%")
+    assert (kpis["hop_count"], kpis["latency_display"]) == (2, "15.7 ms")
+    assert "loss_display" not in kpis and "loss_pct" not in kpis
     assert (kpis["destination_reached"], kpis["city"], kpis["country"]) == (True, "Frankfurt", "DE")
 
-    lossy = [{"hop": 1, "ip": "203.0.113.9", "latency_ms": {"avg": 3.0}, "loss_pct": 33.33}]
-    assert frontend_api._destination_kpis(lossy, "203.0.113.9", None)["loss_display"] == "33.3%"
+    lossy = [{"hop": 1, "ip": "203.0.113.9", "rtt_ms": 3.0}]
+    assert frontend_api._destination_kpis(lossy, "203.0.113.9", None)["latency_display"] == "3.0 ms"
 
     # A synthetic destination was never measured: latency and loss stay unknown, not 0.
     synthetic = [
-        {"hop": 1, "ip": "10.0.0.1", "latency_ms": {"avg": 1.0}, "loss_pct": 0.0},
-        {"hop": 2, "ip": "203.0.113.9", "latency_ms": None, "loss_pct": None, "_synthetic_destination": True},
+        {"hop": 1, "ip": "10.0.0.1", "rtt_ms": 1.0},
+        {"hop": 2, "ip": "203.0.113.9", "rtt_ms": None, "_synthetic_destination": True},
     ]
     kpis = frontend_api._destination_kpis(synthetic, "203.0.113.9", {"city": "Berlin", "country": "DE"})
-    assert kpis["latency_display"] is None and kpis["loss_display"] is None
+    assert kpis["latency_display"] is None
     assert kpis["destination_reached"] is False and kpis["city"] == "Berlin"
 
     # Without a destination hop or a loss value nothing is invented.
     unknown = frontend_api._destination_kpis([{"hop": 1, "ip": "10.0.0.1"}], None, None)
-    assert unknown["latency_display"] is None and unknown["loss_display"] is None and unknown["city"] is None
-    no_loss = frontend_api._destination_kpis(
-        [{"hop": 1, "ip": "203.0.113.9", "latency_ms": {"avg": 2.0}}], "203.0.113.9", None
-    )
-    assert no_loss["loss_display"] is None
+    assert unknown["latency_display"] is None and unknown["city"] is None
+    single = frontend_api._destination_kpis([{"hop": 1, "ip": "203.0.113.9", "rtt_ms": 2.0}], "203.0.113.9", None)
+    assert single["latency_display"] == "2.0 ms" and "loss_display" not in single
 
 
 def test_fragment_counts_collapsed_hops_and_renders_panels(tmp_path: Path, monkeypatch) -> None:
@@ -289,10 +291,14 @@ def test_fragment_counts_collapsed_hops_and_renders_panels(tmp_path: Path, monke
     assert text.count("data-tr-hop") == 7  # every hop stays reachable, grouped ones inside the group
     # Visible text names each step; an aria-label would trip axe's label-content-name-mismatch.
     assert not re.search(r"<button[^>]*tr-step-btn[^>]*aria-label", text)
-    assert text.count(">No reply<") >= 4 and text.count("ju-status-badge--warning") >= 1
-    assert "15.7 ms" in text and "0%" in text and "Frankfurt am Main, DE" in text
+    assert text.count(">No reply<") >= 4 and text.count("ju-status-dot--warning") >= 1
+    assert (
+        "15.7 ms" in text
+        and "%" not in text.split("hop-table", 1)[1].split("</table>")[0]
+        and "Frankfurt am Main, DE" in text
+    )
     assert "Geolocated route for 2 of 7 hops" in text
-    for header in ("IP address", "Hostname", "Location", "Latency", "Loss", "Status"):
+    for header in ("IP address", "Hostname", "Location", "RTT", "Status"):
         assert f">{header}</th>" in text
     # Hostnames are escaped; never emitted as markup.
     assert "<script>alert(1)" not in text and "&lt;script&gt;alert(1)" in text
@@ -308,9 +314,21 @@ def test_fragment_shows_unknown_for_unreached_destination(tmp_path: Path, monkey
     text = client.get(url, headers=_HX).text
 
     assert "not measured" in text
-    assert text.count('data-known="false"') == 2  # latency and loss stay unknown, never 0
-    assert text.count('class="tr-kpi-value">—</dd>') == 2
+    assert text.count('data-known="false"') == 1  # the RTT stays unknown, never 0
+    assert text.count('class="tr-kpi-value">—</dd>') == 1
     assert "No reply" in text
+    client.close()
+
+
+def test_rendered_fragment_names_no_removed_tool(tmp_path: Path, monkeypatch) -> None:
+    hops = [_ok_hop(1, "10.0.0.1", 1.0), _timeout_hop(2), _ok_hop(3, "203.0.113.9", 5.0)]
+    geo = [{**_DEST_GEO, "hop": 3, "_destination": True}]
+    client, url, _calls, _app, _tid = _diagnostics_client(
+        tmp_path, monkeypatch, hops, target_ip="203.0.113.9", geo_points=geo
+    )
+    text = client.get(url, headers=_HX).text
+    assert "No reply" in text
+    assert not re.search(r"\bmtr\b", text, re.IGNORECASE)
     client.close()
 
 
@@ -325,7 +343,7 @@ def test_run_again_forces_new_measurement_with_auth_and_parallel_guard(tmp_path:
     client.get(url, headers=_HX)
     assert len(calls) == 1  # normal tab loads still use the five-minute cache
 
-    # Without the HTMX header the refresh flag is ignored (no cross-site trigger of an MTR run).
+    # Without the HTMX header the refresh flag is ignored (no cross-site trigger of a trace).
     assert client.get(f"{url}?refresh=1").status_code == 200
     assert len(calls) == 1
 
@@ -334,12 +352,12 @@ def test_run_again_forces_new_measurement_with_auth_and_parallel_guard(tmp_path:
     assert client.get(url, headers=_HX).content == forced.content  # cache now holds the new result
     assert len(calls) == 2
 
-    # Immediate repeat is rejected (cooldown) and does not start another MTR run.
+    # Immediate repeat is rejected (cooldown) and does not start another trace.
     again = client.get(f"{url}?refresh=1", headers=_HX)
     assert again.status_code == 429 and "retry-after" in again.headers and len(calls) == 2
 
     # After the cooldown another forced run is allowed.
-    key = (str(app.state.db_path), target_id, "diag.example.com")
+    key = _cache_key(app, target_id, "diag.example.com")
     with frontend_api._traceroute_refresh_lock:
         frontend_api._traceroute_refresh_finished[key] = time.monotonic() - 60
     assert client.get(f"{url}?refresh=1", headers=_HX).status_code == 200
@@ -370,7 +388,7 @@ def test_refresh_is_rejected_while_a_cache_miss_measurement_is_in_flight(tmp_pat
     client, url, calls, app, target_id = _diagnostics_client(
         tmp_path, monkeypatch, hops, target_ip="203.0.113.9", geo_points=geo
     )
-    key = (str(app.state.db_path), target_id, "diag.example.com")
+    key = _cache_key(app, target_id, "diag.example.com")
     frontend_api._traceroute_inflight[key] = SimpleNamespace(done=lambda: False)
     try:
         blocked = client.get(f"{url}?refresh=1", headers=_HX)
@@ -386,9 +404,13 @@ def _measured_at(response) -> int:
     return int(response.headers["x-measured-at"])
 
 
+def _cache_key(app, target_id: int, host: str = "diag.example.com") -> tuple[str, int, str]:
+    return (f"{frontend_api._TRACEROUTE_CACHE_VERSION}:{app.state.db_path}", target_id, host)
+
+
 def _allow_refresh(app, target_id: int, host: str = "diag.example.com") -> None:
     with frontend_api._traceroute_refresh_lock:
-        frontend_api._traceroute_refresh_finished[(str(app.state.db_path), target_id, host)] = time.monotonic() - 60
+        frontend_api._traceroute_refresh_finished[_cache_key(app, target_id, host)] = time.monotonic() - 60
 
 
 def test_response_carries_the_original_measurement_time(tmp_path: Path, monkeypatch) -> None:
@@ -427,7 +449,7 @@ def test_refresh_bypasses_the_server_cache_and_reports_the_new_time(tmp_path: Pa
     assert limited.status_code == 429 and "x-measured-at" not in limited.headers and len(calls) == 2
     _allow_refresh(app, target_id)
     with frontend_api._traceroute_refresh_lock:
-        frontend_api._traceroute_refresh_inflight.add((str(app.state.db_path), target_id, "diag.example.com"))
+        frontend_api._traceroute_refresh_inflight.add(_cache_key(app, target_id, "diag.example.com"))
     assert client.get(f"{url}?refresh=1", headers=_HX).status_code == 429
     assert len(calls) == 2
     client.close()
@@ -438,7 +460,7 @@ def test_unsuccessful_measurement_has_no_time_and_is_not_cached(tmp_path: Path, 
         tmp_path, monkeypatch, [], target_ip="203.0.113.9", geo_points=[]
     )
     response = client.get(url, headers=_HX)
-    assert response.status_code == 200 and "MTR returned no hops" in response.text
+    assert response.status_code == 200 and "No route could be traced" in response.text
     assert "x-measured-at" not in response.headers  # the browser must not keep this as a measurement
     client.get(url, headers=_HX)
     assert len(calls) == 2  # and the server does not cache it either
@@ -572,17 +594,17 @@ def test_timeline_legend_lists_only_present_states() -> None:
 
 def test_fragment_renders_single_timeline(tmp_path: Path, monkeypatch) -> None:
     hops = [
-        _ok_hop(1, "10.0.0.1", 1.0),
+        _ok_hop(1, "2001:db8::1", 1.0),
         _timeout_hop(2),
         _timeout_hop(3),
-        _ok_hop(4, "10.0.0.4", 3.0),
-        _ok_hop(5, "10.0.0.5", 4.0),
-        _ok_hop(6, "10.0.0.6", 5.0),
-        _ok_hop(7, "2001:db8:0:0:0:0:0:99", 6.0),
+        _ok_hop(4, "2001:db8::4", 3.0),
+        _ok_hop(5, "2001:db8::5", 4.0),
+        _ok_hop(6, "2001:db8::6", 5.0),
+        _ok_hop(7, "2001:db8::99", 6.0),
     ]
-    geo = [{"ip": "10.0.0.5", "lat": 51.5, "lon": 7.4, "city": "Dortmund", "country": "DE", "hop": 5}]
+    geo = [{"ip": "2001:db8::5", "lat": 51.5, "lon": 7.4, "city": "Dortmund", "country": "DE", "hop": 5}]
     client, url, _calls, _app, _tid = _diagnostics_client(
-        tmp_path, monkeypatch, hops, target_ip="2001:db8:0:0:0:0:0:99", geo_points=geo
+        tmp_path, monkeypatch, hops, target_ip="2001:db8::99", geo_points=geo
     )
     text = client.get(url, headers=_HX).text
     client.close()
@@ -592,11 +614,11 @@ def test_fragment_renders_single_timeline(tmp_path: Path, monkeypatch) -> None:
     assert "Start / Destination" not in text and ">Start<" not in text
     assert not re.search(r"<button[^>]*tr-step-btn[^>]*aria-label", text)
     assert 'data-hop-first="1"' in text and 'data-country="DE"' in text
-    assert "10.0.0.1" in text and "10.0.0.5" in text
+    assert "2001:db8::1" in text and "2001:db8::5" in text
     assert 'aria-controls="tr-group-2-3"' not in text  # 2 hops are below the group threshold
     assert 'class="tr-route-legend"' in text and "No map location" in text
     assert "Hop 1–7" in text and "7 hops" in text
-    assert 'title="2001:db8:0:0:0:0:0:99"' in text  # full IPv6 stays available
+    assert 'title="2001:db8::99"' in text  # full IPv6 stays available
 
 
 def test_timeline_groups_no_reply_runs_and_keeps_single_timeouts_separate() -> None:
@@ -621,3 +643,152 @@ def test_timeline_groups_no_reply_runs_and_keeps_single_timeouts_separate() -> N
     assert (group["title"], group["subtitle"], group["measurement"]) == ("3 hops without reply", "No reply", "timeout")
     assert nodes[3]["state_label"] == "No reply" and "estimated" not in nodes[3]["detail"].lower()
     assert [item["label"] for item in timeline["legend"]] == ["Measured", "No reply"]
+
+
+# ── Changed IXP data: rendered geo results are replaced from the stored route, never by a new scan ──
+
+
+_IL_CELL = 'Tel Aviv <span class="tr-muted">IL</span>'  # location cell of the hop table
+_DE_CELL = 'Frankfurt <span class="tr-muted">DE</span>'
+
+
+def _ixp_route_hops() -> list[dict]:
+    return [
+        _ok_hop(1, "192.168.0.1", 1.0),
+        _ok_hop(2, "80.81.192.39", 5.0, hostname="-"),
+        _ok_hop(3, "203.0.113.9", 9.0, hostname="diag.example.com"),
+    ]
+
+
+def _decix_index():
+    from app.services import ixp_import, ixp_index
+
+    ix = [{"id": 1, "status": "ok", "name": "DE-CIX Frankfurt", "city": "Frankfurt", "country": "DE"}]
+    ixlan = [{"id": 10, "status": "ok", "ix_id": 1}]
+    ixpfx = [{"id": 100, "status": "ok", "ixlan_id": 10, "protocol": "IPv4", "prefix": "80.81.192.0/21"}]
+    ixfac = [{"id": 1, "status": "ok", "ix_id": 1, "fac_id": 1000}]
+    fac = [{"id": 1000, "status": "ok", "city": "Frankfurt", "country": "DE", "latitude": 50.11, "longitude": 8.68}]
+    snapshot = ixp_import.build_snapshot(ix, ixlan, ixpfx, ixfac, fac).snapshot
+    return ixp_index.IxpIndex(snapshot.exchanges, snapshot.prefixes)
+
+
+@pytest.fixture
+def israeli_geoip(monkeypatch):
+    """GeoIP says Tel Aviv for the exchange address; counts lookups so a re-render can be told from a cache hit."""
+    from app.services import ixp_index
+
+    ixp_index.reset_for_tests()
+    lookups: list[str] = []
+
+    def geoip(ip: str):
+        lookups.append(ip)
+        if ip != "80.81.192.39":
+            return None
+        return {
+            "lat": 32.08,
+            "lon": 34.78,
+            "city": "Tel Aviv",
+            "country": "IL",
+            "accuracy_radius_km": 50.0,
+            "city_is_region": False,
+        }
+
+    monkeypatch.setattr(traceroute_geo, "geolocate_ip", geoip)
+    monkeypatch.setattr(traceroute_geo, "_online_fallback_enabled", lambda: False)
+    yield lookups
+    ixp_index.reset_for_tests()
+
+
+def test_ixp_update_replaces_a_cached_il_hop_without_a_new_scan(tmp_path: Path, monkeypatch, israeli_geoip) -> None:
+    from app.services import ixp_index
+
+    client, url, calls, _app, _tid = _diagnostics_client(
+        tmp_path, monkeypatch, _ixp_route_hops(), target_ip="203.0.113.9", geo_points=[], stub_geo=False
+    )
+    first = client.get(url, headers=_HX)
+    assert _IL_CELL in first.text and "Frankfurt" not in first.text
+    measured_at = first.headers["x-measured-at"]
+
+    lookups_before = len(israeli_geoip)
+    same = client.get(url, headers=_HX)  # same IXP data: the cached fragment is served untouched
+    assert same.content == first.content and len(israeli_geoip) == lookups_before
+
+    generation = ixp_index.current_generation()
+    ixp_index.install(_decix_index())  # a successful IXP import publishes new data
+    assert ixp_index.current_generation() != generation
+
+    updated = client.get(url, headers=_HX)
+    assert updated.status_code == 200
+    assert _DE_CELL in updated.text and "DE-CIX Frankfurt" in updated.text
+    assert _IL_CELL not in updated.text  # the table no longer names Tel Aviv for the exchange hop
+    assert len(calls) == 1  # the stored route was re-rendered; Nmap was not asked again
+    assert updated.headers["x-measured-at"] == measured_at  # still the original measurement time
+
+    lookups_after = len(israeli_geoip)
+    again = client.get(url, headers=_HX)  # and the new rendering is cached again
+    assert again.content == updated.content and len(israeli_geoip) == lookups_after and len(calls) == 1
+
+    forced = client.get(f"{url}?refresh=1", headers=_HX)  # an explicit new scan is still a scan
+    assert forced.status_code == 200 and len(calls) == 2
+    client.close()
+
+
+@pytest.mark.usefixtures("israeli_geoip")
+def test_rerender_after_an_ixp_update_works_when_the_fragment_cache_entry_expired(tmp_path: Path, monkeypatch) -> None:
+    from app.services import ixp_index
+
+    client, url, calls, app, target_id = _diagnostics_client(
+        tmp_path, monkeypatch, _ixp_route_hops(), target_ip="203.0.113.9", geo_points=[], stub_geo=False
+    )
+    client.get(url, headers=_HX)
+    key = _cache_key(app, target_id, "diag.example.com")
+    with frontend_api._traceroute_fragment_cache_lock:
+        _expires, body, measured = frontend_api._traceroute_fragment_cache[key]
+        frontend_api._traceroute_fragment_cache[key] = (time.monotonic() - 1, body, measured)
+    ixp_index.install(_decix_index())
+    updated = client.get(url, headers=_HX)
+    assert _DE_CELL in updated.text and _IL_CELL not in updated.text
+    assert len(calls) == 1
+    client.close()
+
+
+@pytest.mark.usefixtures("israeli_geoip")
+def test_expired_fragment_without_new_ixp_data_still_measures_again(tmp_path: Path, monkeypatch) -> None:
+    client, url, calls, app, target_id = _diagnostics_client(
+        tmp_path, monkeypatch, _ixp_route_hops(), target_ip="203.0.113.9", geo_points=[], stub_geo=False
+    )
+    client.get(url, headers=_HX)
+    key = _cache_key(app, target_id, "diag.example.com")
+    with frontend_api._traceroute_fragment_cache_lock:
+        _expires, body, measured = frontend_api._traceroute_fragment_cache[key]
+        frontend_api._traceroute_fragment_cache[key] = (time.monotonic() - 1, body, measured)
+    client.get(url, headers=_HX)
+    assert len(calls) == 2  # the five-minute contract is unchanged when the geo data did not change
+    client.close()
+
+
+@pytest.mark.usefixtures("israeli_geoip")
+def test_cache_scope_carries_the_geo_version_of_the_ixp_data() -> None:
+    from app.services import ixp_index
+
+    user = {"id": 1, "created_at": "2026-01-01 10:00:00"}
+    row = {"id": 7, "created_at": "2026-02-01 10:00:00", "host": "a.example.com"}
+    without = frontend_api._traceroute_cache_scope(user, row)
+    assert without == frontend_api._traceroute_cache_scope(user, row)
+    assert len(without["geo"]) == 16 and without["geo"].isalnum()
+    ixp_index.install(_decix_index())
+    with_ixp = frontend_api._traceroute_cache_scope(user, row)
+    assert with_ixp["geo"] != without["geo"]
+    assert {k: v for k, v in with_ixp.items() if k != "geo"} == {k: v for k, v in without.items() if k != "geo"}
+    ixp_index.install(_decix_index())  # same content published again: the browser keeps its entry
+    assert frontend_api._traceroute_cache_scope(user, row)["geo"] == with_ixp["geo"]
+
+
+@pytest.mark.usefixtures("israeli_geoip")
+def test_target_page_renders_the_geo_scope_key(tmp_path: Path, monkeypatch) -> None:
+    client, _url, _calls, _app, target_id = _diagnostics_client(
+        tmp_path, monkeypatch, [], target_ip="203.0.113.9", geo_points=[]
+    )
+    page = client.get(f"/ui/targets/{target_id}")
+    assert re.search(r'data-cache-build="[0-9a-f]{16}"\s+data-cache-geo="[0-9a-f]{16}"', page.text)
+    client.close()

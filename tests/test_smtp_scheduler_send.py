@@ -25,7 +25,7 @@ from app.monitor import scheduler as scheduler_module
 from app.monitor.scheduler import MonitorScheduler
 from app.services.notifications import smtp_transport
 from app.services.notifications.spooler import ChannelType, NotificationSpooler, NotificationType
-from app.utils import crypto
+from app.utils import crypto, maintenance
 from app.utils.constants import SettingKeys
 from app.utils.crypto import encrypt_secret
 from tests import _support  # noqa: F401 - imported for its sys.path side effect
@@ -49,15 +49,6 @@ def fakes(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(smtp_transport.smtplib, "SMTP", _FakeSMTP)
     monkeypatch.setattr(smtp_transport.smtplib, "SMTP_SSL", _FakeSMTPSSL)
     return _FakeSMTP, _FakeSMTPSSL
-
-
-@pytest.fixture
-def db_path(tmp_path: Path) -> Path:
-    path = tmp_path / "db" / "justup.db"
-    connection = sqlite_db.connect(path)
-    sqlite_db.init_schema(connection)
-    sqlite_db.close_connection(connection)
-    return path
 
 
 @pytest.fixture
@@ -182,6 +173,22 @@ async def test_queue_row_goes_through_the_scheduler_closure_to_the_transport(
 
 
 @pytest.mark.asyncio
+async def test_spooler_initialisation_runs_inside_a_maintenance_work_section(scheduler, db_path, monkeypatch):
+    inflight_during_init = []
+    spooler = NotificationSpooler(lambda: sqlite_db.connect(db_path))
+
+    def fake_get_spooler(_factory):
+        inflight_during_init.append(maintenance._INFLIGHT)
+        return spooler
+
+    monkeypatch.setattr(scheduler_module, "get_spooler", fake_get_spooler)
+
+    await scheduler._process_notification_spooler(datetime.now(UTC), raise_errors=True)
+
+    assert inflight_during_init and inflight_during_init[0] >= 1
+
+
+@pytest.mark.asyncio
 async def test_queue_row_is_not_sent_when_starttls_is_missing(scheduler, db_path, fakes, monkeypatch):
     _configure(db_path)
     monkeypatch.setattr(_FakeSMTP, "has_extn", lambda _self, _name: False)
@@ -193,3 +200,41 @@ async def test_queue_row_is_not_sent_when_starttls_is_missing(scheduler, db_path
 
     assert all(not inst.sent for inst in fakes[0].instances)
     assert spooler.get_queue_stats_detailed()["by_status"].get("sent", 0) == 0
+
+
+@pytest.mark.asyncio
+async def test_first_spooler_init_under_write_lock_does_not_block_event_loop(scheduler, db_path, monkeypatch):
+    import asyncio
+
+    from app.services.notifications import spooler as spooler_module
+
+    monkeypatch.setattr(spooler_module, "_spooler", None)
+    monkeypatch.setattr(spooler_module, "_spooler_last_failure", None)
+    holder = sqlite_db.connect(db_path)
+    holder.execute("BEGIN IMMEDIATE")
+    ticks = 0
+    ticks_at_release = -1
+
+    async def ticker() -> None:
+        nonlocal ticks
+        while True:
+            await asyncio.sleep(0.02)
+            ticks += 1
+
+    async def release() -> None:
+        nonlocal ticks_at_release
+        await asyncio.sleep(0.5)
+        ticks_at_release = ticks
+        holder.rollback()
+
+    tick_task = asyncio.create_task(ticker())
+    release_task = asyncio.create_task(release())
+    await asyncio.sleep(0)  # let both tasks start their timers before the call under test
+    try:
+        await scheduler._process_notification_spooler(datetime.now(UTC))
+        await release_task
+    finally:
+        tick_task.cancel()
+        sqlite_db.close_connection(holder)
+    # With a blocked loop, release() cannot run until the busy timeout expired and no ticks happen.
+    assert ticks_at_release >= 10

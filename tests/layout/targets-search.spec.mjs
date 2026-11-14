@@ -4,19 +4,27 @@
 //
 
 // Targets page search: filters while typing, opens groups with hits for the duration of the search,
-// restores the manual state afterwards and survives fragment polling (DESIGN.md,
-// "Filter-as-you-type search"). Seeded targets: Production (1) and Websites (3).
+// restores the manual state afterwards and survives fragment polling (DESIGN.md DC-SEARCH-*). Seeded targets: Production (1) and Websites (3).
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { test } from "./fixtures.mjs";
+import { expect } from "@playwright/test";
+import { contrastRatio, test } from "./fixtures.mjs";
 import { waitForVisualStability } from "./harness.mjs";
+import { applyTextEnlargement, cssViewport, effectiveZoom, textEnlargement } from "./test-support.mjs";
 
+// Four distinct notions (DESIGN.md 1.2, DC-MEAS-1; helpers in test-support.mjs):
+//  - css-320x640 is the WCAG reflow equivalent of 400 % zoom (a CSS viewport 320 px wide);
+//  - 1280x720-effective-zoom-200pct is 640x360 CSS px at DPR 2: a viewport proxy, not the browser zoom feature;
+//  - css-1280x720-text-200pct and css-390x844-text-200pct enlarge the root font size at an unchanged CSS viewport;
+//  - DPR alone proves no reflow and has no profile of its own.
 const VIEWPORTS = [
-	{ name: "1280x720", width: 1280, height: 720, dsf: 1 },
-	{ name: "390x844", width: 390, height: 844, dsf: 1 },
-	{ name: "320x640", width: 320, height: 640, dsf: 1 },
-	{ name: "1280x720@200%", width: 640, height: 360, dsf: 2 },
+	cssViewport(1280, 720),
+	cssViewport(390, 844),
+	cssViewport(320, 640),
+	effectiveZoom(1280, 720, 2),
+	textEnlargement(1280, 720, 2),
+	textEnlargement(390, 844, 2),
 ];
 const THEMES = ["light", "dark"];
 const SHOTS = process.env.JUSTUP_TARGETS_SEARCH_SHOTS;
@@ -30,6 +38,7 @@ async function openTargets(browser, app, adminState, viewport) {
 	page.on("pageerror", (error) => problems.push(String(error)));
 	page.on("console", (message) => { if (message.type() === "error") problems.push(message.text()); });
 	await page.goto(app.base + "/ui/targets", { waitUntil: "load" });
+	await applyTextEnlargement(page, viewport.textScale);
 	await page.waitForFunction(() => document.querySelectorAll("#targets-table tbody tr[data-search]").length >= 4, null, { timeout: 20000 });
 	// Start from the documented default: every group open (a narrow viewport collapses them on load).
 	await page.evaluate(() => {
@@ -41,6 +50,33 @@ async function openTargets(browser, app, adminState, viewport) {
 		});
 	});
 	return { context, page, problems };
+}
+
+// DESIGN.md DC-FOCUS-1 variant V1: a text field shows focus by its border alone (no outline, no shadow).
+// Bootstrap animates .form-control border-color (0.15s); on a slow runner two frames end mid-transition.
+// Waits until the field has no running animation or transition, then checks the real focus owner.
+async function expectFieldFocus(page, label) {
+	await page.waitForFunction(() => document.getElementById("targets-search").getAnimations().length === 0);
+	await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+	const state = await page.evaluate(() => {
+		const el = document.getElementById("targets-search");
+		const cs = getComputedStyle(el);
+		const probe = document.createElement("i");
+		probe.style.cssText = "position:absolute;visibility:hidden;border:1px solid var(--ju-focus-field-border)";
+		document.body.append(probe);
+		const token = getComputedStyle(probe).borderTopColor;
+		probe.remove();
+		return {
+			active: document.activeElement === el, focusVisible: el.matches(":focus-visible"), border: cs.borderTopColor, token,
+			outline: cs.outlineStyle, shadow: cs.boxShadow, background: cs.backgroundColor,
+		};
+	});
+	assert.equal(state.active, true, `${label}: the search field owns the focus`);
+	assert.equal(state.focusVisible, true, `${label}: the focus is keyboard-visible`);
+	assert.equal(state.border, state.token, `${label}: focus shows as the field border (${state.border} vs ${state.token})`);
+	assert.ok(state.outline === "none" && state.shadow === "none", `${label}: no outline or glow (${state.outline} ${state.shadow})`);
+	const contrast = contrastRatio(state.border, state.background);
+	assert.ok(contrast >= 3, `${label}: focus border contrast ${contrast.toFixed(2)}:1 is below 3:1`);
 }
 
 const setTheme = async (page, theme) => {
@@ -97,6 +133,8 @@ for (const viewport of VIEWPORTS) {
 				// Typing filters at once, folds diacritics and matches a substring of the name.
 				await search.focus();
 				await page.keyboard.type("LUETT", { delay: 10 });
+				// The filter settles after the last keystroke; the live region is its completion signal.
+				await expect.poll(() => status.textContent(), { message: `${theme}: filter applied` }).toBe("1 target found");
 				assert.deepEqual(await visibleGroups(page).then((list) => list.map((group) => group.name)), ["Websites"], `${theme}: groups without a hit disappear`);
 				const hit = (await visibleGroups(page))[0];
 				assert.equal(hit.expanded && hit.shown, true, `${theme}: the group with a hit opens for the search`);
@@ -106,15 +144,16 @@ for (const viewport of VIEWPORTS) {
 				assert.equal(await clear.isVisible(), true, `${theme}: clear button appears with a query`);
 				assert.equal(await storedGroupState(page), stored, `${theme}: opening a group for the search does not overwrite the stored state`);
 				assert.equal(await empty.isHidden(), true);
-				if (SHOTS && theme) {
+				if (SHOTS) {
 					fs.mkdirSync(SHOTS, { recursive: true });
-					await page.screenshot({ path: path.join(SHOTS, `targets-search-hits-${theme}-${viewport.name.replace(/[@%]/g, "_")}.png`) });
+					await page.screenshot({ path: path.join(SHOTS, `targets-search-hits-${theme}-${viewport.name}.png`) });
 				}
 
 				// Escape clears, restores the manual state and keeps focus in the field.
 				await page.keyboard.press("Escape");
 				assert.equal(await search.inputValue(), "", `${theme}: Escape clears the field`);
 				assert.equal(await page.evaluate(() => document.activeElement.id), "targets-search", `${theme}: focus stays in the field`);
+				await expectFieldFocus(page, `${theme} after Escape`);
 				assert.deepEqual(await groups(page), manual.map((group) => ({ ...group, badge: group.badge })), `${theme}: groups, badges and rows return to the state before the search`);
 				assert.equal(await clear.isHidden(), true);
 				assert.equal(await status.textContent(), "");
@@ -168,6 +207,22 @@ for (const viewport of VIEWPORTS) {
 				await page.evaluate(() => window.htmx.trigger(document.getElementById("targets-table"), "refresh"));
 				await page.waitForFunction(() => document.querySelectorAll("#targets-table tbody tr[data-search]").length >= 6, null, { timeout: 15000 });
 				assert.equal(await search.inputValue(), "luett", "the query survives the fragment swap");
+				await search.focus();
+				// Arm the listener before the trigger; only a swap of the table itself counts (other polls also settle).
+				await page.evaluate(() => {
+					window.__tableSettled = new Promise((resolve) => {
+						const onSettle = (e) => {
+							// htmx 1.9 settles the swapped children, so match the container by ancestry.
+							if (!e.target?.closest?.("#targets-table")) return;
+							document.body.removeEventListener("htmx:afterSettle", onSettle);
+							resolve();
+						};
+						document.body.addEventListener("htmx:afterSettle", onSettle);
+					});
+					window.htmx.trigger(document.getElementById("targets-table"), "refresh");
+				});
+				await page.evaluate(() => window.__tableSettled);
+				await expectFieldFocus(page, "after the fragment swap");
 				const during = await visibleGroups(page);
 				assert.deepEqual(during.map((group) => [group.name, group.visibleRows, group.expanded]), [["Websites", 2, true]], "the new matching row shows, the non-matching one stays hidden");
 				// Row actions keep working while a filter is active.
@@ -208,19 +263,16 @@ for (const viewport of VIEWPORTS) {
 			assert.ok(geometry.mainOverflowX <= 0 && geometry.cardOverflowX <= 0, "no horizontal overflow in main or the card");
 			assert.ok(geometry.fieldLeft >= 0 && geometry.fieldRight <= geometry.viewport, "the field stays inside the viewport");
 			assert.ok(geometry.fieldWidth <= geometry.maxWidth + 1, "the field has a bounded width on wide pages");
-			if (viewport.width <= 390) assert.ok(geometry.fieldWidth >= geometry.viewport - 64, `the field takes the full width on a phone (${geometry.fieldWidth}px)`);
+			// Page padding is rem-based and grows with text enlargement, so the allowance scales with it.
+			if (viewport.width <= 390) assert.ok(geometry.fieldWidth >= geometry.viewport - 64 * viewport.textScale, `the field takes the full width on a phone (${geometry.fieldWidth}px)`);
 			assert.ok(geometry.fieldHeight >= 24 && geometry.clearW >= 24 && geometry.clearH >= 24, "touch targets are at least 24x24 CSS px");
 			assert.ok(geometry.clearInside, "the clear button sits inside the field");
 
-			// Keyboard: the field follows the page actions in tab order and shows a visible focus ring.
+			// Keyboard: the field follows the page actions in tab order and shows the quiet field focus.
 			await page.locator('a[href="/ui/targets/new"]').focus();
 			await page.keyboard.press("Tab");
-			const focus = await page.evaluate(() => {
-				const style = getComputedStyle(document.activeElement);
-				return { id: document.activeElement.id, outline: style.outlineStyle, width: parseFloat(style.outlineWidth), shadow: style.boxShadow };
-			});
-			assert.equal(focus.id, "targets-search", "Tab from New Target reaches the search field");
-			assert.ok((focus.outline !== "none" && focus.width >= 2) || focus.shadow !== "none", `visible keyboard focus (${focus.outline} ${focus.width}px ${focus.shadow})`);
+			assert.equal(await page.evaluate(() => document.activeElement.id), "targets-search", "Tab from New Target reaches the search field");
+			await expectFieldFocus(page, "after Tab");
 			assert.deepEqual(problems, [], "no console or page errors");
 		} finally {
 			await context.close();
@@ -228,6 +280,42 @@ for (const viewport of VIEWPORTS) {
 	});
 }
 
+// N48, DC-SEARCH: UDP ports are searchable only while the UDP scan is active (the data-search attribute lists them then).
+test("targets search matches UDP ports only for an active UDP scan @targets-search", async ({ browser, app, adminState }) => {
+	const { context, page, problems } = await openTargets(browser, app, adminState, cssViewport(1280, 720));
+	const search = page.getByRole("searchbox", { name: "Search targets" });
+	const status = page.locator("#targets-search-status");
+	const created = [];
+	try {
+		const base = { enable_ping: true, enable_udp_scan: true };
+		const active = await api(page, "/targets", "POST", { ...base, name: "udp-search-active", group: "Websites", host: "udp-active.example.org", udp_ports: "40123" });
+		assert.equal(active.status, 201);
+		created.push(active.body.id);
+		const inactive = await api(page, "/targets", "POST", { ...base, name: "udp-search-inactive", group: "Websites", host: "udp-inactive.example.org", udp_ports: "40124" });
+		assert.equal(inactive.status, 201);
+		created.push(inactive.body.id);
+		// The second target keeps its stored UDP ports but switches the scan off.
+		const off = await api(page, `/targets/${inactive.body.id}`, "PATCH", { enable_udp_scan: false });
+		assert.ok([200, 204].includes(off.status), `scan switched off (${off.status})`);
+		await page.waitForFunction(() => {
+			if (document.querySelectorAll("#targets-table tbody tr[data-search]").length >= 6) return true;
+			window.htmx.trigger(document.getElementById("targets-table"), "refresh");
+			return false;
+		}, null, { timeout: 15000, polling: 1000 });
+		const searchTexts = await page.evaluate(() => Object.fromEntries(Array.from(document.querySelectorAll("#targets-table tbody tr[data-search]")).map((row) => [row.dataset.targetId, row.dataset.search])));
+		assert.match(searchTexts[active.body.id], /40123/, "an active UDP scan lists its ports for the search");
+		assert.doesNotMatch(searchTexts[inactive.body.id], /40124/, "a disabled UDP scan lists no ports for the search");
+		await search.fill("40123");
+		await expect.poll(() => status.textContent(), { message: "active UDP port found" }).toBe("1 target found");
+		assert.deepEqual((await visibleGroups(page)).map((group) => [group.name, group.visibleRows]), [["Websites", 1]]);
+		await search.fill("40124");
+		await expect.poll(() => status.textContent(), { message: "inactive UDP port not found" }).toBe("No targets found");
+		assert.deepEqual(problems, [], "no console or page errors");
+	} finally {
+		for (const id of created) assert.ok([200, 204].includes((await api(page, `/targets/${id}`, "DELETE")).status), "cleanup delete");
+		await context.close();
+	}
+});
 // Edit and delete stay reachable on a filtered row.
 async function expect_row_actions(page) {
 	const row = page.locator("#targets-table tbody tr[data-search]:not([hidden])").first();

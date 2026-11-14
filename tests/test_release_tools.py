@@ -8,8 +8,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -68,6 +70,16 @@ def test_manifest_mismatch_fails(bad, message):
         manifest_tool.verify(bad, PUSHED)
 
 
+def test_manifest_rejects_two_entries_for_one_architecture_even_with_different_variants():
+    other = "sha256:" + "e" * 64
+    # The last entry matches the pushed digest, so a collapsing os/architecture map would pass.
+    bad = index((other, platform("arm64", "v7")), (ARM64, platform("arm64", "v8")), (AMD64, platform("amd64")))
+    with pytest.raises(manifest_tool.ManifestError, match=r"more than one entry for: linux/arm64"):
+        manifest_tool.verify(bad, PUSHED)
+    with pytest.raises(manifest_tool.ManifestError, match="more than one entry"):
+        manifest_tool.platform_digests(bad)
+
+
 def test_manifest_cli_verify_and_children(tmp_path, capsys):
     (tmp_path / "digests").mkdir()
     (tmp_path / "digests" / "amd64").write_text(AMD64)
@@ -88,6 +100,11 @@ FIELDS = {
     "java_version": "25",
     "libsignal_client": "0.1",
     "signal_cli": "0.14",
+    "nmap": "7.993",
+    "nmap_source_sha256": "a" * 64,
+    "nmap_bundled_libraries": "libdnet=1.18.2,liblinear=2.50,libpcap=1.10.7",
+    "temurin_package_version": "25.0.1+8",
+    "debian_packages": "zlib1g=1.3.1",
     "fastapi": "1",
 }
 
@@ -102,13 +119,31 @@ def test_parity_flags_difference_and_single_architecture():
     assert any("at least two" in p for p in parity.problems({"amd64": FIELDS}, []))
 
 
-@pytest.mark.parametrize("field", ["java_version", "libsignal_client", "signal_cli", "python"])
+@pytest.mark.parametrize(
+    "field",
+    [
+        "java_version",
+        "libsignal_client",
+        "signal_cli",
+        "nmap",
+        "nmap_source_sha256",
+        "nmap_bundled_libraries",
+        "temurin_package_version",
+        "debian_packages",
+        "python",
+    ],
+)
 def test_parity_requires_fields_even_when_missing_everywhere(field):
     gap = {k: v for k, v in FIELDS.items() if k != field}
     found = parity.problems({"amd64": gap, "arm64": dict(gap)}, list(parity.REQUIRED_FIELDS))
     assert any(f"'{field}' is missing" in p for p in found)
     empty = {**FIELDS, field: ""}
     assert parity.problems({"amd64": empty, "arm64": dict(empty)}, [field])
+
+
+def test_parity_preserves_architecture_specific_package_inventory():
+    arm = {**FIELDS, "temurin_package_version": "25.0.1+9", "debian_packages": "zlib1g=1.3.2"}
+    assert parity.problems({"amd64": FIELDS, "arm64": arm}, list(parity.REQUIRED_FIELDS)) == []
 
 
 def test_parity_requires_every_direct_dependency(tmp_path, capsys):
@@ -184,3 +219,411 @@ def test_trivy_cli_exit_codes(tmp_path, capsys):
     assert trivy.main(["x", "status", str(tmp_path / "absent.json")]) == 1
     assert "scanner failure" in capsys.readouterr().err
     assert trivy.main(["x", "status"]) == 2
+
+
+# --- nmap-release.py: stable-release resolution and signature policy ---------------------
+
+nmap_release = load("nmap-release")
+DIST = nmap_release.DIST
+STABLE_PAGE = (
+    "<b>Latest stable Nmap release tarball: "
+    f'<a href="{DIST}/nmap-7.993.tar.bz2">nmap-7.993.tar.bz2</a></b>'
+    f'<a href="{DIST}/nmap-7.992.tar.bz2">older</a>'
+    f'<b>Latest development: <a href="{DIST}/nmap-7.999BETA1.tar.bz2">beta</a></b>'
+)
+
+
+def test_nmap_latest_takes_only_the_stable_tarball():
+    assert nmap_release.latest_release(STABLE_PAGE) == "7.993"
+
+
+@pytest.mark.parametrize(
+    "page",
+    [
+        "<p>nothing</p>",
+        STABLE_PAGE + STABLE_PAGE,
+        STABLE_PAGE.replace("nmap-7.993.tar.bz2", "nmap-7.993BETA1.tar.bz2"),
+        STABLE_PAGE.replace(DIST, "https://evil.example/dist"),
+    ],
+)
+def test_nmap_latest_requires_exactly_one_official_stable_source(page):
+    with pytest.raises(ValueError, match="exactly one"):
+        nmap_release.latest_release(page)
+
+
+class FakeGpg:
+    def __init__(self, status: str, returncode: int = 0):
+        self.status, self.returncode = status, returncode
+
+    def __call__(self, command, **_kwargs):
+        if "--import" in command:
+            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+        return type("R", (), {"returncode": self.returncode, "stdout": self.status, "stderr": ""})()
+
+
+def validsig(signing: str, primary: str) -> str:
+    return f"[GNUPG:] VALIDSIG {signing} 2026-01-01 1 0 4 0 1 10 00 {primary}\n"
+
+
+def run_verify(monkeypatch, tmp_path, status: str, returncode: int = 0) -> None:
+    monkeypatch.setattr(nmap_release.subprocess, "run", FakeGpg(status, returncode))
+    nmap_release.verify_signature(tmp_path / "a.tar.bz2", tmp_path / "a.asc", tmp_path / "keys", tmp_path / "gnupg")
+
+
+def test_nmap_signature_accepts_the_pinned_key_also_for_a_subkey(monkeypatch, tmp_path):
+    run_verify(monkeypatch, tmp_path, validsig("A" * 40, nmap_release.PROJECT_KEY))
+
+
+@pytest.mark.parametrize(
+    ("status", "returncode"),
+    [
+        (validsig("B" * 40, "B" * 40), 0),
+        (validsig(nmap_release.PROJECT_KEY, nmap_release.PROJECT_KEY) * 2, 0),
+        (validsig(nmap_release.PROJECT_KEY, nmap_release.PROJECT_KEY), 1),
+        ("[GNUPG:] EXPKEYSIG X\n" + validsig(nmap_release.PROJECT_KEY, nmap_release.PROJECT_KEY), 0),
+        ("[GNUPG:] REVKEYSIG X\n" + validsig(nmap_release.PROJECT_KEY, nmap_release.PROJECT_KEY), 0),
+        ("[GNUPG:] BADSIG X\n", 1),
+        ("", 0),
+    ],
+)
+def test_nmap_signature_rejects_untrusted_bad_or_ambiguous_results(monkeypatch, tmp_path, status, returncode):
+    with pytest.raises(ValueError, match="invalid or was made by an untrusted key"):
+        run_verify(monkeypatch, tmp_path, status, returncode)
+
+
+def stub_downloads(monkeypatch, content: bytes = b"archive"):
+    def fake_download(_url, path, **_kwargs):
+        path.write_bytes(content)
+        return hashlib.sha256(content).hexdigest()
+
+    monkeypatch.setattr(nmap_release, "download", fake_download)
+    return hashlib.sha256(content).hexdigest()
+
+
+def test_nmap_fetch_records_provenance_only_after_signature_and_hash_match(monkeypatch, tmp_path):
+    digest = stub_downloads(monkeypatch)
+    monkeypatch.setattr(nmap_release, "verify_signature", lambda *_a: None)
+    nmap_release.fetch("7.993", tmp_path / "out", digest)
+    lines = (tmp_path / "out" / "provenance.txt").read_text().splitlines()
+    assert lines == [
+        "nmap_version=7.993",
+        f"source_url={DIST}/nmap-7.993.tar.bz2",
+        f"source_sha256={digest}",
+        f"signing_key_fingerprint={nmap_release.PROJECT_KEY}",
+    ]
+
+
+def test_nmap_fetch_rejects_a_source_hash_that_differs_from_the_resolved_one(monkeypatch, tmp_path):
+    stub_downloads(monkeypatch)
+    monkeypatch.setattr(nmap_release, "verify_signature", lambda *_a: None)
+    with pytest.raises(ValueError, match="differs from the resolved"):
+        nmap_release.fetch("7.993", tmp_path / "out", "0" * 64)
+    assert not (tmp_path / "out" / "provenance.txt").exists()
+
+
+def test_nmap_fetch_aborts_on_a_failed_signature_without_provenance(monkeypatch, tmp_path):
+    stub_downloads(monkeypatch)
+
+    def reject(*_args):
+        raise ValueError("Nmap signature is invalid or was made by an untrusted key: x")
+
+    monkeypatch.setattr(nmap_release, "verify_signature", reject)
+    with pytest.raises(ValueError, match="untrusted key"):
+        nmap_release.fetch("7.993", tmp_path / "out")
+    assert not (tmp_path / "out" / "provenance.txt").exists()
+
+
+@pytest.mark.parametrize(("version", "digest"), [("7.993;rm", None), ("", None), ("7.993", "XYZ")])
+def test_nmap_fetch_rejects_malformed_inputs_before_any_download(tmp_path, version, digest):
+    with pytest.raises(ValueError):
+        nmap_release.fetch(version, tmp_path / "out", digest)
+    assert not (tmp_path / "out").exists()
+
+
+# --- nmap-release.py release-assets: source archive as a release asset ------------------
+IMAGE_REF = "justup/justup@sha256:" + "b" * 64
+
+
+def release_inputs(tmp_path, *, version="7.993", archs=("amd64", "arm64"), content=b"nmap source"):
+    """Create the `meta` artifact directory and one image provenance file per architecture."""
+    source = tmp_path / "src"
+    source.mkdir()
+    (source / f"nmap-{version}.tar.bz2").write_bytes(content)
+    (source / f"nmap-{version}.tar.bz2.asc").write_bytes(b"signature")
+    (source / "nmap_gpgkeys.txt").write_bytes(b"keys")
+    digest = hashlib.sha256(content).hexdigest()
+    files = []
+    for arch in archs:
+        path = tmp_path / f"prov-{arch}.txt"
+        path.write_text(
+            "\n".join(
+                [
+                    f"nmap_version={version}",
+                    f"source_url={DIST}/nmap-{version}.tar.bz2",
+                    f"source_sha256={digest}",
+                    f"signing_key_fingerprint={nmap_release.PROJECT_KEY}",
+                    f"architecture={arch}",
+                ]
+            )
+            + "\n"
+        )
+        files.append(path)
+    return source, digest, files
+
+
+def run_release_assets(monkeypatch, tmp_path, *, version="7.993", expected=None, **kwargs):
+    monkeypatch.setattr(nmap_release, "verify_signature", lambda *_a: None)
+    source, digest, files = release_inputs(tmp_path, **kwargs)
+    out = tmp_path / "out"
+    nmap_release.release_assets(version, source, out, expected or digest, IMAGE_REF, files)
+    return out, digest
+
+
+def test_nmap_release_assets_write_archive_signature_and_manifest(monkeypatch, tmp_path):
+    out, digest = run_release_assets(monkeypatch, tmp_path)
+    assert (out / "nmap-7.993.tar.bz2").read_bytes() == b"nmap source"
+    assert (out / "nmap-7.993.tar.bz2.asc").read_bytes() == b"signature"
+    fields = nmap_release.read_fields(out / "nmap-source-manifest.txt")
+    assert fields["nmap_version"] == "7.993"
+    assert fields["source_url"] == f"{DIST}/nmap-7.993.tar.bz2"
+    assert fields["source_sha256"] == digest
+    assert fields["source_size_bytes"] == str(len(b"nmap source"))
+    assert fields["signing_key_fingerprint"] == nmap_release.PROJECT_KEY
+    assert fields["license"].endswith("(NPSL)")
+    assert fields["image"] == IMAGE_REF
+    assert fields["image_architectures"] == "amd64,arm64"
+
+
+def test_nmap_release_assets_reject_a_hash_that_differs_from_the_build(monkeypatch, tmp_path):
+    with pytest.raises(ValueError, match="differs from the hash the images were built with"):
+        run_release_assets(monkeypatch, tmp_path, expected="0" * 64)
+    assert not (tmp_path / "out").exists()
+
+
+def test_nmap_release_assets_reject_a_provenance_hash_that_differs(monkeypatch, tmp_path):
+    source, digest, files = release_inputs(tmp_path)
+    files[1].write_text(files[1].read_text().replace(digest, "0" * 64))
+    monkeypatch.setattr(nmap_release, "verify_signature", lambda *_a: None)
+    with pytest.raises(ValueError, match="source_sha256"):
+        nmap_release.release_assets("7.993", source, tmp_path / "out", digest, IMAGE_REF, files)
+    assert not (tmp_path / "out").exists()
+
+
+def test_nmap_release_assets_reject_a_provenance_of_another_version(monkeypatch, tmp_path):
+    source, digest, files = release_inputs(tmp_path)
+    files[0].write_text(files[0].read_text().replace("nmap_version=7.993", "nmap_version=7.992"))
+    monkeypatch.setattr(nmap_release, "verify_signature", lambda *_a: None)
+    with pytest.raises(ValueError, match="nmap_version"):
+        nmap_release.release_assets("7.993", source, tmp_path / "out", digest, IMAGE_REF, files)
+
+
+@pytest.mark.parametrize("missing", ["nmap-7.993.tar.bz2", "nmap-7.993.tar.bz2.asc", "nmap_gpgkeys.txt"])
+def test_nmap_release_assets_reject_a_missing_source_file(monkeypatch, tmp_path, missing):
+    source, digest, files = release_inputs(tmp_path)
+    (source / missing).unlink()
+    monkeypatch.setattr(nmap_release, "verify_signature", lambda *_a: None)
+    with pytest.raises(ValueError, match="missing file"):
+        nmap_release.release_assets("7.993", source, tmp_path / "out", digest, IMAGE_REF, files)
+
+
+def test_nmap_release_assets_reject_a_missing_provenance_file(monkeypatch, tmp_path):
+    source, digest, files = release_inputs(tmp_path)
+    monkeypatch.setattr(nmap_release, "verify_signature", lambda *_a: None)
+    with pytest.raises(ValueError, match="missing file"):
+        nmap_release.release_assets(
+            "7.993", source, tmp_path / "out", digest, IMAGE_REF, [*files, tmp_path / "gone.txt"]
+        )
+
+
+def test_nmap_release_assets_reject_a_wrong_version_for_the_archive(monkeypatch, tmp_path):
+    source, digest, files = release_inputs(tmp_path)
+    monkeypatch.setattr(nmap_release, "verify_signature", lambda *_a: None)
+    with pytest.raises(ValueError, match="missing file"):
+        nmap_release.release_assets("7.994", source, tmp_path / "out", digest, IMAGE_REF, files)
+
+
+def test_nmap_release_assets_reject_a_repeated_architecture(monkeypatch, tmp_path):
+    with pytest.raises(ValueError, match="architecture"):
+        run_release_assets(monkeypatch, tmp_path, archs=("amd64", "amd64"))
+
+
+def test_nmap_release_assets_abort_on_a_failed_signature(monkeypatch, tmp_path):
+    source, digest, files = release_inputs(tmp_path)
+
+    def reject(*_args):
+        raise ValueError("Nmap signature is invalid or was made by an untrusted key: x")
+
+    monkeypatch.setattr(nmap_release, "verify_signature", reject)
+    with pytest.raises(ValueError, match="untrusted key"):
+        nmap_release.release_assets("7.993", source, tmp_path / "out", digest, IMAGE_REF, files)
+    assert not (tmp_path / "out").exists()
+
+
+@pytest.mark.parametrize("image_ref", ["justup/justup:latest", "justup@sha256:abc", ""])
+def test_nmap_release_assets_require_an_image_digest_reference(tmp_path, image_ref):
+    source, digest, files = release_inputs(tmp_path)
+    with pytest.raises(ValueError, match="image reference"):
+        nmap_release.release_assets("7.993", source, tmp_path / "out", digest, image_ref, files)
+
+
+def test_nmap_download_refuses_non_https_urls(tmp_path):
+    with pytest.raises(ValueError, match="non-HTTPS"):
+        nmap_release.download("http://nmap.org/dist/x", tmp_path / "x", limit=10)
+
+
+def test_nmap_cli_reports_usage_and_errors(capsys):
+    assert nmap_release.main(["bogus"]) == 2
+    assert nmap_release.main(["fetch", "bad version", "/nonexistent-out"]) == 1
+    assert "invalid Nmap version" in capsys.readouterr().err
+
+
+def test_dockerfile_nmap_stage_builds_the_pinned_source_without_fixed_version_package_or_default():
+    text = (ROOT / "docker" / "Dockerfile").read_text(encoding="utf-8")
+    stage = text[text.index("AS nmap-builder") : text.index("AS signal-cli-src")]
+    for arg in ("NMAP_VERSION", "NMAP_SOURCE_SHA256"):
+        assert f"\nARG {arg}\n" in stage  # mandatory, no default value
+    assert 'fetch "$version" /tmp/nmap "$source_sha256"' in stage  # hash is enforced in the builder
+    assert not re.search(r"nmap[-= ]\d+\.\d+", stage.replace("nmap-${version}", ""))
+    assert not re.search(r"apt-get install[^\n]*\bnmap\b", text)
+    assert "rpm2cpio" not in stage and "NMAP_RPM" not in stage
+    assert "nmap-release.py latest" not in stage.split("RUN <<'EOF'", 1)[1]  # no resolution cached in a RUN
+
+
+def test_dockerfile_runtime_copies_only_explicit_nmap_paths():
+    text = (ROOT / "docker" / "Dockerfile").read_text(encoding="utf-8")
+    copies = re.findall(r"^COPY --from=nmap-builder (\S+) (\S+)$", text, re.MULTILINE)
+    assert copies == [
+        ("/out/usr/bin/nmap", "/usr/bin/nmap"),
+        ("/out/usr/share/nmap", "/usr/share/nmap"),
+        ("/out/usr/share/doc/nmap", "/usr/share/doc/nmap"),
+    ]
+    runtime = text[text.index("AS runtime") :]
+    assert not re.search(r"\b(build-essential|gcc|make|configure)\b", runtime)
+
+
+def nmap_workflow_problems(workflow: str, builder_fields: set[str]) -> list[str]:
+    """Contract between docker-build.yml, nmap-release.py and the fields the Dockerfile builder writes."""
+    problems = []
+    if re.search(r"nmap_rpm|NMAP_RPM|artifact_sha256|nmap-release\.py fetch[^\n]*\$nmap_rpm", workflow):
+        problems.append("workflow still uses the RPM contract (nmap_rpm / NMAP_RPM / artifact_sha256)")
+    if 'tools/nmap-release.py latest)"' not in workflow:
+        problems.append("meta does not resolve the version with `nmap-release.py latest`")
+    if not re.search(r'nmap-release\.py fetch "\$nmap_version" "\$verify_dir"', workflow):
+        problems.append("meta does not call `fetch VERSION DIR` with the new signature")
+    for arg, source in (("NMAP_VERSION", "nmap_version"), ("NMAP_SOURCE_SHA256", "nmap_source_sha256")):
+        if workflow.count(f'--build-arg "{arg}=${{{{ needs.meta.outputs.{source} }}}}"') != 1:
+            problems.append(f"build-arg {arg} is not passed (once, from meta) to the matrix build")
+    gate = workflow[workflow.index("Verify Nmap TCP and UDP in the runtime image") :]
+    gate = gate[: gate.index("- name: Upload Nmap provenance")]
+    problems.extend(
+        f"provenance gate does not check '{field}' written by the builder"
+        for field in sorted(builder_fields)
+        if f"{field}=" not in gate
+    )
+    if not re.search(r"--entrypoint sha256sum [^\n]*/usr/bin/nmap", gate) or "binary_sha256=${shipped}" not in gate:
+        problems.append("gate does not compare the shipped /usr/bin/nmap hash with binary_sha256")
+    if "- binary " not in gate or "verify-nmap-worker.py" not in workflow:
+        problems.append("gate lacks the ELF/library check or the -sV worker scan")
+    if "build_method=verified-source" not in gate:
+        problems.append("gate does not require build_method=verified-source on every architecture")
+    return problems
+
+
+def dockerfile_builder_fields() -> set[str]:
+    text = (ROOT / "docker" / "Dockerfile").read_text(encoding="utf-8")
+    stage = text[text.index("AS nmap-builder") : text.index("AS signal-cli-src")]
+    block = stage[stage.index("cat /tmp/nmap/provenance.txt") : stage.index("> /out/usr/share/doc/nmap/PROVENANCE.txt")]
+    # provenance.txt (nmap_version, source_*, signing_key_fingerprint) is copied; the builder appends the rest.
+    return {"nmap_version", "source_sha256", "signing_key_fingerprint"} | set(
+        re.findall(r"(?:'|\\n)([a-z][a-z0-9_]*)=", block)
+    )
+
+
+def test_builder_writes_the_provenance_fields_the_release_contract_names():
+    assert dockerfile_builder_fields() >= {
+        "architecture",
+        "build_method",
+        "binary_sha256",
+        "runtime_dependencies",
+        "bundled_libraries",
+        "nmap_version",
+        "source_sha256",
+        "signing_key_fingerprint",
+    }
+
+
+def nmap_builder_stage() -> str:
+    text = (ROOT / "docker" / "Dockerfile").read_text(encoding="utf-8")
+    return text[text.index("AS nmap-builder") : text.index("AS signal-cli-src")]
+
+
+def test_nmap_links_pcre2_and_zlib_from_debian_and_drops_the_unused_ssh2():
+    # Trivy only sees dpkg-owned libraries: every library that can come from Debian must.
+    stage = nmap_builder_stage()
+    assert "libpcre2-dev" in stage
+    assert "--with-libpcre=included" not in stage and "--with-libz=included" not in stage
+    assert "--without-libssh2" in stage  # libssh2 serves NSE only, and NSE is not built
+    # An autodetect fallback to the bundled copy must fail the build, not ship silently.
+    assert "libpcre2-8.so.0" in stage and "nmap-libz" in stage and "nmap-libpcre2" in stage
+    # zlib is no direct NEEDED entry of the binary, so the banner must name the Debian copy positively.
+    assert "libz-[0-9]" in stage and "libpcre2-[0-9]" in stage
+    # "! cmd" is ignored by "set -e": a negative check must be an explicit if.
+    # This guard covers the builder stage only.
+    assert not re.search(r"^!\s", stage, re.MULTILINE)
+
+
+def test_runtime_stage_compares_the_builder_library_list_with_its_own_ldd_result():
+    text = (ROOT / "docker" / "Dockerfile").read_text(encoding="utf-8")
+    pipeline = r"awk '/=>/ \{print \$1\}' [^|]+ \| sort \| paste -sd, -"
+    # Both stages derive the list with the same pipeline, so the comparison is like for like.
+    assert re.search(r"runtime_dependencies=%s\\n' \"\$\(" + pipeline, nmap_builder_stage())
+    runtime = text[text.index("AS runtime") :]
+    assert re.search(r'runtime_dependencies="\$\(' + pipeline, runtime)
+    # A mismatch must exit non-zero and must not be swallowed.
+    match = re.search(
+        r'test "\$builder_dependencies" = "\$runtime_dependencies"\s*\\?\s*\|\|\s*\{[^\n]*exit 1', runtime
+    )
+    assert match, "the library comparison must exit 1 on a mismatch"
+    assert "|| true" not in runtime[match.start() : match.end() + 200]
+
+
+def test_adoptium_key_is_pinned_by_its_exact_fingerprint():
+    text = (ROOT / "docker" / "Dockerfile").read_text(encoding="utf-8")
+    stage = text[text.index("AS jre-builder") : text.index("AS runtime")]
+    assert "--show-keys --with-colons" in stage
+    assert re.search(r'test "\$fingerprints" = "[0-9A-F]{40}"', stage)
+
+
+def test_nmap_composition_is_recorded_for_bundled_and_system_libraries():
+    text = (ROOT / "docker" / "Dockerfile").read_text(encoding="utf-8")
+    stage = nmap_builder_stage()
+    assert "bundled_libraries=" in stage
+    for lib in ("libpcap", "libdnet", "liblinear"):
+        assert lib in stage[stage.index("bundled_libraries=") :]
+    runtime = text[text.index("AS runtime") :]
+    assert "system_libraries=" in runtime and "dpkg-query" in runtime
+    assert re.search(r"^\s+libpcre2-8-0 \\$", runtime, re.MULTILINE)  # explicit, not only inherited from the base
+
+
+def test_release_workflow_matches_the_nmap_release_tool_and_the_builder_contract():
+    workflow = (ROOT / ".github" / "workflows" / "docker-build.yml").read_text(encoding="utf-8")
+    assert nmap_workflow_problems(workflow, dockerfile_builder_fields()) == []
+
+
+def test_contract_check_rejects_the_rpm_era_workflow():
+    workflow = (ROOT / ".github" / "workflows" / "docker-build.yml").read_text(encoding="utf-8")
+    old = workflow.replace('--build-arg "NMAP_SOURCE_SHA256=', '--build-arg "NMAP_RPM=').replace(
+        "binary_sha256=${shipped}", "artifact_sha256"
+    )
+    problems = nmap_workflow_problems(old, dockerfile_builder_fields())
+    assert any("RPM contract" in p for p in problems)
+    assert any("NMAP_SOURCE_SHA256" in p for p in problems)
+    assert any("binary_sha256" in p for p in problems)
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="needs a Linux ELF binary")
+def test_nmap_worker_check_reads_the_dynamic_section_of_an_elf():
+    check = load("verify-nmap-worker")
+    tags = check.dynamic_tags(Path(sys.executable).resolve().read_bytes())
+    assert 1 in tags  # DT_NEEDED
+    assert 5 in tags  # DT_STRTAB

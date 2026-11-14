@@ -29,6 +29,13 @@ test("cookie-only authentication enforces CSRF and revokes logout sessions @auth
 	await page.fill("#password", authApp.bootstrap.password);
 	await page.click("#login-form button[type=submit]");
 	await page.waitForURL(/change-password/);
+	// DC-FORM-4 (N24): the username for password managers is visually hidden, not display:none or `hidden`.
+	const username = await page.locator('#change-password-form input[name="username"]').evaluate((el) => {
+		const style = getComputedStyle(el);
+		return { hiddenAttr: el.hidden, display: style.display, width: parseFloat(style.width), autocomplete: el.autocomplete, readOnly: el.readOnly, value: el.value };
+	});
+	assert.deepEqual({ hiddenAttr: username.hiddenAttr, display: username.display, autocomplete: username.autocomplete, readOnly: username.readOnly }, { hiddenAttr: false, display: "block", autocomplete: "username", readOnly: true });
+	assert.ok(username.width <= 1 && username.value.length > 0, "visually-hidden username keeps its value and collapses to 1px");
 	await page.fill("#new-password", next);
 	await page.fill("#confirm-password", next);
 	await page.click("#change-password-form button[type=submit]");

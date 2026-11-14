@@ -16,7 +16,7 @@ import time
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -35,15 +35,18 @@ from ..models.targets import (
     target_row_to_dict,
 )
 from ..services import event_bus
+from ..services.nmap_jobs import completed_job
 from ..services.target_identity import classify_conflicts, normalize_host
 from ..services.target_profiles import PROFILE_LABELS, build_profile
 from ..utils import maintenance
 from ..utils.client_ip import audit_client_ip
+from ..utils.constants import DEFAULT_TARGET_DOWN_ALERT_DELAY_MINUTES
 from ..utils.crypto import encrypt_secret
 from ..utils.deps import get_conn, get_tsdb_dir
 from ..utils.http_status import DEFAULT_HTTP_SUCCESS_CODES
+from ..utils.public_url import get_public_base_url, target_url
 from ..utils.rate_limit import rate_limit
-from ..utils.tcp_ports import parse_port_list
+from ..utils.tcp_ports import parse_port_list, protocol_scan_hosts
 from .auth import get_current_user, require_admin
 
 _log = logging.getLogger(__name__)
@@ -53,6 +56,8 @@ _TSDB_LEFTOVER_DETAIL = (
 )
 
 _DELETE_COMMIT_FAILED_DETAIL = "Target could not be deleted; its metric data may be partly removed. Repeat the request"
+# Task status is returned to clients; the exception text stays in the server log.
+_NOTIFICATION_TASK_ERROR = "Notification task failed; see server log"
 router = APIRouter(prefix="/targets", tags=["targets"])
 
 
@@ -133,6 +138,29 @@ def _validate_tcp_ports(ports: str | None) -> str:
     return ",".join(str(p) for p in parsed) if parsed else DEFAULT_TCP_PORTS
 
 
+def _validate_udp_ports(ports: str | None) -> str:
+    try:
+        parsed = parse_port_list(ports)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid udp_ports: {exc}") from exc
+    return ",".join(str(port) for port in parsed)
+
+
+def _scan_result_for_target(scan_id: str | None, owner_id: int, target) -> tuple[Any, tuple[str, ...]]:
+    """Return the scan result and the protocols whose scan host the job covers (empty without a scan id)."""
+    if scan_id is None:
+        return None, ()
+    job = completed_job(scan_id, owner_id)
+    covered = (
+        tuple(p for p, h in protocol_scan_hosts(target).items() if h and _norm_host(h) == _norm_host(job.host))
+        if job is not None
+        else ()
+    )
+    if not covered:
+        raise HTTPException(status_code=422, detail="Network scan is unavailable or belongs to another host")
+    return job.result, covered
+
+
 def _encrypt_password(password: str | object | None) -> str | None:
     """Extract plain password from SecretStr and encrypt for storage."""
     if password is None:
@@ -184,7 +212,7 @@ def _validate_target_consistency(data: dict) -> None:
         errors.append("host is required")
 
     if data.get("is_enabled") and not any(
-        data.get(field) for field in ("enable_ping", "enable_http_check", "enable_tcp_connect")
+        data.get(field) for field in ("enable_ping", "enable_http_check", "enable_tcp_connect", "enable_udp_scan")
     ):
         errors.append("An enabled target requires at least one monitoring check")
 
@@ -197,6 +225,9 @@ def _validate_target_consistency(data: dict) -> None:
 
     if data.get("enable_tcp_connect") and not data.get("tcp_host"):
         errors.append("tcp_host is required when enable_tcp_connect is true")
+
+    if data.get("enable_udp_scan") and not data.get("udp_ports"):
+        errors.append("udp_ports is required when enable_udp_scan is true")
 
     if data.get("enable_ping") and not data.get("host") and not data.get("ping_host"):
         errors.append("Host or ping_host is required when enable_ping is true")
@@ -223,9 +254,13 @@ def _validate_target_consistency(data: dict) -> None:
         raise HTTPException(status_code=422, detail="; ".join(errors))
 
 
-def _row_to_target_public(row) -> TargetPublic:
+def _row_to_target_public(row, conn=None, ports=None) -> TargetPublic:
     """Convert DB row to the public response model (no secrets exposed)."""
-    return TargetPublic(**target_row_to_dict(row))
+    data = target_row_to_dict(row)
+    if ports is None and conn is not None:
+        ports = sqlite_db.list_network_ports(conn, row["id"])
+    data["network_ports"] = ports or []
+    return TargetPublic(**data)
 
 
 def _prepare_create_values(payload: TargetCreate) -> dict:
@@ -250,6 +285,7 @@ def _prepare_create_values(payload: TargetCreate) -> dict:
         "http_success_codes": values.get("http_success_codes") or DEFAULT_HTTP_SUCCESS_CODES,
         "enable_cert_expiration": enable_cert_expiration,
         "enable_tcp_connect": values.get("enable_tcp_connect", False),
+        "enable_udp_scan": values.get("enable_udp_scan", False),
         "ping_host": _norm_host(values.get("ping_host")),
         "http_url": http_url,
         "http_username": values.get("http_username"),
@@ -259,8 +295,10 @@ def _prepare_create_values(payload: TargetCreate) -> dict:
         "ignore_cert_errors": values.get("ignore_cert_errors", False),
         "tcp_host": _norm_host(values.get("tcp_host")),
         "tcp_ports": _validate_tcp_ports(values.get("tcp_ports")),
+        "udp_ports": _validate_udp_ports(values.get("udp_ports")),
         "host": _norm_host(values["host"]),
         "max_retries": values.get("max_retries", 5),
+        "down_alert_delay_minutes": values.get("down_alert_delay_minutes", DEFAULT_TARGET_DOWN_ALERT_DELAY_MINUTES),
         "auto_close_alert": values.get("auto_close_alert", True),
         "sla_enabled": values.get("sla_enabled", False),
         "sla_availability_pct": values.get("sla_availability_pct"),
@@ -287,6 +325,7 @@ def preview(payload: TargetWizardPreview, conn=Depends(get_conn), _user=Depends(
             name=payload.name,
             group=payload.group,
             tcp_ports=payload.tcp_ports,
+            udp_ports=payload.udp_ports,
             overrides=payload.overrides,
         )
     except ValueError as exc:
@@ -303,6 +342,7 @@ def preview(payload: TargetWizardPreview, conn=Depends(get_conn), _user=Depends(
         cert_host=values["cert_host"],
         http_url=values["http_url"],
         tcp_ports=values["tcp_ports"],
+        udp_ports=values["udp_ports"],
         enable_cert_expiration=values["enable_cert_expiration"],
     )
     return {"values": public_values, "conflicts": conflicts, "suggested_https": suggested_https}
@@ -311,7 +351,8 @@ def preview(payload: TargetWizardPreview, conn=Depends(get_conn), _user=Depends(
 @router.get("", response_model=list[TargetPublic])
 def list_all(conn=Depends(get_conn), _user=Depends(get_current_user)):
     """List all configured targets."""
-    return [_row_to_target_public(r) for r in sqlite_db.list_targets(conn)]
+    ports = sqlite_db.all_network_ports(conn)
+    return [_row_to_target_public(r, ports=ports.get(r["id"], [])) for r in sqlite_db.list_targets(conn)]
 
 
 @router.get("/{target_id}", response_model=TargetPublic)
@@ -320,13 +361,14 @@ def get_one(target_id: int, conn=Depends(get_conn), _user=Depends(get_current_us
     row = sqlite_db.get_target(conn, target_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Target not found")
-    return _row_to_target_public(row)
+    return _row_to_target_public(row, conn)
 
 
 @router.post("", response_model=TargetPublic, status_code=status.HTTP_201_CREATED)
 def create(payload: TargetCreate, request: Request, conn=Depends(get_conn), _user=Depends(require_admin)):
     """Create a new target."""
     values_db = _prepare_create_values(payload)
+    scan_result, scan_protocols = _scan_result_for_target(payload.network_scan_id, int(_user["id"]), values_db)
     recipient_ids = payload.alert_recipient_ids
     with sqlite_db.immediate_transaction(conn):
         for rid in set(recipient_ids):
@@ -334,6 +376,14 @@ def create(payload: TargetCreate, request: Request, conn=Depends(get_conn), _use
                 raise HTTPException(status_code=422, detail=f"Recipient {rid} not found")
         _check_host_collision(conn, values_db)
         new_id = sqlite_db.create_target(conn, values_db, manage_transaction=False)
+        sqlite_db.sync_network_ports(
+            conn,
+            new_id,
+            tcp_ports=parse_port_list(values_db["tcp_ports"]) if values_db["enable_tcp_connect"] else [],
+            udp_ports=parse_port_list(values_db["udp_ports"]) if values_db["enable_udp_scan"] else [],
+            scan_result=scan_result,
+            scan_protocols=scan_protocols,
+        )
         if recipient_ids:
             sqlite_db.set_target_recipients(conn, new_id, list(dict.fromkeys(recipient_ids)), manage_transaction=False)
         # After the explicit list (which replaces assignments): recipients flagged "all targets" always join.
@@ -361,18 +411,18 @@ def create(payload: TargetCreate, request: Request, conn=Depends(get_conn), _use
         scheduler.request_refresh()
 
     row = sqlite_db.get_target(conn, new_id)
-    return _row_to_target_public(row)
+    return _row_to_target_public(row, conn)
 
 
 @router.patch("/{target_id}", response_model=TargetPublic)
 def patch(target_id: int, payload: TargetUpdate, conn=Depends(get_conn), _user=Depends(require_admin)):
     with sqlite_db.immediate_transaction(conn):
-        result = _patch_locked(target_id, payload, conn)
+        result = _patch_locked(target_id, payload, conn, owner_id=int(_user["id"]))
     event_bus.publish("target.changed", {"target_id": target_id})
     return result
 
 
-def _patch_locked(target_id: int, payload: TargetUpdate, conn):
+def _patch_locked(target_id: int, payload: TargetUpdate, conn, owner_id: int | None = None):
     """
     Update a target by id (partial update).
 
@@ -411,9 +461,11 @@ def _patch_locked(target_id: int, payload: TargetUpdate, conn):
         "http_port",
         "http_success_codes",
         "enable_tcp_connect",
+        "enable_udp_scan",
         "cert_port",
         "ignore_cert_errors",
         "max_retries",
+        "down_alert_delay_minutes",
         "auto_close_alert",
         "sla_enabled",
         "sla_availability_pct",
@@ -423,8 +475,11 @@ def _patch_locked(target_id: int, payload: TargetUpdate, conn):
         if k in patch_payload:
             patch_db[k] = patch_payload[k]
 
-    if "tcp_ports" in patch_payload:
+    # Null or empty tcp_ports means "unchanged"; it must not reset the stored list to the default.
+    if patch_payload.get("tcp_ports") is not None:
         patch_db["tcp_ports"] = _validate_tcp_ports(patch_payload["tcp_ports"])
+    if "udp_ports" in patch_payload:
+        patch_db["udp_ports"] = _validate_udp_ports(patch_payload["udp_ports"])
 
     if "host" in patch_payload:
         patch_db["host"] = _norm_host(patch_payload["host"])
@@ -464,6 +519,7 @@ def _patch_locked(target_id: int, payload: TargetUpdate, conn):
             bool(existing["enable_http_check"]),
         ),
         "enable_tcp_connect": patch_db.get("enable_tcp_connect", existing["enable_tcp_connect"]),
+        "enable_udp_scan": patch_db.get("enable_udp_scan", existing["enable_udp_scan"]),
         "ping_host": _merge("ping_host"),
         "http_url": _merge("http_url"),
         "http_username": _merge("http_username"),
@@ -471,6 +527,7 @@ def _patch_locked(target_id: int, payload: TargetUpdate, conn):
         "cert_host": _merge("cert_host"),
         "tcp_host": _merge("tcp_host"),
         "tcp_ports": _merge("tcp_ports"),
+        "udp_ports": _merge("udp_ports"),
         "http_port": _merge("http_port"),
     }
 
@@ -504,8 +561,29 @@ def _patch_locked(target_id: int, payload: TargetUpdate, conn):
 
     if patch_db:
         sqlite_db.update_target(conn, target_id=target_id, patch=patch_db, manage_transaction=False)
+    host_changed = _norm_host(effective["host"]) != _norm_host(existing["host"])
+    # TCP scans tcp_host (falling back to host); UDP scans host only, so each protocol resets on its own host.
+    old_hosts, new_hosts = protocol_scan_hosts(existing), protocol_scan_hosts(effective)
+    reset_protocols = {p for p, h in new_hosts.items() if _norm_host(h) != _norm_host(old_hosts[p])}
+    if host_changed or reset_protocols:
+        # The aggregate snapshot may include checks against an old scan host; do not show it while they refresh.
+        sqlite_db.delete_target_status(conn, target_id)
+    scan_result, scan_protocols = (
+        _scan_result_for_target(payload.network_scan_id, owner_id, effective)
+        if payload.network_scan_id and owner_id is not None
+        else (None, ())
+    )
+    sqlite_db.sync_network_ports(
+        conn,
+        target_id,
+        tcp_ports=parse_port_list(effective["tcp_ports"]) if effective["enable_tcp_connect"] else [],
+        udp_ports=parse_port_list(effective["udp_ports"]) if effective["enable_udp_scan"] else [],
+        scan_result=scan_result,
+        reset_protocols=reset_protocols,
+        scan_protocols=scan_protocols,
+    )
     row = sqlite_db.get_target(conn, target_id)
-    return _row_to_target_public(row)
+    return _row_to_target_public(row, conn)
 
 
 @router.delete("/{target_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -515,6 +593,17 @@ def delete(target_id: int, request: Request, conn=Depends(get_conn), user=Depend
     if target is None:
         raise HTTPException(status_code=404, detail="Target not found")
 
+    # TSDB files cannot join the SQLite transaction: delete them last, inside it, so leftovers
+    # roll the target delete back and the request can simply be repeated.
+    try:
+        with sqlite_db.transaction(conn):
+            sqlite_db.delete_target(conn, target_id)
+            if not tsdb_db.delete_target(get_tsdb_dir(request), target_id):
+                raise HTTPException(status_code=500, detail=_TSDB_LEFTOVER_DETAIL)
+    except sqlite3.Error:
+        # Files may already be gone while the row stays; repeating the request converges.
+        _log.exception("Target %d delete failed at commit; metric data may already be removed", target_id)
+        raise HTTPException(status_code=500, detail=_DELETE_COMMIT_FAILED_DETAIL) from None
     client_ip = _get_client_ip(request)
     target_name = target["name"]
     _log.info(
@@ -530,24 +619,16 @@ def delete(target_id: int, request: Request, conn=Depends(get_conn), user=Depend
         },
     )
 
-    # TSDB files cannot join the SQLite transaction: delete them last, inside it, so leftovers
-    # roll the target delete back and the request can simply be repeated.
+    # Best-effort after commit: a failure here must not turn a completed delete into a 500.
     try:
-        with sqlite_db.transaction(conn):
-            sqlite_db.delete_target(conn, target_id)
-            if not tsdb_db.delete_target(get_tsdb_dir(request), target_id):
-                raise HTTPException(status_code=500, detail=_TSDB_LEFTOVER_DETAIL)
-    except sqlite3.Error:
-        # Files may already be gone while the row stays; repeating the request converges.
-        _log.exception("Target %d delete failed at commit; metric data may already be removed", target_id)
-        raise HTTPException(status_code=500, detail=_DELETE_COMMIT_FAILED_DETAIL) from None
-    # Best-effort: notify scheduler
-    scheduler = getattr(request.app.state, "scheduler", None)
-    if scheduler is not None:
-        scheduler.forget_target(target_id)
-    else:
-        _log.debug("Scheduler not available, target %d will be forgotten on next restart", target_id)
-    event_bus.publish("target.changed", {"target_id": target_id})
+        scheduler = getattr(request.app.state, "scheduler", None)
+        if scheduler is not None:
+            scheduler.forget_target(target_id)
+        else:
+            _log.debug("Scheduler not available, target %d will be forgotten on next restart", target_id)
+        event_bus.publish("target.changed", {"target_id": target_id})
+    except Exception:  # noqa: BLE001 - best-effort post-commit notification
+        _log.warning("Post-delete notification failed for target %d", target_id, exc_info=True)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -615,6 +696,10 @@ _NOTIFICATION_TASK_TTL_SECONDS = 300
 MAX_ACTIVE_NOTIFICATION_TASKS = 4  # per worker; excess requests get 429 instead of queueing
 _NOTIFICATION_RETRY_AFTER_SECONDS = 10
 MAX_ALERT_RECIPIENTS = 200  # bounds per-request DB lookups and welcome-message fan-out
+
+# Slots reserved by in-flight PUTs, so the cap holds before tasks reach _background_tasks.
+_reserved_slots = 0
+_reserved_slots_lock = threading.Lock()
 
 # Welcome tasks wait out an in-progress restore, but the wait must be bounded and cancellable:
 # maintenance stays active until process restart, so an unbounded loop would spin forever.
@@ -684,12 +769,12 @@ async def _safe_notify_recipients_background(
             target_name,
             recipient_ids,
         )
-    except Exception as e:  # noqa: BLE001 - best-effort/background boundary: log and continue so the request or task is not aborted
+    except Exception:  # noqa: BLE001 - best-effort/background boundary: log and continue so the request or task is not aborted
         _log.exception("Background notification task %s failed", task_id)
         task_status = _notification_tasks.get(target_id, {}).get(task_id)
         if task_status is not None:
             task_status["status"] = "failed"
-            task_status.setdefault("errors", []).append(str(e))
+            task_status.setdefault("errors", []).append(_NOTIFICATION_TASK_ERROR)
             task_status["updated_at"] = time.monotonic()
             task_status["completed_at"] = time.monotonic()
 
@@ -708,19 +793,38 @@ def _replace_alert_recipients(conn, target_id: int, recipient_ids: list[int]) ->
     existing_ids = set(sqlite_db.get_target_recipient_ids(conn, target_id))
     new_ids = set(recipient_ids) - existing_ids
 
-    # Reject before touching the assignment so a 429 never leaves a half-applied request.
-    if new_ids and len(_background_tasks) >= MAX_ACTIVE_NOTIFICATION_TASKS:
-        raise HTTPException(
-            status_code=429,
-            detail="Too many notification tasks running; retry shortly",
-            headers={"Retry-After": str(_NOTIFICATION_RETRY_AFTER_SECONDS)},
-        )
-
-    sqlite_db.set_target_recipients(conn, target_id, recipient_ids)
+    # Reserve capacity atomically before persisting; a 429 never leaves a half-applied request.
+    # On success the caller owns the reservation and must call _release_notification_slot().
+    if new_ids:
+        _reserve_notification_slot()
+    try:
+        sqlite_db.set_target_recipients(conn, target_id, recipient_ids)
+    except BaseException:
+        if new_ids:
+            _release_notification_slot()
+        raise
     return str(target["name"]), new_ids
 
 
-@router.put("/{target_id}/alert-users")
+def _reserve_notification_slot() -> None:
+    global _reserved_slots
+    with _reserved_slots_lock:
+        if len(_background_tasks) + _reserved_slots >= MAX_ACTIVE_NOTIFICATION_TASKS:
+            raise HTTPException(
+                status_code=429,
+                detail="Too many notification tasks running; retry shortly",
+                headers={"Retry-After": str(_NOTIFICATION_RETRY_AFTER_SECONDS)},
+            )
+        _reserved_slots += 1
+
+
+def _release_notification_slot() -> None:
+    global _reserved_slots
+    with _reserved_slots_lock:
+        _reserved_slots = max(0, _reserved_slots - 1)
+
+
+@router.put("/{target_id}/alert-users", dependencies=[Depends(rate_limit("30/minute"))])
 async def set_target_alert_users(
     target_id: int,
     request: Request,
@@ -736,38 +840,42 @@ async def set_target_alert_users(
     _cleanup_notification_tasks(target_id)
     target_name, new_ids = await run_in_threadpool(_replace_alert_recipients, conn, target_id, recipient_ids)
 
-    # If new recipients, start background notification task
+    # If new recipients, start background notification task; the reservation spans scheduling.
     notification_task_id: str | None = None
     if new_ids:
-        db_path = Path(request.app.state.db_path)
-        notification_task_id = str(uuid.uuid4())
+        try:
+            db_path = Path(request.app.state.db_path)
+            notification_task_id = str(uuid.uuid4())
 
-        if target_id not in _notification_tasks:
-            _notification_tasks[target_id] = {}
-        _notification_tasks[target_id][notification_task_id] = {
-            "status": "running",
-            "total": len(new_ids),
-            "success": 0,
-            "queued": 0,  # Queued for later delivery (not a failure)
-            "failed": 0,
-            "errors": [],
-            "updated_at": time.monotonic(),
-            "completed_at": None,
-        }
+            if target_id not in _notification_tasks:
+                _notification_tasks[target_id] = {}
+            _notification_tasks[target_id][notification_task_id] = {
+                "status": "running",
+                "total": len(new_ids),
+                "success": 0,
+                "queued": 0,  # Queued for later delivery (not a failure)
+                "skipped": 0,  # Removed, disabled or without a usable channel
+                "failed": 0,
+                "errors": [],
+                "updated_at": time.monotonic(),
+                "completed_at": None,
+            }
 
-        # Start background task in thread pool (fire-and-forget, non-blocking)
-        # This prevents blocking the FastAPI event loop during I/O-heavy notification sends
-        _bg_task = asyncio.create_task(
-            _safe_notify_recipients_background(
-                db_path,
-                target_id,
-                notification_task_id,
-                target_name,
-                new_ids,
+            # Start background task in thread pool (fire-and-forget, non-blocking)
+            # This prevents blocking the FastAPI event loop during I/O-heavy notification sends
+            _bg_task = asyncio.create_task(
+                _safe_notify_recipients_background(
+                    db_path,
+                    target_id,
+                    notification_task_id,
+                    target_name,
+                    new_ids,
+                )
             )
-        )
-        _background_tasks.add(_bg_task)
-        _bg_task.add_done_callback(_background_tasks.discard)
+            _background_tasks.add(_bg_task)
+            _bg_task.add_done_callback(_background_tasks.discard)
+        finally:
+            _release_notification_slot()
 
     return {
         "status": "ok",
@@ -888,9 +996,6 @@ def _notify_recipients_background_in_section(
     if task_status is None:
         return
 
-    message = f"📣 You were just added to the alerting group for '{target_name}'."
-    email_message = f"📣 You were just added to the alerting group for '{target_name}'."
-
     from ..utils.constants import SettingKeys
 
     conn = sqlite_db.connect(db_path)
@@ -901,8 +1006,11 @@ def _notify_recipients_background_in_section(
             task_status["updated_at"] = time.monotonic()
             task_status["completed_at"] = time.monotonic()
             return
+        # A rename since queueing must not put the old name into the message.
         target_name = str(target["name"])
-        system_url = sqlite_db.get_setting(conn, SettingKeys.SYSTEM_BASE_URL, None) or "#"
+        message = f"📣 You were just added to the alerting group for '{target_name}'."
+        email_message = message
+        system_url = target_url(get_public_base_url(conn), None)
         github_url = "https://github.com/Gill-Bates/justup"
 
         signal_backend = get_signal_backend()
@@ -917,23 +1025,17 @@ def _notify_recipients_background_in_section(
         assigned_ids = set(sqlite_db.get_target_recipient_ids(conn, target_id))
         for rid in recipient_ids:
             recipient = sqlite_db.get_recipient(conn, rid)
-            if rid not in assigned_ids:
-                task_status["success"] += 1
-                continue
-            if not recipient or not recipient["is_enabled"]:
-                task_status["success"] += 1
+            if rid not in assigned_ids or not recipient or not recipient["is_enabled"]:
+                task_status["skipped"] = task_status.get("skipped", 0) + 1
+                task_status["updated_at"] = time.monotonic()
                 continue
 
             recipient_name = recipient["name"]
+            recipient_queued = 0
             phone = recipient["phone"] or None
             email = recipient["email"] or None
-            # ══════════════════════════════════════════════════════════════════════════
-            # ARCHITECTURE: Signal goes through spooler for rate-limit protection.
-            #
-            # If queue is empty (idle), enqueue with immediate=True so it's sent
-            # on next scheduler tick (within seconds). If queue has backlog, normal
-            # queueing ensures FIFO order and prevents bursts.
-            # ══════════════════════════════════════════════════════════════════════════
+            # Signal goes through the spooler for rate-limit protection: an idle queue sends
+            # on the next tick (immediate=True), a backlog keeps FIFO order and avoids bursts.
             if phone and signal_sender:
                 is_idle = spooler.is_channel_idle(ChannelType.SIGNAL)
                 spooler.enqueue(
@@ -956,10 +1058,12 @@ def _notify_recipients_background_in_section(
                     is_idle,
                 )
                 task_status["queued"] += 1
+                recipient_queued += 1
 
             if email and smtp_enabled:
                 subject = f"🎉 justUp! – You were added: {target_name}"
 
+                has_link = system_url.lower().startswith(("http://", "https://"))
                 safe_recipient_name = html.escape(str(recipient_name or ""))
                 safe_target_name = html.escape(str(target_name or ""))
                 safe_message = html.escape(str(email_message or ""))
@@ -978,14 +1082,12 @@ def _notify_recipients_background_in_section(
                     f"{email_message}\n\n"
                     f"From now on, you will receive notifications when the target '{target_name}' "
                     f"goes down or comes back up.\n\n"
-                    "This message was sent automatically.\n\n"
+                    + (f"Open justUp!: {system_url}\n\n" if has_link else "")
+                    + "This message was sent automatically.\n\n"
                     f"justUp! © 2026 Gill-Bates · GitHub: {github_url}\n"
                 )
 
-                # ══════════════════════════════════════════════════════════════════════
-                # ARCHITECTURE: Email goes through spooler (same as Signal).
-                # Nothing leaves the system without going through the spooler.
-                # ══════════════════════════════════════════════════════════════════════
+                # Email also goes through the spooler: nothing leaves the system without it.
                 is_idle = spooler.is_channel_idle(ChannelType.EMAIL)
                 spooler.enqueue(
                     notification_type=NotificationType.WELCOME,
@@ -1008,22 +1110,25 @@ def _notify_recipients_background_in_section(
                     is_idle,
                 )
                 task_status["queued"] += 1
+                recipient_queued += 1
 
-            # Count as success if at least one channel succeeded immediately
-            # (queued notifications will be delivered later)
-            task_status["success"] += 1
+            # success = recipients with at least one queued message; no usable channel is skipped.
+            if recipient_queued:
+                task_status["success"] += 1
+            else:
+                task_status["skipped"] = task_status.get("skipped", 0) + 1
             task_status["updated_at"] = time.monotonic()
-    except Exception as e:  # noqa: BLE001 - best-effort/background boundary: log and continue so the request or task is not aborted
+    except Exception:  # noqa: BLE001 - best-effort/background boundary: log and continue so the request or task is not aborted
         _log.exception("Welcome notification task failed for target %d", target_id)
         task_status["status"] = "failed"
-        task_status["errors"].append(str(e))
+        task_status.setdefault("errors", []).append(_NOTIFICATION_TASK_ERROR)
         task_status["updated_at"] = time.monotonic()
         task_status["completed_at"] = time.monotonic()
     finally:
         sqlite_db.close_connection(conn)
 
     # Determine final status
-    # - completed: all sent immediately
+    # - completed: nothing was queued (all recipients skipped)
     # - completed_with_queued: some queued for later (not an error)
     # - completed_with_errors: permanent failures (currently not possible, all failures are queued)
     if task_status["status"] != "failed":

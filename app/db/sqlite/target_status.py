@@ -56,7 +56,7 @@ def set_target_status_snapshot(
         ).fetchone()
         prev_overall = prev["overall_status"] if prev else "unknown"
         last_down_at = prev["last_down_at"] if prev else None
-        if prev_overall in ("up", "unknown") and overall_status == "down":
+        if overall_status == "down" and prev_overall != "down":
             last_down_at = now
 
         # Preserve last known cert_days_left if current check failed (None)
@@ -122,7 +122,7 @@ def get_target_status(conn: sqlite3.Connection, target_id: int) -> sqlite3.Row |
 
 def get_all_target_statuses(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     """Get cached status for all targets."""
-    return list(conn.execute("SELECT * FROM target_status ORDER BY target_id").fetchall())
+    return conn.execute("SELECT * FROM target_status ORDER BY target_id").fetchall()
 
 
 def delete_target_status(conn: sqlite3.Connection, target_id: int) -> None:

@@ -1,3 +1,4 @@
+{% from "fragments/_state_dot.html" import state_dot, cert_dot, cert_level %}
 {# KPI summary: health signals first, check configuration second. #}
 <section class="target-kpi-row" aria-label="Target summary">
 
@@ -24,56 +25,15 @@
 			<div class="card-body">
 				<p class="target-kpi-label">Checks</p>
 				<div class="ju-badges target-kpi-badges">
-					{% if target.enable_http_check %}
-					<span class="badge
-{% if target.http_status == 'up' %}ju-status-badge--success
-{% elif target.http_status == 'down' %}ju-status-badge--danger
-{% else %}ju-status-badge--neutral{% endif %}">
-						HTTP<span class="visually-hidden">: {{ target.http_status or 'unknown' }}</span>
-					</span>
-					{% endif %}
-					{% if target.enable_ping %}
-					<span class="badge
-{% if target.ping_status == 'up' %}ju-status-badge--success
-{% elif target.ping_status == 'down' %}ju-status-badge--danger
-{% else %}ju-status-badge--neutral{% endif %}">
-						PING<span class="visually-hidden">: {{ target.ping_status or 'unknown' }}</span>
-					</span>
-					{% endif %}
+{% if target.enable_http_check %}{{ state_dot('HTTP', target.http_status) }}{% endif %}
+					{% if target.enable_ping %}{{ state_dot('PING', target.ping_status) }}{% endif %}
 					{% if target.enable_cert_expiration %}
-					<span class="badge
-{% if target.cert_status == 'ok' %}ju-status-badge--success
-{% elif target.cert_status == 'warning' %}ju-status-badge--warning
-{% elif target.cert_status in ('critical', 'expired') %}ju-status-badge--danger
-{% else %}ju-status-badge--neutral{% endif %}">
-						CERT<span class="visually-hidden">: {{ target.cert_status or 'unknown' }}</span>
-					</span>
+					{{ cert_dot('CERT', target.cert_status) }}
 					{% endif %}
-					{% if target.enable_tcp_connect %}
-					{% set port_status = target.tcp_port_status or {} %}
-					{% set ports = (target.tcp_ports or '80').split(',') %}
-					{% if ports | length == 1 %}
-					{# Single port: show simple TCP badge #}
-					<span class="badge
-{% if target.tcp_status == 'up' %}ju-status-badge--success
-{% elif target.tcp_status == 'down' %}ju-status-badge--danger
-{% else %}ju-status-badge--neutral{% endif %}">
-						TCP:{{ ports[0] }}<span class="visually-hidden">: {{ target.tcp_status or 'unknown' }}</span>
-					</span>
-					{% else %}
-					{# Multiple ports: show individual port badges with status colors #}
-					{% for port in ports %}
-					{% set ps = port_status.get(port | trim, 'unknown') %}
-					<span class="badge
-{% if ps == 'up' %}ju-status-badge--success
-{% elif ps == 'down' %}ju-status-badge--danger
-{% else %}ju-status-badge--neutral{% endif %}">
-						TCP:{{ port | trim }}<span class="visually-hidden">: {{ ps }}</span>
-					</span>
+					{% for endpoint in target.endpoints|default([]) if endpoint.kind == 'port' %}
+					{{ state_dot(endpoint.protocol|upper ~ ':' ~ endpoint.port, endpoint.status, endpoint.state_note or endpoint.name) }}
 					{% endfor %}
-					{% endif %}
-					{% endif %}
-					{% if not (target.enable_http_check or target.enable_ping or target.enable_cert_expiration or target.enable_tcp_connect) %}
+					{% if not (target.enable_http_check or target.enable_ping or target.enable_cert_expiration or target.enable_tcp_connect or target.enable_udp_scan) %}
 					<span class="target-kpi-hint">No checks enabled</span>
 					{% endif %}
 				</div>
@@ -85,11 +45,8 @@
 		<div class="card target-kpi-card" id="cert-days-card">
 			<div class="card-body">
 				<p class="target-kpi-label">Cert expiry</p>
-				<p id="cert-days-value" class="target-kpi-value
-{% if target.cert_status == 'ok' %}text-success
-{% elif target.cert_status == 'warning' %}text-warning
-{% elif target.cert_status in ('critical', 'expired') %}text-danger
-{% else %}text-body-secondary{% endif %}">--</p>
+				{% set cl = cert_level(target.cert_status)|trim %}
+				<p id="cert-days-value" class="target-kpi-value text-{{ 'body-secondary' if cl == 'neutral' else cl ~ '-emphasis' }}">--</p>
 				<p id="cert-days-hint" class="target-kpi-hint">No certificate data yet</p>
 			</div>
 		</div>

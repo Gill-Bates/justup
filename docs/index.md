@@ -17,7 +17,7 @@ hide:
 ## What is justUp!?
 
 justUp! is a self-hosted uptime monitor for small teams. It checks hosts with
-ping, HTTP(S), TCP, and certificate checks, alerts by email and Signal, and
+ping, HTTP(S), TCP, UDP, and certificate checks, alerts by email and Signal, and
 creates PDF reports. It runs as a single container with an embedded SQLite
 database. No external database or agent is needed.
 

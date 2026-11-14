@@ -13,8 +13,8 @@ Auth Strategy:
 
 Async/Sync Strategy:
 - Most UI endpoints are SYNC: Simple DB reads, template rendering (SQLite is fast)
-- ASYNC endpoints: Expensive I/O operations only (MTR, external API calls)
-  - fragment_traceroute: MTR subprocess + geolocation
+- ASYNC endpoints: Expensive I/O operations only (traceroute, external API calls)
+  - fragment_traceroute: Nmap worker traceroute + geolocation
   - fragment_downtime_history: TSDB range queries
   - fragment_signal_* are sync def: FastAPI runs their Signal calls in the threadpool
 - Rationale: Sync is simpler, async overhead not justified for <10ms DB queries
@@ -31,6 +31,7 @@ HTTP Status Codes:
 from __future__ import annotations
 
 import asyncio
+import copy
 import functools
 import hashlib
 import html
@@ -42,6 +43,7 @@ import time
 from collections import OrderedDict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import TYPE_CHECKING
 from urllib.parse import urlencode
 
 import markdown
@@ -55,7 +57,10 @@ from ..db import sqlite as sqlite_db
 from ..db import tsdb as tsdb_db
 from ..models.settings import SettingsUpdate
 from ..models.targets import target_row_to_dict
+from ..models.users import PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH
 from ..monitor.quality_probe import DEFAULT_QUALITY_TARGETS
+from ..services import ixp_index
+from ..services.notifications.email_template import placeholder_doc_groups
 from ..services.route_timeline import (
     STATE_LABELS,
     expand_sequence_hops,
@@ -67,13 +72,14 @@ from ..services.route_timeline import build_route_timeline as _build_route_timel
 from ..utils.auth_helpers import (
     is_password_change_exempt_path,
     is_password_change_pending,
+    login_redirect_url,
     resolve_user_optional,
     resolve_user_or_htmx_redirect,
 )
+from ..utils.availability_rules import downtime_series
 from ..utils.constants import (
     DATE_FORMAT_ISO,
     DEFAULT_GEOIP_AUTO_UPDATE,
-    DEFAULT_METRICS_TIMEOUT_MINUTES,
     DEFAULT_PDF_PAGE_SIZE,
     DEFAULT_PURGE_ENABLED,
     DISPLAY_UNGROUPED_EN,
@@ -87,7 +93,10 @@ from ..utils.constants import (
     SettingKeys,
 )
 from ..utils.deps import get_conn, get_tsdb_dir
-from ..utils.formatters import format_compact_count, format_percent, row_to_alert_dict
+from ..utils.downtime_view import build_history
+from ..utils.endpoint_view import build_endpoint_views
+from ..utils.formatters import format_availability, format_compact_count, row_to_alert_dict
+from ..utils.public_url import get_public_hostname
 from ..utils.rate_limit import rate_limit
 from ..utils.runtime_fields import (
     QUALITY_TARGET_MAX_LENGTH,
@@ -96,6 +105,8 @@ from ..utils.runtime_fields import (
 )
 from ..utils.settings_cache import (
     get_pdf_page_size,
+    is_auth_required,
+    is_pdf_export_enabled,
     use_utc_dashboard,
 )
 from ..utils.status_helper import (
@@ -104,10 +115,14 @@ from ..utils.status_helper import (
     get_status_defaults,
 )
 from ..utils.storage_stats import compute_storage_stats
+from ..utils.tcp_ports import parse_port_list, tcp_ports_or_default
 from ..utils.time import assume_utc, utcnow
 from ..utils.uptime_metric import enabled_availability_metrics, uptime_level
 from ..utils.version import BUILD_INFO, VERSION
 from . import notifications as notifications_api
+
+if TYPE_CHECKING:
+    from ..services.traceroute_service import TracerouteOutcome
 
 router = APIRouter(tags=["frontend"])
 
@@ -121,6 +136,15 @@ _TRACEROUTE_MEASURED_AT_HEADER = "X-Measured-At"
 # (monotonic expiry, rendered fragment, measurement time in epoch ms)
 _traceroute_fragment_cache: OrderedDict[tuple[str, int, str], tuple[float, bytes, int]] = OrderedDict()
 _traceroute_fragment_cache_lock = threading.Lock()
+# Cache namespace version: bump when the rendered fragment shape changes so old entries are never served.
+_TRACEROUTE_CACHE_VERSION = "nmap1"
+# Last successfully rendered fragment per key (no expiry); shown again when a new measurement fails.
+_traceroute_last_good: OrderedDict[tuple[str, int, str], tuple[bytes, int]] = OrderedDict()
+# Measured route per key, kept as long as the browser keeps its result, with the IXP data version it was
+# last rendered with. A changed version re-renders this route; the stored hops are never measured again.
+_TRACEROUTE_ROUTE_TTL_SECONDS = 24 * 3600
+_traceroute_routes: OrderedDict[tuple[str, int, str], tuple[float, TracerouteOutcome, str]] = OrderedDict()
+_TRACEROUTE_REFRESH_FAILED_HEADER = "X-Traceroute-Refresh-Failed"
 
 
 def _get_cached_traceroute_fragment(cache_namespace: str, target_id: int, host: str) -> tuple[bytes, int] | None:
@@ -152,6 +176,42 @@ def _cache_traceroute_fragment(
         _traceroute_fragment_cache.move_to_end(key)
         while len(_traceroute_fragment_cache) > _TRACEROUTE_CACHE_MAX_ENTRIES:
             _traceroute_fragment_cache.popitem(last=False)
+        _traceroute_last_good[key] = (body, measured_at_ms)
+        _traceroute_last_good.move_to_end(key)
+        while len(_traceroute_last_good) > _TRACEROUTE_CACHE_MAX_ENTRIES:
+            _traceroute_last_good.popitem(last=False)
+
+
+def _remember_traceroute_route(
+    cache_namespace: str, target_id: int, host: str, outcome: TracerouteOutcome, geo_version: str
+) -> None:
+    key = (cache_namespace, target_id, host)
+    with _traceroute_fragment_cache_lock:
+        _traceroute_routes[key] = (time.monotonic() + _TRACEROUTE_ROUTE_TTL_SECONDS, outcome, geo_version)
+        _traceroute_routes.move_to_end(key)
+        while len(_traceroute_routes) > _TRACEROUTE_CACHE_MAX_ENTRIES:
+            _traceroute_routes.popitem(last=False)
+
+
+def _route_with_outdated_geo(
+    cache_namespace: str, target_id: int, host: str, current_geo_version: str
+) -> TracerouteOutcome | None:
+    """The stored route when it was rendered with other IXP data than the current one, else None."""
+    key = (cache_namespace, target_id, host)
+    with _traceroute_fragment_cache_lock:
+        entry = _traceroute_routes.get(key)
+        if entry is None:
+            return None
+        expires_at, outcome, rendered_with = entry
+        if time.monotonic() >= expires_at:
+            _traceroute_routes.pop(key, None)
+            return None
+        return outcome if rendered_with != current_geo_version else None
+
+
+def _get_last_good_traceroute_fragment(cache_namespace: str, target_id: int, host: str) -> tuple[bytes, int] | None:
+    with _traceroute_fragment_cache_lock:
+        return _traceroute_last_good.get((cache_namespace, target_id, host))
 
 
 # Explicit "Run again": one measurement per key at a time, plus a short cooldown after it.
@@ -187,20 +247,16 @@ def _end_traceroute_refresh(key: tuple[str, int, str]) -> None:
 _logical_hop_count = logical_hop_count
 
 
-def _format_percent_value(value: float) -> str:
-    return f"{round(value, 1):g}%"
-
-
 def _destination_kpis(
     display_hops: list[dict],
     target_ip: str | None,
     destination_geo_point: dict | None,
     destination_reached: bool | None = None,
 ) -> dict:
-    """Derive the KPI row from measured data only; unknown values stay ``None`` (never 0).
+    """Derive the KPI row from measured data only; unknown values stay ``None`` (never 0). The RTT is one probe.
 
     ``destination_reached`` is the single verdict of ``analyze_route``; without it the flags of the
-    hops decide (callers outside the fragment). A synthetic destination never supplies latency or loss.
+    hops decide (callers outside the fragment). A synthetic destination never supplies an RTT.
     """
     destination = next(
         (
@@ -220,15 +276,10 @@ def _destination_kpis(
         measured = None
 
     latency_ms = None
-    loss_pct = None
     if measured is not None:
-        latency = measured.get("latency_ms")
-        raw_latency = latency.get("avg") if isinstance(latency, dict) else latency
+        raw_latency = measured.get("rtt_ms")
         if isinstance(raw_latency, (int, float)) and not isinstance(raw_latency, bool):
             latency_ms = float(raw_latency)
-        raw_loss = measured.get("loss_pct")
-        if isinstance(raw_loss, (int, float)) and not isinstance(raw_loss, bool):
-            loss_pct = float(raw_loss)
 
     place = destination_geo_point or destination or {}
     city = place.get("city") or (destination or {}).get("city")
@@ -238,8 +289,6 @@ def _destination_kpis(
         "destination_found": destination is not None,
         "destination_reached": measured is not None if destination_reached is None else destination_reached,
         "latency_display": f"{latency_ms:.1f} ms" if latency_ms is not None else None,
-        "loss_display": _format_percent_value(loss_pct) if loss_pct is not None else None,
-        "loss_pct": loss_pct,
         "city": city or None,
         "country": country or None,
     }
@@ -248,8 +297,11 @@ def _destination_kpis(
 templates.env.globals["version"] = f"v{VERSION}"
 templates.env.globals["build_info"] = BUILD_INFO
 templates.env.globals["now"] = lambda: datetime.now(UTC)
+templates.env.globals["password_min_length"] = PASSWORD_MIN_LENGTH
+templates.env.globals["password_max_length"] = PASSWORD_MAX_LENGTH
+templates.env.globals["placeholder_groups"] = placeholder_doc_groups()
 
-templates.env.filters["format_percent"] = format_percent
+templates.env.filters["format_availability"] = format_availability
 templates.env.filters["format_compact_count"] = format_compact_count
 
 
@@ -284,19 +336,20 @@ _log = logging.getLogger(__name__)
 _NO_STORE_HEADERS = {"Cache-Control": "private, no-store"}
 
 
-# --- Inline HTML Helpers (prevent XSS, centralize styling) ---
+# Inline HTML helpers keep dynamic markup escaped and consistent.
 
-# Valid status badge tones (prevents class injection)
-VALID_BADGE_COLORS = {"secondary", "success", "danger", "warning", "info"}
+# Valid status dot tones (prevents class injection); `info` is not a dot tone (DC-STATE-3).
+_DOT_TONES = {"success", "warning", "danger"}
 
 
-def _html_badge(text: str, color: str = "secondary", icon: str | None = None) -> str:
-    """Generate a status badge with optional Material icon."""
-    color = color if color in VALID_BADGE_COLORS else "secondary"
-    escaped = html.escape(text)
-    icon_html = f'<span class="material-icons me-1">{html.escape(icon)}</span>' if icon else ""
-    variant = "neutral" if color == "secondary" else color
-    return f'<span class="badge ju-status-badge--{variant}">{icon_html}{escaped}</span>'
+def _html_status_dot(text: str, tone: str = "neutral") -> str:
+    """Server-built status dot (S3), the same markup as the status_dot macro in fragments/_state_dot.html."""
+    known = tone if tone in _DOT_TONES else "neutral"
+    ring = " ju-status-dot--unknown" if known == "neutral" else ""
+    return (
+        f'<span class="ju-status-item"><span class="ju-status-dot ju-status-dot--{known}{ring}" '
+        f'aria-hidden="true"></span>{html.escape(text)}</span>'
+    )
 
 
 def _html_error(text: str) -> str:
@@ -304,12 +357,13 @@ def _html_error(text: str) -> str:
     return f'<div class="text-danger small">{html.escape(text)}</div>'
 
 
-def _get_geoip_build_info() -> int | None:
-    """Get GeoIP database build epoch for display in About page."""
+def _get_geoip_build_info(asn: bool = False) -> int | None:
+    """Get GeoIP database build epoch for display in About page (City by default, ASN with asn=True)."""
     try:
         from ..utils.bootstrap import get_geoip_build_info
+        from ..utils.constants import GEOIP_ASN_DB_RELPATH
 
-        result = get_geoip_build_info()
+        result = get_geoip_build_info(relpath=GEOIP_ASN_DB_RELPATH) if asn else get_geoip_build_info()
         if result:
             return result[1]
         return None
@@ -360,20 +414,23 @@ templates.env.filters["user_scope"] = _user_scope_key
 
 # Bump when the rendered traceroute fragment or its geo decision changes; the browser cache drops
 # entries of another revision, version or build. The server cache is in memory and dies with the process.
-TRACEROUTE_FRAGMENT_REVISION = 2
+TRACEROUTE_FRAGMENT_REVISION = 3
 
 
 def _traceroute_cache_scope(user: dict, row) -> dict[str, str]:
     """Non-secret scope keys the browser's traceroute cache is separated by.
 
-    Hashes keep the keys opaque and stable. The target key changes with the MTR destination
-    and with a re-created target, so a re-used id or an edited host never shows a stale route.
+    Hashes keep the keys opaque and stable. The target key changes with the traceroute destination
+    and with a re-created target, so a re-used id or an edited host never shows a stale route. The geo key
+    follows the IXP data: when it changes, the browser asks the server for a re-rendered result instead of
+    replaying the old locations.
     """
 
     return {
         "user": _user_scope_key(user),
         "target": _scope_digest("target", _row_get(row, "id"), _row_get(row, "created_at"), _resolve_target_host(row)),
         "build": _scope_digest("build", VERSION, BUILD_INFO, TRACEROUTE_FRAGMENT_REVISION),
+        "geo": _scope_digest("geo", ixp_index.geo_version()),
     }
 
 
@@ -381,9 +438,9 @@ def require_ui_user(request: Request, conn) -> dict | Response:
     """Helper to resolve UI user or return redirect response."""
     user = resolve_user_optional(request, conn, allow_cookie=True)
     if not user:
-        return RedirectResponse("/ui/login", status_code=302)
+        return RedirectResponse(login_redirect_url(request), status_code=302)
     if is_password_change_pending(user) and not is_password_change_exempt_path(request.url.path):
-        return RedirectResponse("/ui/change-password", status_code=302)
+        return RedirectResponse(login_redirect_url(request, "/ui/change-password"), status_code=302)
     return dict(user)
 
 
@@ -468,7 +525,24 @@ def target_new_page(request: Request, conn=Depends(get_conn)):
     )
 
 
-def _target_detail_view(conn, row, target_id: int) -> dict:
+def _fill_tcp_status_from_series(target: dict, tsdb_dir) -> None:
+    """Give a TCP port without any stored state the latest ``tcp_up_<port>`` point, the series the charts plot."""
+    stored = {(p["protocol"], p["port"]): p for p in target["network_ports"] if p.get("checked_at")}
+    cache = dict(target.get("tcp_port_status") or {})
+    try:
+        ports = tcp_ports_or_default(str(target.get("tcp_ports") or ""))
+    except ValueError:
+        return
+    for port in ports:
+        if ("tcp", port) in stored or cache.get(str(port)):
+            continue
+        points = tsdb_db.query_latest(tsdb_dir, target_id=target["id"], metric=f"tcp_up_{port}", count=1)
+        if points and points[-1].value in (0, 1):
+            cache[str(port)] = "up" if points[-1].value == 1 else "down"
+    target["tcp_port_status"] = cache
+
+
+def _target_detail_view(conn, row, target_id: int, tsdb_dir=None) -> dict:
     """Target row merged with its cached status, as the detail page and its KPI fragment render it."""
     target = _row_to_dict(row)
     cached = sqlite_db.get_target_status(conn, target_id)
@@ -478,6 +552,10 @@ def _target_detail_view(conn, row, target_id: int) -> dict:
     else:
         target.update(get_status_defaults())
         target["overall_status"] = "unknown" if bool(row["is_enabled"]) else "disabled"
+    target["network_ports"] = sqlite_db.list_network_ports(conn, target_id)
+    if tsdb_dir is not None and target.get("enable_tcp_connect"):
+        _fill_tcp_status_from_series(target, tsdb_dir)
+    target["endpoints"] = build_endpoint_views(target, target["network_ports"])
     return target
 
 
@@ -497,7 +575,7 @@ def fragment_target_info_cards(target_id: int, request: Request, conn=Depends(ge
     response = templates.TemplateResponse(
         request,
         "fragments/target_detail/info_cards.html",
-        {"user": user, "target": _target_detail_view(conn, row, target_id)},
+        {"user": user, "target": _target_detail_view(conn, row, target_id, get_tsdb_dir(request))},
     )
     response.headers["Cache-Control"] = "no-store"
     return response
@@ -512,7 +590,7 @@ def target_detail_page(target_id: int, request: Request, conn=Depends(get_conn))
     row = sqlite_db.get_target(conn, target_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Target not found")
-    target = _target_detail_view(conn, row, target_id)
+    target = _target_detail_view(conn, row, target_id, get_tsdb_dir(request))
 
     return templates.TemplateResponse(
         request,
@@ -524,10 +602,21 @@ def target_detail_page(target_id: int, request: Request, conn=Depends(get_conn))
             "use_utc": use_utc_dashboard(conn),
             "traceroute_cache_scope": _traceroute_cache_scope(user, row),
             "pdf_page_size": get_pdf_page_size(conn),
+            "pdf_export_enabled": is_pdf_export_enabled(conn),
+            "rollup_days": _rollup_days(),
             "has_recipients": len(sqlite_db.get_target_recipient_ids(conn, target_id)) > 0,
-            "alert_recipients": [dict(row) for row in sqlite_db.get_target_recipients(conn, target_id)],
         },
     )
+
+
+def _rollup_days() -> dict[str, int]:
+    """Retention windows per resolution, taken from the TSDB rollup config."""
+    return {
+        "raw": tsdb_db.ROLLUP_CONFIG["raw"][1],
+        "5m": tsdb_db.ROLLUP_CONFIG["5m_median"][1],
+        "max": tsdb_db.MAX_RETENTION_DAYS,
+        "max_years": tsdb_db.MAX_RETENTION_DAYS // 365,
+    }
 
 
 @router.get("/ui/targets/{target_id}/edit", response_class=HTMLResponse)
@@ -552,6 +641,7 @@ def target_edit_page(target_id: int, request: Request, conn=Depends(get_conn)):
             "target": target,
             "groups": groups,
             "limits": MONITORING_LIMITS,
+            "rollup_days": _rollup_days(),
         },
     )
 
@@ -581,7 +671,7 @@ def settings_page(request: Request, conn=Depends(get_conn)):
     )
 
 
-# ─── Settings Tab Fragments (HTMX lazy loading) ─────────────────────────────────
+# Settings tab fragments
 
 
 def _field_bounds(name: str) -> dict[str, int]:
@@ -597,7 +687,6 @@ def _field_bounds(name: str) -> dict[str, int]:
 SETTINGS_LIMITS = {
     name: _field_bounds(name)
     for name in (
-        "metrics_timeout_minutes",
         "session_max_days",
         "quality_targets",
         "quality_min_score",
@@ -618,10 +707,12 @@ def fragment_settings_general(request: Request, conn=Depends(get_conn)):
         "use_utc_dashboard": sqlite_db.get_setting(conn, "use_utc_dashboard", False),
         "pdf_page_size": sqlite_db.get_setting(conn, SettingKeys.PDF_PAGE_SIZE, DEFAULT_PDF_PAGE_SIZE)
         or DEFAULT_PDF_PAGE_SIZE,
-        "metrics_timeout_minutes": sqlite_db.get_setting(
-            conn, SettingKeys.METRICS_TIMEOUT_MINUTES, DEFAULT_METRICS_TIMEOUT_MINUTES
-        )
-        or DEFAULT_METRICS_TIMEOUT_MINUTES,
+        "pdf_export_enabled": is_pdf_export_enabled(conn),
+        "public_hostname": get_public_hostname(conn),
+        # "Require Authentication" switch; derived from the stored auth_disabled key (missing = required).
+        "auth_required": is_auth_required(conn),
+        "session_max_days": sqlite_db.get_session_max_days(conn),
+        "rate_limit_auth": load_runtime_fields(conn)["rate_limit_auth"],
     }
 
     return templates.TemplateResponse(
@@ -665,7 +756,7 @@ def fragment_settings_network(request: Request, conn=Depends(get_conn)):
 @router.get("/ui/fragments/settings-storage", response_class=HTMLResponse)
 async def fragment_settings_storage(request: Request, conn=Depends(get_conn)):
     """Render Storage settings tab fragment with pre-computed stats."""
-    user = require_admin_htmx(request, conn)
+    user = await run_in_threadpool(require_admin_htmx, request, conn)
     if isinstance(user, Response):
         return user
 
@@ -693,13 +784,16 @@ async def fragment_settings_storage(request: Request, conn=Depends(get_conn)):
             return f"{n / 1_000:.0f}k"
         return str(n)
 
+    purge_enabled = await run_in_threadpool(
+        sqlite_db.get_setting, conn, SettingKeys.PURGE_ENABLED, DEFAULT_PURGE_ENABLED
+    )
     return templates.TemplateResponse(
         request,
         "settings/storage.html",
         {
             "current_user": user,
             "settings": {
-                "purge_enabled": sqlite_db.get_setting(conn, SettingKeys.PURGE_ENABLED, DEFAULT_PURGE_ENABLED),
+                "purge_enabled": purge_enabled,
             },
             "storage": {
                 "sql_size": format_bytes(sql_size_bytes),
@@ -765,15 +859,7 @@ def fragment_settings_users(request: Request, conn=Depends(get_conn)):
     return templates.TemplateResponse(
         request,
         "settings/users.html",
-        {
-            "current_user": user,
-            "settings_limits": SETTINGS_LIMITS,
-            "settings": {
-                "auth_disabled": sqlite_db.get_setting(conn, "auth_disabled", False),
-                "session_max_days": sqlite_db.get_session_max_days(conn),
-                **load_runtime_fields(conn),
-            },
-        },
+        {"current_user": user},
     )
 
 
@@ -921,20 +1007,35 @@ def _signal_cli_version() -> str:
         return label
 
 
-@router.get("/ui/about", response_class=HTMLResponse)
-def about_page(request: Request, conn=Depends(get_conn)):
-    """Render the about page with version, dependencies, and license."""
-    import sys
+_nmap_lock = threading.Lock()
+_nmap_cache: tuple[float, str] | None = None
 
-    user = require_ui_user(request, conn)
-    if isinstance(user, Response):
-        return user
 
-    python_version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+def _nmap_version() -> str:
+    """Return the installed Nmap binary version, refreshing after the same probe TTL as signal-cli."""
+    import subprocess
 
-    dependencies = [*_installed_dependencies(), ("signal-cli", _signal_cli_version())]
-    dependencies.sort(key=lambda x: x[0].lower())
+    global _nmap_cache
+    with _nmap_lock:
+        now = time.monotonic()
+        if _nmap_cache is not None and now < _nmap_cache[0]:
+            return _nmap_cache[1]
+        try:
+            result = subprocess.run(["nmap", "--version"], capture_output=True, text=True, timeout=5, check=False)
+            match = (
+                re.match(r"^Nmap version ([0-9]+(?:\.[0-9]+)+)\b", result.stdout) if result.returncode == 0 else None
+            )
+            label = match.group(1) if match else "not available"
+        except (OSError, subprocess.TimeoutExpired):
+            label = "not available"
+        ttl = _SIGNAL_CLI_TTL_OK_SECONDS if label != "not available" else _SIGNAL_CLI_TTL_FAILED_SECONDS
+        _nmap_cache = (time.monotonic() + ttl, label)
+        return label
 
+
+@functools.lru_cache(maxsize=1)
+def _about_static_text() -> tuple[str, str, str]:
+    """Read the shipped license and changelog once per process."""
     license_text = ""
     license_paths = [
         Path(__file__).resolve().parent.parent.parent / "LICENSE",
@@ -970,6 +1071,24 @@ def about_page(request: Request, conn=Depends(get_conn)):
     if not changelog_text:
         changelog_text = "Changelog not found."
 
+    return license_text, license_name, changelog_text
+
+
+@router.get("/ui/about", response_class=HTMLResponse)
+def about_page(request: Request, conn=Depends(get_conn)):
+    """Render the about page with version, dependencies, and license."""
+    import sys
+
+    user = require_ui_user(request, conn)
+    if isinstance(user, Response):
+        return user
+
+    python_version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+
+    dependencies = [*_installed_dependencies(), ("signal-cli", _signal_cli_version())]
+    dependencies.sort(key=lambda x: x[0].lower())
+    license_text, license_name, changelog_text = _about_static_text()
+
     return templates.TemplateResponse(
         request,
         "about.html",
@@ -979,7 +1098,9 @@ def about_page(request: Request, conn=Depends(get_conn)):
             "version": VERSION,
             "build_info": BUILD_INFO,
             "python_version": python_version,
+            "nmap_version": _nmap_version(),
             "geoip_build_info": _get_geoip_build_info(),
+            "geoip_asn_build_info": _get_geoip_build_info(asn=True),
             "dependencies": dependencies,
             "license_text": license_text,
             "license_name": license_name,
@@ -1078,6 +1199,8 @@ def _alerts_panel_context(
             services.append("PING")
         if t["enable_tcp_connect"]:
             services.append("TCP")
+        if t["enable_udp_scan"]:
+            services.append("UDP")
         target_services[t["id"]] = services
 
     for alert in alerts:
@@ -1127,6 +1250,8 @@ NOTIFICATION_TABS = (
     ("activity", "Activity", "history"),
 )
 _NOTIFICATION_TAB_KEYS = {key for key, _label, _icon in NOTIFICATION_TABS}
+# Category -> icon of a notification row; app/static/js/notifications.js keeps the same map (tests pin the parity).
+NOTIFICATION_CATEGORY_ICONS = {key: icon for key, _label, icon in NOTIFICATION_TABS if key not in ("all", "unread")}
 
 
 @router.get("/ui/alerts", response_class=HTMLResponse)
@@ -1160,6 +1285,7 @@ def notifications_page(
         "active_page": "notifications",
         "user": user,
         "tabs": NOTIFICATION_TABS,
+        "category_icons": NOTIFICATION_CATEGORY_ICONS,
         "category": category,
         "severity": severity or "",
         "unread_total": inbox.count_unread(conn, user),
@@ -1198,9 +1324,7 @@ def notifications_page(
     return response
 
 
-# ─────────────────────────────────────────────────────────────
 # HTMX Fragments (all require authentication)
-# ─────────────────────────────────────────────────────────────
 
 
 @router.get(
@@ -1264,6 +1388,7 @@ def fragment_targets_table(
         rows, total = sqlite_db.list_targets_paginated(conn, page=page, page_size=page_size)
 
     status_cache = {s["target_id"]: s for s in sqlite_db.get_all_target_statuses(conn)}
+    stored_ports = sqlite_db.all_network_ports(conn)
 
     targets = []
     for r in rows:
@@ -1278,11 +1403,10 @@ def fragment_targets_table(
             # No cache = show defaults (scheduler hasn't run yet)
             t.update(get_status_defaults())
 
+        t["endpoints"] = build_endpoint_views(t, stored_ports.get(target_id, []))
         targets.append(t)
 
     # Sorting is already done in SQL (list_targets_paginated).
-
-    from collections import OrderedDict
 
     grouped_targets = OrderedDict()
     for t in targets:
@@ -1414,10 +1538,9 @@ def fragment_uptime(target_id: int, request: Request, conn=Depends(get_conn)):
     css_class = f"uptime-value uptime-{level}"
     # Text cue so the state is not conveyed by color alone.
     cue = {"ok": "", "warn": " (warning)", "bad": " (critical)"}[level]
-    from ..utils.formatters import format_percent
 
     hidden = f"<span class='visually-hidden'>{cue}</span>" if cue else ""
-    return Response(f"<span class='{css_class}'>{format_percent(uptime)}{hidden}</span>")
+    return Response(f"<span class='{css_class}'>{format_availability(uptime)}{hidden}</span>")
 
 
 _AVAILABILITY_MAX_RANGE_DAYS = 365
@@ -1450,11 +1573,11 @@ async def fragment_availability_series(
       }
     }
     """
-    _ = resolve_user_or_htmx_redirect(request, conn)
+    _ = await run_in_threadpool(resolve_user_or_htmx_redirect, request, conn)
     if isinstance(_, Response):
         return _
 
-    row = sqlite_db.get_target(conn, target_id)
+    row = await run_in_threadpool(sqlite_db.get_target, conn, target_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Target not found")
 
@@ -1472,12 +1595,19 @@ async def fragment_availability_series(
         enabled_services.add("HTTP")
     if row["enable_tcp_connect"]:
         enabled_services.add("TCP")
+    udp_ports = None
+    if row["enable_udp_scan"]:
+        enabled_services.add("UDP")
+        try:
+            udp_ports = parse_port_list(str(row["udp_ports"] or "")) or None
+        except ValueError:
+            udp_ports = None
 
     tcp_ports = None
     if row["enable_tcp_connect"] and row["tcp_ports"]:
         try:
-            tcp_ports = [int(p.strip()) for p in str(row["tcp_ports"]).split(",") if p.strip().isdigit()]
-        except (ValueError, AttributeError):
+            tcp_ports = parse_port_list(str(row["tcp_ports"])) or None
+        except ValueError:
             tcp_ports = None
 
     series = await run_in_threadpool(
@@ -1489,6 +1619,7 @@ async def fragment_availability_series(
         limit=limit,
         enabled_services=enabled_services,
         tcp_ports=tcp_ports,
+        udp_ports=udp_ports,
         check_interval_seconds=row["interval_seconds"] or 60,
     )
 
@@ -1496,11 +1627,6 @@ async def fragment_availability_series(
         "target_id": target_id,
         "series": series,
     }
-
-
-# ─────────────────────────────────────────────────────────────
-# Helpers
-# ─────────────────────────────────────────────────────────────
 
 
 _row_to_dict = target_row_to_dict
@@ -1518,11 +1644,11 @@ async def fragment_downtime_history(
     """
     HTMX fragment: Recent downtime periods for a target.
     """
-    _ = resolve_user_or_htmx_redirect(request, conn)
+    _ = await run_in_threadpool(resolve_user_or_htmx_redirect, request, conn)
     if isinstance(_, Response):
         return _
 
-    row = sqlite_db.get_target(conn, target_id)
+    row = await run_in_threadpool(sqlite_db.get_target, conn, target_id)
     if row is None:
         return HTMLResponse(_html_muted("Target not found"), status_code=404)
 
@@ -1564,25 +1690,52 @@ async def fragment_downtime_history(
         since=query_since,
         until=query_until,
         limit=limit,
+        series=downtime_series(row),
+        check_interval_seconds=row["interval_seconds"] or 60,
     )
+    unmeasured = await run_in_threadpool(
+        tsdb_db.query_unmeasured_periods,
+        request.app.state.tsdb_dir,
+        target_id=target_id,
+        since=query_since,
+        until=query_until,
+        limit=limit,
+        series=downtime_series(row),
+        check_interval_seconds=row["interval_seconds"] or 60,
+    )
+    # Three separate kinds: measured downtime, measurement gap, UNKNOWN result (the last two are no downtime).
+    entries = [
+        {
+            "kind": "down",
+            "start": p.start,
+            "end": p.end,
+            "duration_seconds": p.duration_seconds,
+            "services": p.failed_services,
+        }
+        for p in periods
+    ] + [
+        {"kind": u.kind, "start": u.start, "end": u.end, "duration_seconds": u.duration_seconds, "services": u.services}
+        for u in unmeasured
+    ]
+    entries.sort(key=lambda entry: entry["start"], reverse=True)
 
     # Only claim "all up" when the range actually holds measurements.
-    has_data = bool(periods) or await run_in_threadpool(
+    has_data = bool(entries) or await run_in_threadpool(
         _has_availability_data,
         request.app.state.tsdb_dir,
         target_id,
         query_since,
         query_until,
-        enabled_availability_metrics(row),
+        tuple(metric for metric, _label in downtime_series(row)),
     )
 
     return templates.TemplateResponse(
         request,
         "fragments/downtime_history.html",
         {
-            "periods": periods,
+            "history": build_history(entries, now=utcnow()),
             "has_data": has_data,
-            "use_utc": use_utc_dashboard(conn),
+            "use_utc": await run_in_threadpool(use_utc_dashboard, conn),
             "range_label": range_label,
         },
     )
@@ -1608,11 +1761,11 @@ async def fragment_traceroute(
     conn=Depends(get_conn),
 ):
     """
-    HTMX fragment: On-demand MTR network path visualization.
+    HTMX fragment: On-demand network path (traceroute) visualization.
 
-    Runs MTR, geolocates hops, handles route interpolation for ICMP-blocked
+    Traces through the Nmap worker, geolocates hops, handles route interpolation for silent
     segments, and returns data for Leaflet map with dashed lines. Successful
-    results are cached in memory for five minutes to avoid repeating MTR on reload
+    results are cached in memory for five minutes to avoid repeating the trace on reload
     and carry the time of the real measurement in ``X-Measured-At`` (epoch ms, also
     on a cache hit); only those responses may be kept by the browser's 24 h cache.
     ``refresh=1`` (only honoured on an HX-Request, so it cannot be triggered by a
@@ -1620,11 +1773,11 @@ async def fragment_traceroute(
     The browser also uses it for an automatic scan after its own 24 h entry expired, so
     that a result still sitting in the five-minute cache is not taken for a new one.
     """
-    _ = resolve_user_or_htmx_redirect(request, conn)
+    _ = await run_in_threadpool(resolve_user_or_htmx_redirect, request, conn)
     if isinstance(_, Response):
         return _
 
-    row = sqlite_db.get_target(conn, target_id)
+    row = await run_in_threadpool(sqlite_db.get_target, conn, target_id)
     if row is None:
         return templates.TemplateResponse(
             request,
@@ -1639,7 +1792,7 @@ async def fragment_traceroute(
             },
         )
 
-    # Determine host for MTR (DRY: use shared helper)
+    # Determine host for the traceroute (DRY: use shared helper)
     lookup_host = _resolve_target_host(row)
 
     if not lookup_host:
@@ -1652,13 +1805,18 @@ async def fragment_traceroute(
                 "hops": [],
                 "has_interpolation": False,
                 "geo_unavailable_reason": None,
-                "unavailable_reason": "No host configured for MTR",
+                "unavailable_reason": "No host configured for traceroute",
             },
         )
 
-    cache_namespace = str(request.app.state.db_path)
+    cache_namespace = f"{_TRACEROUTE_CACHE_VERSION}:{request.app.state.db_path}"
     force_refresh = refresh and request.headers.get("HX-Request") == "true"
     if not force_refresh:
+        # Changed IXP data: render the stored route again with the current geo decisions, no new scan.
+        geo_version = await run_in_threadpool(ixp_index.geo_version)
+        stored_route = _route_with_outdated_geo(cache_namespace, target_id, lookup_host, geo_version)
+        if stored_route is not None:
+            return await _single_flight_traceroute(request, target_id, lookup_host, cache_namespace, stored_route)
         cached_fragment = _get_cached_traceroute_fragment(cache_namespace, target_id, lookup_host)
         if cached_fragment is not None:
             body, measured_at_ms = cached_fragment
@@ -1689,13 +1847,24 @@ async def fragment_traceroute(
 _traceroute_inflight: dict[tuple[str, int, str], asyncio.Task] = {}
 
 
-async def _single_flight_traceroute(request: Request, target_id: int, lookup_host: str, cache_namespace: str):
-    """Run at most one MTR per key; concurrent cache misses wait for it and get its body."""
+async def _single_flight_traceroute(
+    request: Request,
+    target_id: int,
+    lookup_host: str,
+    cache_namespace: str,
+    stored_route: TracerouteOutcome | None = None,
+):
+    """Run at most one traceroute per key; concurrent cache misses wait for it and get its body.
+
+    ``stored_route`` renders an already measured route again instead of measuring.
+    """
     key = (cache_namespace, target_id, lookup_host)
     task = _traceroute_inflight.get(key)
     leader = task is None
     if leader:
-        task = asyncio.ensure_future(_run_traceroute_fragment(request, target_id, lookup_host, cache_namespace))
+        task = asyncio.ensure_future(
+            _run_traceroute_fragment(request, target_id, lookup_host, cache_namespace, stored_route)
+        )
         _traceroute_inflight[key] = task
         # Release in a callback so a failure or cancelled caller cannot leave the key reserved.
         task.add_done_callback(
@@ -1709,10 +1878,16 @@ async def _single_flight_traceroute(request: Request, target_id: int, lookup_hos
     return HTMLResponse(response.body, status_code=response.status_code, headers=headers)
 
 
-async def _run_traceroute_fragment(request: Request, target_id: int, lookup_host: str, cache_namespace: str):
-    """Run MTR for ``lookup_host``, render the fragment and store it in the cache."""
-    # MTR utilities (imports at function level for lazy loading)
-    from ..services.mtr_run import analyze_route, resolve_target_ip, run_mtr
+async def _run_traceroute_fragment(
+    request: Request,
+    target_id: int,
+    lookup_host: str,
+    cache_namespace: str,
+    stored_route: TracerouteOutcome | None = None,
+):
+    """Trace ``lookup_host`` (or reuse ``stored_route``), render the fragment and store it in the cache."""
+    # Traceroute utilities (imports at function level for lazy loading)
+    from ..services import route_map_rules
     from ..services.route_interpolator import (
         collapse_interpolated_hops,
         ensure_destination_hop,
@@ -1722,27 +1897,30 @@ async def _run_traceroute_fragment(request: Request, target_id: int, lookup_host
         geolocate_with_hostname_hint,
         is_ipv6_address,
         location_view,
-        mtr_hops_to_geo_points,
+        route_hop_locations,
+        route_hops_to_geo_points,
         route_map_features,
         shorten_ipv6_for_display,
     )
+    from ..services.traceroute_service import NO_IP_MARKERS, TRACE_HOP_LIMIT, analyze_route, trace
 
-    target_ip = await run_in_threadpool(resolve_target_ip, lookup_host)
-
-    # Keep MTR address family consistent with destination resolution (IPv4 vs IPv6)
-    force_ipv6 = None
-    if target_ip:
-        force_ipv6 = ":" in target_ip
-    elif lookup_host and ":" in lookup_host:
-        force_ipv6 = True
-
-    # Use 20 hops for international routes
-    # Measure the address that was resolved: a host with several A/AAAA records must not be traced to
-    # one IP while the result is judged and geolocated against another. The host stays display-only.
-    hops = await run_in_threadpool(run_mtr, target_ip or lookup_host, count=3, max_hops=20, force_ipv6=force_ipv6)
-    measured_at_ms = time.time_ns() // 1_000_000
-
-    if not hops:
+    # Read before the first geo decision: data published meanwhile only makes the next request render again.
+    geo_version = await run_in_threadpool(ixp_index.geo_version)
+    # The service resolves ONE address and traces exactly that address; scan and evaluation share it.
+    outcome = stored_route if stored_route is not None else await trace(lookup_host)
+    target_ip = outcome.target_ip
+    if not outcome.ok:
+        previous = _get_last_good_traceroute_fragment(cache_namespace, target_id, lookup_host)
+        if previous is not None:
+            body, previous_ms = previous
+            return HTMLResponse(
+                body,
+                headers={
+                    "Cache-Control": "private, no-store",
+                    _TRACEROUTE_MEASURED_AT_HEADER: str(previous_ms),
+                    _TRACEROUTE_REFRESH_FAILED_HEADER: outcome.error_code or "failed",
+                },
+            )
         return templates.TemplateResponse(
             request,
             "fragments/traceroute_map.html",
@@ -1752,9 +1930,13 @@ async def _run_traceroute_fragment(request: Request, target_id: int, lookup_host
                 "geo_summary": None,
                 "has_interpolation": False,
                 "geo_unavailable_reason": None,
-                "unavailable_reason": "MTR returned no hops",
+                "unavailable_reason": outcome.error_message,
+                "error_code": outcome.error_code,
             },
         )
+    hops = copy.deepcopy(outcome.hops)  # rendering must not alter the stored route
+    route = outcome.route
+    measured_at_ms = int(route.completed_at.timestamp() * 1000)
 
     route_analysis = analyze_route(hops, target_ip)
 
@@ -1777,9 +1959,7 @@ async def _run_traceroute_fragment(request: Request, target_id: int, lookup_host
         if route_analysis["last_responding_hop"] > 0:
             for h in hops:
                 if h.get("hop") == route_analysis["last_responding_hop"]:
-                    lat = h.get("latency_ms")
-                    if lat and isinstance(lat, dict):
-                        final_latency = lat.get("avg")
+                    final_latency = h.get("rtt_ms")
                     break
 
         interpolated_hops = ensure_destination_hop(
@@ -1787,13 +1967,17 @@ async def _run_traceroute_fragment(request: Request, target_id: int, lookup_host
             destination_ip=target_ip,
             destination_hostname=lookup_host,
             destination_geo=destination_geo,
-            final_latency_ms=final_latency,
+            final_rtt_hint_ms=final_latency,
         )
 
-    geo_points = mtr_hops_to_geo_points(
+    # GeoIP/SQLite/HTTP lookups block for up to ~10 s: keep them off the event loop.
+    route_locations = await run_in_threadpool(route_hop_locations, interpolated_hops, target_ip, destination_geo)
+    geo_points = await run_in_threadpool(
+        route_hops_to_geo_points,
         interpolated_hops,
         destination_ip=target_ip,
         destination_geo=destination_geo,
+        locations=route_locations,
     )
 
     # Table text and map points come from ONE decision per IP (see location_view): the destination IP
@@ -1805,11 +1989,18 @@ async def _run_traceroute_fragment(request: Request, target_id: int, lookup_host
     for h in interpolated_hops:
         hop_data = dict(h)
         ip = h.get("ip")
-        if ip and ip != "*" and h.get("status") not in ("timeout", "interpolated") and not h.get("_interpolated"):
+        if (
+            ip
+            and ip not in NO_IP_MARKERS
+            and h.get("status") not in ("timeout", "interpolated")
+            and not h.get("_interpolated")
+        ):
             if ip not in view_by_ip:
                 loc = (
                     destination_geo
                     if target_ip and ip == target_ip and destination_geo
+                    else route_locations[ip]
+                    if ip in route_locations
                     else await run_in_threadpool(geolocate_with_hostname_hint, ip, h.get("hostname"))
                 )
                 view_by_ip[ip] = location_view(loc)
@@ -1831,23 +2022,8 @@ async def _run_traceroute_fragment(request: Request, target_id: int, lookup_host
         silent = timeline_measurement(hop_data) == "timeout"
         hop_data["status_display"] = "timeout" if silent else hop_data.get("status", "timeout")
 
-        lat = hop_data.get("latency_ms")
-        if lat:
-            if isinstance(lat, dict):
-                avg = lat.get("avg")
-                hop_data["latency_display"] = f"{avg:.1f} ms" if avg is not None else "–"
-            elif isinstance(lat, (int, float)):
-                hop_data["latency_display"] = f"{lat:.1f} ms"
-            else:
-                hop_data["latency_display"] = "–"
-        else:
-            hop_data["latency_display"] = "–"
-
-        loss = hop_data.get("loss_pct")
-        if loss is not None and loss < 100:
-            hop_data["loss_display"] = f"{loss:.0f}%"
-        else:
-            hop_data["loss_display"] = "–"
+        rtt = hop_data.get("rtt_ms")
+        hop_data["latency_display"] = f"{rtt:.1f} ms" if isinstance(rtt, (int, float)) and not silent else "–"
 
         enriched_hops.append(hop_data)
 
@@ -1895,6 +2071,8 @@ async def _run_traceroute_fragment(request: Request, target_id: int, lookup_host
             "geo_points": geo_points,
             "has_interpolation": has_interpolation,
             "map_features": route_map_features(geo_points),
+            "map_style": route_map_rules.map_style(),
+            "map_labels": route_map_rules.select_labels(geo_points),
             "geo_unavailable_reason": geo_unavailable_reason,
             "unavailable_reason": None,
             "route_start_hop": route_start.get("hop_display") or route_start.get("hop"),
@@ -1916,18 +2094,24 @@ async def _run_traceroute_fragment(request: Request, target_id: int, lookup_host
             "mapped_hop_count": len(mapped_hops),
             "destination_on_map": destination_geo_point is not None,
             "labels": STATE_LABELS,
+            "route_limit_note": (
+                f"The destination did not answer within the {TRACE_HOP_LIMIT}-hop trace limit."
+                if not route.destination_reached
+                else None
+            ),
         },
     )
     _cache_traceroute_fragment(cache_namespace, target_id, lookup_host, response.body, measured_at_ms)
+    _remember_traceroute_route(cache_namespace, target_id, lookup_host, outcome, geo_version)
     response.headers["Cache-Control"] = "private, no-store"
     response.headers[_TRACEROUTE_MEASURED_AT_HEADER] = str(measured_at_ms)
     return response
 
 
-# ─── Signal Registration UI Fragments ───────────────────────────────────────────
+# Signal registration UI fragments
 
 
-@router.get("/ui/fragments/signal-qr", response_class=HTMLResponse)
+@router.get("/ui/fragments/signal-qr", response_class=HTMLResponse, dependencies=[Depends(rate_limit("6/minute"))])
 def fragment_signal_qr(request: Request, conn=Depends(get_conn)):
     """Render Signal QR code for device linking.
 
@@ -1996,25 +2180,17 @@ def fragment_signal_link_status(request: Request, conn=Depends(get_conn)):
         status = backend.status()
 
         if not status.reachable:
-            return HTMLResponse(_html_badge("Status unavailable"))
+            return HTMLResponse(_html_status_dot("Status unavailable"))
 
         if status.linked:
             count = len(status.accounts)
-            return HTMLResponse(f"""
-                <span class="badge ju-status-badge--success">
-                    <span class="material-icons me-1">link</span>Linked ({count} account{"s" if count != 1 else ""})
-                </span>
-            """)
-        return HTMLResponse("""
-                <span class="badge ju-status-badge--neutral">
-                    <span class="material-icons me-1">link_off</span>Not Linked
-                </span>
-            """)
+            return HTMLResponse(_html_status_dot(f"Linked ({count} account{'s' if count != 1 else ''})", "success"))
+        return HTMLResponse(_html_status_dot("Not Linked"))
     except SignalUnavailable:
-        return HTMLResponse(_html_badge("signal-cli unavailable"))
+        return HTMLResponse(_html_status_dot("signal-cli unavailable"))
     except Exception as e:  # noqa: BLE001 - degrade gracefully: report unavailable/placeholder instead of failing the page
         _log.warning("Failed to get Signal link status: %s", e)
-        return HTMLResponse(_html_badge("Status unavailable"))
+        return HTMLResponse(_html_status_dot("Status unavailable"))
 
 
 @router.get("/ui/fragments/signal-status", response_class=HTMLResponse)
@@ -2060,36 +2236,21 @@ def fragment_signal_status(request: Request, conn=Depends(get_conn)):
             </div>
         """)
 
-    badges = []
-    badges.append("""<span class="badge ju-status-badge--success me-1">
-        <span class="material-icons align-middle me-1" style="font-size: 14px;">cloud_done</span>Reachable
-    </span>""")
-
-    if status.registered:
-        badges.append("""<span class="badge ju-status-badge--success me-1">
-            <span class="material-icons align-middle me-1" style="font-size: 14px;">verified_user</span>Registered
-        </span>""")
-    else:
-        badges.append("""<span class="badge ju-status-badge--warning me-1">
-            <span class="material-icons align-middle me-1" style="font-size: 14px;">person_off</span>Not Registered
-        </span>""")
-
-    if status.linked:
-        badges.append("""<span class="badge ju-status-badge--success me-1">
-            <span class="material-icons align-middle me-1" style="font-size: 14px;">link</span>Linked
-        </span>""")
-    else:
-        badges.append("""<span class="badge ju-status-badge--neutral me-1">
-            <span class="material-icons align-middle me-1" style="font-size: 14px;">link_off</span>Not Linked
-        </span>""")
-
+    # Connection states (S3) are status dots with their word, grouped in ju-badges (DC-STATE-1, DC-BADGE-6).
+    badges = [
+        _html_status_dot("Reachable", "success"),
+        _html_status_dot("Registered", "success")
+        if status.registered
+        else _html_status_dot("Not Registered", "warning"),
+        _html_status_dot("Linked", "success") if status.linked else _html_status_dot("Not Linked"),
+    ]
     accounts = status.accounts
     acct_list = ", ".join(html.escape(str(a)) for a in accounts[:3]) + ("..." if len(accounts) > 3 else "")
     acct_info = f'<small class="text-muted d-block mt-1">Accounts: {acct_list}</small>' if accounts else ""
 
     return HTMLResponse(f"""
         <div>
-            {"".join(badges)}
+            <div class="ju-badges">{"".join(badges)}</div>
             {acct_info}
         </div>
     """)

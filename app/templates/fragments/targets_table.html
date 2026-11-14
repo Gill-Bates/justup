@@ -1,3 +1,4 @@
+{% from "fragments/_state_dot.html" import state_dot, cert_dot, check_bucket %}
 {# Targets Table Fragment (HTMX) - Grouped by Group Name #}
 {# Out-of-band update of the page carrier in targets.html (hx-include of polling/refresh); rendered in every state #}
 <input type="hidden" id="targets-page-state" name="page" value="{{ page }}" hx-swap-oob="true">
@@ -40,12 +41,12 @@
 						</thead>
 						<tbody>
 							{% for t in group_targets %}
-							{# data-search lists the fields the targets search matches: name, host, URL, TCP ports, group #}
-							<tr data-search="{{ [t.name, t.host, t.http_url, (t.tcp_ports if t.enable_tcp_connect), group_name] | select | join(' ') }}">
+			{# data-search lists the fields the targets search matches: name, host, URL, ports, group #}
+			<tr data-search="{{ [t.name, t.host, t.http_url, (t.tcp_ports if t.enable_tcp_connect), (t.udp_ports if t.enable_udp_scan), group_name] | select | join(' ') }}" data-target-id="{{ t.id }}">
 								<td data-label="Status" class="text-center ju-cell-icon">
 									<span hx-get="/ui/fragments/target-status/{{ t.id }}" hx-trigger="load, justup-target-{{ t.id }} from:body throttle:1s"
 										hx-swap="innerHTML">
-										<span class="material-icons fs-5 status-unknown" aria-hidden="true">circle</span>
+										<span class="spinner-border spinner-border-sm status-unknown" aria-hidden="true"></span><span class="visually-hidden">Loading status</span>
 									</span>
 								</td>
 								<td data-label="Name" class="ju-cell-text">
@@ -54,37 +55,44 @@
 									</a>
 								</td>
 								<td data-label="Checks">
-									<div class="ju-badges check-badges">
-									{% if t.enable_ping %}
-									<span class="badge {% if t.ping_status == 'up' %}ju-status-badge--success{% elif t.ping_status == 'down' %}ju-status-badge--danger{% else %}ju-status-badge--neutral{% endif %}">Ping</span>
-									{% endif %}
-									{% if t.enable_http_check %}
-									<span class="badge {% if t.http_status == 'up' %}ju-status-badge--success{% elif t.http_status == 'down' %}ju-status-badge--danger{% else %}ju-status-badge--neutral{% endif %}">HTTP</span>
-									{% endif %}
-									{% if t.enable_cert_expiration %}
-									<span class="badge {% if t.cert_status == 'ok' %}ju-status-badge--success{% elif t.cert_status == 'warning' %}ju-status-badge--warning{% elif t.cert_status in ('critical', 'expired') %}ju-status-badge--danger{% else %}ju-status-badge--neutral{% endif %}">Cert</span>
-									{% endif %}
-									{% if t.enable_tcp_connect %}
-									{% set port_status = t.tcp_port_status or {} %}
-									{% set ports = (t.tcp_ports or '80').split(',') %}
-									{% set up_count = port_status.values() | select('eq', 'up') | list | length %}
-									{% set total_count = ports | length %}
-									{% set has_data = port_status | length > 0 %}
-									{% if total_count == 1 %}
-									<span class="badge {% if t.tcp_status == 'up' %}ju-status-badge--success{% elif t.tcp_status == 'down' %}ju-status-badge--danger{% else %}ju-status-badge--neutral{% endif %}" title="TCP Port {{ ports[0] }}">TCP:{{ ports[0] }}</span>
-									{% else %}
-									{# Multiple ports: show individual port badges #}
-									{% for port in ports %}
-									{% set ps = port_status.get(port | trim, 'unknown') %}
-									<span class="badge {% if ps == 'up' %}ju-status-badge--success{% elif ps == 'down' %}ju-status-badge--danger{% else %}ju-status-badge--neutral{% endif %}" title="TCP Port {{ port | trim }}">TCP:{{ port | trim }}</span>
+									{% set checks = namespace(down=[], unknown=[], attention=[], up=[]) %}
+					{# Collect (label, status, title, is_cert) per enabled check, then sort each into its bucket #}
+					{% set pending = [] %}
+					{% if t.enable_ping %}{% set _ = pending.append(('Ping', t.ping_status, '', false)) %}{% endif %}
+					{% if t.enable_http_check %}{% set _ = pending.append(('HTTP', t.http_status, '', false)) %}{% endif %}
+					{% if t.enable_cert_expiration %}{% set _ = pending.append(('Cert', t.cert_status, '', true)) %}{% endif %}
+					{% for endpoint in t.endpoints|default([]) if endpoint.kind == 'port' %}
+						{% set _ = pending.append((endpoint.protocol|upper ~ ':' ~ endpoint.port, endpoint.status, endpoint.state_note or endpoint.name, false)) %}
+					{% endfor %}
+					{% for check in pending %}
+						{% set b = check_bucket(check[1], check[3])|trim %}
+						{% if b == 'down' %}{% set checks.down = checks.down + [check] %}
+						{% elif b == 'up' %}{% set checks.up = checks.up + [check] %}
+						{% elif b == 'attention' %}{% set checks.attention = checks.attention + [check] %}
+						{% else %}{% set checks.unknown = checks.unknown + [check] %}{% endif %}
+					{% endfor %}
+					{% set all_checks = checks.down + checks.unknown + checks.attention + checks.up %}
+									<div class="targets-check-summary">
+										<span>{{ all_checks|length }} Checks</span>
+										{% if checks.down %}<span>{{ checks.down|length }} Down</span>{% endif %}
+										{% if checks.unknown %}<span>{{ checks.unknown|length }} Unknown</span>{% endif %}
+										{% if checks.attention %}<span title="Checks with a certificate alert">{{ checks.attention|length }} Cert alert</span>{% endif %}
+										{% if checks.up %}<span title="Successful checks">{{ checks.up|length }} Passed</span>{% endif %}
+									</div>
+									<div class="ju-badges check-badges" id="target-checks-{{ t.id }}">
+									{% for label, status, title, is_cert in all_checks %}
+										{% if is_cert %}{{ cert_dot(label, status) }}{% else %}{{ state_dot(label, status, title) }}{% endif %}
 									{% endfor %}
-									{% endif %}
+									{# Must match :nth-child(n+4) in ui.css (.targets-table .check-badges) #}
+									{% set visible_checks = 3 %}
+									{% if all_checks|length > visible_checks %}
+									<button type="button" class="targets-check-toggle" aria-expanded="false" aria-controls="target-checks-{{ t.id }}" data-more="{{ all_checks|length - visible_checks }}">+{{ all_checks|length - visible_checks }} more</button>
 									{% endif %}
 									</div>
 								</td>
 								<td data-label="Uptime">
 									{% if t.uptime_percent is not none %}
-									<span class="uptime-value uptime-{{ t.uptime_level }}">{{ t.uptime_percent|format_percent }}</span>
+									<span class="uptime-value uptime-{{ t.uptime_level }}">{{ t.uptime_percent|format_availability }}</span>
 									{% else %}
 									<span class="text-body-secondary" hx-get="/ui/fragments/uptime/{{ t.id }}"
 										hx-trigger="load" hx-swap="outerHTML" aria-label="Loading uptime">…</span>
@@ -101,7 +109,8 @@
 											</a>
 											<button type="button" class="btn btn-sm btn-icon btn-outline-secondary" title="Reset Metrics" aria-label="Reset Metrics"
 												hx-post="/targets/{{ t.id }}/reset"
-												hx-confirm="Reset all metrics for {{ t.name }}?"
+												data-ju-confirm data-confirm-title="Reset metrics" data-confirm-label="Reset metrics"
+												data-confirm-message="All metrics of '{{ t.name }}' are deleted permanently. The target itself stays."
 												hx-swap="none"
 												hx-disabled-elt="this"
 												data-success-toast="Metrics reset"
@@ -111,7 +120,8 @@
 											</button>
 											<button type="button" class="btn btn-sm btn-icon btn-outline-danger" title="Delete" aria-label="Delete"
 												hx-delete="/targets/{{ t.id }}"
-												hx-confirm="Really delete this target?"
+												data-ju-confirm data-confirm-title="Delete target" data-confirm-label="Delete target"
+												data-confirm-message="'{{ t.name }}' and all its metrics are deleted permanently."
 												hx-swap="none"
 												hx-disabled-elt="this"
 												data-success-toast="Target deleted"
@@ -149,7 +159,7 @@
                     hx-target="#targets-table" 
                     hx-swap="innerHTML"
                     {% if page <= 1 %}disabled{% endif %}>
-                <span class="material-icons" style="font-size: 14px; vertical-align: middle;" aria-hidden="true">chevron_left</span>
+                <span class="material-icons ju-icon-14 ju-icon-middle" aria-hidden="true">chevron_left</span>
             </button>
         </li>
         
@@ -159,7 +169,7 @@
                     hx-target="#targets-table" 
                     hx-swap="innerHTML"
                     {% if page >= total_pages %}disabled{% endif %}>
-                <span class="material-icons" style="font-size: 14px; vertical-align: middle;" aria-hidden="true">chevron_right</span>
+                <span class="material-icons ju-icon-14 ju-icon-middle" aria-hidden="true">chevron_right</span>
             </button>
         </li>
     </ul>

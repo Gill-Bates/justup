@@ -8,6 +8,11 @@ persistent delivery queue with retry and backoff.
 A recipient has a name, an email address and/or a Signal number, an active flag,
 and the targets it is assigned to. Only admins manage recipients.
 
+Every application user has exactly one linked recipient. It is created with the user and edited in
+the user dialog or in the recipients list. It cannot be deleted on its own (`409`); deleting the
+user removes it. Without a phone number and email address it must stay disabled (`422` otherwise).
+See [Users & roles](users.md).
+
 **Enable for all Targets:** this switch (create and edit dialog) assigns the recipient to every
 existing target when saved on, and removes it from every target when saved off after it was on.
 New targets automatically get all recipients with the switch on. It only drives these bulk
@@ -19,9 +24,23 @@ all assignments, including manual ones, will be removed. Cancel keeps the edits 
 switch; phone number, hint and Send test appear when it is on. Values you typed stay while the dialog
 is open. On save, a switched-off channel is cleared (the recipient keeps only the channels that are on),
 and at least one channel must be on.
+**Search:** the field above the recipients list filters while you type, like the Targets search. It matches
+name, email address and Signal number (case-insensitive, ignoring accents and extra spaces) and runs only in
+the browser; the text is not stored or sent anywhere. Escape or the clear button resets it. Without a hit the
+list shows "No recipients match ..." with a *Show all recipients* button. The query stays active after
+saving, pausing or deleting; creating a new recipient clears it so the new entry is visible.
+
 **Test messages:** the paper-plane button in the recipients list tests all saved
 channels; the Edit Recipient dialog tests Signal and email separately. Tests use the
 saved values, work for disabled recipients, and are not retried on failure.
+
+**Signal status:** the Signal column shows whether the number is registered with Signal. The
+answer is cached for 24 hours. The *Re-check Signal* button (circular arrows, in the row actions)
+asks signal-cli again for that recipient and replaces the cached answer (a number checked in the
+last 10 seconds is answered from the cache); admins only, at most
+5 checks per minute. Two checks of the same number at the same time share one lookup, and at most
+two lookups run at once. The number is read from the stored recipient and appears neither in the
+request address nor in the log. These limits and the cache apply per application process.
 
 ## Delivery
 
@@ -58,7 +77,7 @@ saved values, work for disabled recipients, and are not retried on failure.
 | --- | --- | --- |
 | `pending` | Waiting for handoff | Queued; waiting for its turn or a scheduled retry |
 | `pending` with retries | Retrying handoff | The last SMTP handoff failed; another attempt is scheduled |
-| `sent` | Accepted by server | The configured SMTP server accepted the message (`RCPT TO` and `DATA`). Final delivery is not verifiable |
+| `sent` | Sent | Accepted by the configured SMTP server (`RCPT TO` and `DATA`) or by signal-cli. Delivery to the recipient is not verifiable |
 | `failed` | Handoff failed | Rejected, retry budget used up, or not handed over within 24 h |
 
 `sent` is the stored status of a message that the SMTP server accepted. It never means that the
@@ -79,6 +98,10 @@ Only the immediate SMTP answer is evaluated:
 - No `VRFY`, no MX lookup of recipients and no DSN request is used.
 
 ### Alerts in the Notification Center
+A successful send of an alert or other regular message writes no entry. Entries appear only for failures
+and for the result of an explicit test send (SMTP test email, Signal test), which is shown on success and failure.
+The queue itself (status, retries, log) is unchanged.
+
 
 Admins see these entries (category *delivery*); they are stored in the database, so they appear even
 when email itself is down, and they never trigger another email:
@@ -96,10 +119,11 @@ when email itself is down, and they never trigger another email:
 
 On the dashboard and in Settings, failed handoffs of the last 24 hours (`failed_recent`) mark the queue
 as failed even when nothing is waiting; older failures only appear in the log. Flush removes failed
-entries. Settings also shows the note that a successful handoff confirms only the server's acceptance.
+entries.
 
-Settings > Delivery Queue shows statistics, per channel the waiting count, next attempt, oldest
-message, active cooldown and failures, and the log. You can flush the queue or clear the log.
+Settings > Delivery Queue shows statistics, each channel's waiting and failed counts, and the log.
+Next attempt, oldest message and active cooldown appear for a channel when available. You can flush
+the queue or clear the log.
 
 ### Background service alerts
 
@@ -140,7 +164,8 @@ supervised: it runs no background task of its own (keep-alives belong to each cl
 
 Configure host, port, STARTTLS or implicit TLS, and credentials under Settings >
 SMTP. Credentials are stored encrypted. Subject and HTML template are editable
-with a fixed set of placeholders. A test email is queued like any other.
+with a fixed set of placeholders. **Send Test Email** queues a separate welcome message (marked TEST, no incident data) in the same
+design; it does not use the alert template. "Queued" means handed to the delivery queue, not delivered.
 
 Transport security (encrypted by default):
 
@@ -169,6 +194,20 @@ Transport security (encrypted by default):
     relay without credentials, open Settings > SMTP and switch **Use STARTTLS** off once;
     otherwise mail now needs STARTTLS from your server. An already saved "off" is kept as is.
 
+## Links in notifications
+
+Links need the **Public hostname** (Settings > General, see [Settings](../configuration/settings.md)).
+With it set, notifications link to `https://<hostname>/ui/targets/<id>`; without it they
+carry no link.
+
+- **Email:** the green **Open in justUp!** button only renders when the instance URL is a
+  valid `http(s)` URL, so a missing public hostname means no button. The plain-text part
+  shows the URL as text. The default template contains the button; a saved custom template
+  keeps its own markup and needs the `{{#if cta}}` block around the button to show it.
+- **Signal:** the default DOWN and UP templates end with a `Link:` line. Add
+  `{{#if cta}}{{system.url}}{{/if cta}}` to a saved custom template to include the link.
+- **Welcome messages** link to the start page.
+
 ## Signal
 
 Signal uses the signal-cli bundled in the container. Under Settings > Signal you can:
@@ -176,6 +215,12 @@ Signal uses the signal-cli bundled in the container. Under Settings > Signal you
 - register a number by SMS or call (with captcha) and verify it,
 - link as a secondary device by QR code, or unlink,
 - set the profile name, edit the DOWN/UP templates, and send a test message.
+
+The status shown under Settings > Signal is cached for 60 seconds, or 10 seconds after
+an error or when signal-cli is unreachable. Concurrent requests share one lookup. Linking,
+unlinking, removing an account, and verifying a registration discard the cache, and the
+page keeps the last status visible while it refreshes. Admins can bypass the cache with
+`GET /settings/signal/status?refresh=true`.
 
 Set `JAVA_XMS`, `JAVA_XMX`, and `SIGNAL_CLI_PATH` as described in
 [Environment variables](../configuration/environment.md).
@@ -187,7 +232,6 @@ a notification never acknowledges an alert.
 
 - **Delete** a notification by swiping left or with the delete control on the row.
   It is hidden for you only.
-- A new delivery in a grouped time window shows the group again.
 
 | Event | Audience |
 | --- | --- |
@@ -195,7 +239,7 @@ a notification never acknowledges an alert.
 | PDF report completed or failed | the requesting user |
 | Admin password changed or reset, user created, target created | admins |
 | New release available | admins |
-| Email or Signal delivery sent or failed | admins |
+| Email or Signal delivery failed; result (success or failure) of an explicit test send | admins |
 
 Once a day justUp! asks the GitHub releases API for the latest stable release and
 adds a notice for a newer version. There is no setting to turn this off. Successful

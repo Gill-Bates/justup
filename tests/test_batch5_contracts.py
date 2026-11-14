@@ -375,7 +375,7 @@ class _FakeResponse:
 def _stub_download(monkeypatch, response: _FakeResponse, limit: int = 100):
     monkeypatch.setattr(bootstrap, "GEOIP_MAX_BYTES", limit)
     monkeypatch.setattr(bootstrap, "urlopen", lambda *_a, **_k: response)
-    monkeypatch.setattr(bootstrap, "_verify_mmdb", lambda _p: True)
+    monkeypatch.setattr(bootstrap, "_verify_mmdb", lambda _p, *_a, **_k: True)
 
 
 @pytest.mark.parametrize(
@@ -479,8 +479,8 @@ def test_geoip_stale_database_is_downloaded_when_size_and_validators_are_inconcl
     target.write_bytes(b"x" * 10)
     old = time.time() - bootstrap.GEOIP_MAX_AGE_SECONDS - 60
     os.utime(target, (old, old))
-    monkeypatch.setattr(bootstrap, "_verify_mmdb", lambda _p: True)
-    monkeypatch.setattr(bootstrap, "_check_remote_meta", lambda: {"size": 10, "etag": '"b"', "last_modified": None})
+    monkeypatch.setattr(bootstrap, "_verify_mmdb", lambda _p, *_a, **_k: True)
+    monkeypatch.setattr(bootstrap, "_check_remote_meta", lambda *_a: {"size": 10, "etag": '"b"', "last_modified": None})
     _stub_download(monkeypatch, _FakeResponse(b"y" * 10, {"Content-Length": "10", "ETag": '"b"'}))
     assert bootstrap._download_geoip_db(target) == target
     assert target.read_bytes() == b"y" * 10  # replaced, not kept
@@ -644,7 +644,6 @@ def _default_setting_values():
         SettingKeys.PURGE_ENABLED: constants.DEFAULT_PURGE_ENABLED,
         SettingKeys.GEOIP_AUTO_UPDATE: constants.DEFAULT_GEOIP_AUTO_UPDATE,
         SettingKeys.PDF_PAGE_SIZE: constants.DEFAULT_PDF_PAGE_SIZE,
-        SettingKeys.METRICS_TIMEOUT_MINUTES: constants.DEFAULT_METRICS_TIMEOUT_MINUTES,
     }
 
 
@@ -660,13 +659,12 @@ def test_fresh_db_is_seeded_with_defaults_and_settings_fallback_agrees(tmp_path,
     for key, value in expected.items():
         assert sqlite_db.get_setting(conn, key, "<missing>") == value
     assert "downsample_enabled" not in {row[0] for row in conn.execute("SELECT key FROM settings")}
-    conn.execute("DELETE FROM settings WHERE key IN (?, ?, ?, ?)", tuple(expected))
+    conn.execute("DELETE FROM settings WHERE key IN (?, ?, ?)", tuple(expected))
     conn.commit()
     loaded = _load(conn)
     assert loaded.purge_enabled is expected[SettingKeys.PURGE_ENABLED]
     assert loaded.geoip_auto_update is expected[SettingKeys.GEOIP_AUTO_UPDATE]
     assert loaded.pdf_page_size == expected[SettingKeys.PDF_PAGE_SIZE]
-    assert loaded.metrics_timeout_minutes == expected[SettingKeys.METRICS_TIMEOUT_MINUTES]
     sqlite_db.close_connection(conn)
 
 
@@ -677,13 +675,13 @@ def test_bootstrap_seeds_only_missing_settings_and_keeps_custom_values(tmp_path,
     bootstrap.bootstrap(db, tmp_path / "tsdb", tmp_path)
     conn = sqlite_db.connect(db)
     sqlite_db.set_setting(conn, SettingKeys.PDF_PAGE_SIZE, "letter")
-    sqlite_db.set_setting(conn, SettingKeys.METRICS_TIMEOUT_MINUTES, 17)
+    sqlite_db.set_setting(conn, SettingKeys.USE_UTC_DASHBOARD, True)
     conn.execute("DELETE FROM settings WHERE key=?", (SettingKeys.PURGE_ENABLED,))
     conn.commit()
     sqlite_db.close_connection(conn)
     bootstrap.bootstrap(db, tmp_path / "tsdb", tmp_path)
     conn = sqlite_db.connect(db)
     assert sqlite_db.get_setting(conn, SettingKeys.PDF_PAGE_SIZE, None) == "letter"
-    assert sqlite_db.get_setting(conn, SettingKeys.METRICS_TIMEOUT_MINUTES, None) == 17
+    assert sqlite_db.get_setting(conn, SettingKeys.USE_UTC_DASHBOARD, None) is True
     assert sqlite_db.get_setting(conn, SettingKeys.PURGE_ENABLED, None) is True
     sqlite_db.close_connection(conn)

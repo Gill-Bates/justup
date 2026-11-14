@@ -18,7 +18,6 @@ import {
     SIGNAL_API, 
     signalStatusGuard, 
     isSignalBusy,
-    maskPhone,
     setOnPanelEnabled
 } from './settings.signal-core.js';
 
@@ -28,6 +27,7 @@ const apiFetch = window.apiFetch;
 // Dependency injection for circular dependency resolution
 let _signalUnlinkFn = null;
 let _signalSelectModeFn = null;
+let pendingForcedRefresh = false;
 
 /**
  * Set the unlink handler (called from signal-actions.js init)
@@ -38,7 +38,7 @@ export function setUnlinkHandler(fn) {
 }
 
 /**
- * Set the mode selection handler (called from signal-registration.js init)
+ * Set the mode selection handler (called from initSignal in signal-actions.js)
  * @param {Function} fn
  */
 export function setSelectModeHandler(fn) {
@@ -60,12 +60,29 @@ export function initSignalStatus() {
 /**
  * Load and display Signal connection status badges and device info
  */
-export async function loadSignalStatus() {
+export async function loadSignalStatus({ forceRefresh = false } = {}) {
     // Skip status refresh during mutating operations to prevent UI jumping
     if (isSignalBusy()) {
         return;
     }
+    if (signalStatusGuard.isRunning()) {
+        if (forceRefresh) pendingForcedRefresh = true;
+        return;
+    }
     
+    // Without a known registered account there is nothing to test, unlink or show as linked.
+    const hideRegisteredUi = () => {
+        const testSection = document.getElementById('signal-test-section');
+        if (testSection) {
+            testSection.classList.add('d-none');
+            testSection.classList.remove('d-flex');
+        }
+        const advancedActions = document.getElementById('signal-advanced-actions');
+        if (advancedActions) advancedActions.style.display = 'none';
+        const linkedAccount = document.getElementById('signal-linked-account-section');
+        if (linkedAccount) linkedAccount.style.display = 'none';
+    };
+
     return signalStatusGuard.guard(async () => {
         const container = DOM.signalStatusBadges();
         const deviceInfo = DOM.signalDeviceInfo();
@@ -73,16 +90,19 @@ export async function loadSignalStatus() {
         
         if (!container) return;
         
-        // Show loading state and hide mode selection until we know the status
-        container.innerHTML = '<span class="badge ju-status-badge--neutral"><span class="spinner-border spinner-border-sm me-1" style="width: 12px; height: 12px;"></span>Checking...</span>';
-        if (modeSelection) modeSelection.style.display = 'none';
+        // Keep the last known status visible during a refresh.
+        if (!container.innerHTML.trim()) {
+            container.innerHTML = '<span class="ju-status-item"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span>Checking...</span>';
+            if (modeSelection) modeSelection.hidden = true;
+        }
 
         try {
-            const resp = await apiFetch(SIGNAL_API.status);
+            const resp = await apiFetch(forceRefresh ? `${SIGNAL_API.status}?refresh=true` : SIGNAL_API.status);
             if (!resp.ok) {
-                container.innerHTML = '<span class="badge ju-status-badge--neutral">Status unavailable</span>';
+                container.innerHTML = window.JuStatusDot.html('neutral', 'Status unavailable');
                 if (deviceInfo) deviceInfo.textContent = 'Could not connect to signal-cli';
-                if (modeSelection) modeSelection.style.display = 'block';
+                if (modeSelection) modeSelection.hidden = false;
+                hideRegisteredUi();
                 return;
             }
             
@@ -101,8 +121,15 @@ export async function loadSignalStatus() {
                 deviceInfo.replaceChildren();
                 if (errorMsg) {
                     var errSpan = document.createElement('span');
-                    errSpan.className = 'text-danger';
-                    errSpan.textContent = 'signal-cli error: ' + errorMsg;
+                    errSpan.className = 'text-danger d-inline-flex align-items-center gap-1';
+                    // Error marker (DC-STATE-7): the icon is decorative, the text carries the meaning.
+                    var errIcon = document.createElement('span');
+                    errIcon.className = 'material-icons ju-icon-inline';
+                    errIcon.setAttribute('aria-hidden', 'true');
+                    errIcon.textContent = 'error';
+                    var errText = document.createElement('span');
+                    errText.textContent = 'signal-cli error: ' + errorMsg;
+                    errSpan.append(errIcon, errText);
                     deviceInfo.appendChild(errSpan);
                 } else if (registered && accounts.length > 0) {
                     var linkedSpan = document.createElement('span');
@@ -111,47 +138,21 @@ export async function loadSignalStatus() {
                     deviceInfo.appendChild(linkedSpan);
                     deviceInfo.appendChild(document.createTextNode(' · Account: ' + accounts.join(', ')));
                 } else if (reachable) {
-                    var warnSpan = document.createElement('span');
-                    warnSpan.className = 'text-warning';
-                    warnSpan.textContent = 'signal-cli ready · No account linked';
-                    deviceInfo.appendChild(warnSpan);
+                    deviceInfo.appendChild(window.JuWarning.create('signal-cli ready · No account linked'));
                 } else {
                     deviceInfo.textContent = 'signal-cli not available';
                 }
             }
 
-            // Health badge - build as DocumentFragment to avoid flash
-            var badgeFragment = document.createDocumentFragment();
+            // Health badge - one markup assignment avoids a flash
+            var badgeHtml;
             
             if (errorMsg) {
-                const badge = document.createElement('span');
-                badge.className = 'badge ju-status-badge--danger';
-                badge.title = errorMsg;
-                const badgeIcon = document.createElement('span');
-                badgeIcon.className = 'material-icons me-1';
-                badgeIcon.textContent = 'cancel';
-                badge.appendChild(badgeIcon);
-                badge.appendChild(document.createTextNode('Offline'));
-                badgeFragment.appendChild(badge);
+                badgeHtml = JuStatusDot.html('danger', 'Offline', { title: errorMsg });
             } else if (registered) {
-                const badge = document.createElement('span');
-                badge.className = 'badge ju-status-badge--success';
-                const badgeIcon = document.createElement('span');
-                badgeIcon.className = 'material-icons me-1';
-                badgeIcon.textContent = 'check_circle';
-                badge.appendChild(badgeIcon);
-                badge.appendChild(document.createTextNode('Linked'));
-                badgeFragment.appendChild(badge);
+                badgeHtml = JuStatusDot.html('success', 'Linked');
             } else if (reachable) {
-                const badge = document.createElement('span');
-                badge.className = 'badge ju-status-badge--warning';
-                badge.title = 'signal-cli ready but no account linked';
-                const badgeIcon = document.createElement('span');
-                badgeIcon.className = 'material-icons me-1';
-                badgeIcon.textContent = 'link_off';
-                badge.appendChild(badgeIcon);
-                badge.appendChild(document.createTextNode('Not linked'));
-                badgeFragment.appendChild(badge);
+                badgeHtml = JuStatusDot.html('warning', 'Not linked', { title: 'signal-cli ready but no account linked' });
                 
                 // Reset UI to show setup options - only if not busy and no flow active
                 if (!isSignalBusy()) {
@@ -166,22 +167,16 @@ export async function loadSignalStatus() {
                     }
                 }
             } else {
-                const badge = document.createElement('span');
-                badge.className = 'badge ju-status-badge--neutral';
-                const badgeIcon = document.createElement('span');
-                badgeIcon.className = 'material-icons me-1';
-                badgeIcon.textContent = 'help_outline';
-                badge.appendChild(badgeIcon);
-                badge.appendChild(document.createTextNode('Unavailable'));
-                badgeFragment.appendChild(badge);
+                badgeHtml = JuStatusDot.html('neutral', 'Unavailable');
             }
 
-            container.replaceChildren(badgeFragment);
+            container.innerHTML = badgeHtml;
             
             // Show/hide test section based on registration status
             const testSection = document.getElementById('signal-test-section');
             if (testSection) {
                 testSection.classList.toggle('d-none', !registered);
+                testSection.classList.toggle('d-flex', registered);
             }
             
             // Show/hide mode selection based on registration status
@@ -190,7 +185,7 @@ export async function loadSignalStatus() {
             
             if (registered) {
                 // Hide mode selection (Link/Register buttons)
-                if (modeSelection) modeSelection.style.display = 'none';
+                if (modeSelection) modeSelection.hidden = true;
                 
                 // Show linked account info section (created dynamically if needed)
                 showLinkedAccountSection(accounts);
@@ -204,7 +199,7 @@ export async function loadSignalStatus() {
                 if (flowLink) flowLink.classList.add('d-none');
                 if (flowRegister) flowRegister.classList.add('d-none');
             } else {
-                if (modeSelection) modeSelection.style.display = 'block';
+                if (modeSelection) modeSelection.hidden = false;
                 
                 if (linkedAccountSection) linkedAccountSection.style.display = 'none';
                 
@@ -213,22 +208,22 @@ export async function loadSignalStatus() {
             }
         } catch (e) {
             console.warn('Failed to load Signal status:', e);
-            container.innerHTML = '<span class="badge ju-status-badge--neutral">Status unavailable</span>';
+            container.innerHTML = window.JuStatusDot.html('neutral', 'Status unavailable');
             if (deviceInfo) deviceInfo.textContent = 'Connection error';
-            if (modeSelection) modeSelection.style.display = 'block';
-            
-            const testSection = document.getElementById('signal-test-section');
-            if (testSection) testSection.classList.add('d-none');
-            
-            const advancedActions = document.getElementById('signal-advanced-actions');
-            if (advancedActions) advancedActions.style.display = 'none';
+            if (modeSelection) modeSelection.hidden = false;
+            hideRegisteredUi();
+        }
+    }).finally(() => {
+        if (pendingForcedRefresh) {
+            pendingForcedRefresh = false;
+            return loadSignalStatus({ forceRefresh: true });
         }
     });
 }
 
 /**
  * Show linked account section with account info and unlink button
- * @param {string[]} accounts - List of registered accounts (masked phone numbers)
+ * @param {string[]} accounts - List of registered accounts (phone numbers)
  */
 function showLinkedAccountSection(accounts) {
     const setupCollapse = document.getElementById('signal-setup-collapse');
@@ -250,8 +245,6 @@ function showLinkedAccountSection(accounts) {
     
     section.replaceChildren();
 
-    const maskedAccounts = accounts;
-
     // Alert box - build with DOM API to prevent XSS
     var alert = document.createElement('div');
     alert.className = 'alert alert-success small py-2 mb-3';
@@ -265,7 +258,7 @@ function showLinkedAccountSection(accounts) {
     strong.textContent = 'Device linked';
     var acctSpan = document.createElement('span');
     acctSpan.className = 'text-body-secondary ms-2';
-    acctSpan.textContent = 'Account: ' + maskedAccounts.join(', ');
+    acctSpan.textContent = 'Account: ' + accounts.join(', ');
     alertInner.append(icon, strong, acctSpan);
     alert.appendChild(alertInner);
     section.appendChild(alert);
@@ -396,5 +389,5 @@ function resetModeSelection() {
     container.append(linkBtn, regBtn);
     modeSelection.appendChild(container);
     modeSelection.classList.remove('d-none');
-    modeSelection.style.display = 'block';
+    modeSelection.hidden = false;
 }

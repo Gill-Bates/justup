@@ -69,7 +69,10 @@ def test_provider_table_uses_ip_key(monkeypatch, info):
     b = _builder({"http_url": "https://example.com:8443/x"})
     b._add_provider_info()
     assert len(b.elements) == 1
+    texts = _texts(b)  # collected before rendering, which consumes the flowables
     assert _render(b).startswith(b"%PDF")
+    assert (info["ip"] if info["ip"] != "-" else "—") in texts
+    assert info["provider"] in texts or info["provider"] == "-"
 
 
 def test_provider_table_markup_in_external_fields_is_escaped(monkeypatch):
@@ -83,7 +86,13 @@ def test_provider_table_markup_in_external_fields_is_escaped(monkeypatch):
     monkeypatch.setattr(pdf_report, "lookup_provider_info", lambda host: evil)
     b = _builder({"ping_host": "example.com"})
     b._add_provider_info()
+    texts = _texts(b)  # collected before rendering, which consumes the flowables
     assert _render(b).startswith(b"%PDF")
+    assert '<font color="red">' not in texts
+    assert "&lt;font" in texts
+    assert "AS&lt;b&gt;1&amp;2" in texts
+    assert "\x00" not in texts
+    assert "\x07" not in texts
 
 
 def test_provider_section_skipped_without_host(monkeypatch):
@@ -390,8 +399,10 @@ def test_ssl_section_survives_hostile_text(monkeypatch):
     cert = dataclasses.replace(
         base.certificate, subject='CN=<font color="red">a&b', issuer="O=<i>Issuer", san=("<b>x</b>.example",)
     )
-    _, pdf = _ssl_section(monkeypatch, dataclasses.replace(base, certificate=cert))
+    text, pdf = _ssl_section(monkeypatch, dataclasses.replace(base, certificate=cert))
     assert pdf.startswith(b"%PDF")
+    assert '<font color="red">' not in text and "<i>Issuer" not in text and "<b>x</b>" not in text
+    assert "CN=&lt;font" in text and "O=&lt;i&gt;Issuer" in text
 
 
 def test_ssl_section_lists_every_certificate_deployment(monkeypatch):
@@ -423,7 +434,9 @@ def test_stack_section_survives_hostile_text(monkeypatch):
     monkeypatch.setattr(b, "_get_whatweb_data", lambda: stack)
     b._add_detected_stack()
     assert b.elements
+    text = _texts(b)  # collected before rendering, which consumes the flowables
     assert _render(b).startswith(b"%PDF")
+    assert '<font color="red">' not in text and "nginx &lt;1.0&gt; &amp; co" in text
 
 
 def test_get_ssl_data_turns_scanner_crash_into_failed_result(monkeypatch):
@@ -445,6 +458,85 @@ def test_pdf_tls_scan_deadline_leaves_time_before_the_job_timeout(monkeypatch):
     monkeypatch.setattr(pdf_report, "scan_tls", scan)
     _builder({"http_url": "https://host.example"})._get_ssl_data()
     assert calls == [("https://host.example", {"timeout": 15, "deadline": 60.0})]
+
+
+@pytest.mark.parametrize(
+    ("fields", "expected"),
+    [
+        ({"http_url": "https://host.example", "cert_port": 8443}, "https://host.example:8443"),
+        ({"cert_host": "2001:db8::1", "cert_port": 8443}, "https://[2001:db8::1]:8443"),
+        ({"cert_host": "2001:db8::1"}, "https://[2001:db8::1]"),
+        ({"cert_host": "c.example", "http_url": "https://h.example:9443/x"}, "https://c.example:9443"),
+        ({"cert_host": "c.example", "http_url": "https://h.example", "http_port": 8443}, "https://c.example:8443"),
+        ({"cert_host": "c.example", "http_url": "http://h.example"}, "https://c.example"),
+        ({"http_url": "https://[2001:db8::1]:8443/"}, "https://[2001:db8::1]:8443"),
+        ({"http_url": "http://host.example", "http_port": 8080}, None),
+        ({"http_url": "https://host.example", "cert_port": 99999}, None),
+    ],
+)
+def test_get_ssl_data_uses_the_shared_certificate_target_resolution(monkeypatch, fields, expected):
+    calls = []
+
+    def scan(target, **_kwargs):
+        calls.append(target)
+        return _tls_result()
+
+    monkeypatch.setattr(pdf_report, "scan_tls", scan)
+    result = _builder(fields)._get_ssl_data()
+    assert calls == ([expected] if expected else [])
+    assert (result is None) == (expected is None)
+
+
+def _scan_targets(monkeypatch, fields) -> list[str]:
+    calls = []
+    monkeypatch.setattr(pdf_report, "scan_tls", lambda target, **_k: calls.append(target) or _tls_result())
+    _builder(fields)._get_ssl_data()
+    return calls
+
+
+@pytest.mark.parametrize(
+    ("fields", "expected"),
+    [
+        # A configured http:// is never upgraded to https:// for a scan, whatever else is set.
+        ({"http_url": "http://host.example"}, []),
+        ({"http_url": "HTTP://host.example"}, []),
+        ({"http_url": "http://host.example:8443/", "cert_port": 8443}, []),
+        ({"http_url": "http://[2001:db8::1]:8080/"}, []),
+        ({"http_url": "http://u:pw@host.example/p?token=x#frag", "http_port": 8443}, []),
+        ({"http_url": "ftp://host.example"}, []),
+        ({"http_url": "http://[bad"}, []),
+        # The scheme check is case-insensitive; userinfo, path, query and fragment never reach the scan target.
+        ({"http_url": "HTTPS://Host.Example/"}, ["https://host.example"]),
+        ({"http_url": "https://u:pw@host.example:8443/p?token=x#frag"}, ["https://host.example:8443"]),
+        ({"http_url": "https://[2001:db8::1]:8443/"}, ["https://[2001:db8::1]:8443"]),
+        ({"http_url": "https://host.example", "cert_port": 8443}, ["https://host.example:8443"]),
+        # An explicit cert_host is the user's request for a TLS scan, also next to a plain-HTTP site.
+        ({"http_url": "http://h.example", "cert_host": "c.example", "cert_port": 8443}, ["https://c.example:8443"]),
+        ({"http_url": "https://h.example:9443/", "cert_host": "c.example"}, ["https://c.example:9443"]),
+    ],
+)
+def test_ssl_scan_never_turns_http_into_https_and_never_exposes_url_secrets(monkeypatch, fields, expected):
+    assert _scan_targets(monkeypatch, fields) == expected
+
+
+def test_plain_http_target_gets_a_neutral_marking_and_no_tls_section_or_secrets(monkeypatch):
+    url = "http://user:hunter2@plain.example:8080/path?token=SECRET#frag"
+    b = _full_builder(
+        monkeypatch, ssl=None, target_extra={"http_url": url, "host": None, "ping_host": None, "cert_host": None}
+    )
+    text = _all_text(b)
+    assert "Certificate" not in text and "Not applicable" not in text
+    assert "HTTP" in text and "no TLS scan" in text
+    assert "plain.example" in text
+    for leaked in ("user", "hunter2", "SECRET", "frag", "token="):
+        assert leaked not in text
+    uris = set(re.findall(rb"/URI \(([^)]*)\)", b.build()))
+    assert uris <= {b"https://github.com/Gill-Bates/justUp"}  # no link from the monitored URL
+
+
+def test_secure_target_still_shows_the_tls_sections(monkeypatch):
+    b = _full_builder(monkeypatch, ssl=_tls_result())
+    assert "Certificate" in _all_text(b)
 
 
 # ─── Layout contracts: chapters, page breaks, repeated headers, A4/Letter ──────────────────────
@@ -521,7 +613,7 @@ def _full_builder(
     monkeypatch.setattr(b, "_get_whatweb_data", lambda: None)
     monkeypatch.setattr(b, "_get_ssl_data", lambda: ssl)
     hop_list = list(hops)
-    monkeypatch.setattr(b, "_get_mtr_data", lambda **_k: (hop_list, [], False))
+    monkeypatch.setattr(b, "_get_route_data", lambda **_k: (hop_list, [], False))
     return b
 
 
@@ -538,7 +630,8 @@ def _assert_chapter_layout(b: PDFReportBuilder) -> None:
     assert pages[0] == 1
     assert pages == sorted(set(pages)), pages  # strictly increasing: no two chapters share a page
     if merged:
-        assert b.chapter_pages["Downtime Log"] == b.page_count or b.chapter_pages["Downtime Log"] >= pages[-1]
+        # The performance chapter can span several pages; the merged summary closes it on the last page.
+        assert b.chapter_pages["Downtime Log"] == b.page_count, (b.chapter_pages, b.page_count)
     b._assemble()  # build() consumes the flowables; re-compose them for the structural checks
     heads = [i for i, el in enumerate(b.elements) if getattr(el, "chapter_name", None) in names[1:]]
     assert len(heads) == len(names) - 1
@@ -559,8 +652,6 @@ def test_cover_is_page_one_and_each_chapter_starts_on_a_new_page(monkeypatch):
 
 @pytest.mark.parametrize("size", ["a4", "letter"])
 def test_a4_and_letter_keep_the_chapter_layout(monkeypatch, size):
-    import re
-
     b = _full_builder(
         monkeypatch,
         size=size,
@@ -786,7 +877,7 @@ def test_odd_measurement_values_and_naive_dates_do_not_abort_the_report(monkeypa
     b2 = PDFReportBuilder(naive)
     monkeypatch.setattr(b2, "_get_whatweb_data", lambda: None)
     monkeypatch.setattr(b2, "_get_ssl_data", lambda: None)
-    monkeypatch.setattr(b2, "_get_mtr_data", lambda **_k: ([], [], False))
+    monkeypatch.setattr(b2, "_get_route_data", lambda **_k: ([], [], False))
     assert b.build().startswith(b"%PDF") and b2.build().startswith(b"%PDF")
     assert b.kpis.avg_response_ms is not None  # valid points still count, bad ones are skipped
 
@@ -801,6 +892,18 @@ def test_ongoing_outage_duration_is_measured_to_the_last_sample_not_the_period_e
     text = " | ".join(out)
     assert "ONGOING" in text and "≥ " in text
     assert b._last_uptime_sample() < b.report_data.to_date
+
+
+def test_ongoing_outage_kpi_matches_log_with_naive_samples(monkeypatch):
+    b = _full_builder(monkeypatch, hops=[], ssl=None, fail=(118, 119))
+    uptime_data = [
+        {"ts": ts.replace(tzinfo=None).isoformat(), "value": value}
+        for ts, value in b.report_data.uptime_data.outage_points()
+    ]
+    data = dataclasses.replace(b.report_data, uptime_data=uptime_data, downtime_periods=b.downtime_events)
+    report = PDFReportBuilder(data)
+    assert report._last_uptime_sample() == b._last_uptime_sample()
+    assert report.kpis.downtime_minutes == b.kpis.downtime_minutes
 
 
 # ─── Blank pages: a chapter that ends exactly at the page end must not leave an empty page ─────
@@ -908,7 +1011,9 @@ def test_downtime_is_labelled_as_an_estimate_everywhere(monkeypatch):
     assert "Est. duration" in text and "Estimated downtime:" in text
     assert "estimated downtime is about" not in text
     assert "| DOWNTIME" not in f"| {text}" and "| Duration" not in f"| {text}"
-    assert b.kpis.downtime_minutes == 3 * 5  # failed checks x 300 s interval
+    # The series is thinned to 5040 s, beyond the 3 x 300 s gap boundary. Each failure
+    # proves one check interval; the unmeasured time between them stays UNKNOWN.
+    assert b.kpis.downtime_minutes == 3 * 5
 
 
 FULL_COVERAGE = {"interval_seconds": 5040}  # 120 checks fill the 7-day series
@@ -946,7 +1051,8 @@ def test_low_coverage_never_shows_a_green_operational_status(monkeypatch):
     assert "of recorded checks successful" in detail and "remaining 94.0%" in detail
     text = _all_text(b)
     assert "RECORDED CHECKS SUCCESSFUL" in text and "120/120 measurements · data coverage 6%" in text
-    assert "None detected" in text and "in observed checks" in text and "≈ 0 min" not in text
+    assert "ESTIMATED DOWNTIME" in text and "None detected" not in text
+    assert "in observed checks" in text and "≈ 0 min" not in text
     assert "AVAILABILITY" not in text
 
 
@@ -1091,11 +1197,11 @@ def _route_builder(monkeypatch, hops, *, host="dest.example", size="a4"):
     b = _full_builder(monkeypatch, hops=[], ssl=None, size=size)
     monkeypatch.setattr(
         b,
-        "_get_mtr_data",
-        lambda *, max_hops=pdf_report._MTR_MAX_HOPS: PDFReportBuilder._get_mtr_data(b, max_hops=max_hops),
+        "_get_route_data",
+        lambda *, max_hops=pdf_report._ROUTE_MAX_HOPS: PDFReportBuilder._get_route_data(b, max_hops=max_hops),
     )
     monkeypatch.setattr(b, "_get_traceroute_host", lambda: host)
-    monkeypatch.setattr(pdf_report, "_run_mtr_with_interpolation", lambda *_a, **_k: (list(hops), [], False))
+    monkeypatch.setattr(pdf_report, "_run_traceroute_with_interpolation", lambda *_a, **_k: (list(hops), [], False))
     return b
 
 
@@ -1110,10 +1216,11 @@ def _synthetic_destination(n):
 
 
 def test_route_cut_at_the_hop_limit_is_flagged_incomplete(monkeypatch):
-    hops = [_hop(i) for i in range(1, 19)] + [_hop(i, status="timeout") for i in (19, 20)]
-    b = _route_builder(monkeypatch, [*hops, _synthetic_destination(20)])
+    limit = pdf_report._ROUTE_MAX_HOPS
+    hops = [_hop(i) for i in range(1, limit - 1)] + [_hop(i, status="timeout") for i in (limit - 1, limit)]
+    b = _route_builder(monkeypatch, [*hops, _synthetic_destination(limit)])
     text = _all_text(b)
-    assert text.count("Route incomplete – 20-hop limit reached") == 2  # chapter subtitle and warning note
+    assert text.count(f"Route incomplete – {limit}-hop limit reached") == 2  # chapter subtitle and warning note
     assert "not shown completely" in text and "NO REPLY" in text
 
 
@@ -1126,9 +1233,10 @@ def test_route_reaching_its_destination_is_not_flagged_incomplete(monkeypatch):
 
 
 def test_route_ending_in_silent_hops_at_the_limit_is_incomplete_without_a_resolved_destination(monkeypatch):
-    hops = [_hop(i) for i in range(1, 19)] + [_hop(i, status="timeout") for i in (19, 20)]
+    limit = pdf_report._ROUTE_MAX_HOPS
+    hops = [_hop(i) for i in range(1, limit - 1)] + [_hop(i, status="timeout") for i in (limit - 1, limit)]
     text = _all_text(_route_builder(monkeypatch, hops))
-    assert "Route incomplete – 20-hop limit reached" in text
+    assert f"Route incomplete – {limit}-hop limit reached" in text
     short = [_hop(i) for i in range(1, 9)] + [_hop(i, status="timeout") for i in (9, 10)]
     assert "Route incomplete" not in _all_text(_route_builder(monkeypatch, short))
 
@@ -1238,7 +1346,7 @@ def test_long_ungroupable_route_splits_over_pages_and_keeps_every_hop(monkeypatc
 def test_route_ending_in_silent_hops_is_not_truncated_in_the_pdf(monkeypatch):
     hops = [_hop(i) for i in range(1, 9)] + [_hop(i, status="timeout") for i in (9, 10)]
     b = _route_builder(monkeypatch, hops)
-    assert [h["hop"] for h in b._get_mtr_data()[0]][-1] == 10
+    assert [h["hop"] for h in b._get_route_data()[0]][-1] == 10
     spans = [e["span"] for e in pdf_report._build_route_entries(hops, None)["entries"]]
     assert spans[-1] in ("10", "9–10")
 
@@ -1272,8 +1380,7 @@ def test_provider_location_is_marked_approximate_with_radius(monkeypatch):
     monkeypatch.setattr(
         pdf_report, "lookup_provider_info", lambda host: _info(location="Ratingen", location_accuracy="100 km radius")
     )
-    b._provider_cache = None
-    del b._provider_cache
+    b.__dict__.pop("_provider_cache", None)  # drop the lookup cached by the builder fixture
     assert b._destination_place() == "Ratingen, DE · approximate GeoIP location · 100 km radius"
     assert b._destination_place(with_accuracy=False) == "Ratingen, DE · approximate GeoIP location"
 
@@ -1281,9 +1388,7 @@ def test_provider_location_is_marked_approximate_with_radius(monkeypatch):
 def test_merged_downtime_summary_without_incidents_and_own_page_with_incidents(monkeypatch):
     quiet = _full_builder(monkeypatch, hops=[_hop(1)], ssl=None, target_extra=FULL_COVERAGE)
     quiet.build()
-    assert quiet.chapter_pages["Downtime Log"] == quiet.chapter_pages["Availability & Performance"] or (
-        quiet.chapter_pages["Downtime Log"] == quiet.page_count
-    )
+    assert quiet.chapter_pages["Downtime Log"] == quiet.chapter_pages["Availability & Performance"]
     assert "No downtime recorded" in _all_text(quiet)
     thin = _full_builder(monkeypatch, hops=[_hop(1)], ssl=None)
     assert "No downtime detected in observed checks" in _all_text(thin)
@@ -1366,7 +1471,7 @@ def test_coverage_indicator_and_low_coverage_caveat():
     assert not b._is_low_coverage() and b._effective_level() == "ok"
 
 
-def test_empty_mtr_route_is_cached_so_mtr_runs_once(monkeypatch):
+def test_empty_route_is_cached_so_the_trace_runs_once(monkeypatch):
     b = _route_builder(monkeypatch, [])
     calls = []
 
@@ -1374,9 +1479,9 @@ def test_empty_mtr_route_is_cached_so_mtr_runs_once(monkeypatch):
         calls.append(1)
         return [], [], False
 
-    monkeypatch.setattr(pdf_report, "_run_mtr_with_interpolation", _silent_route)
-    assert b._get_mtr_data() == ([], [], False)
-    assert b._get_mtr_data() == ([], [], False)
+    monkeypatch.setattr(pdf_report, "_run_traceroute_with_interpolation", _silent_route)
+    assert b._get_route_data() == ([], [], False)
+    assert b._get_route_data() == ([], [], False)
     assert len(calls) == 1
 
 
@@ -1487,7 +1592,6 @@ def test_pdf_builds_offline_with_text_only_when_flags_are_unavailable(monkeypatc
         raise OSError("offline")
 
     monkeypatch.setattr(flag_images.httpx, "Client", no_network)
-    flag_images.clear_cache()
     b = _route_flag_builder(monkeypatch, flags=False)
     b.prefetch_external_data()
     assert b._flags == {}
@@ -1540,8 +1644,8 @@ def test_report_text_is_english_only(monkeypatch, kw):
 
 def test_single_failed_check_uses_singular_wording(monkeypatch):
     text = _all_text(_full_builder(monkeypatch, hops=[_hop(1)], ssl=None, fail=(10,)))
-    assert "1 failed check ×" in text and "forms 1 downtime event" not in text
-    assert "1 failed checks" not in text
+    assert "sum of measured outages" in text and "forms 1 downtime event" not in text
+    assert "× interval" not in text
 
 
 def test_country_without_city_is_not_shown_as_a_place(monkeypatch):
@@ -1613,13 +1717,13 @@ def test_response_time_legend_is_below_plot(monkeypatch):
         (6, [0, 2, 4, 6]),
         (140, [0, 50, 100, 150]),
         (1250, [0, 250, 500, 750, 1000, 1250]),
-        (0.8, [0, 0.2, 0.4, 0.6, 0.8]),
+        (0.8, [0, 0.2, 0.4, 0.6, 0.8, 1.0]),
     ],
 )
 def test_nice_ticks_are_round_ascending_numbers(top, expected):
     ticks = pdf_report._nice_ticks(top, 4 if top == 140 else 5)
     assert ticks[0] == 0 and ticks[-1] >= top and ticks == sorted(set(ticks))
-    assert ticks == pytest.approx(expected) or len(ticks) <= 8
+    assert ticks == pytest.approx(expected)
 
 
 @pytest.mark.parametrize(
@@ -1792,7 +1896,8 @@ def test_pdf_logo_comes_from_the_single_web_logo_asset():
     assert web_logo == pdf_logo.LOGO_SVG_PATH
     assert "/static/img/justup_1c.svg" in (repo / "app" / "templates" / "base.html").read_text(encoding="utf-8")
     # No second, stale copy of the wordmark and no hand-drawn footer signet.
-    assert not list((repo / "app" / "static").glob("justup_1c.*"))
+    copies = sorted(p for p in (repo / "app" / "static").rglob("justup_1c.*") if p != web_logo)
+    assert not copies, copies
     source = Path(pdf_report.__file__).read_text(encoding="utf-8")
     assert "justup_1c.png" not in source
     assert "heartbeat" not in source.lower()
@@ -1819,3 +1924,74 @@ def test_logo_aspect_and_bounds_match_the_svg_viewbox():
     assert min(xs) >= -1 and max(xs) <= w + 1
     assert min(ys) >= -1 and max(ys) <= h + 1
     assert pdf_logo.logo_aspect() == pytest.approx(h / w)
+
+
+# --- Availability agrees with the listed outages -------------------------------------------------
+
+
+def _combined_availability_data(tmp_path: Path, *, with_periods: bool) -> ReportData:
+    from app.db import tsdb
+    from app.utils.report_metrics import collect_report_inputs
+
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    end = start + timedelta(hours=1)
+    target = {
+        "enable_http_check": True,
+        "enable_ping": False,
+        "enable_tcp_connect": True,
+        "tcp_ports": "443",
+        "interval_seconds": 300,
+        "sla_enabled": False,
+    }
+    for i in range(12):
+        at = start + timedelta(minutes=5 * i)
+        tsdb.append_point(tmp_path, target_id=1, metric="http_up", value=1, retention_days=365, at=at)
+        tcp = 0 if i in (3, 4) else 1
+        tsdb.append_point(tmp_path, target_id=1, metric="tcp_up", value=tcp, retention_days=365, at=at)
+    inputs = collect_report_inputs(tmp_path, 1, target, start, end)
+    down_at = start + timedelta(minutes=15)
+    exact = [tsdb.DowntimePeriod(down_at, down_at + timedelta(minutes=10), 600, ["TCP:443"])]
+    inputs["downtime_periods"] = exact if with_periods else None  # None = sampled-event fallback
+    return ReportData(target=target, from_date=start, to_date=end, **inputs)
+
+
+@pytest.mark.parametrize("with_periods", [False, True], ids=["sampled-events", "exact-periods"])
+def test_availability_includes_a_failing_check_that_the_outage_list_shows(tmp_path, with_periods):
+    data = _combined_availability_data(tmp_path, with_periods=with_periods)
+    builder = PDFReportBuilder(data)
+    assert builder.downtime_events
+    assert builder.kpis.uptime_percent is not None and builder.kpis.uptime_percent < 100
+    assert builder.kpis.down_count == 2
+    assert builder._status_info()[0] != "Operational"
+
+
+def test_report_data_defaults_missing_interval_to_60_seconds():
+    assert _builder({"name": "t"}).report_data.uptime_data.interval_seconds == 60
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (50, 50.0),
+        (50.25, 50.25),
+        ("50.25", 50.25),
+        (True, None),
+        ("not-a-number", None),
+        (float("nan"), None),
+        (float("-inf"), None),
+        (None, None),
+    ],
+)
+def test_pdf_report_number_rejects_boolean_and_non_finite_values(value, expected):
+    assert pdf_report._num(value) == expected
+
+
+def test_every_above_scale_marker_keeps_its_value_label(monkeypatch):
+    peaks = {40: 2400, 41: 3452, 42: 2903, 118: 4318}
+    (fig,) = _capture_axes(
+        monkeypatch,
+        lambda: pdf_report._create_response_time_chart(_display(base=80, peaks=peaks), _CH_START, _CH_END),
+    )
+    texts = [t.get_text() for t in fig.axes[0].texts]
+    for value in ("2,400 ms", "3,452 ms", "2,903 ms", "4,318 ms"):
+        assert value in texts, (value, texts)

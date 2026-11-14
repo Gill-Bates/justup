@@ -41,7 +41,7 @@ from fastapi import Depends, Request
 from fastapi.responses import JSONResponse
 
 from .client_ip import normalize_ip_bucket, resolve_trusted_client_ip
-from .constants import RATE_LIMIT_AUTH_DEFAULT, SettingKeys
+from .constants import RATE_LIMIT_AUTH_DEFAULT, RATE_LIMIT_PATTERN, SettingKeys
 from .runtime_settings import get_runtime_setting
 
 __all__ = [
@@ -73,7 +73,7 @@ MAX_KEYS = 10_000
 # Requests without a usable client address share one bucket: conservative, never a bypass.
 _UNKNOWN_CLIENT_KEY = "unknown"
 _UNIT_SECONDS = {"second": 1, "minute": 60, "hour": 3600, "day": 86400}
-_LIMIT_RE = re.compile(r"^([1-9][0-9]{0,5})/(second|minute|hour|day)$")
+_LIMIT_RE = re.compile(RATE_LIMIT_PATTERN)
 # Minimum gap between sweeps of a full table and between failure log lines.
 _SWEEP_INTERVAL = 1.0
 _LOG_INTERVAL = 60.0
@@ -100,7 +100,7 @@ class CapacityExhaustedError(RuntimeError):
 
 @lru_cache(maxsize=64)
 def _parse_str(limit: str) -> tuple[int, int]:
-    match = _LIMIT_RE.match(limit)
+    match = _LIMIT_RE.fullmatch(limit)
     if match is None:
         raise ValueError(f"Invalid rate limit {limit!r}; expected 'N/second|minute|hour|day'")
     return int(match.group(1)), _UNIT_SECONDS[match.group(2)]

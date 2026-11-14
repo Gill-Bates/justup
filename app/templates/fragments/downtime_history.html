@@ -1,66 +1,44 @@
-{# Downtime History Fragment (HTMX). Styles live in target-detail.css. #}
-{% if periods %}
-<div class="downtime-scroll" role="region" aria-label="Downtime history" tabindex="0" data-range-label="{{ range_label | default('30d') }}">
-	<p class="downtime-summary">
-		<strong>{{ periods | length }}</strong> {{ 'downtime' if periods | length == 1 else 'downtimes' }}
-		{% if periods | selectattr('end', 'none') | list | length %}<span class="badge ju-status-badge--danger">Ongoing</span>{% endif %}
-	</p>
-	<ol class="downtime-list">
-		{% for p in periods %}
-		<li class="downtime-item{% if p.end is none %} downtime-item--ongoing{% endif %}">
-			<span class="downtime-marker" aria-hidden="true"></span>
-			<div class="downtime-body">
-				<div class="downtime-times">
-					<span class="local-time" data-utc="{{ p.start.isoformat() }}"
-						data-use-utc="{{ 'true' if use_utc else 'false' }}">
-						{{ p.start.strftime('%Y-%m-%d %H:%M:%S') }} UTC
-					</span>
-					<span class="downtime-arrow" aria-hidden="true">→</span><span class="visually-hidden"> until </span>
-					{% if p.end %}
-					<span class="local-time" data-utc="{{ p.end.isoformat() }}"
-						data-use-utc="{{ 'true' if use_utc else 'false' }}">
-						{{ p.end.strftime('%Y-%m-%d %H:%M:%S') }} UTC
-					</span>
-					{% else %}
-					<span class="badge ju-status-badge--danger">Ongoing</span>
-					{% endif %}
-				</div>
-				<div class="downtime-services">
-					{% for svc in p.failed_services %}
-					<span class="badge ju-status-badge--danger">{{ svc }}</span>
-					{% endfor %}
-				</div>
-			</div>
-			<div class="downtime-duration">
-				{% if p.duration_seconds is not none %}
-				{% set hours = p.duration_seconds // 3600 %}
-				{% set minutes = (p.duration_seconds % 3600) // 60 %}
-				{% set seconds = p.duration_seconds % 60 %}
-				{% if hours > 0 %}
-				{{ hours }}h {{ minutes }}m
-				{% elif minutes > 0 %}
-				{{ minutes }}m {{ seconds }}s
-				{% else %}
-				{{ seconds }}s
-				{% endif %}
-				{% else %}
-				<span class="text-danger">--</span>
-				{% endif %}
-			</div>
-		</li>
-		{% endfor %}
-	</ol>
+{# Downtime History Fragment (HTMX). Styles live in target-detail.css; the view model is app/utils/downtime_view.py.
+   Three kinds, told apart by words and marker shape: measured downtime ("down"), a measurement gap ("gap")
+   and an UNKNOWN result ("unknown"). Only "down" is downtime; the other two are unmeasured time. #}
+{% set summary = history.summary %}
+{% macro stats() %}
+<ul class="downtime-stats">
+	<li class="downtime-stat"><strong>{{ summary.downtimes }}</strong> {{ 'Downtime' if summary.downtimes == 1 else 'Downtimes' }}</li>
+	<li class="downtime-stat"><strong>{{ summary.data_gaps }}</strong> {{ 'Data gap' if summary.data_gaps == 1 else 'Data gaps' }}</li>
+	{% if summary.ongoing %}<li class="downtime-ongoing">Ongoing</li>{% endif %}
+</ul>
+{% endmacro %}
+{% if history.events %}
+<div class="downtime-panel" data-range-label="{{ range_label | default('30d') }}">
+	<div class="downtime-head">
+		{{ stats() }}
+	</div>
+	<div class="downtime-scroll" role="region" aria-label="Downtime history" tabindex="0">
+		<ol class="downtime-list">
+			{% for ev in history.events %}
+			<li class="downtime-item downtime-item--{{ ev.kind }}{% if ev.ongoing %} downtime-item--ongoing{% endif %}">
+				<span class="downtime-marker" aria-hidden="true"></span>
+				<strong class="downtime-kind">{{ ev.label }}</strong>
+				<span class="downtime-when" data-start="{{ ev.start_iso }}" data-end="{{ ev.end_iso }}"
+					data-use-utc="{{ 'true' if use_utc else 'false' }}">
+					<span class="downtime-when-text" aria-hidden="true" title="{{ ev.precise_text }}">{{ ev.range_text }}</span>
+					<span class="visually-hidden downtime-when-precise">{{ ev.precise_text }}</span>
+				</span>
+				<span class="downtime-duration">{{ ev.duration_text }}</span>
+				<span class="downtime-meta">{{ ev.meta | join(' · ') }}</span>
+			</li>
+			{% endfor %}
+		</ol>
+	</div>
 </div>
 {% elif has_data %}
-<div class="target-empty-state" role="status" data-range-label="{{ range_label | default('30d') }}">
-	<span class="target-empty-icon target-empty-icon--ok"><i class="material-icons" aria-hidden="true">check_circle</i></span>
-	<p class="target-empty-title">No downtimes in selected range</p>
-	<p class="target-empty-text">All enabled checks stayed up during this period.</p>
+<div class="downtime-panel" data-range-label="{{ range_label | default('30d') }}">
+	<div class="downtime-head">{{ stats() }}</div>
+	<p class="downtime-empty" role="status">No outages in selected range</p>
 </div>
 {% else %}
-<div class="target-empty-state" role="status" data-range-label="{{ range_label | default('30d') }}">
-	<span class="target-empty-icon"><i class="material-icons" aria-hidden="true">info</i></span>
-	<p class="target-empty-title">No measurement data in selected range</p>
-	<p class="target-empty-text">No availability checks were recorded during this period.</p>
+<div class="downtime-panel" data-range-label="{{ range_label | default('30d') }}">
+	<p class="downtime-empty downtime-empty--nodata" role="status"><strong>No measurement data</strong>No checks recorded in this range</p>
 </div>
 {% endif %}

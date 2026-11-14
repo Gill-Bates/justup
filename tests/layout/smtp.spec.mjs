@@ -3,22 +3,13 @@
 // Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 //
 
-import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
-import { resolvePythonExecutable, startStaticAppServer } from "./test-support.mjs";
+import { renderTemplates, startStaticAppServer } from "./test-support.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-const PYTHON = resolvePythonExecutable(ROOT);
-const RENDER = `
-import json, sys
-from jinja2 import Environment, FileSystemLoader, select_autoescape
-env = Environment(loader=FileSystemLoader(sys.argv[1]), autoescape=select_autoescape(["html"]))
-print(env.get_template("settings/smtp.html").render(
-    smtp=json.loads(sys.argv[2]), implicit_tls_port=465, template={"subject": "s", "html": "<p>h</p>"}))
-`;
 const BASE_SMTP = {
 	smtp_enabled: true, smtp_host: "mail.example.com", smtp_port: 587, smtp_from: "alerts@example.com",
 	smtp_user: "", smtp_use_tls: true, smtp_password_set: false,
@@ -34,6 +25,7 @@ window.JuFieldErrors = { clear() {}, show() {} };
 </script>`;
 const PAGE = (smtp) => `<!doctype html><html lang="en"><head><meta charset="utf-8"></head><body>${STUB}
 <div id="settings-form"><div id="smtp-host">${render(smtp)}</div></div>
+<script src="/static/js/utils/status-badge.js"></script>
 <script type="module">
 import { initStorage, loadSettings } from "/static/js/settings.storage.js";
 import { resetDomCache } from "/static/js/settings.core.js";
@@ -43,7 +35,7 @@ window.__ready = true;
 </script></body></html>`;
 
 function render(smtp) {
-	return execFileSync(PYTHON, ["-c", RENDER, path.join(ROOT, "app", "templates"), JSON.stringify(smtp)], { encoding: "utf8" });
+	return renderTemplates(ROOT, [{ template: "settings/smtp.html", context: { smtp, implicit_tls_port: 465, template: { subject: "s", html: "<p>h</p>" } } }]);
 }
 
 let current = "";
@@ -247,9 +239,52 @@ test.describe("SMTP settings browser regressions @smtp-ui", () => {
 		await respond(page, previews[1].index, true, { html: "<html><body>resolved-preview</body></html>" });
 		await expect.poll(() => page.locator("#email_preview_frame").evaluate((frame) => frame.srcdoc.includes("resolved-preview"))).toBe(true);
 		await respond(page, previews[0].index, true, { html: "<html><body>down-preview</body></html>" });
+		// Let the page process the stale answer first; polling alone would pass before it arrived.
+		await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 0)));
 		await expect.poll(() => page.locator("#email_preview_frame").evaluate((frame) => frame.srcdoc)).toContain("resolved-preview");
 	});
 
+	test("editor mode and preview variant buttons keep aria-pressed in step with the active state", async ({ page }) => {
+		await loadPage(page, BASE_SMTP);
+		await page.addScriptTag({ url: "/static/js/settings.smtp-template.js" });
+		await page.evaluate(() => document.dispatchEvent(new Event("DOMContentLoaded")));
+		const state = (ids) => page.evaluate((list) => list.map((id) => {
+			const button = document.getElementById(id);
+			return [id, button.getAttribute("aria-pressed"), button.classList.contains("active")];
+		}), ids);
+		const modes = ["btn-mode-edit", "btn-mode-html", "btn-mode-preview"];
+		const variants = ["btn-preview-down", "btn-preview-resolved"];
+		const expectPressed = async (ids, pressedId) => {
+			const rows = await state(ids);
+			for (const [id, pressed, active] of rows) {
+				expect(pressed, `${id} aria-pressed`).toBe(id === pressedId ? "true" : "false");
+				expect(active, `${id} .active`).toBe(id === pressedId);
+			}
+		};
+		await expectPressed(modes, "btn-mode-preview");
+		await expectPressed(variants, "btn-preview-down");
+		await page.click("#btn-mode-html");
+		await expectPressed(modes, "btn-mode-html");
+		await page.click("#btn-mode-preview");
+		await expectPressed(modes, "btn-mode-preview");
+		await page.click("#btn-preview-resolved");
+		await expectPressed(variants, "btn-preview-resolved");
+		await page.click("#btn-preview-down");
+		await expectPressed(variants, "btn-preview-down");
+	});
+	test("the placeholders disclosure is a button that the Space key opens", async ({ page }) => {
+		await loadPage(page, BASE_SMTP);
+		await page.addScriptTag({ url: "/static/js/bootstrap.bundle.min.js" });
+		const toggle = page.locator('[data-bs-target="#placeholdersCollapse"]');
+		expect(await toggle.evaluate((el) => el.tagName)).toBe("BUTTON");
+		await toggle.focus();
+		await expect(toggle).toHaveAttribute("aria-expanded", "false");
+		await page.keyboard.press("Space");
+		await expect(toggle).toHaveAttribute("aria-expanded", "true");
+		await expect(page.locator("#placeholdersCollapse")).toBeVisible();
+		await page.keyboard.press("Space");
+		await expect(toggle).toHaveAttribute("aria-expanded", "false");
+	});
 	test("failed autosave prevents the test-mail request", async ({ page }) => {
 		await loadPage(page, BASE_SMTP);
 		await page.addScriptTag({ url: "/static/js/settings.users.js" });

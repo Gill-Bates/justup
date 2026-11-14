@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import logging
 import math
 import os
@@ -26,8 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from ..utils import maintenance
-from ..utils.report_metrics import fetch_metric_data, parse_tcp_ports, report_filename
-from ..utils.uptime_metric import select_uptime_metric
+from ..utils.report_metrics import collect_report_inputs, report_filename
 
 _log = logging.getLogger(__name__)
 
@@ -35,6 +35,7 @@ PROGRESS_PROCESSING = 10
 PROGRESS_METRICS_FETCHED = 40
 PROGRESS_PDF_RENDERED = 90
 PROGRESS_DONE = 100
+PDF_DISABLED_ERROR = "PDF export is disabled"  # public job error: shown to the client as written
 
 # Rough peak memory of one concurrent PDF render; used to cap CPU workers on small hosts.
 _MEM_PER_CPU_WORKER = 256 * 1024 * 1024
@@ -123,6 +124,22 @@ def _db_connection(db_connector: Callable, db_path: Path):
         sqlite_db.close_connection(conn)
 
 
+def _export_enabled(db_connector: Callable, db_path: Path) -> bool:
+    """Read the PDF export switch on a short-lived connection (blocking; call it off the event loop)."""
+    from ..utils.settings_cache import is_pdf_export_enabled
+
+    with _db_connection(db_connector, db_path) as conn:
+        return is_pdf_export_enabled(conn)
+
+
+def _update_job_status(db_connector: Callable, db_path: Path, job_id: str, **fields) -> None:
+    """Write one job-status update on a short-lived connection (blocking; call it off the event loop)."""
+    from ..db import sqlite as sqlite_db
+
+    with _db_connection(db_connector, db_path) as conn:
+        sqlite_db.update_report_job(conn, job_id, **fields)
+
+
 def _run_in_maintenance_section(generation: int, callback: Callable, *args, **kwargs):
     """Keep maintenance registered in the executor thread for its full callback lifetime."""
     with maintenance.work_section(generation):
@@ -153,9 +170,8 @@ class PDFWorker:
         )
 
     def shutdown(self) -> None:
-        """Graceful shutdown: finish current work, then force-stop."""
+        """Signal the loops to stop and wait for running jobs to finish."""
         self.stop_event.set()
-        # Give running jobs a chance to finish
         self.cpu_executor.shutdown(wait=True, cancel_futures=False)
         self.io_executor.shutdown(wait=True, cancel_futures=False)
         _log.info("PDF worker shutdown complete")
@@ -213,9 +229,6 @@ class PDFWorker:
 
     async def run_loop(self, db_connector: Callable, *, stop_event: asyncio.Event | None = None) -> None:
         """Main worker loop that processes PDF generation jobs."""
-        from ..db import sqlite as sqlite_db
-        from ..db import tsdb as tsdb_db
-        from ..utils.metric_limits import choose_display_bucket_seconds, choose_points_limit
         from .pdf_report import ReportData, generate_pdf_report
 
         stop = stop_event or self.stop_event
@@ -247,6 +260,7 @@ class PDFWorker:
                 self.queue.task_done()  # shutting down while held back
                 continue
 
+            loop = asyncio.get_running_loop()
             try:
                 _log.info("Processing PDF job %s for target %d", _job.job_id, _job.target_id)
 
@@ -254,111 +268,25 @@ class PDFWorker:
                 if not isinstance(_job.target_dict, dict):
                     raise ValueError("target_dict must be a dict")
 
-                with _db_connection(db_connector, _job.db_path) as conn:
-                    sqlite_db.update_report_job(conn, _job.job_id, status="processing", progress=PROGRESS_PROCESSING)
+                async def _set_status(_j=_job, _loop=loop, **fields) -> None:
+                    await _loop.run_in_executor(
+                        self.io_executor,
+                        functools.partial(_update_job_status, db_connector, _j.db_path, _j.job_id, **fields),
+                    )
 
-                loop = asyncio.get_running_loop()
+                # A job queued before the switch went off is not rendered; the row stays, marked failed.
+                if not await loop.run_in_executor(self.io_executor, _export_enabled, db_connector, _job.db_path):
+                    _log.info("PDF job %s skipped: PDF export is disabled", _job.job_id)
+                    await _set_status(status="failed", progress=PROGRESS_DONE, error=PDF_DISABLED_ERROR, completed=True)
+                    continue
+
+                await _set_status(status="processing", progress=PROGRESS_PROCESSING)
 
                 # Default args bind _job now; a plain closure would see a later loop value.
-                def fetch_metrics(_j=_job) -> dict[str, list[dict]]:
-                    http_data: list[dict] = []
-                    uptime_data: list[dict] = []
-                    ping_data: list[dict] = []
-                    tcp_data: list[dict] = []
-                    cert_data: list[dict] = []
-                    status_code_data: list[dict] = []
-                    tcp_port_data: dict[int, list[dict]] = {}
-
-                    def _fetch(metric: str, limit_metric: str | None = None) -> list[dict]:
-                        return fetch_metric_data(
-                            _j.tsdb_dir,
-                            _j.target_id,
-                            metric,
-                            _j.from_date,
-                            _j.to_date,
-                            limit=choose_points_limit(
-                                metric=limit_metric or metric,
-                                since=_j.from_date,
-                                until=_j.to_date,
-                                profile=_j.profile,
-                            ),
-                        )
-
-                    def _fetch_display(metric: str) -> dict:
-                        try:
-                            return tsdb_db.query_display_series(
-                                _j.tsdb_dir,
-                                target_id=_j.target_id,
-                                metric=metric,
-                                since=_j.from_date,
-                                until=_j.to_date,
-                                bucket_seconds=choose_display_bucket_seconds(
-                                    since=_j.from_date,
-                                    until=_j.to_date,
-                                    plot_width=900,
-                                ),
-                            )
-                        except Exception as e:  # noqa: BLE001 - keep a partial report usable
-                            _log.warning("Failed to fetch display metric %s: %s", metric, e)
-                            return {"points": [], "status_counts": {}}
-
-                    target = _j.target_dict
-
-                    # Same rules as the synchronous endpoint (app/api/reports.py): one uptime metric,
-                    # no fallback to another check when it has no data.
-                    uptime_metric = select_uptime_metric(target)
-
-                    if target.get("enable_http_check"):
-                        http_data = _fetch("http_ms")
-                        if uptime_metric == "http_up":
-                            uptime_data = _fetch("http_up")
-                        status_counts = _fetch_display("http_status")["status_counts"]
-                        status_code_data = [
-                            {"value": int(code) if code != "Error" else 0, "count": count}
-                            for code, count in status_counts.items()
-                        ]
-
-                    if target.get("enable_ping"):
-                        ping_data = _fetch("ping_ms")
-                        if uptime_metric == "ping_up":
-                            uptime_data = _fetch("ping_up")
-
-                    if target.get("enable_tcp_connect"):
-                        tcp_data = _fetch("tcp_ms")
-                        if uptime_metric == "tcp_up":
-                            uptime_data = _fetch("tcp_up")
-                        # Per-port TCP data for the multi-port chart
-                        tcp_ports = parse_tcp_ports(str(target.get("tcp_ports") or "80"))
-                        if len(tcp_ports) > 1:
-                            for port in tcp_ports:
-                                port_data = _fetch(f"tcp_ms_{port}", limit_metric="tcp_ms")
-                                if port_data:
-                                    tcp_port_data[port] = port_data
-                    if target.get("enable_cert_expiration"):
-                        cert_data = _fetch("cert_days_left")
-                    display_data = {}
-                    chart_metrics = ["http_ms", "ping_ms", "tcp_ms"]
-                    chart_metrics.extend(f"tcp_ms_{port}" for port in tcp_port_data)
-                    for metric in chart_metrics:
-                        if (
-                            (metric == "http_ms" and not target.get("enable_http_check"))
-                            or (metric == "ping_ms" and not target.get("enable_ping"))
-                            or (metric.startswith("tcp_ms") and not target.get("enable_tcp_connect"))
-                        ):
-                            continue
-                        display_data[metric] = _fetch_display(metric)["points"]
-
-                    return {
-                        "http_data": http_data,
-                        "uptime_data": uptime_data,
-                        "ping_data": ping_data,
-                        "tcp_data": tcp_data,
-                        "cert_data": cert_data,
-                        "status_code_data": status_code_data,
-                        "tcp_port_data": tcp_port_data or {},
-                        "display_data": display_data,
-                        "status_counts_exact": True,
-                    }
+                def fetch_metrics(_j=_job) -> dict[str, Any]:
+                    return collect_report_inputs(
+                        _j.tsdb_dir, _j.target_id, _j.target_dict, _j.from_date, _j.to_date, profile=_j.profile
+                    )
 
                 generation = maintenance.current_generation()
                 metrics = await loop.run_in_executor(
@@ -367,8 +295,7 @@ class PDFWorker:
                     generation,
                     fetch_metrics,
                 )
-                with _db_connection(db_connector, _job.db_path) as conn:
-                    sqlite_db.update_report_job(conn, _job.job_id, progress=PROGRESS_METRICS_FETCHED)
+                await _set_status(progress=PROGRESS_METRICS_FETCHED)
 
                 report_data = ReportData(
                     target=_job.target_dict,
@@ -396,8 +323,7 @@ class PDFWorker:
                     _log.warning("PDF job %s timed out after 120s; render thread may still be running", _job.job_id)
                     raise RuntimeError(f"PDF generation timed out after 120s for target {_job.target_id}") from None
 
-                with _db_connection(db_connector, _job.db_path) as conn:
-                    sqlite_db.update_report_job(conn, _job.job_id, progress=PROGRESS_PDF_RENDERED)
+                await _set_status(progress=PROGRESS_PDF_RENDERED)
 
                 pdf_path = self.get_pdf_path(_job.job_id)
                 pdf_path.parent.mkdir(parents=True, exist_ok=True)
@@ -412,15 +338,7 @@ class PDFWorker:
 
                 filename = report_filename(_job.target_dict.get("name"), _job.from_date)
 
-                with _db_connection(db_connector, _job.db_path) as conn:
-                    sqlite_db.update_report_job(
-                        conn,
-                        _job.job_id,
-                        status="completed",
-                        progress=PROGRESS_DONE,
-                        filename=filename,
-                        completed=True,
-                    )
+                await _set_status(status="completed", progress=PROGRESS_DONE, filename=filename, completed=True)
 
                 _log.info("PDF job %s completed: %s (%d bytes)", _job.job_id, filename, len(pdf_bytes))
 
@@ -431,15 +349,19 @@ class PDFWorker:
                     error_msg = traceback.format_exception_only(type(e), e)
                     error_detail = "".join(error_msg).strip()[:1000]
 
-                    with _db_connection(db_connector, _job.db_path) as conn:
-                        sqlite_db.update_report_job(
-                            conn,
+                    await loop.run_in_executor(
+                        self.io_executor,
+                        functools.partial(
+                            _update_job_status,
+                            db_connector,
+                            _job.db_path,
                             _job.job_id,
                             status="failed",
                             progress=PROGRESS_DONE,  # Mark as complete even on failure
                             error=error_detail,
                             completed=True,
-                        )
+                        ),
+                    )
                 except Exception:  # noqa: BLE001 - worker-loop resilience: log and keep the loop alive on any job failure
                     # Ensure worker loop stays alive even if DB update fails
                     _log.exception("Failed to update failed status for PDF job %s", getattr(_job, "job_id", "?"))

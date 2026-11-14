@@ -9,6 +9,8 @@
  * nothing: the finished report reaches the user as a server-created notification (Notification
  * Center), and the button that started the job resets on 'pdf-job-completed'. Job ids are stored per
  * user; other users' entries and the old global/ready-list keys are dropped.
+ * Known limitation: writes are last-writer-wins across tabs, so a tab can drop a job another tab
+ * stored; that job then only reaches the user through its notification.
  * Auto-download: only the tab that started a job (marker in sessionStorage) navigates a hidden
  * same-origin iframe to the server's attachment URL once the job is completed (HEAD check first, then
  * a marker in user-scoped localStorage). Best effort: the marker is not atomic across tabs, and the
@@ -22,7 +24,7 @@
 	var LEGACY_KEYS = ['justup_pdf_jobs', 'justup_pdf_ready']; // global, owner unknown: deleted
 	var userStorage = window.JustUpUserStorage;
 	var JOB_ID_RE = /^[a-zA-Z0-9_-]{1,64}$/; // same format the server accepts
-var MAX_JOB_AGE_MS = 5 * 60 * 1000; // 5 minutes
+	var MAX_JOB_AGE_MS = 5 * 60 * 1000; // 5 minutes
 	var POLL_INTERVAL_MS = 2000;
 	var MAX_ATTEMPTS = 5; // consecutive transient failures before giving up
 	var MAX_BACKOFF_MS = 30000;

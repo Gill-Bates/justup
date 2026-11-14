@@ -1,9 +1,8 @@
 # syntax=docker/dockerfile:1
 # justUp! - Lightweight Uptime Monitor
 #
-# Python dependencies are installed wheel-only from the hash-checked
-# docker/requirements.lock (derived from pyproject.toml) plus the vendored SSLyze
-# wheel in docker/vendor/wheels/; the release workflow passes PYTHON_BASE as a
+# Python dependencies resolve from pyproject.toml at build time, using wheels only.
+# The vendored SSLyze wheel is verified against its provenance; the release passes PYTHON_BASE as a
 # digest so both architectures share one base.
 ARG PYTHON_BASE=python:3.13-slim
 # Java LTS line of the signal-cli runtime; the newest patch of it is taken at build time.
@@ -17,27 +16,33 @@ ARG RUST_IMAGE=rust:1.98.1-slim-trixie@sha256:4cd829461bd5c4d511c32e269da9cb8929
 # Stage 1: Dependencies
 # ──────────────────────────────────────────────────────────────
 FROM ${PYTHON_BASE} AS deps-builder
+ARG BUILD_DATE=local
 
 WORKDIR /build
 
-# Python deps: pyproject.toml declares the direct dependencies, docker/requirements.lock
-# pins the complete tested set with hashes (--require-hashes also rejects unpinned
-# transitive packages). Installed as a standalone layer to keep dependency caching intact.
+# Python deps: pyproject.toml declares the direct dependencies. pip resolves the newest
+# compatible wheels when this layer is built. The release's BUILD_DATE refreshes this
+# layer on each run; local builds can pass a fresh value to do the same.
 #
 # Wheel-only on purpose: --only-binary=:all: means nothing is compiled and no build
 # backend (setuptools/wheel/isolated build env) is ever downloaded or run, so the
 # stage needs no compiler or -dev packages. sslyze is not taken from PyPI or a source
 # archive but from the vendored, SHA-256-pinned justUp wheel (docker/vendor/wheels/,
-# provenance in docker/vendor/PROVENANCE.json); --find-links points pip at it and the
-# lock hash decides. A missing wheel, a wrong hash or a wrong platform fails the build.
+# provenance in docker/vendor/PROVENANCE.json); --find-links points pip at it.
+# A missing wheel, a wrong hash or a wrong platform fails the build.
 # pip is the one shipped in the digest-pinned base image and is not upgraded here.
-COPY docker/requirements.lock /tmp/requirements.lock
+COPY pyproject.toml /build/pyproject.toml
+COPY tools/pyproject-deps.py /build/tools/pyproject-deps.py
 COPY docker/vendor/wheels/ /tmp/wheels/
+COPY docker/vendor/PROVENANCE.json /tmp/PROVENANCE.json
 
-RUN pip install --no-cache-dir --root-user-action=ignore --require-hashes --only-binary=:all: \
-        --find-links /tmp/wheels -r /tmp/requirements.lock \
+RUN test -n "$BUILD_DATE" \
+ && python /build/tools/pyproject-deps.py > /tmp/requirements-runtime.txt \
+ && python -c 'import hashlib,json,pathlib; p=json.load(open("/tmp/PROVENANCE.json")); w=pathlib.Path("/tmp/wheels")/pathlib.Path(p["wheel"]).name; assert w.is_file() and w.name=="sslyze-{}-{}.whl".format(p["version"],p["tags"]); assert w.stat().st_size==p["size_bytes"] and hashlib.sha256(w.read_bytes()).hexdigest()==p["sha256"]' \
+ && pip install --no-cache-dir --root-user-action=ignore --only-binary=:all: \
+        --find-links /tmp/wheels -r /tmp/requirements-runtime.txt \
  && pip check \
- && rm -rf /tmp/requirements.lock /tmp/wheels
+ && rm -rf /tmp/requirements-runtime.txt /tmp/PROVENANCE.json /tmp/wheels
 
 
 # ──────────────────────────────────────────────────────────────
@@ -63,6 +68,132 @@ COPY app/ app/
 COPY pyproject.toml ./
 # Remove __pycache__ directories
 RUN find app/ -type d -name "__pycache__" -prune -exec rm -rf {} + || true
+
+# ──────────────────────────────────────────────────────────────
+# Stage 2a: Nmap (official stable release, built from the signature-verified source)
+# ──────────────────────────────────────────────────────────────
+# Both architectures build the same upstream source natively with identical configure options
+# (no vendor binary, no Debian package): one recipe, one provenance format, one set of runtime
+# libraries from this base. The official x86-64 RPM was dropped on purpose: it is a statically
+# linked vendor build with its own OpenSSL, so amd64 would differ from arm64 in options and TLS
+# stack and the image would depend on a binary package we cannot rebuild.
+#
+# The release workflow resolves the latest stable release once (tools/nmap-release.py latest),
+# downloads and verifies it once (fetch) and passes the same version and archive hash to both
+# builds. The args are mandatory and carry no default: they are part of every BuildKit cache key
+# here, so a new release or a changed upstream archive can never hit a cached old binary, and the
+# builder aborts if the archive it downloads does not match NMAP_SOURCE_SHA256.
+# The verified archive itself is never copied into the runtime image; the release workflow attaches
+# the same archive (hash-checked against NMAP_SOURCE_SHA256) to the GitHub release instead.
+# Local build:
+#   v="$(python3 tools/nmap-release.py latest)"
+#   python3 tools/nmap-release.py fetch "$v" /tmp/nmap-verify   # prints nothing, writes provenance.txt
+#   h="$(sed -n 's/^source_sha256=//p' /tmp/nmap-verify/provenance.txt)"
+#   docker build --target runtime --build-arg "NMAP_VERSION=$v" --build-arg "NMAP_SOURCE_SHA256=$h" -f docker/Dockerfile .
+FROM ${PYTHON_BASE} AS nmap-builder
+ARG TARGETARCH
+ARG NMAP_VERSION
+ARG NMAP_SOURCE_SHA256
+COPY tools/nmap-release.py /usr/local/bin/nmap-release.py
+# Everything below exists only in this stage: compiler, headers, gpg, the source tree.
+RUN apt-get update && apt-get upgrade -y && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      ca-certificates gnupg bzip2 build-essential libssl-dev pkg-config zlib1g-dev libpcre2-dev \
+ && rm -rf /var/lib/apt/lists/*
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+RUN <<'EOF'
+set -euo pipefail
+version="${NMAP_VERSION:-}"
+source_sha256="${NMAP_SOURCE_SHA256:-}"
+if [[ -z "$version" || -z "$source_sha256" || -z "${TARGETARCH:-}" ]]; then
+  echo "NMAP_VERSION, NMAP_SOURCE_SHA256 and TARGETARCH are required (see the stage comment)" >&2
+  exit 1
+fi
+case "$TARGETARCH" in
+  amd64) machine="Advanced Micro Devices X86-64" ;;
+  arm64) machine="AArch64" ;;
+  *) echo "Unsupported TARGETARCH '${TARGETARCH}'" >&2; exit 1 ;;
+esac
+python3 /usr/local/bin/nmap-release.py fetch "$version" /tmp/nmap "$source_sha256"
+tar -xjf "/tmp/nmap/nmap-${version}.tar.bz2" -C /tmp/nmap
+cd "/tmp/nmap/nmap-${version}"
+# PCRE2 and zlib come from Debian (dpkg-owned, so the image scan sees them). libssh2 only serves NSE,
+# which is not built. libpcap, libdnet and liblinear stay bundled (see docs/development/release-image.md).
+./configure --prefix=/usr --with-libpcap=included --with-libdnet=included --with-liblinear=included \
+  --without-libssh2 \
+  --without-liblua --without-ncat --without-nping --without-ndiff --without-zenmap
+make -j"$(nproc)" nmap
+make DESTDIR=/out install-nmap
+
+# Only what scans need: the binary and the data files (-sV needs the probes; no NSE, no man pages).
+find /out/usr/share/nmap -maxdepth 1 -type f \
+  ! -name nmap-services ! -name nmap-service-probes ! -name nmap-protocols ! -name nmap-rpc -delete
+rm -rf /out/usr/share/nmap/scripts /out/usr/share/nmap/nselib /out/usr/share/man
+for data in nmap-services nmap-service-probes nmap-protocols nmap-rpc; do
+  test -s "/out/usr/share/nmap/${data}"
+done
+
+# ELF contract of the shipped binary: architecture, loader, no RPATH/RUNPATH, all libraries resolvable.
+readelf -h /out/usr/bin/nmap | grep -q "Machine:.*${machine}"
+readelf -l /out/usr/bin/nmap | grep -q "Requesting program interpreter"
+if readelf -d /out/usr/bin/nmap | grep -Eq 'RPATH|RUNPATH'; then
+  echo "nmap carries an RPATH/RUNPATH" >&2; exit 1
+fi
+mkdir -p /out/usr/share/doc/nmap
+ldd /out/usr/bin/nmap > /out/usr/share/doc/nmap/DEPENDENCIES.txt
+# "! cmd" never trips "set -e", so every negative check is an explicit if.
+if grep -q 'not found' /out/usr/share/doc/nmap/DEPENDENCIES.txt; then
+  echo "nmap has unresolved libraries" >&2; exit 1
+fi
+if grep -Eq '/tmp/|/out/|/build' /out/usr/share/doc/nmap/DEPENDENCIES.txt; then
+  echo "nmap resolves a library from the build tree" >&2; exit 1
+fi
+# A silent autodetect fallback to the bundled copies would hide them from the scan: fail instead.
+# PCRE2 is a direct NEEDED entry. zlib is not: the linker drops libz.so.1 from nmap's own list and it
+# resolves only through libcrypto, so zlib is proven by the banner (Debian: "libz-<v>", bundled:
+# "nmap-libz-<v>") plus the Debian library in the ldd output.
+readelf -d /out/usr/bin/nmap | grep -q 'NEEDED.*libpcre2-8.so.0'
+banner="$(NMAPDIR=/out/usr/share/nmap /out/usr/bin/nmap --version)"
+compiled_with="$(sed -n 's/^Compiled with: //p' <<<"$banner")"
+for required in 'libz-[0-9]' 'libpcre2-[0-9]'; do
+  grep -Eq "(^| )${required}" <<<"$compiled_with" \
+    || { echo "nmap banner lacks the Debian library ${required}: ${compiled_with}" >&2; exit 1; }
+done
+if grep -Eq 'nmap-libz|nmap-libpcre2|libssh2' <<<"$compiled_with"; then
+  echo "nmap bundles a library that must come from Debian: ${compiled_with}" >&2; exit 1
+fi
+grep -Eq '^[[:space:]]*libz\.so\.1 => /' /out/usr/share/doc/nmap/DEPENDENCIES.txt
+# Versions of the libraries compiled into the binary, read from the verified source tree.
+libpcap_version="$(cat libpcap/VERSION.txt)"
+libdnet_version="$(sed -n "s/^PACKAGE_VERSION='\(.*\)'$/\1/p" libdnet-stripped/configure)"
+liblinear_version="$(awk '/#define LIBLINEAR_VERSION/ {printf "%d.%02d", $3/100, $3%100}' liblinear/linear.h)"
+for v in "$libpcap_version" "$libdnet_version" "$liblinear_version"; do
+  [[ "$v" =~ ^[0-9]+(\.[0-9]+)+$ ]] || { echo "Cannot read a bundled library version (got '${v}')" >&2; exit 1; }
+done
+actual="$(sed -n 's/^Nmap version \([^ ]*\).*/\1/p' <<<"$banner")"
+[[ "$actual" == "$version" ]] || { echo "Built Nmap ${actual} differs from the resolved ${version}" >&2; exit 1; }
+
+# Licence, provenance and the notice (NPSL redistribution) travel with the binary.
+tar -xOf "/tmp/nmap/nmap-${version}.tar.bz2" "nmap-${version}/LICENSE" > /out/usr/share/doc/nmap/LICENSE
+{
+  cat /tmp/nmap/provenance.txt
+  printf 'architecture=%s\nbuild_method=verified-source\nbinary_sha256=%s\n' \
+    "$TARGETARCH" "$(sha256sum /out/usr/bin/nmap | cut -d' ' -f1)"
+  printf 'runtime_dependencies=%s\n' "$(awk '/=>/ {print $1}' /out/usr/share/doc/nmap/DEPENDENCIES.txt | sort | paste -sd, -)"
+  printf 'bundled_libraries=libdnet=%s,liblinear=%s,libpcap=%s\n' "$libdnet_version" "$liblinear_version" "$libpcap_version"
+  printf 'bundled_libraries_origin=compiled into the binary from the verified source tarball (invisible to package scanners)\n'
+} > /out/usr/share/doc/nmap/PROVENANCE.txt
+cat > /out/usr/share/doc/nmap/NOTICE.txt <<NOTICE
+This image redistributes Nmap ${version} (nmap binary, nmap-services, nmap-service-probes,
+nmap-protocols, nmap-rpc) under the Nmap Public Source License (NPSL), https://nmap.org/npsl/.
+The licence text is in LICENSE next to this file. Nmap is a registered trademark of Nmap Software LLC.
+Source of this release: https://nmap.org/dist/nmap-${version}.tar.bz2 (signature verified,
+SHA-256 ${source_sha256})
+The same archive, its signature and a manifest are attached to the matching release at
+https://github.com/Gill-Bates/justup/releases
+Build: unmodified upstream source, built natively for ${TARGETARCH}; provenance: PROVENANCE.txt
+NOTICE
+EOF
+
 # ──────────────────────────────────────────────────────────────
 # Stage 2b: signal-cli release (download verified against the published SHA-256)
 # ──────────────────────────────────────────────────────────────
@@ -284,13 +415,14 @@ FROM ${PYTHON_BASE} AS jre-builder
 ARG JAVA_MAJOR
 
 # binutils: jlink --strip-debug calls objcopy. Build-only, never copied to the runtime.
-RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get upgrade -y && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
     gpg \
     binutils \
  && curl -fsSL https://packages.adoptium.net/artifactory/api/gpg/key/public -o /tmp/adoptium.key \
- && gpg --import --import-options show-only /tmp/adoptium.key 2>&1 | grep -q "3B04D753C9050D9A5D343F39843C48A565F8F04B" \
+ && fingerprints="$(gpg --show-keys --with-colons /tmp/adoptium.key | awk -F: '$1=="pub"{p=1;next} $1=="sub"{p=0} $1=="fpr"&&p{print $10;p=0}')" \
+ && test "$fingerprints" = "3B04D753C9050D9A5D343F39843C48A565F8F04B" \
  && gpg --dearmor -o /usr/share/keyrings/adoptium.gpg /tmp/adoptium.key \
  && rm /tmp/adoptium.key \
  && echo "deb [signed-by=/usr/share/keyrings/adoptium.gpg] https://packages.adoptium.net/artifactory/deb $(. /etc/os-release && echo "$VERSION_CODENAME") main" > /etc/apt/sources.list.d/adoptium.list \
@@ -321,7 +453,9 @@ RUN set -eu; \
     for m in $needed; do grep -qx "$m" /tmp/have || { echo "jlink runtime lacks required module $m" >&2; exit 1; }; done; \
     /opt/java/bin/java -version; \
     # Traceability + guard: the runtime must belong to the requested LTS line.
-    grep -E "^JAVA_VERSION=\"${JAVA_MAJOR}[.\"]" /opt/java/release
+    grep -E "^JAVA_VERSION=\"${JAVA_MAJOR}[.\"]" /opt/java/release; \
+    dpkg-query -W -f='${Version}\n' "temurin-${JAVA_MAJOR}-jdk" > /opt/java/.temurin-package-version; \
+    test -s /opt/java/.temurin-package-version
 
 # ──────────────────────────────────────────────────────────────
 # Stage 3: Runtime
@@ -356,7 +490,10 @@ RUN apt-get update && apt-get upgrade -y && DEBIAN_FRONTEND=noninteractive apt-g
     libfreetype6 \
     libjpeg62-turbo \
     zlib1g \
-    mtr-tiny \
+    libssl3 \
+    libstdc++6 \
+    libzstd1 \
+    libpcre2-8-0 \
     whatweb \
     gosu \
     iputils-ping \
@@ -365,9 +502,8 @@ RUN apt-get update && apt-get upgrade -y && DEBIAN_FRONTEND=noninteractive apt-g
  && printf '#!/bin/sh\nexec /usr/local/bin/signal-cli --config "${SIGNAL_DATA_DIR:-/app/data/signal}" "$@"\n' \
      > /usr/local/bin/signal \
  && chmod +x /usr/local/bin/signal \
- # Security: Grant raw socket capability for ping and mtr (required as non-root)
+ # Security: Grant raw socket capability for ping (required as non-root)
  && setcap cap_net_raw+ep /bin/ping \
- && setcap cap_net_raw+ep /usr/bin/mtr \
  && chmod u-s /bin/ping \
  && apt-get autoremove -y \
  && rm -rf /var/lib/apt/lists/* \
@@ -389,10 +525,51 @@ RUN ln -s /opt/signal-cli/bin/signal-cli /usr/local/bin/signal-cli \
       ls /opt/signal-cli/lib | grep '^libsignal-client-'; } > /opt/COMPONENTS.txt \
  && rm -rf /tmp/hsperfdata_*
 
+COPY --from=nmap-builder /out/usr/bin/nmap /usr/bin/nmap
+COPY --from=nmap-builder /out/usr/share/nmap /usr/share/nmap
+COPY --from=nmap-builder /out/usr/share/doc/nmap /usr/share/doc/nmap
+RUN test -s /usr/share/nmap/nmap-services \
+ && test -s /usr/share/nmap/nmap-service-probes \
+ && nmap --version \
+ && ldd /usr/bin/nmap > /usr/share/doc/nmap/DEPENDENCIES.txt \
+ && ! grep -q 'not found' /usr/share/doc/nmap/DEPENDENCIES.txt \
+ && builder_dependencies="$(sed -n 's/^runtime_dependencies=//p' /usr/share/doc/nmap/PROVENANCE.txt)" \
+ && runtime_dependencies="$(awk '/=>/ {print $1}' /usr/share/doc/nmap/DEPENDENCIES.txt | sort | paste -sd, -)" \
+ && { test "$builder_dependencies" = "$runtime_dependencies" \
+      || { echo "Nmap libraries differ between builder (${builder_dependencies}) and runtime (${runtime_dependencies})" >&2; exit 1; }; }
+# Debian packages (name=version) that own every library the binary resolves here: the part of Nmap an image scan covers.
+# The library list (runtime_dependencies, from the builder) was compared with this stage's ldd result above.
+RUN set -eu \
+ && libraries="$(awk '/=>/ && $3 ~ /^\// {print $3}' /usr/share/doc/nmap/DEPENDENCIES.txt)" \
+ && test -n "$libraries" \
+ && package_names="$(for library in $libraries; do \
+      real_library="$(readlink -f "$library")" || exit 1; \
+      owner="$(dpkg-query -S "$real_library")" || exit 1; \
+      case "$owner" in *:*) package="${owner%%: *}" ;; *) echo "Cannot parse package owner for $real_library: $owner" >&2; exit 1 ;; esac; \
+      test -n "$package" || { echo "No Debian package owns $real_library" >&2; exit 1; }; \
+      printf '%s\n' "$package"; \
+    done \
+    )" \
+ && test -n "$package_names" \
+ && package_versions="$(for package in $package_names; do \
+      dpkg-query -W -f='${binary:Package}=${Version}\n' "$package" || exit 1; \
+    done)" \
+ && test -n "$package_versions" \
+ && system_libraries="$(printf '%s\n' "$package_versions" | sort -u | paste -sd, -)" \
+ && test -n "$system_libraries" \
+ && printf 'system_libraries=%s\n' "$system_libraries" \
+      >> /usr/share/doc/nmap/PROVENANCE.txt
+
 # Non-root user with dedicated home directory (security: avoid HOME=/tmp)
 RUN groupadd -r justup && useradd -r -g justup justup \
  && mkdir -p /home/justup/.matplotlib \
  && chown -R justup:justup /home/justup
+# Dedicated identity of the Nmap worker (docker/entrypoint.sh): the only process that gets
+# CAP_NET_RAW. The web user joins its group solely to reach the worker's Unix socket.
+RUN groupadd -r -g 10001 justup-nmap \
+ && useradd -r -u 10001 -g justup-nmap -d /nonexistent -s /usr/sbin/nologin justup-nmap \
+ && usermod -aG justup-nmap justup \
+ && command -v setpriv >/dev/null
 
 WORKDIR /app
 
@@ -445,7 +622,8 @@ RUN mkdir -p \
 
 # Entrypoint performs UID/GID setup, then hands off to gosu.
 COPY docker/entrypoint.sh /entrypoint.sh
-RUN chmod 0755 /entrypoint.sh
+COPY docker/nmap-worker.sh /usr/local/bin/nmap-worker.sh
+RUN chmod 0755 /entrypoint.sh /usr/local/bin/nmap-worker.sh
 
 EXPOSE 8000
 
@@ -476,6 +654,7 @@ ENV HOME=/home/justup \
     JUSTUP_DATA_DIR=/app/data \
     SIGNAL_CLI_PATH=/usr/local/bin/signal-cli \
     SIGNAL_DATA_DIR=/app/data/signal \
+    NMAPDIR=/usr/share/nmap \
     JAVA_XMS=64m \
     JAVA_XMX=256m
 

@@ -14,8 +14,6 @@
  * @module charts/chart-builder
  */
 
-/** Mobile breakpoint for responsive legend placement. */
-var _MOBILE_BREAKPOINT = 768;
 
 /**
  * Return 'bottom' on narrow screens, 'right' on wider ones.
@@ -23,11 +21,13 @@ var _MOBILE_BREAKPOINT = 768;
  */
 function _legendPosition(chartOrCanvas) {
   const canvas = chartOrCanvas?.canvas || chartOrCanvas;
-  const width = chartOrCanvas?.width || canvas?.parentElement?.clientWidth || canvas?.clientWidth || window.innerWidth;
+  // A canvas element's .width is its backing-store size (300 initially, CSS width x DPR later).
+  const chartWidth = chartOrCanvas?.canvas ? chartOrCanvas.width : 0;
+  const width = chartWidth || canvas?.parentElement?.clientWidth || canvas?.clientWidth || window.innerWidth;
   const fitDashboard =
     window.matchMedia &&
     window.matchMedia("(min-width: 1200px) and (min-height: 800px)").matches;
-  return width < _MOBILE_BREAKPOINT && !fitDashboard ? "bottom" : "right";
+  return width < LEGEND_BOTTOM_MAX_CHART_WIDTH && !fitDashboard ? "bottom" : "right";
 }
 
 /**
@@ -39,16 +39,26 @@ function _legendPosition(chartOrCanvas) {
  * @property {Map} metricsCache - Cached metric data
  */
 
-/** Golden-angle hue per TCP port, so neighbouring ports get well-separated colors. */
-function tcpPortHueFor(port) {
-  return (port * 137.508) % 360;
+/** Palette slot (0-based) per availability series: HTTP, Ping, TCP/UDP ports ascending, then the rest (DC-CHART-4). */
+function availabilitySlots(names) {
+  const slots = new Map();
+  const portOf = (n) => (/^(TCP|UDP):/.test(n) ? parseInt(n.split(":")[1], 10) : NaN);
+  const ports = [...new Set(names.map(portOf).filter((p) => !isNaN(p)))].sort((x, y) => x - y);
+  let next = 2 + ports.length;
+  names.forEach((n) => {
+    let slot;
+    if (n === "HTTP") slot = 0;
+    else if (n === "PING") slot = 1;
+    else if (!isNaN(portOf(n))) slot = 2 + ports.indexOf(portOf(n));
+    else slot = next++;
+    slots.set(n, slot % 8);
+  });
+  return slots;
 }
 
-/** TCP-port series color; lighter in dark mode for contrast. Shared with chart-theme.js. */
-function tcpPortColorFor(hue, mode) {
-  return (
-    "hsl(" + Math.round(hue) + ", 70%, " + (mode === "dark" ? 65 : 45) + "%)"
-  );
+/** Series colour of a palette slot, read from the active theme's --ju-dv-N token. */
+function availabilitySlotColor(slot, fallback) {
+  return getCssVar("--ju-dv-" + (slot + 1), fallback);
 }
 
 function _unbindDblClick(canvas) {
@@ -156,24 +166,24 @@ function _registerChart(canvasId, chart, ctx, skipSampling) {
     }, 0);
   }
 
+  window.JuChartReset.captureLoadView(chart);
+
   // Use addEventListener to avoid overwriting existing handlers
   const dblClickHandler = function () {
     const ch = appState.charts.get(canvasId);
-    if (ch && ch.resetZoom) {
-      ch.resetZoom();
-      if (ch._reloadVisible) ch._reloadVisible();
-      if (!skipSampling) {
-        setTimeout(() => {
-          // Verify chart is still active before updating
-          if (
-            appState.charts.get(canvasId) === ch &&
-            ch.canvas &&
-            ch.canvas.isConnected
-          ) {
-            updateChartSampling(ch);
-          }
-        }, 0);
-      }
+    if (!ch) return;
+    window.JuChartReset.resetChartView(ch);
+    if (!skipSampling) {
+      setTimeout(() => {
+        // Verify chart is still active before updating
+        if (
+          appState.charts.get(canvasId) === ch &&
+          ch.canvas &&
+          ch.canvas.isConnected
+        ) {
+          updateChartSampling(ch);
+        }
+      }, 0);
     }
   };
 
@@ -199,22 +209,9 @@ function buildAvailabilitySeriesChart(canvasId, data) {
   const zoomOpts = createZoomOptions(updateChartSampling);
   const config = createLineConfig(theme, zoomOpts, _getVisibleRangeMs);
 
-  // Service-specific colors (semantic)
-  const serviceColors = {
-    PING: "#0d6efd", // Primary blue
-    HTTP: "#198754", // Success green
-    TCP: "#fd7e14", // Orange
-    CERT: "#6f42c1", // Purple
-  };
+  const slots = availabilitySlots(Object.keys(seriesData));
 
-  // Golden-angle hue per TCP port; null for non-TCP services
-  function getTcpPortColor(serviceName) {
-    if (!serviceName.startsWith("TCP:")) return null;
-    var port = parseInt(serviceName.split(":")[1], 10);
-    if (isNaN(port)) return null;
-    return tcpPortColorFor(tcpPortHueFor(port), theme.mode);
-  }
-
+  // TCP and UDP of one port share the hue and differ by line style (UDP is dashed), not colour alone.
   const datasets = [];
   for (const [serviceName, points] of Object.entries(seriesData)) {
     if (!points || points.length === 0) continue;
@@ -225,16 +222,8 @@ function buildAvailabilitySeriesChart(canvasId, data) {
       observed: !!p.observed,
     }));
 
-    const color =
-      serviceColors[serviceName] || getTcpPortColor(serviceName) || "#6c757d";
-    // Store TCP port hue for theme-aware color updates
-    var tcpPortHue = null;
-    if (serviceName.startsWith("TCP:")) {
-      var port = parseInt(serviceName.split(":")[1], 10);
-      if (!isNaN(port)) {
-        tcpPortHue = tcpPortHueFor(port);
-      }
-    }
+    const slot = slots.get(serviceName);
+    const color = availabilitySlotColor(slot, theme.text);
 
     var dataset = {
       label: serviceName,
@@ -246,6 +235,9 @@ function buildAvailabilitySeriesChart(canvasId, data) {
       tension: 0,
       stepped: "before",
       fill: false,
+      // Series are clipped to the plot area: a step segment that starts or ends outside the zoom window
+      // must not run over the axes or the card edge (the shared line config turns clipping off).
+      clip: 0,
       segment: {
         // Red segments when service is down
         borderColor: function (segCtx) {
@@ -256,10 +248,9 @@ function buildAvailabilitySeriesChart(canvasId, data) {
         },
       },
     };
-    // Store hue metadata for theme updates (if TCP port)
-    if (tcpPortHue !== null) {
-      dataset._tcpPortHue = tcpPortHue;
-    }
+    // The slot lets a theme switch re-read the token
+    dataset._dvSlot = slot;
+    if (serviceName.startsWith("UDP:")) dataset.borderDash = [6, 4];
     datasets.push(dataset);
   }
 
@@ -346,6 +337,8 @@ function buildAvailabilitySeriesChart(canvasId, data) {
             fillStyle: "transparent", // No fill - outlined only
             strokeStyle: dataset.borderColor,
             lineWidth: 2,
+            // The UDP dash is a protocol cue and is repeated in the key (DC-EX-CHART-1).
+            lineDash: dataset.borderDash || [],
             hidden: meta.hidden,
             datasetIndex: i,
             fontColor: labelColor,
@@ -370,8 +363,55 @@ function buildAvailabilitySeriesChart(canvasId, data) {
 }
 
 /**
+ * Fill the HTML legend under the donut with status code and class per segment.
+ */
+function _renderStatusDonutLegend(listEl, keys, colors, clsOf) {
+  if (!listEl) return;
+  listEl.textContent = "";
+  keys.forEach((k, i) => {
+    const cls = CombinedChartData.STATUS_CLASSES[clsOf(k)];
+    const item = _el("li", "combined-donut-legend-item");
+    item.appendChild(_swatch(cls ? cls.shape : "circle", colors[i], false));
+    const name = _el("span", "combined-donut-legend-name", k === "Error" ? "Error" : "HTTP " + k);
+    if (cls) {
+      name.appendChild(document.createTextNode(" "));
+      name.appendChild(_el("span", "combined-donut-legend-class", cls.label));
+    }
+    item.appendChild(name);
+    listEl.appendChild(item);
+  });
+  listEl.hidden = false;
+}
+
+/** Draw each segment's count and share on the ring when the arc has room for a legible label. */
+function _drawStatusDonutLabels(chart, values, shares) {
+  const arcs = chart.getDatasetMeta(0).data;
+  const ctx = chart.ctx;
+  ctx.save();
+  ctx.font = "600 12px " + (getComputedStyle(document.body).fontFamily || "sans-serif");
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = "#000000";
+  values.forEach((value, index) => {
+    const arc = arcs[index];
+    if (!arc || !chart.getDataVisibility(index)) return;
+    const { x, y, startAngle, endAngle, innerRadius, outerRadius } = arc.getProps(
+      ["x", "y", "startAngle", "endAngle", "innerRadius", "outerRadius"], true,
+    );
+    const middleRadius = (innerRadius + outerRadius) / 2;
+    const label = formatChartCount(value) + " (" + formatChartShare(shares[index]) + ")";
+    if (Math.abs(endAngle - startAngle) * middleRadius < ctx.measureText(label).width + 8) return;
+    const angle = (startAngle + endAngle) / 2;
+    const labelX = x + Math.cos(angle) * middleRadius;
+    const labelY = y + Math.sin(angle) * middleRadius;
+    ctx.fillText(label, labelX, labelY);
+  });
+  ctx.restore();
+}
+
+/**
  * Build the HTTP status-code doughnut shown next to the combined chart.
- * Colors follow the status classes of the combined chart markers; labels carry the code as text.
+ * Colors follow the status classes of the combined chart markers; counts and shares are labeled on the arcs.
  * @param {string} canvasId
  * @param {object} data - { points: [{ ts, value }, ...], error?: boolean }  (value: HTTP status code)
  */
@@ -382,6 +422,7 @@ function buildStatusCodeChart(canvasId, data) {
   const wrap = document.getElementById("status-donut-plot");
   const emptyEl = document.getElementById("status-donut-empty");
   const totalEl = document.getElementById("status-donut-total");
+  const legendEl = document.getElementById("status-donut-legend");
   const points = (data && data.points) || [];
   const exact = !!(data && data.status_counts);
   const statusCounts = exact ? data.status_counts : {};
@@ -391,9 +432,11 @@ function buildStatusCodeChart(canvasId, data) {
       const key = code === null ? "Error" : String(code);
       statusCounts[key] = (statusCounts[key] || 0) + 1;
     });
+  const rawDays =
+    (typeof pageConfig !== "undefined" && pageConfig.rawRetentionDays) || 30;
   const unit = exact
     ? data.raw_status_only
-      ? "raw checks in the last 30 days"
+      ? "raw checks in the last " + rawDays + " days"
       : "checks"
     : "samples";
   const numericCodes = Object.keys(statusCounts)
@@ -407,6 +450,7 @@ function buildStatusCodeChart(canvasId, data) {
     _destroyExisting(canvasId);
     if (wrap) wrap.hidden = true;
     if (totalEl) totalEl.hidden = true;
+    if (legendEl) legendEl.hidden = true;
     if (emptyEl) {
       emptyEl.hidden = false;
       emptyEl.textContent =
@@ -421,7 +465,7 @@ function buildStatusCodeChart(canvasId, data) {
   if (emptyEl) emptyEl.hidden = true;
   if (totalEl) {
     const total = keys.reduce((sum, k) => sum + statusCounts[k], 0);
-    totalEl.textContent = total + " " + unit;
+    totalEl.textContent = formatChartCount(total) + " " + unit;
     totalEl.hidden = false;
   }
 
@@ -431,7 +475,10 @@ function buildStatusCodeChart(canvasId, data) {
     keys.map((k) => _combinedPalette(theme)[clsOf(k)]);
   const labels = keys.map((k) => (k === "Error" ? "Error" : "HTTP " + k));
   const values = keys.map((k) => statusCounts[k]);
+  const shares = chartShares(values);
   const theme = appState.theme;
+  const labelState = { values, shares };
+  _renderStatusDonutLegend(legendEl, keys, colorsFor(theme), clsOf);
   const chart = _createOrUpdateChart(canvasId, ctx, {
     type: "doughnut",
     options: {
@@ -441,21 +488,12 @@ function buildStatusCodeChart(canvasId, data) {
       layout: { padding: 4 },
       animation: _prefersReducedMotion() ? false : { duration: 250 },
       plugins: {
-        legend: {
-          display: true,
-          position: "bottom",
-          labels: {
-            color: theme.text,
-            usePointStyle: true,
-            pointStyle: "rectRounded",
-            boxWidth: 10,
-            boxHeight: 10,
-            padding: 12,
-            font: { size: 12 },
-          },
-        },
+        legend: { display: false },
         tooltip: {
-          callbacks: { label: (c) => ` ${c.label}: ${c.raw} ${unit}` },
+          callbacks: {
+            label: (c) =>
+              ` ${c.label}: ${formatChartCount(c.raw)} ${unit} (${formatChartShare(shares[c.dataIndex])})`,
+          },
         },
         zoom: {
           zoom: {
@@ -467,6 +505,13 @@ function buildStatusCodeChart(canvasId, data) {
         },
       },
     },
+    plugins: [{
+      id: "statusDonutLabels",
+      afterDatasetsDraw(chart) {
+        const labels = chart._statusDonutLabels || labelState;
+        if (labels) _drawStatusDonutLabels(chart, labels.values, labels.shares);
+      },
+    }],
     data: {
       labels: labels,
       datasets: [
@@ -479,16 +524,21 @@ function buildStatusCodeChart(canvasId, data) {
       ],
     },
   });
+  chart._statusDonutLabels = labelState;
+  chart.update("none");
   chart._fixedLegend = true;
   chart._themeHook = function (t) {
     chart.data.datasets[0].backgroundColor = colorsFor(t);
     chart.data.datasets[0].borderColor = t.bg;
+    _renderStatusDonutLegend(legendEl, keys, colorsFor(t), clsOf);
   };
   ctx.setAttribute("role", "img");
   ctx.setAttribute(
     "aria-label",
     "HTTP status code distribution: " +
-      labels.map((l, i) => l + " " + values[i] + " " + unit).join(", ") +
+      labels
+        .map((l, i) => l + " " + formatChartCount(values[i]) + " " + unit + " (" + formatChartShare(shares[i]) + ")")
+        .join(", ") +
       ".",
   );
   _registerChart(canvasId, chart, ctx, true);

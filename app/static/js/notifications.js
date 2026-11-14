@@ -19,6 +19,7 @@
 		security: 'shield', activity: 'history'
 	};
 
+	var SEVERITY_LOOK = { error: ['danger', 'Error'], warning: ['warning', 'Warning'], success: ['success', 'Success'], info: ['neutral', 'Info'] };
 	function categoryIcon(category) {
 		return CATEGORY_ICONS[category] || 'notifications';
 	}
@@ -319,6 +320,15 @@
 				titleText.className = 'ju-notif-pop-text';
 				title.appendChild(hidden);
 				title.appendChild(titleText);
+				var sev = documentRef.createElement('span');
+				sev.className = 'ju-status-item ju-notif-pop-sev';
+				var sevDot = documentRef.createElement('span');
+				sevDot.className = 'ju-status-dot';
+				sevDot.setAttribute('aria-hidden', 'true');
+				var sevWord = documentRef.createElement('span');
+				sevWord.className = 'ju-notif-pop-sev-word';
+				sev.appendChild(sevDot);
+				sev.appendChild(sevWord);
 				var detail = documentRef.createElement('small');
 				detail.className = 'ju-notif-pop-detail text-body-secondary';
 				var detailContext = documentRef.createElement('span');
@@ -328,6 +338,7 @@
 				detail.appendChild(detailContext);
 				detail.appendChild(detailTime);
 				main.appendChild(title);
+				main.appendChild(sev);
 				main.appendChild(detail);
 				button.appendChild(icon);
 				button.appendChild(main);
@@ -360,6 +371,10 @@
 			var text = button.querySelector('.ju-notif-pop-text');
 			text.textContent = n.title || '';
 			text.title = n.title || '';
+			var sevTone = SEVERITY_LOOK[n.severity] || SEVERITY_LOOK.info;
+			var sevDotEl = button.querySelector('.ju-status-dot');
+			sevDotEl.className = 'ju-status-dot ju-status-dot--' + sevTone[0] + (sevTone[0] === 'neutral' ? ' ju-status-dot--unknown' : '');
+			button.querySelector('.ju-notif-pop-sev-word').textContent = sevTone[1];
 			var contextSpan = button.querySelector('.ju-notif-pop-context');
 			var context = detailLine(n);
 			contextSpan.textContent = context;
@@ -518,7 +533,8 @@
 
 	poller = createPoller({
 		intervalMs: POLL_MS,
-		fetchSummary: function () { return root.apiFetch('/ui/notifications/summary', { cache: 'no-store' }); },
+		// The timeout settles a hung request so the in-flight guard cannot freeze the badge.
+		fetchSummary: function () { return root.apiFetch('/ui/notifications/summary', { cache: 'no-store', signal: AbortSignal.timeout(10000) }); },
 		onData: onData,
 		onAuthLost: function () { badge.hidden = true; },
 		isHidden: function () { return doc.hidden; },

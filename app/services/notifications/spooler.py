@@ -5,15 +5,15 @@
 #
 
 """
-Notification Spooler - Persistent Queue for Failed Notifications.
+Notification Spooler - Persistent Queue for Notifications.
 
-This module implements a spooler/retry queue for notifications that failed
-to send (e.g., due to rate limiting, network issues, service unavailability).
+This module implements a spooler/retry queue: every notification is queued before it is sent
+and retried on failure (e.g., rate limiting, network issues, service unavailability).
 
 Key features:
 - SQLite-backed persistent queue (survives restarts)
 - Exponential backoff with jitter
-- Configurable max retries
+- Fixed retry policy (budget and validity are constants in delivery_policy.py)
 - Automatic cleanup of old entries
 - Background processing via scheduler
 
@@ -23,11 +23,11 @@ Message types:
 - 'test': Configuration test messages
 
 Usage:
-    from app.services.notifications.spooler import NotificationSpooler
+    from app.services.notifications.spooler import get_spooler
 
-    spooler = NotificationSpooler(db_conn_factory)
-    spooler.enqueue(...)  # Add failed notification to queue
-    await spooler.process_queue()  # Process pending (called by scheduler)
+    spooler = get_spooler(db_conn_factory)
+    spooler.enqueue(...)  # every notification is delivered through the queue
+    await asyncio.to_thread(spooler.process_queue_sync, send_signal, send_email)  # scheduler
 """
 
 from __future__ import annotations
@@ -42,14 +42,16 @@ import time
 from collections.abc import Callable
 from contextlib import AbstractContextManager, contextmanager, nullcontext, suppress
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from email.utils import getaddresses
 from enum import StrEnum
 from typing import Any
 
 from ...db import notifications as inbox
 from ...db import sqlite as sqlite_db
+from ...db.sqlite.recipients import DELETED_RECIPIENT_ID
 from ...utils import maintenance
+from ...utils.time import assume_utc
 from ...utils.time import utcnow as _utcnow
 from .delivery_policy import (
     CHANNEL_POLICIES,
@@ -68,7 +70,7 @@ from .delivery_policy import (
 _log = logging.getLogger(__name__)
 
 
-# ─── Configuration ──────────────────────────────────────────────────────────────
+# Configuration
 
 # Retry timing, message validity, pacing and failure classes live in delivery_policy.py.
 # MAX_RETRIES is the budget of non-transient failures only (see FailureKind.LIMITED); transient
@@ -139,6 +141,10 @@ SIGNAL_TEST_PENDING_LIMIT = 50
 
 class SignalQueueLimitError(Exception):
     """The Signal test-message queue has reached an abuse limit."""
+
+
+class RecipientTestCooldownError(Exception):
+    """A recipient test for this channel was queued within its cooldown."""
 
 
 class NotificationType(StrEnum):
@@ -238,8 +244,7 @@ def _accepts_kwarg(func: Callable[..., Any], name: str) -> bool:
 
 def _parse_ts(ts_str: str) -> datetime:
     """Parse a stored ISO timestamp; naive values count as UTC."""
-    dt = datetime.fromisoformat(ts_str)
-    return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
+    return assume_utc(datetime.fromisoformat(ts_str))
 
 
 def _calculate_next_retry(retry_count: int) -> datetime:
@@ -395,6 +400,7 @@ class NotificationSpooler:
         error: str | None = None,
         immediate: bool = False,
         target_id: int | None = None,
+        recipient_test_cooldown_seconds: int | None = None,
     ) -> int:
         """
         Add a notification to the persistent delivery queue.
@@ -412,6 +418,7 @@ class NotificationSpooler:
             error: The error that caused the initial failure
             immediate: If True, set next_retry_at to now (process immediately)
             target_id: ID of the associated target (None for test messages)
+            recipient_test_cooldown_seconds: Optional per-recipient/channel test cooldown
 
         Returns:
             ID of the queued notification
@@ -439,16 +446,28 @@ class NotificationSpooler:
             raise ValueError(f"Payload is not JSON-serializable: {e}") from e
 
         with self._db_conn(immediate=True) as conn:
+            if notification_type == NotificationType.TEST and recipient_test_cooldown_seconds is not None:
+                cutoff = (now - timedelta(seconds=recipient_test_cooldown_seconds)).isoformat()
+                recent = conn.execute(
+                    """
+                    SELECT 1 FROM notification_queue
+                    WHERE notification_type = ? AND recipient_id = ? AND channel_type = ? AND created_at >= ?
+                    LIMIT 1
+                    """,
+                    (NotificationType.TEST.value, recipient_id, channel_type.value, cutoff),
+                ).fetchone()
+                if recent:
+                    raise RecipientTestCooldownError
+
             if notification_type == NotificationType.ALERT and isinstance(payload.get("alert_id"), str):
                 duplicate = conn.execute(
-                    """
+                    f"""
                     SELECT id FROM notification_queue
                     WHERE notification_type = ? AND channel_type = ? AND recipient_id = ?
-                      AND CASE WHEN json_valid(payload) THEN json_extract(payload, '$.alert_id') END = ?
-                      AND CASE WHEN json_valid(payload)
-                               THEN COALESCE(json_extract(payload, '$.alert_event'), 'open') END = ?
+                      AND {_ALERT_KEY_SQL.format(t="")} = ?
+                      AND {_ALERT_EVENT_SQL.format(t="")} = ?
                     ORDER BY id DESC LIMIT 1
-                    """,
+                    """,  # noqa: S608 - fixed SQL fragments, all values bound as params
                     (
                         NotificationType.ALERT.value,
                         channel_type.value,
@@ -799,6 +818,7 @@ class NotificationSpooler:
             # Guard: a retried test message must never be claimed (see TEST_FINAL_SQL).
             self._finalize_retried_tests(conn)
             self._expire_stale(conn, now)
+            self._fail_deleted_recipient(conn, now)
             blocked_keys = self._blocked_keys(conn, now)
             # Rank by channel before applying the total limit so a Signal backlog cannot hide email.
             # Channels or senders in cooldown (or still pacing) and held-back alert events are not candidates.
@@ -865,7 +885,7 @@ class NotificationSpooler:
                         last_error = COALESCE(last_error, '') || ' [MAX RETRIES EXCEEDED after recovery]'
                     WHERE id IN ({stuck_placeholders}) AND limited_attempts > ?
                     """,  # noqa: S608 - placeholder count only, ids bound as params
-                    [QueueStatus.FAILED.value, now.isoformat(), *list(stuck_processing_ids), MAX_RETRIES],
+                    [QueueStatus.FAILED.value, now.isoformat(), *stuck_processing_ids, MAX_RETRIES],
                 )
 
                 # Get IDs that were marked as failed to exclude from claim
@@ -874,7 +894,7 @@ class NotificationSpooler:
                     SELECT id FROM notification_queue
                     WHERE id IN ({stuck_placeholders}) AND status = ?
                     """,  # noqa: S608 - placeholder count only, ids bound as params
-                    [*list(stuck_processing_ids), QueueStatus.FAILED.value],
+                    [*stuck_processing_ids, QueueStatus.FAILED.value],
                 ).fetchall()
                 failed_ids = {row[0] for row in failed_rows}
                 for failed_id in failed_ids:
@@ -969,17 +989,20 @@ class NotificationSpooler:
     def _record_delivery(conn: sqlite3.Connection, queue_id: int, *, sent: bool) -> None:
         """Write the inbox event for a final delivery state in the same transaction as the status change.
 
-        Retries are intentionally silent: only a confirmed hand-off, a final failure, or a long-running
-        outage (see check_handoff_outage) is an event.
+        Retries are intentionally silent: only a final failure, a long-running outage (see check_handoff_outage)
+        or the success of an explicit test send is an event.
         """
         row = conn.execute(
-            "SELECT channel_type, target_id, last_error FROM notification_queue WHERE id = ?", (queue_id,)
+            "SELECT channel_type, target_id, last_error, notification_type FROM notification_queue WHERE id = ?",
+            (queue_id,),
         ).fetchone()
         if row is None or row[0] not in ("email", "signal"):
             return
         channel = row[0]
         if sent:
-            inbox.emit_delivery_sent(conn, channel)
+            # Quiet by default: a successful regular send writes no inbox row; only the explicit test does.
+            if row[3] == NotificationType.TEST.value:
+                inbox.emit_test_delivery_sent(conn, channel, queue_id=queue_id)
             if channel != "email":
                 return  # only email has an aggregated hand-off incident; Signal reports per message
             if _other_stuck_email(conn, queue_id):
@@ -1126,16 +1149,20 @@ class NotificationSpooler:
             if not cur.rowcount:
                 return False
             row = conn.execute(
-                "SELECT retry_count, limited_attempts, created_at FROM notification_queue WHERE id = ?",
+                "SELECT retry_count, limited_attempts, created_at, recipient_id FROM notification_queue WHERE id = ?",
                 (queue_id,),
             ).fetchone()
             if not row:
                 return False
 
-            retry_count, limited_attempts, created_at = row
+            retry_count, limited_attempts, created_at, recipient_id = row
             expired = (now - _parse_ts(created_at)).total_seconds() >= MESSAGE_VALIDITY_SECONDS
-            if expired or limited_attempts > MAX_RETRIES:
-                final_error = _expired_error(error) if expired else error
+            # Deletion marks in-flight entries so a failed send is never re-queued.
+            deleted = recipient_id == DELETED_RECIPIENT_ID
+            if expired or deleted or limited_attempts > MAX_RETRIES:
+                final_error = (
+                    _expired_error(error) if expired else "[PERMANENT] recipient was deleted" if deleted else error
+                )
                 cur = conn.execute(
                     """
                     UPDATE notification_queue
@@ -1366,7 +1393,7 @@ class NotificationSpooler:
         _log.warning("Email SMTP hand-off failing for over %d min: %s", HANDOFF_ALERT_AFTER_SECONDS // 60, category)
         return True
 
-    # ─── Channel state: pacing and provider cooldown (persistent) ────────────────
+    # Channel pacing and provider cooldown
 
     def _blocked_keys(self, conn: sqlite3.Connection, now: datetime) -> set[str]:
         """Send paths that must not be claimed now: in provider cooldown or still pacing for too long."""
@@ -1436,51 +1463,152 @@ class NotificationSpooler:
             )
         _log.warning("Send path %s paused until %s (provider limit)", channel_of_key(key), until)
 
-    def _expire_stale(self, conn: sqlite3.Connection, now: datetime) -> int:
-        """Finalize unsent messages older than MESSAGE_VALIDITY_SECONDS as failed/expired (visible in the log)."""
-        cutoff = (now - timedelta(seconds=MESSAGE_VALIDITY_SECONDS)).isoformat()
+    def _fail_deleted_recipient(self, conn: sqlite3.Connection, now: datetime) -> int:
+        """Finalize unsent rows of a deleted recipient (recipient_id = DELETED_RECIPIENT_ID) as failed.
+        cancel_pending_notifications re-points in-flight rows to the marker. If the worker died, or the row was
+        released back to PENDING, recovery would otherwise claim and resend it. A row under an active lease is
+        left to its worker (mark_retry ends it there).
+        """
+        lease_cutoff = (now - timedelta(seconds=PROCESSING_TIMEOUT_SECONDS)).isoformat()
         rows = conn.execute(
-            "SELECT id, last_error FROM notification_queue WHERE status = ? AND created_at < ?",
-            (QueueStatus.PENDING.value, cutoff),
+            "SELECT id FROM notification_queue "
+            "WHERE recipient_id = ? AND (status = ? OR (status = ? AND updated_at < ?))",
+            (DELETED_RECIPIENT_ID, QueueStatus.PENDING.value, QueueStatus.PROCESSING.value, lease_cutoff),
         ).fetchall()
-        for queue_id, last_error in rows:
-            error = _expired_error(last_error)
+        failed = 0
+        for (queue_id,) in rows:
             cur = conn.execute(
-                "UPDATE notification_queue SET status = ?, last_error = ?, updated_at = ? WHERE id = ? AND status = ?",
-                (QueueStatus.FAILED.value, error[:500], now.isoformat(), queue_id, QueueStatus.PENDING.value),
+                "UPDATE notification_queue SET status = ?, last_error = ?, updated_at = ? "
+                "WHERE id = ? AND (status = ? OR (status = ? AND updated_at < ?))",
+                (
+                    QueueStatus.FAILED.value,
+                    "[PERMANENT] recipient was deleted",
+                    now.isoformat(),
+                    queue_id,
+                    QueueStatus.PENDING.value,
+                    QueueStatus.PROCESSING.value,
+                    lease_cutoff,
+                ),
             )
             if cur.rowcount:
+                failed += 1
+                self._record_delivery(conn, queue_id, sent=False)
+        if failed:
+            _log.warning("Failed %d undelivered notification(s) of deleted recipients", failed)
+        return failed
+
+    def _expire_stale(self, conn: sqlite3.Connection, now: datetime) -> int:
+        """Finalize unsent messages older than MESSAGE_VALIDITY_SECONDS as failed/expired (visible in the log).
+
+        Covers every non-terminal state: a PROCESSING row whose lease ran out (crash recovery) must not
+        be re-claimed and sent after its validity. A row still under an active lease is left to its worker.
+        """
+        cutoff = (now - timedelta(seconds=MESSAGE_VALIDITY_SECONDS)).isoformat()
+        lease_cutoff = (now - timedelta(seconds=PROCESSING_TIMEOUT_SECONDS)).isoformat()
+        rows = conn.execute(
+            "SELECT id, last_error FROM notification_queue WHERE created_at < ? "
+            "AND (status = ? OR (status = ? AND updated_at < ?))",
+            (cutoff, QueueStatus.PENDING.value, QueueStatus.PROCESSING.value, lease_cutoff),
+        ).fetchall()
+        expired = 0
+        for queue_id, last_error in rows:
+            cur = conn.execute(
+                "UPDATE notification_queue SET status = ?, last_error = ?, updated_at = ? "
+                "WHERE id = ? AND (status = ? OR (status = ? AND updated_at < ?))",
+                (
+                    QueueStatus.FAILED.value,
+                    _expired_error(last_error)[:500],
+                    now.isoformat(),
+                    queue_id,
+                    QueueStatus.PENDING.value,
+                    QueueStatus.PROCESSING.value,
+                    lease_cutoff,
+                ),
+            )
+            if cur.rowcount:
+                expired += 1
                 self._record_delivery(conn, queue_id, sent=False)
                 _log.warning(
                     "Notification %d expired: not handed over within %d h", queue_id, MESSAGE_VALIDITY_SECONDS // 3600
                 )
-        if rows:
-            _log.warning("Expired %d undelivered notification(s) older than the message validity", len(rows))
-        return len(rows)
+        if expired:
+            _log.warning("Expired %d undelivered notification(s) older than the message validity", expired)
+        return expired
+
+    def _expire_claimed(self, conn: sqlite3.Connection, item: QueuedNotification, stamp: str, now: datetime) -> bool:
+        """Last check before the external send: fail the claimed item atomically if it is past its validity."""
+        if now - item.created_at < timedelta(seconds=MESSAGE_VALIDITY_SECONDS):
+            return False
+        cur = conn.execute(
+            "UPDATE notification_queue SET status = ?, last_error = ?, updated_at = ? "
+            "WHERE id = ? AND status = ? AND updated_at = ?",
+            (
+                QueueStatus.FAILED.value,
+                _expired_error(item.last_error)[:500],
+                now.isoformat(),
+                item.id,
+                QueueStatus.PROCESSING.value,
+                stamp,
+            ),
+        )
+        if cur.rowcount:
+            self._record_delivery(conn, item.id, sent=False)
+            _log.warning(
+                "Notification %d expired before send (older than %d h)", item.id, MESSAGE_VALIDITY_SECONDS // 3600
+            )
+        return True
 
     def _reserve_send(self, item: QueuedNotification, key: str, section: Callable[[], Any]) -> DeliveryResult | None:
-        """Pace the send and take the claim; None means go ahead, otherwise the outcome without a send.
+        """Reserve the send slot and take the claim; None means go ahead, otherwise the outcome without a send.
 
-        The spacing since the last attempt on this path comes from the database, so it also holds
-        after a scheduler or container restart. Waiting for it is not a failure.
+        Pacing check, slot reservation and lease renewal are one write transaction, so parallel workers
+        on the same send path get distinct slots (spacing from the database also holds after a restart).
+        Waiting for the slot happens outside the transaction and is not a failure.
         """
         try:
-            with section():
-                wait = self.pacing_wait_seconds(key)
-        except (maintenance.StaleWorkError, maintenance.MaintenanceActiveError):
-            return DeliveryResult("deferred", "maintenance")
-        if wait is None:
-            return DeliveryResult("deferred", "cooldown")
-        if wait > 0:
-            time.sleep(wait)
-        try:
-            with section():
-                lease = self.renew_lease(item.id, item.updated_at.isoformat())
-                if lease is not None:
-                    self.record_attempt(key)
+            with section(), self._db_conn(immediate=True) as conn:
+                now = _utcnow()
+                row = conn.execute(
+                    "SELECT last_attempt_at, cooldown_until FROM notification_channel_state WHERE channel_key = ?",
+                    (key,),
+                ).fetchone()
+                if row and row[1] and _parse_ts(row[1]) > now:
+                    return DeliveryResult("deferred", "cooldown")
+                if self._expire_claimed(conn, item, item.updated_at.isoformat(), now):
+                    return DeliveryResult("expired", "expired")
+                stamp = now.isoformat()
+                cur = conn.execute(
+                    "UPDATE notification_queue SET updated_at = ? WHERE id = ? AND status = ? AND updated_at = ?",
+                    (stamp, item.id, QueueStatus.PROCESSING.value, item.updated_at.isoformat()),
+                )
+                if not cur.rowcount:
+                    return DeliveryResult("lost")
+                slot = now
+                policy = CHANNEL_POLICIES.get(channel_of_key(key))
+                if policy and row and row[0]:
+                    slot = max(now, _parse_ts(row[0]) + timedelta(seconds=policy.min_interval_seconds))
+                conn.execute(
+                    """
+                    INSERT INTO notification_channel_state (channel_key, last_attempt_at, updated_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(channel_key) DO UPDATE SET last_attempt_at = excluded.last_attempt_at,
+                                                           updated_at = excluded.updated_at
+                    """,
+                    (key, slot.isoformat(), stamp),
+                )
         except (maintenance.StaleWorkError, maintenance.MaintenanceActiveError):
             return DeliveryResult("deferred", "maintenance")  # window/restore in progress: defer instead of sending
-        return DeliveryResult("lost") if lease is None else None
+        wait = (slot - now).total_seconds()
+        if wait <= 0:
+            return None
+        time.sleep(wait)
+        try:
+            with section(), self._db_conn(immediate=True) as conn:
+                if self._expire_claimed(conn, item, stamp, _utcnow()):
+                    return DeliveryResult("expired", "expired")
+        except (maintenance.StaleWorkError, maintenance.MaintenanceActiveError):
+            return DeliveryResult("deferred", "maintenance")
+        return None
 
     def _finalize(
         self,
@@ -1544,8 +1672,9 @@ class NotificationSpooler:
            - SignalRateLimited: Rate limited, will use retry_after_seconds for backoff
            - SignalRecipientInvalid / SignalNotRegistered: permanent failure (no retry)
            - Timeout/disconnect while sending: outcome unconfirmed, retried tagged UNCERTAIN_MARKER
-           - Any other Exception: Transient error, will retry with exponential backoff
-        3. Return False is treated as transient error (will retry)
+           - Other exceptions are classified by delivery_policy.classify_failure
+             (transient / rate_limited / limited / permanent)
+        3. Returning False spends the limited retry budget like a non-transient failure
 
         Returns:
             Tuple of (processed_count, success_count)
@@ -1600,6 +1729,8 @@ class NotificationSpooler:
                     _log.warning("Notification %d: claim lost before send, skipping", item.id)
                     processed -= 1
                     continue
+                elif result.kind == "expired":
+                    continue  # already finalized as failed/expired inside the reservation
             if result.cooldown_seconds:
                 cooled.add(key)
 
@@ -1625,7 +1756,7 @@ class NotificationSpooler:
         return (processed, succeeded)
 
 
-# ─── Module-level singleton for easy access ─────────────────────────────────────
+# Module-level singleton
 #
 # Note: This singleton pattern works for single-process deployments.
 # For multi-process setups (e.g., gunicorn with multiple workers),

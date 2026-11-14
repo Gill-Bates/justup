@@ -4,9 +4,9 @@
         <span class="fw-semibold">
             <span class="quality-widget-icon" aria-hidden="true"></span> Monitor Quality
         </span>
-        <span class="badge" id="quality-state-badge">--</span>
+        <span id="quality-state-badge" aria-busy="true">Loading</span>
     </div>
-    <div class="card-body dashboard-widget-body quality-body d-flex flex-column align-items-center">
+    <div class="card-body dashboard-widget-body quality-body d-flex flex-column align-items-center" tabindex="0" role="region" aria-label="Monitor quality">
         <div class="dashboard-widget-value fw-bold" id="quality-score">--</div>
         <div class="text-body-secondary small" id="quality-label">Loading...</div>
         <div id="quality-targets" class="ju-badges ju-badges--fill quality-targets" role="group" aria-label="Quality targets: loading"></div>

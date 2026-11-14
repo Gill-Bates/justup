@@ -4,13 +4,13 @@ The **Network diagnostics** tab of a target shows the route to the host: a route
 timeline, metrics, a hop table, and an interactive map. The data loads when you
 open the tab.
 
-Traceroute (`mtr`) runs only on demand, from the tab or as part of a PDF report.
+Traceroute runs through the Nmap worker (`nmap --traceroute`) only on demand, from the tab or as part of a PDF report.
 Three layers decide whether a new measurement happens:
 
 | Layer | Lifetime | Purpose |
 | --- | --- | --- |
 | Browser cache | 24 hours | Reload, new navigation and browser restart show the stored result without any request to the traceroute endpoint |
-| Server cache | 5 minutes | Protects against repeated `mtr` runs for the same target and host |
+| Server cache | 5 minutes | Protects against repeated traces for the same target and host |
 | New scan | on demand | The refresh icon (**Run new scan**) always measures again |
 
 - **Automatic scan.** A stored result is reused for 24 hours after the actual
@@ -37,12 +37,86 @@ a target under a reused id starts a new entry. Entries are kept as rendered
 fragment HTML in `localStorage` (at most 12 entries of 256 KiB; expired ones are
 dropped after 7 days) and inserted like a live response. Without usable storage
 the page works as before and keeps the result in memory only.
+- **Changed IXP data.** The page carries a key for the active IXP data. An entry
+  stored under another key is dropped and the next view asks the server, which
+  renders its stored route again with the current locations; no new scan runs. This
+  needs the route in the server's memory (kept for 24 hours, lost on restart). After
+  a restart the next view measures once. An unchanged re-import keeps the key.
 
 !!! note "Privacy"
     A stored route can contain internal IP addresses and host names. It stays in
     the local browser profile only, holds no tokens or credentials, and is
     removed on logout and when another user opens a target on the same browser.
     Entries of deleted targets are removed by the size and age limits.
+
+## Method and limits
+
+- **Probe order.** The first attempt is Nmap host discovery with its default probes
+  (`-sn --traceroute`). Only if that yields no trace (no trace found or time-out) does
+  one fallback run with a single port probe (default TCP 443) follow. A TCP or UDP probe
+  requested by the caller runs first, alone. There is never a third attempt.
+- **Privileges.** Nmap runs with `--privileged` and needs `NET_RAW`. The worker
+  receives only that capability; without it the page reports a permission error.
+- **Limits.** At most 30 hops. One shared deadline covers name resolution and all
+  attempts. Two traces run at a time; a further request is refused as busy.
+  Traces and port scans share three Nmap process slots (at most two scans, at most two
+  traces), so monitoring scans can never take the last slot from an interactive trace, and
+  traces never block a scan for longer than one trace takes.
+- **Values.** Each hop has a single round-trip time as reported by Nmap. There are no
+  loss, average, best or worst statistics. Hops that do not answer are shown as
+  *No reply*. IPv4 and IPv6 are supported; a host name is resolved once and that
+  address is traced.
+- **Without Docker.** A local worker started by the application has the same limits.
+  It needs an `nmap` binary and raw-socket rights (root or `cap_net_raw`); otherwise
+  traceroute is unavailable.
+
+## Measured behaviour
+Measured in a three-router lab (network namespaces, IPv4 and IPv6) with Nmap 7.993 from the
+runtime image under the Compose capability profile, against `mtr --json -n -c 3 -m 20` 0.95
+(the removed tool). 10 runs per cell (5 for the last two rows), one trace at a time, p50 in
+seconds. The lab is a clean, low-latency path; absolute times on the internet differ.
+
+| Scenario | MTR p50 | Nmap p50 | Route found |
+| --- | --- | --- | --- |
+| Clean path, 3 hops | 7.8 | 0.2 (IPv6), 0.6 (IPv4)¹ | both: all 3 hops |
+| Router without *time exceeded*, target drops ping | 8.6 | 2.1 | Nmap: 2 hops, destination reached. MTR: 1 hop, destination not reached |
+| Target also drops all TCP and UDP | 8.6 | 2.1 (IPv4), 3.1 (IPv6, no trace) | IPv4: Nmap reached the destination; IPv6: the first attempt found no trace, the fallback (through the worker) found 1 hop after 11.2 s |
+| Target down | 9.0 | 3.1 (no trace), 11.2 with the fallback | MTR shows the routers up to the failing one; plain Nmap often shows nothing |
+
+¹ Back-to-back IPv4 runs hit the kernel's ICMP rate limit (one *time exceeded* per second), so
+some Nmap runs missed a hop and were retried; the IPv6 runs did not.
+
+- **Faster** on a healthy path (about 0.2–0.6 s against 7.8 s), because Nmap sends its probes
+  once instead of three rounds per hop. **Slower** when the target stays silent: after the
+  first attempt returns nothing, the fallback needs up to about 11 s; MTR always needs 8–9 s.
+- When a router or the target blocks ping, Nmap's discovery probes found the destination in
+  cases where MTR's ICMP probes did not.
+- **Probe volume.** Per trace Nmap sent 15–27 packets and MTR 18–59 (counter delta on the
+  client interface, includes unrelated background traffic of the container).
+- **Concurrency.** Two traces run in parallel; the third is refused as *busy* by design (5 of
+  15 requests in a three-parallel run). Nmap is one short process per trace (about 27 MB peak
+  RSS).
+- **Lost compared with MTR:** per-hop loss and average, best and worst round-trip time. A
+  hop's single RTT is one sample and says nothing about loss or stability.
+- **Worker overhead:** about 0–0.5 s over a plain Nmap call (socket, validation, XML parsing).
+- **Sustained load (fake Nmap, not a network measurement).** Test double with 0.8 s per process,
+  5 scan loops and 3 trace loops for 12 s: peak 3 Nmap processes, 33 scans and 15 traces
+  completed, 238 trace requests refused as *busy* (retries every 0.1 s, none queued), longest
+  scan wait 2.5 s, longest trace 0.85 s. Neither kind starved: scans keep two slots, traces one.
+- **Abort, error, time-out (same test double).** 48 mixed scans and traces with failing,
+  hanging and cancelled processes: all slots were free again afterwards and no Nmap process
+  stayed behind. Refused traces used to leave one idle lock entry per address; they no
+  longer do.
+- **IPv6 and a switched-off target (fixture output, not a measurement).** A silent IPv6
+  target runs discovery, then one fallback with `-6` on both runs. Only the router that
+  answered is shown; the destination is never added as a hop, and a target without any route
+  reports *no trace*.
+- **Not measured:** public IPv6 and three parallel traces against a real host. The test
+  environment had no `nmap` binary and no IPv6 route to the internet, so these remain open,
+  as does arm64 (CI only).
+
+If the silent-target case matters, a tuning option would be a shorter budget for the first
+attempt (it currently takes 40 % of the request time); this was not implemented.
 
 ## Route timeline
 
@@ -61,12 +135,21 @@ ran the measurement. Unknown values show `—`, never invented zeros.
 
 | State | Meaning |
 | --- | --- |
-| Measured | The hop replied (partial loss is stated) |
+| Measured | The hop replied |
 | No reply | The hop did not answer. This includes silent hops between measured hops (for example ICMP blocked). No address, host name, latency or location is shown, and nothing is estimated for it |
 | Not reached | Synthetic destination, because the target never answered |
 
 A hop without map location is not a failed hop. It is marked "Location unknown"
 and has no map marker.
+
+## Hop table
+
+The table lists every hop with its address, location and result. It scrolls inside its
+own frame (at most 40 rem or 75 % of the viewport high), and the header row stays on top
+while it scrolls vertically. From a panel width of 30 rem the table fits without sideways
+scrolling: host and location wrap between words, while an IPv4 address, hop number, round-trip
+time and result never break. Below that the table scrolls sideways and the last column (the
+result) stays pinned at the end, so the status is always visible.
 
 ## Map
 
@@ -81,25 +164,61 @@ A link is dashed when at least one end is estimated or approximate, or when hops
 between did not answer or have no location; the hop numbers it skips are named in
 its tooltip. Nothing is estimated for a skipped hop: it gets no marker and no
 coordinates. A real geographic back-jump stays visible, and a back-jump caused by an
-approximate position is recognizable by its dashed link. The PDF report draws the
-same chain from the same data.
+approximate position is recognizable by its dashed link.
+
+The browser map draws each link as a schematic curve with a direction arrow; long
+curves repeat the arrow. An arrow shows hop order on solid and dashed links alike, and a
+curve is never a cable route. Links that share a corridor are drawn in separate lanes.
+Routes that cross the date line take the shorter way round.
+
+When markers lie too close together to tell apart, the map places them in an ordered marker
+lane. A dense region becomes one marker whose popup lists the hops of that region in
+order. Selecting a hop highlights it in the timeline, the table and the map. The
+map card has no scroll area of its own. On viewports of at least 1200x800 px the panel is
+height-bound and the row of table and map keeps a floor of 36 rem, so iPad sizes need no inner
+scrolling; a lower main area scrolls as a whole.
+
+The PDF report draws the same chain from the same data, with its own layout: straight
+links, and arrows only on long solid links.
 
 ## Location sources
 
 justUp! picks one location per hop. Local sources come first; online services are
-only a fallback (see [Online fallback](#online-fallback)). Sources:
+only a fallback (see [Enhanced Accuracy](#enhanced-accuracy-online-geolocation)). Sources:
 
 - **POP detection** from curated hostname-code mappings and explicitly reviewed
   learned aliases. The PeeringDB refresh stores city-level facility evidence but
   never creates a hostname alias from a facility alone. Refresh status is at
   `GET /api/admin/pop/status`; UN/LOCODE import remains a placeholder.
-- **GeoLite2-City** (offline). Without the database, traceroute still works, but
+- **GeoLite2-City** (offline; the GeoLite2-ASN file is updated together with it and
+  supplies the ASN of an address). Without the database, traceroute still works, but
   such hops stay off the map. A GeoLite2 point is plotted only when its accuracy
   radius is at most 25 km; otherwise the location stays approximate.
-- **ipwho.is** and, with a key, **ip-api Pro** (online fallback only). Their
+- **PeeringDB IXP prefixes** (offline, refreshed with the PeeringDB data). A hop
+  inside the peering LAN of an internet exchange is recognized by its prefix and
+  never asks online services. A verified POP still gives the router position. Without
+  one, the exchange region from its facilities is shown as an estimate (city and
+  country, marked "PeeringDB IXP prefix", never a router position). When the
+  facilities do not agree on one area, the hop names the exchange but shows no city,
+  and a country only when all facilities lie in one country; the administrative
+  country of the exchange record is never used. A refresh whose facility data is
+  incomplete does not replace the last complete snapshot.
+  After an update that adds the IXP data, the first import does not wait for the
+  30-day freshness window of the facility import: it starts a few minutes after
+  start (`IXP snapshot missing` in `auto_refresh.next_attempt_reason`). A failed
+  attempt, including HTTP 429, keeps the data in place and waits with the normal
+  backoff (15 minutes, doubling, at most 24 hours). `GET /api/admin/pop/status`
+  shows the active snapshot as `ixp_snapshot` (`null` until the first import).
+- **Latency check.** A GeoIP or online position that the measured round-trip times rule
+  out is dropped, with or without IXP data. Light in fibre covers about 200 km per
+  millisecond, and a probe to a later hop passes the earlier ones, so two hops cannot be
+  farther apart than the later round trip allows. The hop that breaks this against more
+  hops than each of its partners shows no location and is not drawn; a POP, hostname or
+  IXP position is never dropped. Hops without a latency are left as they are.
+- **ipwho.is** and, with a key, **ip-api Pro** (Enhanced Accuracy only). Their
   coordinates have no published accuracy and are never plotted as precise points.
 
-### Online fallback
+### Enhanced Accuracy (online geolocation)
 
 GeoLite2 is queried first. Its result counts as high quality when it has valid
 coordinates, a real city (not only a region), a country code and an accuracy radius
@@ -129,9 +248,9 @@ request. See [PoP candidate review](../development/database-maintenance.md#pop-c
 for the explicit review workflow.
 
 Only public IPs are ever sent to ipwho.is / ip-api Pro (HTTPS), subject to cache and
-backoff; private and non-global addresses never are. **Online fallback**
-(`online_geo_fallback_enabled`, Settings > Network > Geolocation) switches the
-fallback off completely. It is read on every lookup, so a change applies at once
+backoff; private and non-global addresses never are. **Enhanced Accuracy**
+(`online_geo_fallback_enabled`, Settings > Network > Geolocation) is off by default
+on new installations; while it is off, only the offline sources are used. It is read on every lookup, so a change applies at once
 and needs no restart.
 
 An online result has no evidenced accuracy, so it never replaces a local position.
@@ -153,6 +272,7 @@ A provider that rate-limits or fails is skipped for a while; GeoLite2 remains th
 local fallback.
 
 !!! warning "GeoLite2 license"
-    The automatic update downloads `GeoLite2-City.mmdb` from the P3TERX GitHub
-    mirror (`P3TERX/GeoLite.mmdb`), not from MaxMind. Make sure your use complies with the
+    The automatic update downloads `GeoLite2-City.mmdb` and `GeoLite2-ASN.mmdb` from the P3TERX GitHub
+    mirror (`P3TERX/GeoLite.mmdb`), not from MaxMind. This product includes GeoLite2 Data
+    created by MaxMind, available from <https://www.maxmind.com>. Make sure your use complies with the
     MaxMind GeoLite2 license. See [Settings](../configuration/settings.md).

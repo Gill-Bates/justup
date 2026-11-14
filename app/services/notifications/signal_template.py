@@ -25,7 +25,8 @@ DEFAULT_SIGNAL_TEMPLATE_DOWN = """{{status.emoji}} [ {{target.name}} ]  {{status
 ————————————————————
 Service:   {{alert.reason}}
 Started:   {{alert.started_at}}
-"""
+{{#if cta}}Link:         {{system.url}}
+{{/if cta}}"""
 
 DEFAULT_SIGNAL_TEMPLATE_UP = """{{status.emoji}} [ {{target.name}} ]  {{status.text}}
 ————————————————————
@@ -34,7 +35,8 @@ Service:     {{alert.reason}}
 Started:     {{alert.started_at}}
 Resolved:  {{alert.resolved_at}}
 Duration:   {{alert.duration}}
-"""
+{{#if cta}}Link:         {{system.url}}
+{{/if cta}}"""
 
 
 def load_signal_templates(conn) -> dict[str, str]:

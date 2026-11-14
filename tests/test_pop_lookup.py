@@ -31,7 +31,8 @@ def _add(conn, canonical, alias, lat, lon, *, confidence=100, priority=1, retire
 def conn():
     c = sqlite3.connect(":memory:")
     sqlite_db.init_schema(c)
-    return c
+    yield c
+    c.close()
 
 
 def test_tie_same_location_returns_hit_deterministically(conn):

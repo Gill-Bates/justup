@@ -35,7 +35,7 @@
             ('website', 'Website', 'Availability, response time and TLS certificate expiry.', 'language'),
             ('api', 'API / health endpoint', 'A specific HTTP endpoint and its expected status.', 'api'),
             ('server', 'Server / host', 'Reachability through ICMP ping.', 'dns'),
-            ('tcp', 'TCP service', 'Connectivity to ports that you choose.', 'settings_ethernet'),
+            ('tcp', 'TCP/UDP service', 'Connectivity to TCP or UDP ports that you choose.', 'settings_ethernet'),
             ('custom', 'Custom', 'Combine checks and fine-tune every setting.', 'tune')
           ] %}
           <label class="target-type-card {{ 'target-type-card--custom' if kind == 'custom' else '' }}">
@@ -51,17 +51,10 @@
       <section class="target-wizard-step" data-step="1" aria-labelledby="step-address-title" hidden>
         <div class="wizard-step-intro"><h2 id="step-address-title" tabindex="-1">Where is the target?</h2><p>Enter the address you want us to check. You can add a familiar name and group.</p></div>
         <div class="row g-3">
-          <div class="col-12 col-lg-7">
+          <div class="col-12">
             <label for="wizard-address" class="form-label" id="wizard-address-label">Full URL or domain *</label>
-            <input id="wizard-address" name="address" class="form-control" type="text" required maxlength="2048" autocomplete="url" aria-describedby="wizard-address-help wizard-address-error">
+            <input id="wizard-address" name="address" class="form-control" type="text" required maxlength="2048" autocomplete="url" autocapitalize="none" spellcheck="false" aria-describedby="wizard-address-help">
             <div id="wizard-address-help" class="form-text">A domain without a scheme suggests HTTPS. Enter http:// explicitly to keep HTTP.</div>
-            <div id="wizard-address-error" class="invalid-feedback" role="alert"></div>
-          </div>
-          <div class="col-12 col-lg-5 wizard-kind" data-kinds="tcp custom" hidden>
-            <label for="wizard-ports" class="form-label">TCP ports <span class="wizard-kind" data-kinds="tcp" hidden>*</span></label>
-            <input id="wizard-ports" name="tcp_ports" class="form-control" type="text" maxlength="200" placeholder="e.g. 22,443" aria-describedby="wizard-ports-help wizard-ports-error">
-            <div id="wizard-ports-help" class="form-text">Choose ports explicitly; no port is assumed.</div>
-            <div id="wizard-ports-error" class="invalid-feedback" role="alert"></div>
           </div>
           <div class="col-12 col-lg-7"><label for="wizard-name" class="form-label">Name</label>
             <input id="wizard-name" name="name" class="form-control" type="text" maxlength="200" autocomplete="off" placeholder="Suggested from address">
@@ -71,29 +64,52 @@
               {% for group in groups %}<option value="{{ group.name }}">{{ group.name }}</option>{% endfor %}
             </select>
           </div>
+          <div class="col-12 wizard-kind" data-kinds="tcp custom" data-ports-on-demand hidden>
+            {# Backing fields of the form payload; the picker below is the only visible port input. #}
+            <input id="wizard-ports" name="tcp_ports" type="hidden">
+            <input id="wizard-udp-ports" name="udp_ports" type="hidden">
+            {% set scan_prefix = 'wizard' %}
+            {% set scan_host_id = 'wizard-address' %}
+            {% set scan_tcp_id = 'wizard-ports' %}
+            {% set scan_udp_id = 'wizard-udp-ports' %}
+            {% set scan_tcp_toggle_id = 'wizard-tcp' %}
+            {% set scan_udp_toggle_id = 'wizard-udp' %}
+            {% include 'fragments/network_scan_picker.html' %}
+          </div>
         </div>
       </section>
 
       <section class="target-wizard-step" data-step="2" aria-labelledby="step-checks-title" hidden>
         <div class="wizard-step-intro"><h2 id="step-checks-title" tabindex="-1">Monitoring checks</h2><p>These are suggested starting values. Adjust them now or later in the full editor.</p></div>
         <div class="wizard-check-grid">
-          <div class="wizard-check-option"><div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="wizard-http" name="enable_http_check" aria-controls="wizard-group-http-url wizard-group-http-method wizard-group-http-codes wizard-group-ignore-cert"><label class="form-check-label" for="wizard-http">HTTP check</label></div></div>
-          <div class="wizard-check-option"><div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="wizard-ping" name="enable_ping"><label class="form-check-label" for="wizard-ping">ICMP ping</label></div></div>
-          <div class="wizard-check-option"><div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="wizard-tcp" name="enable_tcp_connect" aria-controls="wizard-group-tcp"><label class="form-check-label" for="wizard-tcp">TCP connection</label></div></div>
-          <div class="wizard-check-option"><div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="wizard-cert" name="enable_cert_expiration" aria-controls="wizard-group-ignore-cert"><label class="form-check-label" for="wizard-cert">Monitor certificate expiry</label></div></div>
+          <div class="wizard-check-option"><div class="form-check form-switch ju-switch"><input class="form-check-input" type="checkbox" role="switch" id="wizard-http" name="enable_http_check" aria-controls="wizard-group-http-url wizard-group-http-method wizard-group-http-codes wizard-group-ignore-cert"><label class="form-check-label" for="wizard-http">HTTP check</label></div></div>
+          <div class="wizard-check-option"><div class="form-check form-switch ju-switch"><input class="form-check-input" type="checkbox" role="switch" id="wizard-ping" name="enable_ping"><label class="form-check-label" for="wizard-ping">ICMP ping</label></div></div>
+          <div class="wizard-check-option"><div class="form-check form-switch ju-switch"><input class="form-check-input" type="checkbox" role="switch" id="wizard-tcp" name="enable_tcp_connect" aria-controls="wizard-group-tcp"><label class="form-check-label" for="wizard-tcp">TCP connection</label></div></div>
+          <div class="wizard-check-option"><div class="form-check form-switch ju-switch"><input class="form-check-input" type="checkbox" role="switch" id="wizard-udp" name="enable_udp_scan" aria-controls="wizard-group-udp"><label class="form-check-label" for="wizard-udp">UDP ports</label></div></div>
+          <div class="wizard-check-option"><div class="form-check form-switch ju-switch"><input class="form-check-input" type="checkbox" role="switch" id="wizard-cert" name="enable_cert_expiration" aria-controls="wizard-group-ignore-cert"><label class="form-check-label" for="wizard-cert">Monitor certificate expiry</label></div></div>
         </div>
         <p id="wizard-checks-status" class="visually-hidden" role="status"></p>
-        <div class="wizard-check-detail" id="wizard-group-tcp" data-check-group="tcp" hidden><label for="wizard-extra-ports" class="form-label">TCP ports *</label><input id="wizard-extra-ports" class="form-control" type="text" maxlength="200" placeholder="e.g. 22,443" aria-describedby="wizard-extra-ports-help"><div id="wizard-extra-ports-help" class="form-text">Choose every TCP port explicitly. Each port is tested with its own connection on the host from the previous step.</div></div>
+        <div class="wizard-check-detail" id="wizard-group-tcp" data-check-group="tcp" hidden>
+          <p class="wizard-port-summary" id="wizard-tcp-summary"><span class="wizard-port-summary-label" id="wizard-tcp-summary-label">TCP ports:</span> <strong class="wizard-port-summary-value" id="wizard-tcp-summary-value">None chosen yet</strong><button type="button" class="btn btn-link btn-sm wizard-port-edit" data-edit-ports="tcp" aria-describedby="wizard-tcp-summary-label wizard-tcp-summary-value wizard-tcp-summary-error">Edit ports</button></p>
+          <div id="wizard-tcp-summary-error" class="invalid-feedback"></div>
+          <div id="wizard-tcp-summary-help" class="form-text">Each port is tested with its own connection on the host from the previous step.</div>
+        </div>
+        <div class="wizard-check-detail" id="wizard-group-udp" data-check-group="udp" hidden>
+          <p class="wizard-port-summary" id="wizard-udp-summary"><span class="wizard-port-summary-label" id="wizard-udp-summary-label">UDP ports:</span> <strong class="wizard-port-summary-value" id="wizard-udp-summary-value">None chosen yet</strong><button type="button" class="btn btn-link btn-sm wizard-port-edit" data-edit-ports="udp" aria-describedby="wizard-udp-summary-label wizard-udp-summary-value wizard-udp-summary-error">Edit ports</button></p>
+          <div id="wizard-udp-summary-error" class="invalid-feedback"></div>
+          <div id="wizard-udp-summary-help" class="form-text">An uncertain UDP result stays unknown until a later scan confirms it.</div>
+        </div>
         <details class="wizard-advanced" id="wizard-advanced"><summary><span class="material-icons" aria-hidden="true">tune</span>Advanced settings</summary>
           <div class="row g-3 mt-1">
             <div class="col-12 col-md-6" id="wizard-group-http-url" data-check-group="http" hidden><label for="wizard-http-url" class="form-label">Full HTTP URL</label><input id="wizard-http-url" name="http_url" class="form-control" type="url" maxlength="2048"></div>
             <div class="col-12 col-md-3" id="wizard-group-http-method" data-check-group="http" hidden><label for="wizard-method" class="form-label">HTTP method</label><select id="wizard-method" name="http_method" class="form-select"><option value="GET">GET</option><option value="HEAD">HEAD</option></select></div>
             <div class="col-12 col-md-3" id="wizard-group-http-codes" data-check-group="http" hidden><label for="wizard-codes" class="form-label">Success codes</label><input id="wizard-codes" name="http_success_codes" class="form-control" type="text" maxlength="200" placeholder="200-399"></div>
-            <div class="col-12 col-md-4"><label for="wizard-interval" class="form-label">Interval (seconds)</label><input id="wizard-interval" name="interval_seconds" class="form-control" type="number" min="{{ limits.interval_seconds.min }}" max="{{ limits.interval_seconds.max }}" required></div>
-            <div class="col-12 col-md-4"><label for="wizard-retries" class="form-label">Retries</label><input id="wizard-retries" name="max_retries" class="form-control" type="number" min="{{ limits.max_retries.min }}" max="{{ limits.max_retries.max }}" required></div>
-            <div class="col-12 col-md-4"><label for="wizard-retention" class="form-label">Retention (days)</label><input id="wizard-retention" name="retention_days" class="form-control" type="number" min="{{ limits.retention_days.min }}" max="{{ limits.retention_days.max }}" required></div>
-            <div class="col-12 col-md-6"><div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="wizard-auto-close" name="auto_close_alert"><label class="form-check-label" for="wizard-auto-close">Close alerts automatically after recovery</label></div></div>
-            <div class="col-12 col-md-6" id="wizard-group-ignore-cert" data-check-group="tls" hidden><div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="wizard-ignore-cert" name="ignore_cert_errors"><label class="form-check-label" for="wizard-ignore-cert">Ignore TLS certificate errors</label></div><div class="form-text">Disables certificate validation for the HTTP request and the certificate check.</div></div>
+            <div class="col-12 col-md-3"><label for="wizard-interval" class="form-label">Interval (seconds)</label><input id="wizard-interval" name="interval_seconds" class="form-control" type="number" min="{{ limits.interval_seconds.min }}" max="{{ limits.interval_seconds.max }}" required></div>
+            <div class="col-12 col-md-3"><label for="wizard-retries" class="form-label">Retries</label><input id="wizard-retries" name="max_retries" class="form-control" type="number" min="{{ limits.max_retries.min }}" max="{{ limits.max_retries.max }}" required></div>
+            <div class="col-12 col-md-3"><label for="wizard-alert-delay" class="form-label">Down alert delay (minutes)</label><input id="wizard-alert-delay" name="down_alert_delay_minutes" class="form-control" type="number" min="{{ limits.down_alert_delay_minutes.min }}" max="{{ limits.down_alert_delay_minutes.max }}" aria-describedby="wizard-alert-delay-help" required><div class="form-text" id="wizard-alert-delay-help">A DOWN alert fires at the first measurement after this time. Independent of retries.</div></div>
+            <div class="col-12 col-md-3"><label for="wizard-retention" class="form-label">Retention (days)</label><input id="wizard-retention" name="retention_days" class="form-control" type="number" min="{{ limits.retention_days.min }}" max="{{ limits.retention_days.max }}" required></div>
+            <div class="col-12 col-md-6"><div class="form-check form-switch ju-switch"><input class="form-check-input" type="checkbox" role="switch" id="wizard-auto-close" name="auto_close_alert"><label class="form-check-label" for="wizard-auto-close">Close alerts automatically after recovery</label></div></div>
+            <div class="col-12 col-md-6" id="wizard-group-ignore-cert" data-check-group="tls" hidden><div class="form-check form-switch ju-switch"><input class="form-check-input" type="checkbox" role="switch" id="wizard-ignore-cert" name="ignore_cert_errors" aria-describedby="wizard-ignore-cert-help"><label class="form-check-label" for="wizard-ignore-cert">Ignore TLS certificate errors</label></div><div class="form-text" id="wizard-ignore-cert-help">Disables certificate validation for the HTTP request and the certificate check.</div></div>
           </div>
         </details>
       </section>
@@ -120,4 +136,4 @@
 </div>
 {% endblock %}
 
-{% block scripts %}<script src="/static/js/utils/optional-groups.js" defer></script><script src="/static/js/utils/check-groups.js" defer></script><script src="/static/js/target-wizard.js" defer></script>{% endblock %}
+{% block scripts %}<script src="/static/js/utils/optional-groups.js" defer></script><script src="/static/js/utils/check-groups.js" defer></script><script src="/static/js/utils/port-scan-core.js" defer></script><script src="/static/js/network-scan-picker.js" defer></script><script src="/static/js/target-wizard.js" defer></script>{% endblock %}

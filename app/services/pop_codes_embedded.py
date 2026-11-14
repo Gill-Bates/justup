@@ -288,8 +288,6 @@ def lookup_embedded(hostname: str) -> dict | None:
         return None
 
     tokens = extract_pop_tokens(hostname)
-    if not tokens:
-        return None
 
     # Try each token (longest first)
     for token in tokens:

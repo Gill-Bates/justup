@@ -16,7 +16,7 @@ Layout (imports only point downwards, domain modules never import ``migrations``
 - ``layout``: structural schema layout reading and comparison
 - ``migrations``: ``MIGRATIONS`` registry, ``check_schema_compatibility``, ``init_schema``
 - domain modules: settings, target_status, auth_tokens, users, targets, groups, login_attempts,
-  recipients, alerts, monitor_quality, report_jobs, scheduler_runs, bootstrap
+  recipients, alerts, monitor_quality, report_jobs, network_ports, scheduler_runs, bootstrap
 
 Monkeypatching ``sqlite_db.<name>`` keeps working for internal callers: the package module forwards
 an assignment to every submodule that holds the name (see ``_SqliteModule``).
@@ -41,6 +41,7 @@ from . import (
     login_attempts,
     migrations,
     monitor_quality,
+    network_ports,
     recipients,
     report_jobs,
     scheduler_runs,
@@ -146,11 +147,14 @@ from .layout import (
     _IndexShape,
     _Layout,
     _layout,
+    _layout_for_version,
     _layout_problems,
     _normalise_sql,
     _short,
     _skip_quoted,
     _TableShape,
+    expected_triggers,
+    normalise_trigger_sql,
 )
 from .login_attempts import (
     _LOGIN_LOCK_MAX_SECONDS,
@@ -161,11 +165,9 @@ from .login_attempts import (
     record_failed_login,
 )
 from .migrations import (
+    LEGACY_SCHEMA_VERSION,
     MIGRATIONS,
     Migration,
-    _migrate_2_spooler_resilience,
-    _migrate_3_alert_dispatch_outbox,
-    _migrate_5_recipient_enable_for_all_targets,
     _missing_migrations,
     check_schema_compatibility,
     init_schema,
@@ -175,10 +177,19 @@ from .monitor_quality import (
     insert_monitor_quality,
     query_monitor_quality,
 )
+from .network_ports import (
+    all_network_ports,
+    list_network_ports,
+    record_service_observation,
+    sync_network_ports,
+    update_network_port_status,
+)
 from .recipients import (
     DuplicatePhoneError,
+    UserBoundRecipientError,
     _assert_phone_free,
     assign_flagged_recipients,
+    cancel_pending_notifications,
     create_recipient,
     delete_recipient,
     get_recipient,
@@ -257,20 +268,27 @@ from .targets import (
     update_target,
 )
 from .users import (
+    AdminUserError,
     _discard_bootstrap_credentials_for,
+    _insert_user_with_recipient,
     create_user,
+    delete_non_admin_user,
     delete_user,
+    ensure_user_recipients,
     get_all_users,
     get_first_admin,
+    get_recipients_by_user,
     get_user,
     get_user_by_id,
     get_user_by_username,
+    get_user_recipient,
     get_user_theme,
     set_user_active,
     set_user_theme,
     update_user,
     update_user_last_login,
     update_user_password,
+    update_user_recipient,
 )
 
 _SUBMODULES = (
@@ -290,6 +308,7 @@ _SUBMODULES = (
     alerts,
     monitor_quality,
     report_jobs,
+    network_ports,
     scheduler_runs,
     bootstrap,
 )

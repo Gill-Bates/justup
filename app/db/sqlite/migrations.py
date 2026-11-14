@@ -4,15 +4,22 @@
 # Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 #
 
-"""SQLite schema migrations: registry, compatibility check and ``init_schema`` orchestration."""
+"""SQLite schema versioning and initialization."""
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 from collections.abc import Callable
 from typing import NamedTuple
 
+from ...utils.constants import (
+    DEFAULT_TARGET_DOWN_ALERT_DELAY_MINUTES,
+    TARGET_DOWN_ALERT_DELAY_MINUTES_MAX,
+    TARGET_DOWN_ALERT_DELAY_MINUTES_MIN,
+)
+from ...utils.time import utcnow
 from .connection import ensure_wal_mode, transaction
 from .layout import (
     _SAFE_HINT,
@@ -20,11 +27,13 @@ from .layout import (
     _database_file,
     _diff_layout,
     _drift_error,
-    _expected_layout,
     _layout,
+    _layout_for_version,
     _layout_problems,
 )
 from .schema import (
+    _RECIPIENTS_DDL,
+    BLANK_CHARS_SQL,
     SCHEMA_CORRUPT,
     SCHEMA_FUTURE,
     SCHEMA_MIGRATION_FAILED,
@@ -33,245 +42,174 @@ from .schema import (
     SCHEMA_VERSION,
     IncompatibleSchemaError,
     _create_baseline_schema,
+    _ensure_recipient_triggers,
     _ensure_unique_recipient_phone,
     get_schema_version,
 )
-from .schema_notifications import ensure_alert_dispatch_outbox_table, ensure_notification_queue_table
+from .users import ensure_user_recipients
 
-# Keep the pre-split logger name: log filters and caplog assertions address app.db.sqlite.
 _log = logging.getLogger("app.db.sqlite")
 
 
 class Migration(NamedTuple):
-    """One forward-only schema step that upgrades a database from ``version - 1`` to ``version``."""
+    """One forward-only step from version - 1 to version after the new baseline."""
 
     version: int
     description: str
     apply: Callable[[sqlite3.Connection], None]
+    # Table rebuilds need ``PRAGMA foreign_keys=OFF``, which only works outside a transaction:
+    # init_schema switches it off before BEGIN and restores it afterwards.
+    foreign_keys_off: bool = False
 
 
-def _migrate_2_spooler_resilience(conn: sqlite3.Connection) -> None:
-    """Add the separate budget for non-transient send failures and the persistent channel state."""
-    columns = {row[1] for row in conn.execute("PRAGMA table_info(notification_queue)")}
-    if "limited_attempts" not in columns:
-        conn.execute(
-            "ALTER TABLE notification_queue "
-            "ADD COLUMN limited_attempts INTEGER NOT NULL DEFAULT 0 CHECK (limited_attempts >= 0)"
-        )
-        # Earlier releases counted every failure against one budget: keep those rows' history.
-        conn.execute("UPDATE notification_queue SET limited_attempts = retry_count")
-    ensure_notification_queue_table(conn)
+# The former current version has the same layout as the new version-1 baseline.
+# This one-time restamp preserves databases and backups created by that release.
+LEGACY_SCHEMA_VERSION = 10
+
+# The former global "Down Alert Delay" setting. Only the migration still knows it: the value moves into the
+# per-target column and the row is deleted.
+_OLD_DELAY_SETTING_KEY = "metrics_timeout_minutes"
 
 
-def _migrate_3_alert_dispatch_outbox(conn: sqlite3.Connection) -> None:
-    ensure_alert_dispatch_outbox_table(conn)
-    columns = {row[1] for row in conn.execute("PRAGMA table_info(alerts)")}
-    if "active_incident" not in columns:
-        conn.execute(
-            "ALTER TABLE alerts ADD COLUMN active_incident INTEGER NOT NULL DEFAULT 0 CHECK (active_incident IN (0, 1))"
-        )
-    conn.execute(
-        """
-        UPDATE alerts SET active_incident = 1
-        WHERE id IN (
-            SELECT id FROM (
-                SELECT a.id, a.target_id,
-                       upper(a.failed_service) LIKE 'CERT%' AS is_cert,
-                       row_number() OVER (
-                           PARTITION BY a.target_id, upper(a.failed_service) LIKE 'CERT%'
-                           ORDER BY a.started_at DESC, a.id DESC
-                       ) AS position
-                FROM alerts a
-                WHERE a.status = 'open'
-            ) ranked
-            WHERE position = 1 AND (
-                (is_cert AND EXISTS (
-                    SELECT 1 FROM target_status ts
-                    WHERE ts.target_id = ranked.target_id AND ts.cert_days_left <= 7
-                )) OR (NOT is_cert AND EXISTS (
-                    SELECT 1 FROM target_status ts
-                    WHERE ts.target_id = ranked.target_id AND ts.overall_status = 'down'
-                ))
-            )
-        )
-        """
-    )
-    conn.execute(
-        """
-        INSERT OR IGNORE INTO alert_dispatch_outbox (
-            alert_id, event_type, target_id, target_name, failed_service,
-            started_at, ended_at, duration_seconds, status, attempts,
-            next_attempt_at, created_at, updated_at
-        )
-        SELECT id, 'open', target_id, target_name, failed_service,
-               started_at, NULL, NULL, 'pending', 0, created_at, created_at, updated_at
-        FROM alerts WHERE status = 'open' AND active_incident = 1
-        """
-    )
+def _migrate_v1_to_v2(conn: sqlite3.Connection) -> None:
+    """Version 2: index report_jobs.target_id; link recipients to users; per-target down alert delay.
 
+    Rebuilds ``recipients`` with ``user_id`` and gives every user a recipient.
 
-def _migrate_4_dashboard_widget_height_mode(conn: sqlite3.Connection) -> None:
-    """One-time schema upgrade: preserve v3 positions/widths and assign automatic height mode."""
-    views = list(conn.execute("SELECT name, sql FROM sqlite_schema WHERE type = 'view' ORDER BY name"))
-    view_triggers = [
-        row[0]
-        for row in conn.execute(
-            "SELECT sql FROM sqlite_schema WHERE type = 'trigger' AND tbl_name IN "
-            "(SELECT name FROM sqlite_schema WHERE type = 'view') ORDER BY name"
-        )
-    ]
-    dependent_sql = [
-        row[0]
-        for row in conn.execute(
-            "SELECT sql FROM sqlite_schema WHERE tbl_name = 'dashboard_layouts' "
-            "AND type IN ('index', 'trigger') AND sql IS NOT NULL ORDER BY type, name"
-        )
-    ]
-    for name, _sql in views:
-        quoted_name = '"' + name.replace('"', '""') + '"'
-        conn.execute(f"DROP VIEW {quoted_name}")
-    conn.execute(
-        """
-        CREATE TABLE dashboard_layouts_v4 (
-            user_id INTEGER NOT NULL,
-            widget_id TEXT NOT NULL CHECK (length(widget_id) BETWEEN 1 AND 64),
-            position INTEGER NOT NULL CHECK (position >= 0),
-            x INTEGER NOT NULL CHECK (x BETWEEN 0 AND 11),
-            y INTEGER NOT NULL CHECK (y >= 0),
-            w INTEGER NOT NULL CHECK (w BETWEEN 1 AND 12),
-            h INTEGER NOT NULL CHECK (h BETWEEN 1 AND 100),
-            visible INTEGER NOT NULL DEFAULT 1 CHECK (visible IN (0, 1)),
-            layout_version INTEGER NOT NULL DEFAULT 2 CHECK (layout_version = 2),
-            height_mode TEXT NOT NULL DEFAULT 'auto' CHECK (height_mode IN ('auto', 'manual')),
-            PRIMARY KEY (user_id, widget_id),
-            CHECK (x + w <= 12),
-            CHECK (y + h <= 1000),
-            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-        ) WITHOUT ROWID
-        """
-    )
-    conn.execute(
-        """
-        INSERT INTO dashboard_layouts_v4 (
-            user_id, widget_id, position, x, y, w, h, visible, layout_version, height_mode
-        )
-        SELECT user_id, widget_id, position, x, y, w, h, visible, 2, 'auto'
-        FROM dashboard_layouts
-        """
-    )
-    conn.execute("DROP TABLE dashboard_layouts")
-    conn.execute("ALTER TABLE dashboard_layouts_v4 RENAME TO dashboard_layouts")
-    for statement in dependent_sql:
-        conn.execute(statement)
-    for _name, statement in views:
-        conn.execute(statement)
-    for statement in view_triggers:
-        conn.execute(statement)
-
-
-def _migrate_5_recipient_enable_for_all_targets(conn: sqlite3.Connection) -> None:
-    """Add the per-recipient "enable for all targets" flag; existing recipients keep it off."""
+    Runs inside init_schema's immediate transaction with foreign keys switched off (a DROP TABLE with active
+    foreign keys would cascade-delete ``target_recipients``). Repeatable: an existing ``user_id`` column skips the
+    rebuild and the backfill only touches users without a recipient. Counts are verified before the commit.
+    """
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_report_jobs_target ON report_jobs(target_id)")
     columns = {row[1] for row in conn.execute("PRAGMA table_info(recipients)")}
-    if "enable_for_all_targets" not in columns:
-        conn.execute(
-            "ALTER TABLE recipients ADD COLUMN "
-            "enable_for_all_targets INTEGER NOT NULL DEFAULT 0 CHECK (enable_for_all_targets IN (0, 1))"
+    if "user_id" not in columns:
+        _rebuild_recipients_with_user_id(conn)
+    before = conn.execute("SELECT COUNT(*) FROM recipients").fetchone()[0]
+    now = utcnow()
+    # Existing users get a disabled recipient without channels; they configure it in the user dialog.
+    added = conn.execute(
+        "INSERT INTO recipients(name, phone, email, is_enabled, enable_for_all_targets, created_at, updated_at, "
+        "user_id) SELECT u.username, NULL, NULL, 0, 0, ?, ?, u.id FROM users u "
+        "WHERE NOT EXISTS (SELECT 1 FROM recipients r WHERE r.user_id = u.id)",
+        (now, now),
+    ).rowcount
+    after = conn.execute("SELECT COUNT(*) FROM recipients").fetchone()[0]
+    if after != before + added:
+        raise RuntimeError(f"recipients row count mismatch after backfill: {before} + {added} != {after}")
+    if conn.execute("PRAGMA foreign_key_check").fetchone() is not None:
+        raise RuntimeError("foreign key violations after the recipients migration")
+    _ensure_recipient_triggers(conn)
+    _add_target_down_alert_delay(conn)
+
+
+def _old_global_delay(conn: sqlite3.Connection) -> int:
+    """The former global value with the semantics the scheduler used: missing/falsy/invalid -> 5, clamped to 1..10."""
+    row = conn.execute("SELECT value FROM settings WHERE key = ?", (_OLD_DELAY_SETTING_KEY,)).fetchone()
+    if row is None:
+        return DEFAULT_TARGET_DOWN_ALERT_DELAY_MINUTES
+    try:
+        stored = json.loads(row[0])
+        value = int(stored or DEFAULT_TARGET_DOWN_ALERT_DELAY_MINUTES)
+    except (ValueError, TypeError, OverflowError):
+        _log.warning("Stored %s is not a number; using the default", _OLD_DELAY_SETTING_KEY)
+        return DEFAULT_TARGET_DOWN_ALERT_DELAY_MINUTES
+    return max(TARGET_DOWN_ALERT_DELAY_MINUTES_MIN, min(TARGET_DOWN_ALERT_DELAY_MINUTES_MAX, value))
+
+
+def _add_target_down_alert_delay(conn: sqlite3.Connection) -> None:
+    """Add targets.down_alert_delay_minutes, give every target the former global value and drop that setting.
+
+    Repeatable: an existing column means the step already ran, so neither target values nor settings are touched.
+    Runs inside init_schema's transaction; a failed row count rolls everything back. The ALTER text equals the
+    baseline column definition, which the layout check after the migrations requires.
+    """
+    if any(row[1] == "down_alert_delay_minutes" for row in conn.execute("PRAGMA table_info(targets)")):
+        return
+    conn.execute(
+        "ALTER TABLE targets ADD COLUMN down_alert_delay_minutes INTEGER NOT NULL DEFAULT 5 "
+        "CHECK (down_alert_delay_minutes > 0)"
+    )
+    delay = _old_global_delay(conn)
+    total = conn.execute("SELECT COUNT(*) FROM targets").fetchone()[0]
+    updated = conn.execute("UPDATE targets SET down_alert_delay_minutes = ?", (delay,)).rowcount
+    if updated != total:
+        raise RuntimeError(f"down alert delay was set on {updated} of {total} targets")
+    conn.execute("DELETE FROM settings WHERE key = ?", (_OLD_DELAY_SETTING_KEY,))
+    _log.info("Moved the global down alert delay (%d min) to %d target(s)", delay, total)
+
+
+def _rebuild_recipients_with_user_id(conn: sqlite3.Connection) -> None:
+    """SQLite table rebuild (create new, copy, drop, rename) keeping ids, rows and the AUTOINCREMENT counter."""
+    # The compatibility check tolerates extra tables, so the scratch name may belong to someone else. Never
+    # drop an unknown object: stop with a clear error before anything is written.
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'recipients_new' COLLATE NOCASE").fetchone():
+        raise RuntimeError(
+            "table 'recipients_new' already exists and is not part of the schema; the migration needs that name "
+            "and will not drop it. Rename or remove it yourself (after checking its content), then restart"
+        )
+    # Version 1 only required "not NULL", so a blank string may count as a channel there. It is normalised to
+    # NULL below (no information is lost); a standalone recipient left without any real channel cannot be
+    # kept under the stricter CHECK and is not deleted or invented away either: stop and name the rows.
+    unusable = [
+        int(row[0])
+        for row in conn.execute(
+            f"SELECT id FROM recipients WHERE COALESCE(trim(phone, {BLANK_CHARS_SQL}), '') = '' "  # noqa: S608 - constant
+            f"AND COALESCE(trim(email, {BLANK_CHARS_SQL}), '') = '' ORDER BY id"
+        )
+    ]
+    if unusable:
+        raise RuntimeError(
+            f"recipient id(s) {', '.join(map(str, unusable))} have no usable contact channel (phone and email are "
+            "empty or blank); give them a phone number or email address, or delete them, then restart"
+        )
+    rows_before = conn.execute("SELECT COUNT(*) FROM recipients").fetchone()[0]
+    links_before = conn.execute("SELECT COUNT(*) FROM target_recipients").fetchone()[0]
+    sequence = conn.execute("SELECT seq FROM sqlite_sequence WHERE name = 'recipients'").fetchone()
+    conn.execute(_RECIPIENTS_DDL.format(name="recipients_new", if_not_exists=""))
+    conn.execute(
+        "INSERT INTO recipients_new(id, name, phone, email, is_enabled, created_at, updated_at, "  # noqa: S608 - constant
+        "enable_for_all_targets) SELECT id, name, "
+        f"CASE WHEN trim(phone, {BLANK_CHARS_SQL}) = '' THEN NULL ELSE phone END, "
+        f"CASE WHEN trim(email, {BLANK_CHARS_SQL}) = '' THEN NULL ELSE email END, "
+        "is_enabled, created_at, updated_at, enable_for_all_targets FROM recipients"
+    )
+    conn.execute("DROP TABLE recipients")
+    conn.execute("ALTER TABLE recipients_new RENAME TO recipients")
+    if sequence is not None:  # a deleted recipient's id must not be handed out again
+        updated = conn.execute(
+            "UPDATE sqlite_sequence SET seq = MAX(seq, ?) WHERE name = 'recipients'", (sequence[0],)
+        ).rowcount
+        if not updated:
+            conn.execute("INSERT INTO sqlite_sequence(name, seq) VALUES ('recipients', ?)", (sequence[0],))
+    # Non-unique first; _ensure_unique_recipient_phone upgrades it unless legacy duplicates exist.
+    conn.execute("CREATE INDEX idx_recipients_phone ON recipients(phone)")
+    conn.execute("CREATE INDEX idx_recipients_email ON recipients(email)")
+    conn.execute("CREATE INDEX idx_recipients_enabled ON recipients(is_enabled)")
+    _ensure_unique_recipient_phone(conn)
+    rows_after = conn.execute("SELECT COUNT(*) FROM recipients").fetchone()[0]
+    links_after = conn.execute("SELECT COUNT(*) FROM target_recipients").fetchone()[0]
+    if (rows_after, links_after) != (rows_before, links_before):
+        raise RuntimeError(
+            f"recipients rebuild changed row counts: recipients {rows_before} -> {rows_after}, "
+            f"target_recipients {links_before} -> {links_after}"
         )
 
 
-def _migrate_6_pop_candidates(conn: sqlite3.Connection) -> None:
-    """Add bounded PoP observations and explicit-review metadata without promoting old candidates."""
-    columns = {row[1] for row in conn.execute("PRAGMA table_info(pop_alias_candidates)")}
-    additions = {
-        "hostname": "TEXT",
-        "public_ip": "TEXT",
-        "parser_context": "TEXT",
-        "proposal_source": "TEXT",
-        "proposal_lat": "REAL",
-        "proposal_lon": "REAL",
-        "independent_count": "INTEGER NOT NULL DEFAULT 0",
-        "conflict_count": "INTEGER NOT NULL DEFAULT 0",
-        "quality_score": "INTEGER NOT NULL DEFAULT 0",
-        "status": "TEXT NOT NULL DEFAULT 'pending'",
-        "reviewed_at": "TEXT",
-        "reviewed_by": "TEXT",
-        "review_evidence": "TEXT",
-        "approved_location_id": "INTEGER",
-    }
-    for name, definition in additions.items():
-        if name not in columns:
-            conn.execute(f"ALTER TABLE pop_alias_candidates ADD COLUMN {name} {definition}")
-    conn.execute(
-        "UPDATE pop_alias_candidates SET status = 'legacy_reviewed' WHERE reviewed = 1 AND approved_location_id IS NULL"
-    )
-    conn.execute(
-        """CREATE TABLE IF NOT EXISTS pop_candidate_observations (
-            candidate_id INTEGER NOT NULL REFERENCES pop_alias_candidates(id),
-            measurement_key TEXT NOT NULL,
-            context_key TEXT NOT NULL,
-            observed_at TEXT NOT NULL,
-            PRIMARY KEY(candidate_id, measurement_key)
-        )"""
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_pop_observations_context "
-        "ON pop_candidate_observations(candidate_id, context_key)"
-    )
-    conn.execute(
-        """CREATE TABLE IF NOT EXISTS pop_candidate_reviews (
-            id INTEGER PRIMARY KEY,
-            candidate_id INTEGER NOT NULL REFERENCES pop_alias_candidates(id),
-            action TEXT NOT NULL CHECK(action IN ('approve', 'reject', 'revoke')),
-            actor TEXT NOT NULL,
-            evidence TEXT NOT NULL,
-            reviewed_at TEXT NOT NULL,
-            location_id INTEGER
-        )"""
-    )
-    conn.execute(
-        """CREATE TABLE IF NOT EXISTS pop_city_evidence (
-            city_code TEXT NOT NULL,
-            city TEXT NOT NULL,
-            country TEXT NOT NULL,
-            lat REAL NOT NULL,
-            lon REAL NOT NULL,
-            facility_count INTEGER NOT NULL,
-            position_source TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            PRIMARY KEY(city_code, country)
-        )"""
-    )
-
-
-# Ordered by version, contiguous from 2.
 MIGRATIONS: tuple[Migration, ...] = (
-    Migration(
-        2,
-        "spooler resilience: limited_attempts column, notification_channel_state table",
-        _migrate_2_spooler_resilience,
-    ),
-    Migration(3, "durable alert dispatch outbox", _migrate_3_alert_dispatch_outbox),
-    Migration(4, "dashboard widget automatic and manual height contract", _migrate_4_dashboard_widget_height_mode),
-    Migration(5, "recipients.enable_for_all_targets flag", _migrate_5_recipient_enable_for_all_targets),
-    Migration(6, "bounded PoP candidate evidence and explicit review metadata", _migrate_6_pop_candidates),
+    Migration(2, "link recipients to users; per-target down alert delay", _migrate_v1_to_v2, foreign_keys_off=True),
 )
 
 
 def check_schema_compatibility(conn: sqlite3.Connection) -> int:
-    """Return the stored user_version if the database may be initialised or opened by this release.
+    """Read-only validation of an empty, current, or exact former-current database.
 
-    Compatible: a new, empty database (user_version 0, no application tables), a database with an
-    older user_version and a registered migration path, or a database at SCHEMA_VERSION whose tables,
-    columns (types, NOT NULL, defaults, primary keys), foreign keys, unique keys, CHECK constraints and
-    required indexes match the current schema. Column order is ignored: ALTER TABLE ADD COLUMN always
-    appends, so a correctly migrated database orders columns differently from a new one.
-    Read-only: nothing is written.
-
-    Raises:
-        IncompatibleSchemaError: ``kind`` tells corrupt file, unversioned pre-release tables, future
-            schema version, missing migration path or schema drift apart.
+    Version and layout come from one read snapshot (a transaction of their own unless the caller already holds
+    one), so a concurrent migration cannot show up as a version of one schema and the layout of another.
     """
+    owns_snapshot = not conn.in_transaction
     try:
+        if owns_snapshot:
+            conn.execute("BEGIN")
         version = get_schema_version(conn)
         tables, indexes = _layout(conn)
     except sqlite3.DatabaseError as exc:
@@ -282,114 +220,153 @@ def check_schema_compatibility(conn: sqlite3.Connection) -> int:
                 kind=SCHEMA_CORRUPT,
             ) from exc
         raise
+    finally:
+        if owns_snapshot and conn.in_transaction:
+            conn.rollback()
     where = f"Cannot use database {_database_file(conn)}"
     if version == 0:
         if tables:
             raise IncompatibleSchemaError(
                 f"{where}: it contains tables but no schema version (unversioned pre-release database); "
-                f"this release migrates only databases created by v1.0.0 or later. To start over, move the file "
-                f"and data/tsdb aside (measurements are bound to target IDs). {_SAFE_HINT}",
+                f"the data was left untouched. {_SAFE_HINT}",
                 kind=SCHEMA_UNVERSIONED,
                 version=0,
             )
-    elif version > SCHEMA_VERSION:
+    elif version in (SCHEMA_VERSION, LEGACY_SCHEMA_VERSION, 1):
+        if diffs := _diff_layout((tables, indexes), _layout_for_version(version)):
+            raise _drift_error(conn, version, diffs, expected_version=1 if version != SCHEMA_VERSION else version)
+    elif version < SCHEMA_VERSION and not _missing_migrations(version):
+        return version
+    elif version < LEGACY_SCHEMA_VERSION:
+        raise IncompatibleSchemaError(
+            f"{where}: its schema version is {version}, but this release supports {SCHEMA_VERSION} "
+            f"and has no migration path from {version}. {_SAFE_HINT}",
+            kind=SCHEMA_NO_MIGRATION_PATH,
+            version=version,
+        )
+    else:
         raise IncompatibleSchemaError(
             f"{where}: its schema version is {version}, newer than the {SCHEMA_VERSION} this release supports; "
-            f"it was written by a newer JustUp. Start that release again or restore a backup made with this one. "
-            + _SAFE_HINT,
+            f"start the matching release or restore a compatible backup. {_SAFE_HINT}",
             kind=SCHEMA_FUTURE,
             version=version,
         )
-    elif version < SCHEMA_VERSION:
-        if _missing_migrations(version):
-            raise IncompatibleSchemaError(
-                f"{where}: its schema version is {version}, but this release supports {SCHEMA_VERSION} and has no "
-                f"complete migration path from {version}. {_SAFE_HINT}",
-                kind=SCHEMA_NO_MIGRATION_PATH,
-                version=version,
-            )
-    elif diffs := _diff_layout((tables, indexes), _expected_layout()):
-        raise _drift_error(conn, version, diffs)
     return version
 
 
 def _missing_migrations(current: int) -> bool:
-    """True if MIGRATIONS has no contiguous chain from *current* + 1 up to SCHEMA_VERSION."""
+    """Whether a version has no complete path to the current baseline."""
+    if current == LEGACY_SCHEMA_VERSION:
+        return False
+    if current > SCHEMA_VERSION:
+        return True
     chain = sorted(m.version for m in MIGRATIONS if m.version > current)
     return chain != list(range(current + 1, SCHEMA_VERSION + 1))
 
 
+def _pending_migrations(current: int) -> list[Migration]:
+    """Migrations that lead from a stored version to SCHEMA_VERSION (the legacy stamp starts at version 1)."""
+    if current == 0:
+        return []
+    start = 1 if current == LEGACY_SCHEMA_VERSION else current
+    return [
+        m for m in sorted(MIGRATIONS, key=lambda migration: migration.version) if start < m.version <= SCHEMA_VERSION
+    ]
+
+
 def init_schema(conn: sqlite3.Connection) -> None:
-    """Create the schema on a new database, or accept (and upgrade) a compatible one.
+    """Create the baseline or validate, migrate and stamp a supported database.
 
-    The compatibility check runs first and writes nothing, so an incompatible file stays byte-identical.
-    Migrations and the final layout validation share one immediate transaction: any failure rolls
-    schema changes and user_version back together. Each applied migration is logged once.
-
-    Raises:
-        IncompatibleSchemaError: see check_schema_compatibility(); also ``kind`` migration_failed
-            or schema_drift when an upgrade was rolled back.
+    The layout check precedes writes. Schema creation, migrations, and the version stamp share an immediate
+    transaction, so a failure leaves existing data and version unchanged. The version is read again under the
+    write lock: a second process that started at the same time finds the finished database and does nothing.
     """
     current = check_schema_compatibility(conn)
     if current == 0:
-        # Only effective before the first table exists; existing files are never converted (needs a VACUUM).
         conn.execute("PRAGMA auto_vacuum=INCREMENTAL")
     elif int(conn.execute("PRAGMA auto_vacuum").fetchone()[0]) == 0:
         _log.info("Database has auto_vacuum=0; free pages are not returned incrementally (no automatic VACUUM)")
-    ensure_wal_mode(conn)  # journal_mode cannot change inside the transaction below
-    pending = [m for m in sorted(MIGRATIONS, key=lambda m: m.version) if m.version > current]
-    rebuild = any(m.version == 4 for m in pending)
-    foreign_keys = int(conn.execute("PRAGMA foreign_keys").fetchone()[0])
-    if rebuild:
-        if conn.in_transaction:
-            raise sqlite3.OperationalError("Dashboard layout migration requires an outermost transaction")
-        if foreign_keys:
-            conn.execute("PRAGMA foreign_keys = OFF")
+    ensure_wal_mode(conn)
+    pending = _pending_migrations(current)
+    restore_foreign_keys = _disable_foreign_keys_for(conn, pending, current)
     step: Migration | None = None
     try:
         with transaction(conn, immediate=True):
+            # Re-check under the write lock: another process may have migrated since the first check, which
+            # would otherwise be reported as drift or migrated a second time.
+            locked = check_schema_compatibility(conn)
+            if locked != current:
+                _log.info("Schema changed from version %d to %d while waiting for the write lock", current, locked)
+                current, pending = locked, _pending_migrations(locked)
+                if any(m.foreign_keys_off for m in pending) and int(conn.execute("PRAGMA foreign_keys").fetchone()[0]):
+                    raise IncompatibleSchemaError(
+                        f"Cannot use database {_database_file(conn)}: the schema changed while starting and needs a "
+                        f"restart to migrate with foreign keys disabled. {_SAFE_HINT}",
+                        kind=SCHEMA_MIGRATION_FAILED,
+                        version=current,
+                    )
             if current == 0:
                 _create_baseline_schema(conn)
+            else:
+                _ensure_unique_recipient_phone(conn)
             for step in pending:
                 step.apply(conn)
-                if step.version == 4 and (violations := conn.execute("PRAGMA foreign_key_check").fetchall()):
-                    raise sqlite3.IntegrityError(f"Foreign-key violations after dashboard migration: {violations[:3]}")
             step = None
+            if current != 0:
+                _ensure_recipient_triggers(conn)
+                healed = ensure_user_recipients(conn)
+                if healed and current == SCHEMA_VERSION:
+                    _log.warning(
+                        "Created a missing recipient for %d user(s); the database was changed directly", healed
+                    )
             if current != SCHEMA_VERSION:
                 if diffs := _layout_problems(conn):
                     raise _drift_error(conn, current, diffs)
                 conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-            elif current:
-                _ensure_unique_recipient_phone(conn)
     except Exception as exc:
         if step is not None:
             _log.error(
-                "Schema migration %d -> %d (%s): failed and rolled back, database stays at schema version %d: %s",
+                "Schema migration %d -> %d (%s) failed and rolled back: %s",
                 step.version - 1,
                 step.version,
                 step.description,
-                current,
                 exc,
             )
             raise IncompatibleSchemaError(
-                f"Cannot use database {_database_file(conn)}: schema migration {step.version - 1} -> {step.version} "
-                f"({step.description}) failed and was rolled back; the database is unchanged at schema version "
-                f"{current}: {type(exc).__name__}: {exc}. {_SAFE_HINT}",
+                f"Cannot use database {_database_file(conn)}: schema migration {step.version - 1} -> "
+                f"{step.version} ({step.description}) failed and was rolled back: {type(exc).__name__}: {exc}. "
+                + _SAFE_HINT,
                 kind=SCHEMA_MIGRATION_FAILED,
                 version=current,
             ) from exc
-        if pending and isinstance(exc, IncompatibleSchemaError):
-            _log.error(
-                "Schema migration %d -> %d: rolled back, the migrated layout is invalid: %s",
-                current,
-                SCHEMA_VERSION,
-                exc,
-            )
         raise
     finally:
-        if rebuild and foreign_keys:
-            conn.execute("PRAGMA foreign_keys = ON")
-    for migration in pending if current else ():
+        if restore_foreign_keys:
+            conn.execute("PRAGMA foreign_keys=ON")
+    for migration in pending:
         _log.info("Schema migration %d -> %d (%s): ok", migration.version - 1, migration.version, migration.description)
-    # After index/schema changes: refresh planner statistics where stale (cheap, outside the transaction).
+    if current == LEGACY_SCHEMA_VERSION:
+        _log.info("Schema baseline reset %d -> %d: ok", current, SCHEMA_VERSION)
     conn.execute("PRAGMA optimize")
+
+
+def _disable_foreign_keys_for(conn: sqlite3.Connection, pending: list[Migration], current: int) -> bool:
+    """Switch foreign keys off when a pending migration rebuilds tables; True if init_schema must restore them.
+
+    The pragma is a no-op inside a transaction, so its effect is read back and the start is refused before
+    anything is written. Without this a DROP TABLE would cascade-delete rows of referencing tables.
+    """
+    if not any(m.foreign_keys_off for m in pending):
+        return False
+    was_on = int(conn.execute("PRAGMA foreign_keys").fetchone()[0]) == 1
+    if not was_on:
+        return False
+    conn.execute("PRAGMA foreign_keys=OFF")
+    if int(conn.execute("PRAGMA foreign_keys").fetchone()[0]) != 0:
+        raise IncompatibleSchemaError(
+            f"Cannot use database {_database_file(conn)}: foreign keys could not be disabled for the schema "
+            f"migration (is a transaction open on this connection?). The file was not modified. " + _SAFE_HINT,
+            kind=SCHEMA_MIGRATION_FAILED,
+            version=current,
+        )
+    return True

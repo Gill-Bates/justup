@@ -13,10 +13,13 @@ import sqlite3
 from datetime import datetime, timedelta
 from typing import Any
 
-from ...utils.time import ensure_utc, utcnow
+from ...utils.time import elapsed_seconds, ensure_utc, utcnow
 from .connection import transaction
 
-# ─── Alerts (Downtime Events) ───────────────────────────────────────────────
+
+def _duration_seconds(started_at: datetime, ended_at: datetime) -> int:
+    """Whole seconds between two timestamps, truncated toward zero."""
+    return elapsed_seconds(started_at, ended_at)
 
 
 def create_alert(
@@ -128,22 +131,21 @@ def record_alert_dispatch_attempt(
         )
 
 
+# Outbox rows whose alert was removed by a cascade can never be dispatched; they must not count as pending.
+_DISPATCHABLE_SQL = "status = 'pending' AND alert_id IN (SELECT id FROM alerts)"
+
+
 def list_pending_alert_dispatches(conn: sqlite3.Connection, *, limit: int = 100) -> list[sqlite3.Row]:
-    return list(
-        conn.execute(
-            """
-            SELECT * FROM alert_dispatch_outbox
-            WHERE status = 'pending' AND next_attempt_at <= ?
-            ORDER BY created_at, id
-            LIMIT ?
-            """,
-            (utcnow(), limit),
-        ).fetchall()
+    sql = (
+        "SELECT * FROM alert_dispatch_outbox WHERE " + _DISPATCHABLE_SQL + " AND next_attempt_at <= ? "  # noqa: S608 - constants only
+        "ORDER BY created_at, id LIMIT ?"
     )
+    return conn.execute(sql, (utcnow(), limit)).fetchall()
 
 
 def has_pending_alert_dispatches(conn: sqlite3.Connection) -> bool:
-    return conn.execute("SELECT 1 FROM alert_dispatch_outbox WHERE status = 'pending' LIMIT 1").fetchone() is not None
+    sql = "SELECT 1 FROM alert_dispatch_outbox WHERE " + _DISPATCHABLE_SQL + " LIMIT 1"  # noqa: S608 - constants only
+    return conn.execute(sql).fetchone() is not None
 
 
 def resolve_alert(
@@ -160,7 +162,7 @@ def resolve_alert(
             "SELECT started_at, target_id, target_name, failed_service FROM alerts WHERE id = ?", (alert_id,)
         ).fetchone()
         if row:
-            duration_seconds = int((ended_at - row["started_at"]).total_seconds())
+            duration_seconds = _duration_seconds(row["started_at"], ended_at)
             conn.execute(
                 """
                 UPDATE alerts SET
@@ -232,7 +234,7 @@ def acknowledge_alert(
         row = conn.execute("SELECT started_at FROM alerts WHERE id = ?", (alert_id,)).fetchone()
         duration_seconds = None
         if row:
-            duration_seconds = int((now - row["started_at"]).total_seconds())
+            duration_seconds = _duration_seconds(row["started_at"], now)
 
         cur = conn.execute(
             """
@@ -258,26 +260,27 @@ def acknowledge_all_open_alerts(
 ) -> int:
     """Acknowledge (close) all open alerts and return number of updated rows."""
     now = utcnow()
-    with transaction(conn):
-        cur = conn.execute(
+    with transaction(conn, immediate=True):
+        rows = conn.execute(
+            "SELECT id, started_at FROM alerts WHERE status = 'open' AND is_acknowledged = 0"
+        ).fetchall()
+        # Durations are computed in Python so all paths share one truncation rule.
+        conn.executemany(
             """
             UPDATE alerts SET
                 status = 'resolved',
                 active_incident = 0,
                 ended_at = COALESCE(ended_at, ?),
-                duration_seconds = COALESCE(
-                    duration_seconds,
-                    CAST((julianday(?) - julianday(started_at)) * 86400 AS INTEGER)
-                ),
+                duration_seconds = COALESCE(duration_seconds, ?),
                 is_acknowledged = 1,
                 acknowledged_by = ?,
                 acknowledged_at = ?,
                 updated_at = ?
-            WHERE status = 'open' AND is_acknowledged = 0
+            WHERE id = ?
             """,
-            (now, now, acknowledged_by, now, now),
+            [(now, _duration_seconds(r["started_at"], now), acknowledged_by, now, now, r["id"]) for r in rows],
         )
-        return cur.rowcount
+        return len(rows)
 
 
 def list_alerts(
@@ -330,7 +333,7 @@ def list_alerts(
         params_with_pagination,
     ).fetchall()
 
-    return list(rows), total
+    return rows, total
 
 
 def summarize_alerts(
@@ -379,23 +382,22 @@ def get_alerts_for_target_in_range(
     to_date = ensure_utc(to_date)
     if from_date >= to_date:
         return []
-    return list(
-        conn.execute(
-            """
+    return conn.execute(
+        """
         SELECT * FROM alerts
         WHERE target_id = ?
             AND started_at < ?
             AND (ended_at IS NULL OR ended_at > ?)
         ORDER BY started_at ASC
         """,
-            (target_id, to_date, from_date),
-        ).fetchall()
-    )
+        (target_id, to_date, from_date),
+    ).fetchall()
 
 
 def delete_all_alerts(conn: sqlite3.Connection) -> int:
     """Delete all alerts from the database. Returns the number of deleted rows."""
     with transaction(conn):
+        conn.execute("DELETE FROM alert_dispatch_outbox")
         cur = conn.execute("DELETE FROM alerts")
         return cur.rowcount
 
@@ -403,5 +405,6 @@ def delete_all_alerts(conn: sqlite3.Connection) -> int:
 def delete_alerts_by_target(conn: sqlite3.Connection, target_id: int) -> int:
     """Delete all alerts (open and closed) for a specific target. Returns the number of deleted rows."""
     with transaction(conn):
+        conn.execute("DELETE FROM alert_dispatch_outbox WHERE target_id = ?", (target_id,))
         cur = conn.execute("DELETE FROM alerts WHERE target_id = ?", (target_id,))
         return cur.rowcount

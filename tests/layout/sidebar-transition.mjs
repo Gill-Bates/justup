@@ -218,23 +218,49 @@ async function matrix(page) {
   return checks;
 }
 
+const contrast = (a, b) => {
+  const lum = (value) => {
+    const [r, g, bl] = /rgba?\(([^)]+)\)/.exec(value)[1].split(/[ ,/]+/).filter(Boolean).slice(0, 3).map((n) => {
+      const c = Number(n) / 255;
+      return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * r + 0.7152 * g + 0.0722 * bl;
+  };
+  const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x);
+  return (hi + 0.05) / (lo + 0.05);
+};
 async function focusRing(page) {
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.setContent(PAGE, { waitUntil: "load" });
   await page.locator("#sidebar-collapse").click();
   await settle(page);
-  for (const id of ["nav-dashboard", "nav-manage", "nav-target"]) {
-    await page.focus(`#${id}`);
-    await page.keyboard.press("Shift+Tab");
-    await page.keyboard.press("Tab");
-    const ring = await page.evaluate((target) => {
-      const el = document.getElementById(target);
-      const cs = getComputedStyle(el);
-      const r = el.getBoundingClientRect();
-      const sr = document.getElementById("app-sidebar").getBoundingClientRect();
-      return { active: document.activeElement === el, width: parseFloat(cs.outlineWidth), style: cs.outlineStyle, inside: r.left >= sr.left && r.right <= sr.right };
-    }, id);
-    assert.ok(ring.active && ring.style !== "none" && ring.width > 0 && ring.inside, `${id}: focus indicator is not visible inside the rail`);
+  for (const theme of ["light", "dark"]) {
+    await page.evaluate((t) => document.documentElement.setAttribute("data-bs-theme", t), theme);
+    for (const id of ["nav-dashboard", "nav-manage", "nav-target"]) {
+      await page.focus(`#${id}`);
+      await page.keyboard.press("Shift+Tab");
+      await page.keyboard.press("Tab");
+      const ring = await page.evaluate((target) => {
+        const el = document.getElementById(target);
+        const cs = getComputedStyle(el);
+        const r = el.getBoundingClientRect();
+        const sr = document.getElementById("app-sidebar").getBoundingClientRect();
+        const probe = document.createElement("i");
+        probe.style.cssText = "color:var(--ju-sidebar-ring);background:var(--ju-sidebar-bg);display:block;width:var(--ju-focus-outline-width)";
+        document.body.append(probe);
+        const token = getComputedStyle(probe);
+        const tokens = { ring: token.color, bg: token.backgroundColor, width: probe.getBoundingClientRect().width };
+        probe.remove();
+        const bgOf = getComputedStyle(document.getElementById("app-sidebar")).backgroundColor;
+        return { active: document.activeElement === el, width: parseFloat(cs.outlineWidth), style: cs.outlineStyle, color: cs.outlineColor, offset: parseFloat(cs.outlineOffset), bg: bgOf, tokens, inside: r.left >= sr.left && r.right <= sr.right };
+      }, id);
+      assert.ok(ring.active && ring.style !== "none" && ring.width > 0 && ring.inside, `${theme} ${id}: focus indicator is not visible inside the rail`);
+      // DC-EX-FOCUS-2: the ring reads --ju-sidebar-ring, keeps the shared width, uses the V3 inset offset and reaches 3:1 on the sidebar.
+      assert.equal(ring.color, ring.tokens.ring, `${theme} ${id}: ring colour is not --ju-sidebar-ring`);
+      assert.equal(ring.width, ring.tokens.width, `${theme} ${id}: ring width is not --ju-focus-outline-width`);
+      assert.equal(ring.offset, -ring.tokens.width, `${theme} ${id}: ring offset is not the V3 inset`);
+      assert.ok(contrast(ring.color, ring.bg) >= 3, `${theme} ${id}: ring ${ring.color} on ${ring.bg} is below 3:1`);
+    }
   }
   await page.focus("#sidebar-collapse");
   const toggleRing = await page.evaluate(() => { const cs = getComputedStyle(document.getElementById("sidebar-collapse")); return cs.outlineStyle !== "none" && parseFloat(cs.outlineWidth) > 0; });
@@ -247,6 +273,38 @@ async function focusRing(page) {
   await page.click("#nav-manage");
   assert.equal(await page.getAttribute("#nav-manage", "aria-expanded"), "false");
   assert.equal(await page.isVisible("#nav-target"), false);
+}
+
+// DC-A11Y-1: the sidebar accent (active marker and icon, an indicator) reaches 3:1 on the sidebar surface; the link colour
+// (text) reaches 4.5:1 on the panel and page surfaces. Both are read from the computed tokens in each theme.
+async function accentContrast(page) {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.setContent(PAGE, { waitUntil: "load" });
+  for (const theme of ["light", "dark"]) {
+    await page.evaluate((t) => document.documentElement.setAttribute("data-bs-theme", t), theme);
+    const colours = await page.evaluate(() => {
+      const read = (color, background) => {
+        const probe = document.createElement("i");
+        probe.style.cssText = `color:${color};background:${background};display:block`;
+        document.body.append(probe);
+        const cs = getComputedStyle(probe);
+        const out = { color: cs.color, background: cs.backgroundColor };
+        probe.remove();
+        return out;
+      };
+      return {
+        accent: read("var(--ju-sidebar-accent)", "var(--ju-sidebar-bg)"),
+        linkPanel: read("var(--bs-link-color)", "var(--ju-panel-bg)"),
+        linkPage: read("var(--bs-link-color)", "var(--bs-body-bg)"),
+      };
+    });
+    const accent = contrast(colours.accent.color, colours.accent.background);
+    assert.ok(accent >= 3, `${theme}: sidebar accent ${colours.accent.color} on ${colours.accent.background} is ${accent.toFixed(2)}:1, below 3:1`);
+    for (const surface of ["linkPanel", "linkPage"]) {
+      const ratio = contrast(colours[surface].color, colours[surface].background);
+      assert.ok(ratio >= 4.5, `${theme}: link ${colours[surface].color} on ${colours[surface].background} (${surface}) is ${ratio.toFixed(2)}:1, below 4.5:1`);
+    }
+  }
 }
 
 async function mobile(page) {
@@ -271,4 +329,4 @@ async function mobile(page) {
   assert.equal(await handle.getAttribute("aria-expanded"), "false", "mobile handle closes the drawer");
 }
 
-export { assertExpanded, focusRing, matrix, mobile, transition };
+export { accentContrast, assertExpanded, focusRing, matrix, mobile, transition };

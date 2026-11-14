@@ -159,12 +159,7 @@ def test_accepted_handoff_is_sent_and_never_claims_delivery(db_path, clock, rela
     _tick(db_path, clock, email=r.email)
     assert _row(db_path, qid)[0] == "sent"
     assert r.accepted == 1
-    rows = _inbox(db_path, "delivery.email.sent")
-    assert len(rows) == 1
-    text = f"{rows[0][2]} {rows[0][3]}".lower()
-    assert "accepted by the smtp server" in text or "accepted by smtp server" in text
-    assert "not verifiable" in text
-    assert "delivered" not in text
+    assert _inbox(db_path, "delivery.%") == []  # a successful regular hand-off is silent
 
 
 def test_recipient_rejected_with_550_fails_once_with_one_admin_alert(db_path, clock, relay):
@@ -555,5 +550,25 @@ def test_signal_failure_is_reported_per_message_without_an_aggregated_incident(d
     assert "SMTP" not in f"{failed[2]} {failed[3]}"
     ok = _sig(sp)
     sp.mark_sent(ok)
-    assert len(_inbox(db_path, "delivery.signal.sent")) == 1
+    assert _inbox(db_path, "delivery.signal.sent") == []  # success of a regular send is silent
     assert _inbox(db_path, "incident.%") == []
+
+
+def test_test_mail_success_is_reported_without_claiming_delivery(db_path, clock, relay):
+    r = relay("accept")
+    qid = _spooler(db_path).enqueue(
+        "test",
+        "email",
+        0,
+        "T",
+        "r@example.com",
+        {"subject": "s", "text_body": "t", "html_body": "<p>t</p>"},
+        immediate=True,
+    )
+    _tick(db_path, clock, email=r.email)
+    assert _row(db_path, qid)[0] == "sent"
+    (row,) = _inbox(db_path, "delivery.%")
+    assert (row[0], row[1]) == ("delivery.email.sent", "success")
+    text = f"{row[2]} {row[3]}".lower()
+    assert "accepted by" in text and "not verifiable" in text and "delivered" not in text
+    assert "r@example.com" not in text

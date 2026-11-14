@@ -174,6 +174,8 @@ class TestMaintenanceState:
         entered = threading.Event()
         release = threading.Event()
         instance = MonitorScheduler.__new__(MonitorScheduler)
+        # Thread-call epoch state normally set by __init__.
+        MonitorScheduler._init_thread_call_state(instance)
         instance._last_quality_probe_at = None
         instance._quality_state = scheduler_module.QualityState.OK
         instance._connectivity_ok = True

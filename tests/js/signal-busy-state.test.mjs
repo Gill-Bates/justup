@@ -9,14 +9,17 @@ function makeEl() {
   return {
     style: {}, className: "", innerHTML: "", textContent: "", value: "", disabled: false, checked: false,
     dataset: {},
-    classList: { add() {}, remove() {}, contains: () => false },
+    classList: { add() {}, remove() {}, toggle() {}, contains: () => false },
     children: [],
     replaceChildren() { this.children = []; this.innerHTML = ""; },
     append(...n) { this.children.push(...n); },
     appendChild(n) { this.children.push(n); },
     querySelector: () => null,
     querySelectorAll: () => [],
-    setAttribute() {}, removeAttribute() {}, addEventListener() {}, focus() {},
+    closest: () => null,
+    addEventListener() {},
+    removeEventListener() {},
+    setAttribute() {}, removeAttribute() {}, focus() {},
   };
 }
 const els = {};
@@ -27,7 +30,9 @@ globalThis.document = {
   querySelectorAll: () => [],
   addEventListener() {},
 };
+const document = globalThis.document;
 globalThis.window = globalThis;
+globalThis.JuStatusDot = { html: () => '<span></span>' };
 globalThis.justUpToast = { success() {}, error() {}, warning() {}, info() {} };
 let respond;
 globalThis.window.apiFetch = async (url, opts = {}) => respond(url, opts);
@@ -36,7 +41,7 @@ const registration = await import("../../app/static/js/settings.signal-registrat
 const actions = await import("../../app/static/js/settings.signal-actions.js");
 const BUTTON_IDS = [
   "signal-link-confirm-btn", "signal-register-btn", "signal-verify-btn",
-  "confirm-unlink-device-btn", "confirm-unregister-phone-btn", "send-test-btn",
+  "confirm-unlink-device-btn", "confirm-unregister-phone-btn", "send-signal-test-btn",
 ];
 const buttons = () => BUTTON_IDS.map(id => document.getElementById(id));
 const json = (status, body) => ({ ok: status < 400, status, json: async () => body, text: async () => JSON.stringify(body) });
@@ -70,8 +75,10 @@ for (const [name, handler] of [
   test(`registration (${name}) leaves the action buttons usable`, async () => {
     reset();
     document.getElementById("signal-register-number").value = "+491701234567";
-    respond = handler;
+    let requests = 0;
+    respond = () => { requests += 1; return handler(); };
     await registration.signalRegister();
+    assert.equal(requests, 1, "the request must actually be sent");
     assert.ok(buttons().every(b => !b.disabled));
   });
 }
@@ -80,8 +87,13 @@ test("verify leaves the action buttons usable after success and failure", async 
   document.getElementById("signal-register-number").value = "+491701234567";
   document.getElementById("signal-verify-code").value = "123456";
   for (const r of [json(400, { detail: "bad code" }), json(200, {})]) {
-    respond = () => r;
+    const requests = [];
+    const refreshes = [];
+    registration.setStatusLoader(options => refreshes.push(options));
+    respond = url => { requests.push(url); return r; };
     await registration.signalVerify();
+    assert.equal(requests[0], core.SIGNAL_API.verify);
+    assert.deepEqual(refreshes, r.ok ? [{ forceRefresh: true }] : []);
     assert.ok(buttons().every(b => !b.disabled));
   }
 });
@@ -98,8 +110,36 @@ test("unregister leaves the action buttons usable after success and failure", as
   reset();
   document.getElementById("unregister-phone-password").value = "pw";
   for (const r of [json(401, { detail: "Invalid password" }), json(200, {})]) {
-    respond = () => r;
+    const requests = [];
+    respond = url => { requests.push(url); return r; };
     await actions.unregisterPhone();
+    assert.deepEqual(requests, r.ok
+      ? [core.SIGNAL_API.unregister, `${core.SIGNAL_API.status}?refresh=true`]
+      : [core.SIGNAL_API.unregister]);
     assert.ok(buttons().every(b => !b.disabled));
+  }
+});
+
+test("reinitializing Signal keeps one delegated action and restores mode selection", async () => {
+  const clicks = [];
+  document.getElementById("signal_enabled").checked = false;
+  const addEventListener = document.addEventListener;
+  document.addEventListener = (type, listener) => {
+    if (type === 'click') clicks.push(listener);
+  };
+  try {
+    await actions.initSignal();
+    await actions.initSignal();
+    assert.equal(clicks.length, 1);
+
+    const mode = document.getElementById('signal-mode-selection');
+    mode.hidden = false;
+    clicks[0]({ target: { closest: () => ({ disabled: false, dataset: { signalAction: 'select-mode', mode: 'link' } }) } });
+    assert.equal(mode.hidden, true);
+    registration.signalBackToModeSelection();
+    assert.equal(mode.hidden, false);
+  } finally {
+    document.addEventListener = addEventListener;
+    actions.cleanupSignal();
   }
 });

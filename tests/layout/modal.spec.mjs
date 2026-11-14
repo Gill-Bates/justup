@@ -8,8 +8,9 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { test as base } from "@playwright/test";
-import { startStaticAppServer } from "./test-support.mjs";
+import { expect, test as base } from "@playwright/test";
+import { test as appTest } from "./fixtures.mjs";
+import { applyTextEnlargement, recipientScripts, startStaticAppServer } from "./test-support.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const MODALS = path.join(ROOT, "app", "templates", "settings", "modals.html");
@@ -19,7 +20,7 @@ const PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <link rel="stylesheet" href="/static/css/bootstrap.min.css"><link rel="stylesheet" href="/static/css/ui.css">
 </head><body><button type="button" id="opener">Open</button>
 ${readFileSync(MODALS, "utf8")}
-<script src="/static/js/utils/csrf.js"></script><script src="/static/js/utils/escape.js"></script><script src="/static/js/bootstrap.bundle.min.js"></script><script src="/static/js/utils/modal-focus.js"></script><script src="/static/js/utils/field-errors.js"></script><script src="/static/js/utils/optional-groups.js"></script><script src="/static/js/utils/confirm-dialog.js"></script><script src="/static/js/app.js"></script><script src="/static/js/settings.recipients.js"></script></body></html>`;
+${recipientScripts().map((src) => `<script src="/static/js/${src}"></script>`).join("")}</body></html>`;
 
 const test = base.extend({
 	modalBase: [async ({}, use) => {
@@ -222,7 +223,7 @@ test("confirmAction keyboard behavior and concurrency @modal", async ({ page, br
 		if (!(await focusIsOpener())) fail("focus not returned to the opener after Confirm");
 		await ask(); await shown();
 		await page.dblclick("#ju-confirm-ok");
-		if (!(await gone()) || !(await result(true))) fail("double click on Confirm did not resolve exactly one true");
+		if (!(await gone()) || !(await result(true))) fail("double click on Confirm did not resolve true");
 	}
 	// Concurrent confirmAction calls: the second is rejected with false and leaves the active dialog fully usable.
 	{
@@ -336,3 +337,194 @@ test("confirmAction keyboard behavior and concurrency @modal", async ({ page, br
 	assert.ok(checked > 0, "expected modal browser checks");
 	assert.deepEqual(findings, [], findings.join("\n"));
 });
+
+// DC-SCROLL-6: Bootstrap locks <body>, which is not the scroller in the app shell, so the observable lock on <main> is
+// asserted with real gestures. A positive control proves the gesture scrolls <main> without a dialog.
+// N35: the lock holds on every page family that owns a modal: Groups, Settings and the Dashboard.
+appTest.describe("open dialog locks the main scroll region @modal", () => {
+	// The Dashboard modal fills its list when its own button opens it, so that page is opened through that button.
+	const ROUTES = [{ route: "/ui/groups" }, { route: "/ui/settings" }, { route: "/", opener: '[data-bs-target="#dashboard-widgets-modal"]' }];
+	for (const [{ route, opener }, width, height] of ROUTES.flatMap((r) => [[r, 390, 844], [r, 1280, 720]])) {
+		appTest(`${route} ${width}x${height}`, async ({ browser, browserName, app, adminState }) => {
+			const context = await browser.newContext({ viewport: { width, height }, hasTouch: width < 500, storageState: adminState });
+			const page = await context.newPage();
+			try {
+				await page.goto(app.base + route, { waitUntil: "load" });
+				const frames = (count) => page.evaluate((n) => new Promise((resolve) => {
+					const step = (left) => (left ? requestAnimationFrame(() => step(left - 1)) : resolve());
+					step(n);
+				}), count);
+				const mainTop = () => page.evaluate(() => document.getElementById("main-content").scrollTop);
+				await page.evaluate(() => {
+					const main = document.getElementById("main-content");
+					const filler = document.createElement("div");
+					filler.style.height = "4000px";
+					main.append(filler);
+					main.scrollTop = 300;
+				});
+				// Widget bodies are level-2 scroll regions with `overscroll-behavior: contain` (DC-SCROLL-4): a wheel over one never
+				// reaches <main>, so the control gesture needs a point whose first scroll container is <main> itself.
+				const point = await page.evaluate(() => {
+					const main = document.getElementById("main-content");
+					const box = main.getBoundingClientRect();
+					const scrollable = (el) => /(auto|scroll)/.test(getComputedStyle(el).overflowY);
+					for (let y = box.top + 24; y < Math.min(box.bottom, innerHeight) - 24; y += 24) {
+						for (let x = box.left + 8; x < box.right - 8; x += 24) {
+							let el = document.elementFromPoint(x, y);
+							if (!el || !main.contains(el)) continue;
+							while (el !== main && !scrollable(el)) el = el.parentElement;
+							if (el === main) return { x, y };
+						}
+					}
+					return null;
+				});
+				assert.ok(point, "a point whose scroll container is <main> exists");
+				await page.mouse.move(point.x, point.y);
+				await page.mouse.wheel(0, 200);
+				await expect.poll(mainTop, { message: "control: wheel scrolls <main> without a dialog" }).toBeGreaterThan(300);
+				await page.evaluate(() => { document.getElementById("main-content").scrollTop = 300; });
+				// shown.bs.modal marks the end of the show transition; Bootstrap ignores Escape/hide() until then.
+				const id = await page.evaluate((selector) => new Promise((resolve) => {
+					const button = selector ? document.querySelector(selector) : null;
+					const modal = button ? document.querySelector(button.dataset.bsTarget) : [...document.querySelectorAll(".modal")].find((m) => m.querySelector("input,button"));
+					modal.addEventListener("shown.bs.modal", () => resolve(modal.id), { once: true });
+					if (button) button.click();
+					else window.bootstrap.Modal.getOrCreateInstance(modal).show();
+				}), opener ?? null);
+				await page.waitForFunction((i) => document.getElementById(i).classList.contains("show") && !document.querySelector(".modal-backdrop.fade:not(.show)"), id);
+				const box = await page.locator(`#${id} .modal-content`).boundingBox();
+				await page.mouse.move(3, 3);
+				await page.mouse.wheel(0, 500);
+				await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+				await page.mouse.wheel(0, 3000);
+				// Keys act on the dialog itself: on a focused control Space would activate it instead of scrolling.
+				await page.evaluate((i) => document.getElementById(i).focus(), id);
+				for (const key of ["PageDown", "Space", "ArrowDown", "End"]) await page.keyboard.press(key);
+				if (browserName === "chromium" && width < 500) {
+					const cdp = await context.newCDPSession(page);
+					for (const x of [width / 2, 5]) {
+						await cdp.send("Input.synthesizeScrollGesture", { x, y: height / 2, yDistance: -400, gestureSourceType: "touch", speed: 800 });
+					}
+				}
+				await frames(6);
+				assert.equal(await mainTop(), 300, "<main> scrolled behind the open dialog");
+				await page.keyboard.press("Escape");
+				await page.waitForFunction(() => !document.body.classList.contains("modal-open"));
+				assert.equal(await mainTop(), 300, "closing the dialog changed the scroll position of <main>");
+			} finally {
+				await context.close();
+			}
+		});
+	}
+});
+// DC-MODAL-8: vertical rhythm. A visible label sits above its control, help and error text directly below it, `form-control-sm` is not mixed with
+// regular controls in one dialog, and the primary action dominates the footer while every secondary action keeps a text label.
+test("modal forms keep one vertical rhythm, one control size and a dominant primary action @modal", async ({ page, modalBase }) => {
+	const findings = [];
+	await page.goto(modalBase);
+	await page.setViewportSize({ width: 1280, height: 900 });
+	const ids = await page.$$eval(".modal.ju-modal--form", (els) => els.map((el) => el.id));
+	assert.ok(ids.length >= 4, `form dialogs found: ${ids.length}`);
+	for (const id of ids) {
+		await open(page, id);
+		const out = await page.evaluate((i) => {
+			const m = document.getElementById(i);
+			const problems = [];
+			const box = (el) => el.getBoundingClientRect();
+			const visible = (el) => el.offsetParent !== null && !el.closest(".d-none, [hidden]");
+			const controls = [...m.querySelectorAll(".modal-body .form-control, .modal-body .form-select")].filter(visible);
+			const small = controls.filter((el) => el.classList.contains("form-control-sm") || el.classList.contains("form-select-sm"));
+			if (small.length && small.length !== controls.length && !m.classList.contains("ju-modal--compact")) problems.push(`mixes ${small.length} small with ${controls.length - small.length} regular controls`);
+			let measured = 0;
+			for (const control of controls) {
+				const label = control.id ? m.querySelector(`label[for="${control.id}"]`) : null;
+				if (label && visible(label) && !label.classList.contains("visually-hidden") && !label.closest(".form-check")) {
+					measured += 1;
+					if (box(label).bottom > box(control).top + 1) problems.push(`label of #${control.id} is not above its control`);
+				}
+				for (const token of (control.getAttribute("aria-describedby") || "").split(/\s+/).filter(Boolean)) {
+					const note = document.getElementById(token);
+					if (!note || !visible(note) || note.classList.contains("visually-hidden")) continue;
+					if (box(note).top < box(control).bottom - 1) problems.push(`help #${token} is not below #${control.id}`);
+					else if (box(note).top - box(control).bottom > 24) problems.push(`help #${token} is not directly below #${control.id} (${Math.round(box(note).top - box(control).bottom)}px gap)`);
+				}
+			}
+			// One gap between the stacked blocks of the form: the vertical distance between siblings is a single value per form.
+			for (const form of m.querySelectorAll(".ju-modal-form")) {
+				const blocks = [...form.children].filter((el) => visible(el) && box(el).height > 0);
+				const gaps = blocks.slice(1).map((el, n) => Math.round(box(el).top - box(blocks[n]).bottom));
+				if (gaps.length > 1 && Math.max(...gaps) - Math.min(...gaps) > 1) problems.push(`form #${form.id}: unequal gaps ${JSON.stringify(gaps)}`);
+				measured += gaps.length;
+			}
+			const buttons = [...m.querySelectorAll(".modal-footer .btn")];
+			const primary = buttons.filter((b) => /\bbtn-(primary|danger|warning)\b/.test(b.className));
+			if (primary.length !== 1) problems.push(`${primary.length} primary actions in the footer`);
+			for (const b of buttons) if (!b.textContent.replace(/\b(check|close|add|save)\b/g, "").trim() && !b.getAttribute("aria-label")) problems.push("a footer action has no text label");
+			for (const b of m.querySelectorAll(".modal-body button.btn")) if (visible(b) && !b.textContent.replace(/[a-z_]+(?=\s|$)/g, (word) => (b.querySelector(".material-icons")?.textContent === word ? "" : word)).trim()) problems.push(`#${b.id || b.className}: a secondary action without a text label`);
+			const secondary = [...m.querySelectorAll(".modal-body button.btn")].filter(visible);
+			for (const b of secondary) if (/\bbtn-primary\b/.test(b.className)) problems.push(`#${b.id}: a body action is styled as the primary action`);
+			if (!measured) problems.push("nothing was measured");
+			return problems;
+		}, id);
+		for (const problem of out) findings.push(`#${id}: ${problem}`);
+		await page.keyboard.press("Escape");
+		await closed(page, id);
+	}
+	assert.deepEqual(findings, [], findings.join("\n"));
+});
+// OR-14 / DC-MEAS-2: the modal checks also run with text enlargement (root font size 200 %) at an unchanged viewport.
+//  - 1280x720: the dialog stays inside the viewport, its body scrolls instead of growing past it, and the title, the close button
+//    and every footer action stay reachable and unclipped (no loss of content or function).
+//  - 390x844: NOT met (measured 2026-11-10, Chromium): the header and the stacked footer outgrow the dialog, so the title is clipped and the
+//    footer actions of every dialog leave the visible dialog (DESIGN.md DC-MEAS-2, open). Only what holds today is asserted there:
+//    the dialog stays inside the viewport, the page does not scroll sideways and the dialog can still be closed.
+for (const [width, height, strict] of [[1280, 720, true], [390, 844, false]]) {
+	test(`modals under 200 % text enlargement at ${width}x${height} ${strict ? "lose no content or action" : "stay inside the viewport and closable"} @modal`, async ({ page, modalBase }) => {
+		const findings = [];
+		await page.setViewportSize({ width, height });
+		await page.goto(modalBase);
+		await applyTextEnlargement(page, 2);
+		const ids = await page.$$eval(".modal", (els) => els.map((el) => el.id));
+		assert.ok(ids.length >= 10, `dialogs found: ${ids.length}`);
+		for (const id of ids) {
+			await open(page, id);
+			const out = await page.evaluate(({ i, strictMode }) => {
+				const m = document.getElementById(i);
+				const problems = [];
+				const box = (el) => el.getBoundingClientRect();
+				const content = m.querySelector(".modal-content");
+				const c = box(content);
+				const de = document.documentElement;
+				if (parseFloat(getComputedStyle(de).fontSize) < 30) problems.push("text enlargement is not active");
+				if (c.left < -1 || c.right > de.clientWidth + 1 || c.top < -1 || c.bottom > innerHeight + 1) problems.push(`dialog exceeds the viewport (${Math.round(c.top)}..${Math.round(c.bottom)} of ${innerHeight})`);
+				if (de.scrollWidth > de.clientWidth + 1) problems.push("the page scrolls sideways");
+				const close = m.querySelector(".btn-close");
+				const cb = box(close);
+				if (cb.width < 24 || cb.height < 24 || cb.top < -1 || cb.bottom > innerHeight + 1 || cb.right > de.clientWidth + 1) problems.push("the close button is not reachable");
+				if (!strictMode) return problems;
+				if (content.scrollWidth > content.clientWidth + 1) problems.push("horizontal overflow");
+				const body = m.querySelector(".modal-body");
+				if (body.scrollHeight > body.clientHeight + 1 && !["auto", "scroll"].includes(getComputedStyle(body).overflowY)) problems.push("the body overflows without scrolling");
+				const title = m.querySelector(".modal-title");
+				if (title.scrollWidth > title.clientWidth + 1) problems.push("the title is clipped");
+				for (const b of m.querySelectorAll(".modal-footer .btn")) {
+					const r = box(b);
+					if (r.top < -1 || r.bottom > innerHeight + 1 || r.right > de.clientWidth + 1 || r.left < -1) problems.push(`footer action "${b.textContent.trim()}" is outside the viewport`);
+					if (b.scrollWidth > b.clientWidth + 1) problems.push(`footer action "${b.textContent.trim()}" is clipped`);
+				}
+				const first = body.querySelector("input:not([type=hidden]):not(.visually-hidden), select, textarea");
+				if (first && body.scrollHeight > body.clientHeight + 1) {
+					first.scrollIntoView({ block: "nearest" });
+					const fr = box(first);
+					const br = box(body);
+					if (fr.bottom < br.top - 1 || fr.top > br.bottom + 1) problems.push("the first field cannot be scrolled into the body");
+				}
+				return problems;
+			}, { i: id, strictMode: strict });
+			for (const problem of out) findings.push(`#${id}: ${problem}`);
+			await page.keyboard.press("Escape");
+			if (!(await closed(page, id))) findings.push(`#${id}: Escape did not close the dialog`);
+		}
+		assert.deepEqual(findings, [], findings.join("\n"));
+	});
+}

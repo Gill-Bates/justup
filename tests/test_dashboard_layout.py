@@ -16,6 +16,7 @@ from tempfile import TemporaryDirectory
 import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
+from starlette.requests import Request
 
 from app.api.dashboard_layout import DASHBOARD_WIDGETS
 from app.db import dashboard_layouts as layouts
@@ -174,7 +175,7 @@ def test_layouts_are_isolated_per_user(env):
 
 def test_admin_widget_is_rejected_and_filtered_after_role_change(env):
     alice = env["alice"]
-    queue = {**_STATUS, "id": "delivery-queue", "h": 3}
+    queue = {**_STATUS, "id": "delivery-queue", "w": 4, "h": 3}
     assert alice.call("PUT", {"version": 2, "widgets": [queue]}).status_code == 403
     connection = sqlite_db.connect(env["app"].state.db_path)
     try:
@@ -193,6 +194,7 @@ def test_admin_widget_is_rejected_and_filtered_after_role_change(env):
         {"version": 2, "widgets": [{**_STATUS, "y": 999, "h": 2}]},  # y + h > 1000
         {"version": 2, "widgets": [{**_STATUS, "x": -1}]},
         {"version": 2, "widgets": [{**_STATUS, "w": 0}]},
+        {"version": 2, "widgets": [{**_STATUS, "w": 1}]},
         {"version": 2, "widgets": [{**_STATUS, "h": 1}]},
         {"version": 2, "widgets": [{**_STATUS, "height_mode": "invalid"}]},
         {"version": 2, "widgets": [{key: value for key, value in _STATUS.items() if key != "height_mode"}]},
@@ -230,8 +232,41 @@ def test_widget_allowlist_matches_client_registry_and_template():
     assert len(re.findall(r'data-widget-id="', template)) == len(DASHBOARD_WIDGETS)
 
 
+def test_rendered_dashboard_widget_ids_match_client_registry_by_role():
+    from app.api.frontend import templates
+
+    registry = (ROOT / "app/static/js/dashboard-widgets.js").read_text(encoding="utf-8")
+    widget_ids = re.findall(r"def\('([a-z-]+)'", registry)
+    admin_only = {match.group(1) for match in re.finditer(r"def\('([a-z-]+)'[^\n]*,\s*true\)", registry)}
+    assert len(widget_ids) == len(set(widget_ids))
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/",
+            "headers": [],
+            "query_string": b"",
+            "server": ("test", 80),
+            "scheme": "http",
+            "client": ("test", 1),
+            "root_path": "",
+        }
+    )
+    marker = "x"
+    request.state.csrf_token = marker
+    for is_admin in (False, True):
+        response = templates.TemplateResponse(
+            request,
+            "dashboard.html",
+            {"active_page": "dashboard", "user": {"is_admin": is_admin}},
+        )
+        rendered_ids = {value.decode() for value in re.findall(rb'data-widget-id="([a-z-]+)"', response.body)}
+        expected = set(widget_ids) - admin_only if not is_admin else set(widget_ids)
+        assert rendered_ids == expected
+
+
 def test_widget_sizes_agree_between_template_registry_and_server():
-    """Registry and server table must carry identical minimums; the template carries defaults only."""
+    """Registry and server table must carry identical minimums; the template carries no geometry."""
     registry = (ROOT / "app/static/js/dashboard-widgets.js").read_text(encoding="utf-8")
     template = (ROOT / "app/templates/dashboard.html").read_text(encoding="utf-8")
     definitions = {
@@ -239,13 +274,12 @@ def test_widget_sizes_agree_between_template_registry_and_server():
         for m in re.finditer(r"def\('([a-z-]+)', '[^']+', (\d+), (\d+), (\d+), (\d+), (\d+), (\d+)", registry)
     }
     assert set(definitions) == set(layouts.DASHBOARD_WIDGET_MIN_SIZES) == DASHBOARD_WIDGETS
-    for wid, (x, y, w, h, min_w, min_h) in definitions.items():
+    for wid, (_x, _y, _w, _h, min_w, min_h) in definitions.items():
         assert layouts.DASHBOARD_WIDGET_MIN_SIZES[wid] == (min_w, min_h), f"{wid}: registry and server minimum differ"
         tile = re.search(rf'<div class="grid-stack-item[^"]*"[^>]*gs-id="{wid}"[^>]*>', template)
         assert tile is not None, wid
         assert "gs-min-" not in tile.group(), f"{wid}: the template must not carry its own minimum"
-        for key, value in {"x": x, "y": y, "w": w, "h": h}.items():
-            assert f'gs-{key}="{value}"' in tile.group(), f"{wid}: template default {key} differs from the registry"
+        assert not re.search(r"gs-[xywh]=", tile.group()), f"{wid}: geometry belongs to the registry only"
 
 
 def test_uptime_summary_excludes_unknown_time_and_disabled_targets(env, monkeypatch):
@@ -265,23 +299,28 @@ def test_uptime_summary_excludes_unknown_time_and_disabled_targets(env, monkeypa
     )
     calls = []
 
+    from app.utils.availability_series import AvailabilitySeries
+
     def availability(_directory, **kwargs):
         calls.append(kwargs)
-        return {
-            "HTTP": [
-                {"ts": (now - timedelta(hours=24)).isoformat(), "up": 1},
-                {"ts": (now - timedelta(hours=12)).isoformat(), "up": None},
-            ]
-        }
+        return AvailabilitySeries.from_points(
+            [
+                {"ts": (now - timedelta(hours=24)).isoformat(), "value": 1},
+                {"ts": (now - timedelta(hours=12)).isoformat(), "value": None},
+            ],
+            kwargs["interval_seconds"],
+        )
 
-    monkeypatch.setattr(api.tsdb_db, "query_availability_series", availability)
+    monkeypatch.setattr(api.tsdb_db, "query_availability_runs", availability)
     alice = env["alice"]
     response = alice.client.get(URL + "/uptime", headers={"Authorization": f"Bearer {alice.token}"})
     assert response.status_code == 200
-    assert response.json() == {"uptime_percent": 100, "coverage_percent": 50}
+    # A sample vouches only for stale_after (3 intervals = 180 s), not for the 12 h until the next one.
+    body = response.json()
+    assert body["uptime_percent"] == 100 and body["coverage_percent"] == pytest.approx(180 / 86400 * 100)
     assert len(calls) == 1
     assert calls[0]["target_id"] == 1
-    assert calls[0]["enabled_services"] == {"HTTP"}
+    assert calls[0]["metrics"] == ("http_up",)
 
 
 def test_uptime_summary_without_measurements_is_unknown(env, monkeypatch):
@@ -292,3 +331,125 @@ def test_uptime_summary_without_measurements_is_unknown(env, monkeypatch):
     response = alice.client.get(URL + "/uptime", headers={"Authorization": f"Bearer {alice.token}"})
     assert response.status_code == 200
     assert response.json() == {"uptime_percent": None, "coverage_percent": 0}
+
+
+def _avail(points, *, stale_after=100.0, minutes=10):
+    from datetime import UTC, datetime, timedelta
+
+    from app.api.dashboard_layout import _availability_seconds
+
+    until = datetime(2026, 1, 1, 12, minutes, tzinfo=UTC)
+    since = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+    return _availability_seconds(
+        [{"ts": (since + timedelta(seconds=s)).isoformat(), "up": up} for s, up in points], since, until, stale_after
+    )
+
+
+def test_availability_gap_longer_than_stale_after_is_unknown_not_carried_forward():
+    # up at 0s, next sample only at 400s: only stale_after (100s) of the gap is known
+    assert _avail([(0, 1), (400, 0)]) == (100.0, 100.0 + 100.0)
+
+
+def test_availability_transition_within_stale_after_uses_the_next_timestamp():
+    assert _avail([(0, 1), (60, 0), (120, 1)], minutes=3) == (60.0 + 60.0, 60.0 + 60.0 + 60.0)
+
+
+def test_availability_invalid_state_and_window_bounds():
+    assert _avail([(0, 2), (30, 1)], stale_after=1000.0, minutes=1) == (30.0, 30.0)
+    assert _avail([(0, 1)], stale_after=1000.0, minutes=1) == (60.0, 60.0)
+    assert _avail([], minutes=1) == (0.0, 0.0)
+
+
+def test_availability_last_point_is_capped_by_stale_after_and_window_start():
+    # last sample vouches for stale_after only, not until the window end
+    assert _avail([(0, 1), (500, 0)], stale_after=100.0) == (100.0, 200.0)
+    # a sample before the window start only counts from `since`
+    assert _avail([(-50, 1)], stale_after=100.0, minutes=10) == (50.0, 50.0)
+
+
+def test_availability_non_monotonic_timestamps_never_yield_negative_time():
+    up, known = _avail([(300, 1), (100, 0), (200, 1)], stale_after=1000.0, minutes=10)
+    assert 0.0 <= up <= known <= 600.0
+
+
+def test_client_layout_bounds_mirror_the_server_model() -> None:
+    # dashboard-grid.js validates stored layouts with the same bounds; a drift makes every save fail with 422.
+    from app.api.dashboard_layout import DASHBOARD_MAX_Y, DashboardWidgetLayout
+
+    source = (Path(__file__).resolve().parents[1] / "app/static/js/dashboard-grid.js").read_text(encoding="utf-8")
+    max_y = re.search(r"const MAX_Y = (\d+);", source)
+    assert max_y and int(max_y.group(1)) == DASHBOARD_MAX_Y
+
+    def bounds(name: str) -> tuple[int, int]:
+        meta = {type(m).__name__: m for m in DashboardWidgetLayout.model_fields[name].metadata}
+        return meta["Ge"].ge, meta["Le"].le
+
+    assert bounds("x") == (0, 11)
+    assert bounds("y") == (0, DASHBOARD_MAX_Y)
+    assert bounds("w") == (1, 12)
+    assert bounds("h") == (1, 100)
+    assert "inRange(saved.x, 11) && inRange(saved.y, MAX_Y)" in source
+    assert "saved.w >= 1 && saved.w <= 12" in source
+    assert "saved.h >= 1 && saved.h <= 100" in source
+    assert "saved.x + saved.w <= 12 && saved.y + saved.h <= MAX_Y" in source
+
+
+def test_separate_overlaps_runs_only_while_normalising_a_loaded_layout() -> None:
+    # DC-GRID-1: after load GridStack owns drag, resize and keyboard move; the client computes no position.
+    source = (Path(__file__).resolve().parents[1] / "app/static/js/dashboard-grid.js").read_text(encoding="utf-8")
+    start = source.index("function mergeWithDefault(")
+    end = source.index("function separateOverlaps(")
+    assert "separateOverlaps(merged)" in source[start:end]
+    outside = source[:start] + source[end + len("function separateOverlaps(") :]
+    assert len(re.findall(r"\bseparateOverlaps\(", outside)) == 0
+    assert len(re.findall(r"\bmergeWithDefault\(", source)) == 2  # definition and the single load call
+    for hook in ("'dragstop'", "'resizestop'", "'change'", "'dragstart'"):
+        handlers = [m.start() for m in re.finditer(r"grid\.on\([^)]*" + hook, source)]
+        for pos in handlers:
+            assert "separateOverlaps" not in source[pos : pos + 600]
+
+
+def test_uptime_summary_combines_all_enabled_checks(env, monkeypatch):
+    """All enabled availability checks are read together, as for the overall status, scheduler and PDF."""
+    from datetime import UTC, datetime
+
+    from app.api import dashboard_layout as api
+    from app.utils.availability_series import AvailabilitySeries
+
+    now = datetime(2026, 11, 1, 12, tzinfo=UTC)
+    monkeypatch.setattr(api, "utcnow", lambda: now)
+    monkeypatch.setattr(
+        api.sqlite_db,
+        "list_targets",
+        lambda _conn: [
+            {
+                "id": 1,
+                "is_enabled": True,
+                "interval_seconds": 60,
+                "enable_http_check": True,
+                "enable_ping": True,
+                "enable_udp_scan": True,
+                "udp_ports": ",",
+            }
+        ],
+    )
+    calls = []
+
+    def availability(_directory, **kwargs):
+        calls.append(kwargs)
+        return AvailabilitySeries()
+
+    monkeypatch.setattr(api.tsdb_db, "query_availability_runs", availability)
+    alice = env["alice"]
+    response = alice.client.get(URL + "/uptime", headers={"Authorization": f"Bearer {alice.token}"})
+    assert response.status_code == 200
+    # udp_ports "," is no usable port, so UDP does not count; HTTP and Ping do.
+    assert calls[0]["metrics"] == ("http_up", "ping_up")
+
+
+@pytest.mark.parametrize("visible", ["false", 0, 1, None])
+def test_storage_rejects_non_bool_visible(conn, visible):
+    user_id, _ = _user(conn, "u")
+    with pytest.raises(ValueError):
+        layouts.set_dashboard_layout(conn, user_id, {"version": 2, "widgets": [{**_STATUS, "visible": visible}]})
+    assert layouts.get_dashboard_layout(conn, user_id) is None

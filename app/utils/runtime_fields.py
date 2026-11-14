@@ -33,6 +33,7 @@ NON_NULL_RUNTIME_KEYS = frozenset(
         SettingKeys.QUALITY_RTT_THRESHOLD_MS,
         SettingKeys.PROVIDER_LOOKUP_ENABLED,
         SettingKeys.ONLINE_GEO_FALLBACK_ENABLED,
+        SettingKeys.PDF_EXPORT_ENABLED,
         SettingKeys.PROVIDER_LOOKUP_CACHE_TTL_SECONDS,
     }
 )
@@ -48,9 +49,14 @@ QUALITY_TARGET_MAX_LENGTH = 300
 _TARGET_RE = re.compile(QUALITY_TARGET_PATTERN)
 
 
+def split_quality_targets(raw: str) -> list[str]:
+    """Split the stored comma-separated target list: trimmed, empty entries dropped, first occurrence kept."""
+    return list(dict.fromkeys(t.strip() for t in raw.split(",") if t.strip()))
+
+
 def validate_quality_targets(raw: str) -> str:
     """Normalise a comma-separated target list; empty means built-in defaults."""
-    items = list(dict.fromkeys(t.strip() for t in raw.split(",") if t.strip()))
+    items = split_quality_targets(raw)
     if not items:
         return ""
     if len(items) < QUALITY_MIN_TARGETS:

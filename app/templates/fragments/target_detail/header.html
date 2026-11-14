@@ -38,17 +38,19 @@
 				<i class="material-icons" aria-hidden="true">edit</i>
 			</a>
 			{% endif %}
+			{% if pdf_export_enabled %}
 			<p class="target-run-again-status" id="pdf-export-status" role="status" aria-live="polite" hidden></p>
 			<button type="button" class="btn btn-outline-secondary btn-icon" id="export-pdf-btn" title="Export PDF report" aria-label="Export PDF report">
 				<i class="material-icons" id="pdf-icon" aria-hidden="true">picture_as_pdf</i>
-				<span class="spinner-border spinner-border-sm d-none" id="pdf-spinner"></span>
+				<span class="spinner-border spinner-border-sm d-none" id="pdf-spinner" aria-hidden="true"></span>
 			</button>
+			{% endif %}
 			{% if user and user.is_admin %}
 			<button type="button" class="btn btn-outline-info btn-icon" id="test-alert-btn"
 				{% if not has_recipients %}disabled{% endif %}
 				title="{% if has_recipients %}Send test alert to all configured recipients{% else %}No recipients configured - add recipients in target settings{% endif %}" aria-label="{% if has_recipients %}Send test alert to all configured recipients{% else %}No recipients configured - add recipients in target settings{% endif %}">
 				<i class="material-icons" id="test-alert-icon" aria-hidden="true">notifications_active</i>
-				<span class="spinner-border spinner-border-sm d-none" id="test-alert-spinner"></span>
+				<span class="spinner-border spinner-border-sm d-none" id="test-alert-spinner" aria-hidden="true"></span>
 			</button>
 			{% endif %}
 			<button type="button" class="btn btn-outline-secondary btn-icon target-run-again" id="traceroute-run-again" hidden
@@ -67,7 +69,8 @@
 				<ul class="dropdown-menu dropdown-menu-end target-detail-more-menu" aria-labelledby="target-more-toggle">
 					<li>
 						<button type="button" class="dropdown-item target-detail-more-item target-detail-more-item--warning" hx-post="/targets/{{ target.id }}/reset"
-							hx-confirm="Reset all metrics for {{ target.name }}?"
+							data-ju-confirm data-confirm-title="Reset metrics" data-confirm-label="Reset metrics"
+							data-confirm-message="All metrics of '{{ target.name }}' are deleted permanently. The target itself stays."
 							hx-swap="none"
 							data-success-toast="Metrics reset"
 							data-success-reload="1"
@@ -79,7 +82,8 @@
 					<li><hr class="dropdown-divider"></li>
 					<li>
 						<button type="button" class="dropdown-item target-detail-more-item target-detail-more-item--danger" hx-delete="/targets/{{ target.id }}"
-							hx-confirm="Really delete this target? All metrics will be removed." hx-swap="none"
+							data-ju-confirm data-confirm-title="Delete target" data-confirm-label="Delete target"
+							data-confirm-message="'{{ target.name }}' and all its metrics are deleted permanently." hx-swap="none"
 							data-success-toast="Target deleted"
 							data-success-redirect="/ui/targets"
 							data-success-delay="500"

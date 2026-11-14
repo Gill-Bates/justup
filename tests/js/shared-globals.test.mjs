@@ -39,6 +39,7 @@ test("apiFetch adds the current CSRF token and same-origin credentials", async (
   }, {
     Headers,
     getCsrfToken: () => "token/value",
+    withCsrf: load("static/js/utils/csrf.js", { cookie: "csrf_token=token%2Fvalue" }, { Headers }).withCsrf,
     fetch: async (...args) => { calls.push(args); return { ok: true }; },
   });
 
@@ -49,6 +50,17 @@ test("apiFetch adds the current CSRF token and same-origin credentials", async (
 
   await w.apiFetch("/explicit", { method: "POST", headers: { "X-CSRF-Token": "caller-token" } });
   assert.equal(calls[1][1].headers.get("X-CSRF-Token"), "caller-token");
+});
+
+test("withCsrf keeps caller headers and credentials, tolerates a missing cookie and always sends on GET", () => {
+  const { withCsrf } = load("static/js/utils/csrf.js", { cookie: "csrf_token=t1" }, { Headers });
+  const get = withCsrf({ method: "GET" });
+  assert.equal(get.headers.get("X-CSRF-Token"), "t1");
+  assert.equal(get.credentials, "same-origin");
+  assert.equal(withCsrf({ credentials: "include" }).credentials, "include");
+  assert.equal(withCsrf().headers.get("X-CSRF-Token"), "t1");
+  const bare = load("static/js/utils/csrf.js", { cookie: "" }, { Headers }).withCsrf({ method: "POST" });
+  assert.equal(bare.headers.has("X-CSRF-Token"), false);
 });
 
 test("escapeHtml and escapeAttr neutralize markup and quotes and tolerate null", () => {
@@ -100,4 +112,13 @@ test("no first-party script redefines the shared helpers differently", () => {
     if (file.startsWith("static/js/utils/")) continue;
     assert.doesNotMatch(read(file), /function\s+getCsrfToken\s*\(/, file);
   }
+});
+
+test("parseUtcTimestamp reads offset-less timestamps as UTC and keeps explicit offsets", () => {
+  const { parseUtcTimestamp } = load("static/js/utils/utc-time.js");
+  const expected = Date.parse("2026-11-01T12:00:00Z");
+  assert.equal(parseUtcTimestamp("2026-11-01 12:00:00"), expected);
+  assert.equal(parseUtcTimestamp("2026-11-01T12:00:00"), expected);
+  assert.equal(parseUtcTimestamp("2026-11-01T14:00:00+02:00"), expected);
+  assert.ok(Number.isNaN(parseUtcTimestamp("garbage")));
 });

@@ -97,14 +97,12 @@ def query_monitor_quality(
     where = " AND ".join(conditions) if conditions else "1=1"
     params.append(limit)
 
-    return list(
-        conn.execute(
-            f"""
+    return conn.execute(
+        f"""
         SELECT * FROM monitor_quality
         WHERE {where}
         ORDER BY ts ASC
         LIMIT ?
         """,  # noqa: S608 - code-built WHERE from fixed clauses, values bound as params
-            params,
-        ).fetchall()
-    )
+        params,
+    ).fetchall()
