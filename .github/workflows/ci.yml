@@ -536,8 +536,8 @@ jobs:
       # the Dockerfile misconfiguration scanner actually analyzed a config.
       - name: Trivy source scan
         env:
-          TRIVY_OUTPUT_FILE: ${{ runner.temp }}/source-trivy.json
-          TRIVY_LOG: ${{ runner.temp }}/source-trivy.log
+          SOURCE_SCAN_REPORT: ${{ runner.temp }}/source-trivy.json
+          SOURCE_SCAN_LOG: ${{ runner.temp }}/source-trivy.log
         run: |
           set -euo pipefail
           scan_status=0
@@ -546,17 +546,17 @@ jobs:
             --scanners secret,misconfig \
             --skip-dirs .git,.venv,venv,__pycache__,data,site,app/static/vendor \
             --format json \
-            --output "$TRIVY_OUTPUT_FILE" \
+            --output "$SOURCE_SCAN_REPORT" \
             --exit-code 1 \
             --severity CRITICAL,HIGH \
             --timeout 5m \
-            --ignorefile .trivyignore.yaml . > "$TRIVY_LOG" 2>&1 || scan_status=$?
-          cat "$TRIVY_LOG"
-          if grep -Eq 'No enabled scanners found|Falling back to embedded checks' "$TRIVY_LOG"; then
+            --ignorefile .trivyignore.yaml . > "$SOURCE_SCAN_LOG" 2>&1 || scan_status=$?
+          cat "$SOURCE_SCAN_LOG"
+          if grep -Eq 'No enabled scanners found|Falling back to embedded checks' "$SOURCE_SCAN_LOG"; then
             echo "ERROR: Trivy did not load the requested source scanners and checks bundle." >&2
             exit 1
           fi
-          result="$(python3 tools/trivy-report.py status "$TRIVY_OUTPUT_FILE" --expect-class config)"
+          result="$(python3 tools/trivy-report.py status "$SOURCE_SCAN_REPORT" --expect-class config)"
           echo "### Trivy source scan" >> "$GITHUB_STEP_SUMMARY"
           echo "$result" >> "$GITHUB_STEP_SUMMARY"
           echo "$result"
