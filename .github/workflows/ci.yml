@@ -536,7 +536,7 @@ jobs:
       # the Dockerfile misconfiguration scanner actually analyzed a config.
       - name: Trivy source scan
         env:
-          TRIVY_REPORT: ${{ runner.temp }}/source-trivy.json
+          TRIVY_OUTPUT_FILE: ${{ runner.temp }}/source-trivy.json
           TRIVY_LOG: ${{ runner.temp }}/source-trivy.log
         run: |
           set -euo pipefail
@@ -546,7 +546,7 @@ jobs:
             --scanners secret,misconfig \
             --skip-dirs .git,.venv,venv,__pycache__,data,site,app/static/vendor \
             --format json \
-            --output "$TRIVY_REPORT" \
+            --output "$TRIVY_OUTPUT_FILE" \
             --exit-code 1 \
             --severity CRITICAL,HIGH \
             --timeout 5m \
@@ -556,7 +556,7 @@ jobs:
             echo "ERROR: Trivy did not load the requested source scanners and checks bundle." >&2
             exit 1
           fi
-          result="$(python3 tools/trivy-report.py status "$TRIVY_REPORT" --expect-class config)"
+          result="$(python3 tools/trivy-report.py status "$TRIVY_OUTPUT_FILE" --expect-class config)"
           echo "### Trivy source scan" >> "$GITHUB_STEP_SUMMARY"
           echo "$result" >> "$GITHUB_STEP_SUMMARY"
           echo "$result"
