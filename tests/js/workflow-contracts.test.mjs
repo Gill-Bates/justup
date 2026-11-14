@@ -47,7 +47,7 @@ function assertReleaseGates(document) {
   const candidateIndex = stepIndex(steps, (step) => step.name === "Create candidate index", "candidate index creation");
   const verifyIndex = stepIndex(
     steps,
-    (step) => step.name === "Verify candidate index" && step.run?.includes("tools/verify-manifest.py verify manifest-candidate.json digests"),
+    (step) => step.name === "Verify candidate index" && step.run?.includes('tools/verify-manifest.py verify "$RUNNER_TEMP/manifest-candidate.json" digests'),
     "candidate manifest verification",
   );
   const publishIndex = stepIndex(steps, (step) => step.name === "Publish version tag", "version publication");
@@ -56,7 +56,7 @@ function assertReleaseGates(document) {
   assert.match(verify.run, /^\s*set -euo pipefail/m);
   assert.ok(candidateIndex < verifyIndex && verifyIndex < publishIndex);
   assert.match(steps[publishIndex].run, /imagetools create --tag "\$\{IMAGE_NAME\}:\$\{VERSION\}" "\$\{IMAGE_NAME\}@\$\{INDEX_DIGEST\}"/);
-  assert.match(steps[publishIndex].run, /verify manifest-version\.json digests/);
+  assert.match(steps[publishIndex].run, /verify "\$RUNNER_TEMP\/manifest-version\.json" digests/);
 }
 
 test("CI runs on every branch and supports manual dispatch", () => {
@@ -79,7 +79,7 @@ test("notification, wizard and SMTP browser suites are listed and run once with 
   assert.equal(runSteps[0].env.JUSTUP_LAYOUT_JUNIT, "${{ runner.temp }}/notification-wizard-smtp.xml");
 });
 
-test("source scan bypasses setup-trivy only after checksum-verifying the pinned release binary", () => {
+test("source scan uses the checksum-verified Trivy binary and proves scanner coverage", () => {
   const job = ciWorkflow.jobs["source-scan"];
   const installIndex = stepIndex(job.steps, (step) => step.name === "Install checksum-verified Trivy", "verified Trivy install");
   const scanIndex = stepIndex(job.steps, (step) => step.name === "Trivy source scan", "Trivy source scan");
@@ -91,8 +91,10 @@ test("source scan bypasses setup-trivy only after checksum-verifying the pinned 
   assert.match(install.run, /releases\/download\/v\$\{TRIVY_VERSION\}\/trivy_\$\{TRIVY_VERSION\}_Linux-64bit\.tar\.gz/);
   assert.match(job.env.TRIVY_SHA256, /^[a-f0-9]{64}$/);
   assert.match(job.env.TRIVY_VERSION, /^\d+\.\d+\.\d+$/);
-  assert.equal(scan.with.version, "v${{ env.TRIVY_VERSION }}", "action version references the checksum-verified binary version");
-  assert.equal(scan.with["skip-setup-trivy"], "true");
+  assert.match(scan.run, /trivy fs \\\n\s+--scanners secret,misconfig/);
+  assert.match(scan.run, /Falling back to embedded checks/);
+  assert.match(scan.run, /tools\/trivy-report\.py status .*--expect-class config/);
+  assert.equal(scan.with, undefined, "the checksum-verified binary is invoked directly");
 });
 
 test("release publication is gated by image purity and verified candidate manifests", () => {

@@ -339,7 +339,9 @@ def test_release_build_date_refreshes_floating_runtime_dependencies():
     assert "ARG BUILD_DATE=local" in stage
     assert 'test -n "$BUILD_DATE"' in stage
     release = RELEASE_WORKFLOW.read_text(encoding="utf-8")
-    assert '--build-arg "BUILD_DATE=${{ needs.meta.outputs.build_date }}"' in release
+    build_step = release.split("- name: Build image for smoke tests", 1)[1].split("- name: Log out of Docker Hub", 1)[0]
+    assert "BUILD_DATE: ${{ needs.meta.outputs.build_date }}" in build_step
+    assert '--build-arg "BUILD_DATE=$BUILD_DATE"' in build_step
 
 
 def _dockerfile_stage(text: str, name: str) -> str:
