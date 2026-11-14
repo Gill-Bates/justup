@@ -458,7 +458,10 @@ function initVerificationCodeBoxes() {
         });
     });
     
-    setTimeout(() => boxes[0].focus(), 100);
+    // Do not pull focus back once the user (or a fast input) already works inside the boxes.
+    setTimeout(() => {
+        if (!container.contains(document.activeElement)) boxes[0].focus();
+    }, 100);
 }
 
 /**

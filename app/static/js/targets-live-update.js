@@ -337,8 +337,9 @@
 
 	document.body.addEventListener('htmx:beforeSwap', function (event) {
 		const detail = event.detail;
-		transaction = null;
+		// Status and uptime cells swap on their own while a list swap settles; only a swap of the list resets it.
 		if (!detail || detail.target !== container || event.target !== container) return;
+		transaction = null;
 		if (!detail.xhr || detail.xhr.status !== 200 || typeof detail.serverResponse !== 'string') return;
 		if (isSuperseded(detail)) {
 			detail.shouldSwap = false;
