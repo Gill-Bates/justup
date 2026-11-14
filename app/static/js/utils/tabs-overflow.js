@@ -25,6 +25,13 @@
 			const left = tab.offsetLeft - (strip.clientWidth - tab.offsetWidth) / 2;
 			strip.scrollTo({ left: Math.max(0, left), behavior: smooth && !reduceMotion.matches ? 'smooth' : 'auto' });
 		};
+		// Fonts and late content change tab widths after the first measurement without a scroll or resize event.
+		if (window.ResizeObserver) {
+			const observer = new ResizeObserver(update);
+			observer.observe(strip);
+			strip.querySelectorAll('.nav-link').forEach((tab) => observer.observe(tab));
+		}
+		if (document.fonts && document.fonts.ready) document.fonts.ready.then(update);
 		strip.addEventListener('scroll', update, { passive: true });
 		window.addEventListener('resize', update);
 		strip.addEventListener('shown.bs.tab', (e) => reveal(e.target, true));
