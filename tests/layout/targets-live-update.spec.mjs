@@ -375,6 +375,9 @@ for (const viewport of SHORT_VIEWPORTS) {
 			const ids = await page.evaluate(() => [...document.querySelectorAll("#targets-table tr[data-target-id]")].map((row) => row.dataset.targetId));
 			drop = ids.slice(-2);
 			await refreshAndSettle(page);
+			// The cells load with their own requests and grow the list; measure the settled state, not a state in between.
+			await page.waitForFunction(() => !document.querySelector("#targets-table .status-unknown, #targets-table [aria-label='Loading uptime']"));
+			await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
 			const state = await scrollOf(page);
 			assert.ok(state.top > 0, "the list jumped to the top");
 			assert.ok(state.top >= state.max - 1, `scroll ${state.top}px is not at the new end ${state.max}px`);
