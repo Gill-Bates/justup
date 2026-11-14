@@ -675,6 +675,7 @@ html {
 	min-height: 0;
 	padding-bottom: 0;
 	overflow-y: auto;
+	overflow-anchor: none;
 
 	/* Reserve the scrollbar so content does not jump sideways when the page grows past the viewport. */
 	scrollbar-gutter: stable;

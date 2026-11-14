@@ -347,7 +347,7 @@
 	});
 
 	// Registered after targets-search.js, so its filter and group state are applied before the scroll is restored.
-	document.body.addEventListener('htmx:afterSwap', function (event) {
+	document.body.addEventListener('htmx:afterSettle', function (event) {
 		if (event.target !== container || !transaction) return;
 		const saved = transaction;
 		transaction = null;

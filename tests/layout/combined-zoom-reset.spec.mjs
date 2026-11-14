@@ -210,6 +210,14 @@ test("live refresh after zoom reset follows an actual plot resize @combined-zoom
 		detail.on = true;
 		await drag(page, detail, 0.7, 0.95);
 		await page.setViewportSize({ width: 1920, height: 900 });
+		await page.waitForFunction((previousWidth) => document.getElementById("combined-plot").clientWidth !== previousWidth, initialPlotWidth);
+		await page.waitForFunction(() => {
+			const plot = document.getElementById("combined-plot");
+			const width = plot.clientWidth;
+			if (window.__stablePlotWidth === width) window.__stablePlotFrames += 1;
+			else { window.__stablePlotWidth = width; window.__stablePlotFrames = 0; }
+			return window.__stablePlotFrames >= 2;
+		});
 		const resizedPlotWidth = await page.locator("#combined-plot").evaluate((element) => element.clientWidth);
 		assert.ok(resizedPlotWidth >= 500 && resizedPlotWidth !== Number(initialWidth), "the plot actually resized");
 		const fullRangeReload = page.waitForRequest((request) => {

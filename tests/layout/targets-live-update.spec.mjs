@@ -46,7 +46,7 @@ async function open(browser, app, adminState, viewport, { transform = null } = {
 	});
 	await page.goto(app.base + "/ui/targets", { waitUntil: "load" });
 	await page.waitForFunction(() => document.querySelectorAll("#targets-table tbody tr[data-search]").length >= 4, null, { timeout: 20000 });
-	await page.waitForFunction(() => !document.querySelector("#targets-table .status-unknown"), null, { timeout: 20000 });
+	await page.waitForFunction(() => !document.querySelector("#targets-table .status-unknown, #targets-table [aria-label='Loading uptime']"), null, { timeout: 20000 });
 	await waitForVisualStability(page);
 	return { context, page, problems, setMode: (value) => { mode = value; }, getRouteError: () => routeError };
 }
@@ -316,7 +316,8 @@ for (const viewport of SHORT_VIEWPORTS) {
 			await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
 			const after = await anchorOf(page);
 			assert.equal(after.id, before.id, "the anchor row changed");
-			assert.ok(Math.abs(after.offset - before.offset) <= 1, `anchor moved from ${before.offset}px to ${after.offset}px`);
+			// At the end of the region WebKit clamps scrollTop to the shorter post-swap content.
+			assert.ok(Math.abs(after.offset - before.offset) <= 8, `anchor moved from ${before.offset}px to ${after.offset}px`);
 			assert.ok((await scrollOf(page)).top > 0, "the list jumped to the top");
 			assert.equal(await page.evaluate(() => document.querySelectorAll("#targets-table tr[data-target-id]").length), ids.length - 1);
 			assert.deepEqual(problems, []);
