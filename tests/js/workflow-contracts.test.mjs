@@ -227,7 +227,7 @@ test("CI manifest check and release workflow accept exactly the same versions", 
     return found[0];
   };
   const ciRegex = pattern(ciWorkflow, "manifest");
-  const releaseRegex = pattern(workflow, "meta");
+  const releaseRegex = pattern(workflow, "preflight");
   assert.equal(ciRegex, releaseRegex, "both gates keep the same release version contract");
   const valid = ["0.0.0", "1.0.3", "10.20.30", "1.0.3-rc.1", "1.0.3-rc1", "1.0.3-0", "1.0.3-a-b.c"];
   const invalid = ["", "1", "1.0", "v1.0.3", "1.0.3.4", "1.0.3-", "1.0.3-rc..1", "1.0.3-rc.", "1.0.3+build", "1.0.3 ", "01.x.3"];

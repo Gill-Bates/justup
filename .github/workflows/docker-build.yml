@@ -1,5 +1,5 @@
 # .github/workflows/docker-build.yml: tag release for justUp.
-# Calls ci.yml before publishing; docs-build.yml follows a successful release.
+# Validates the tag first, then calls ci.yml before publishing; docs-build.yml follows a successful release.
 name: Docker Multi-Arch Build
 
 on:
@@ -19,17 +19,80 @@ env:
   REGISTRY: docker.io
 
 jobs:
+  # Fail fast: cheap tag checks that need no test result run before CI.
+  preflight:
+    name: Validate tag
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.tag.outputs.version }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          # Full commit history (no blobs) for the main-ancestry check below.
+          fetch-depth: 0
+          filter: blob:none
+
+      # Pinned so tomllib (below) does not depend on the runner's system Python.
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.13"
+
+      - name: Validate tag, version and main ancestry
+        id: tag
+        run: |
+          set -euo pipefail
+
+          # pyproject.toml [project] version is the single source of truth. A
+          # missing file or key aborts here (pipefail); an empty value fails the format check.
+          VERSION="$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])' | tr -d '[:space:]')"
+
+          if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'; then
+            echo "ERROR: Invalid version format: '$VERSION' (expected: X.Y.Z or X.Y.Z-suffix)"
+            exit 1
+          fi
+
+          # Also applies to workflow_dispatch: select the tag as the ref.
+          if [[ "$GITHUB_REF_TYPE" != "tag" ]]; then
+            echo "ERROR: This workflow must run from a tag, but ref '${GITHUB_REF_NAME}' is a ${GITHUB_REF_TYPE}."
+            echo "Push tag v${VERSION}, or re-run this workflow selecting that tag as the ref."
+            exit 1
+          fi
+
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          if [[ "$TAG_VERSION" != "$VERSION" ]]; then
+            echo "ERROR: Git tag (${GITHUB_REF_NAME}) does not match pyproject.toml version (${VERSION})"
+            exit 1
+          fi
+
+          # The tagged commit must be on main; checked before CI so a wrong tag costs no test run.
+          git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main'
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "ERROR: ${GITHUB_REF_NAME} points at ${GITHUB_SHA}, which is not contained in main."
+            echo "Merge the release commit into main first, then tag that commit."
+            exit 1
+          fi
+
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
   # Release gate: the PR checks on the tagged commit. The ancestry check in
-  # meta only proves the commit is on main, not that CI for it passed.
+  # preflight only proves the commit is on main, not that CI for it passed.
   ci:
     name: CI gate
+    needs: preflight
     uses: ./.github/workflows/ci.yml
     permissions:
       contents: read
 
   meta:
     name: Validate build metadata
-    needs: ci
+    needs: [preflight, ci]
     # Named runner image: ubuntu-latest migrates in stages and two runs of one
     # tag could otherwise land on different operating systems.
     runs-on: ubuntu-26.04
@@ -55,8 +118,6 @@ jobs:
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
-          # Full history for the main-ancestry check below.
-          fetch-depth: 0
 
       # Pinned so tomllib (below) does not depend on the runner's system Python.
       - name: Set up Python
@@ -77,6 +138,7 @@ jobs:
         id: meta
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          PREFLIGHT_VERSION: ${{ needs.preflight.outputs.version }}
         run: |
           set -euo pipefail
 
@@ -85,35 +147,8 @@ jobs:
             exit 1
           fi
 
-          # pyproject.toml [project] version is the single source of truth. A
-          # missing file or key aborts here (pipefail); an empty value fails the format check.
-          VERSION="$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])' | tr -d '[:space:]')"
-
-          if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'; then
-            echo "ERROR: Invalid version format: '$VERSION' (expected: X.Y.Z or X.Y.Z-suffix)"
-            exit 1
-          fi
-
-          # Also applies to workflow_dispatch: select the tag as the ref.
-          if [[ "$GITHUB_REF_TYPE" != "tag" ]]; then
-            echo "ERROR: This workflow must run from a tag, but ref '${GITHUB_REF_NAME}' is a ${GITHUB_REF_TYPE}."
-            echo "Push tag v${VERSION}, or re-run this workflow selecting that tag as the ref."
-            exit 1
-          fi
-
-          TAG_VERSION="${GITHUB_REF_NAME#v}"
-          if [[ "$TAG_VERSION" != "$VERSION" ]]; then
-            echo "ERROR: Git tag (${GITHUB_REF_NAME}) does not match pyproject.toml version (${VERSION})"
-            exit 1
-          fi
-
-          # The tagged commit was checked by the reusable CI job above and must also be on main.
-          git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main'
-          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
-            echo "ERROR: ${GITHUB_REF_NAME} points at ${GITHUB_SHA}, which is not contained in main."
-            echo "Merge the release commit into main first, then tag that commit."
-            exit 1
-          fi
+          # Validated once in preflight; meta only reuses the value.
+          VERSION="$PREFLIGHT_VERSION"
 
           BUILD_DATE="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
           TAG="v${VERSION}"
