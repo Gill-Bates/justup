@@ -26,7 +26,8 @@ async function open(browser, app, adminState, { viewport = { width: 1280, height
 	const context = await browser.newContext({ viewport, storageState: adminState });
 	const page = await context.newPage();
 	const errors = [];
-	page.on("pageerror", (error) => errors.push(String(error)));
+	// WebKit reports the live client's /health probe, cancelled by the test's own reload(), as a page error; only that message is dropped.
+	page.on("pageerror", (error) => { if (!/^Fetch API cannot load .*\/health due to access control checks\.?$/.test(String(error.message ?? error))) errors.push(String(error)); });
 	await page.goto(`${app.base}/`, { waitUntil: "load" });
 	const layout = await page.evaluate((spec) => {
 		const pick = new Function("widget", `return (${spec})(widget)`);
