@@ -7,6 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import { renderTemplates, startStaticAppServer } from "./test-support.mjs";
+import { collectPageErrors } from "./page-errors.mjs";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const STUB = `<script>
 // A real request resolves in a later task, not inside the input event that triggered it.
@@ -40,7 +41,7 @@ test.describe("Group field error on the Signal code boxes @field-group-error", (
 	});
 	test.beforeEach(({ page }) => {
 		errors = [];
-		page.on("pageerror", (error) => errors.push(String(error)));
+		collectPageErrors(page, errors);
 	});
 	test.afterEach(() => expect(errors).toEqual([]));
 	for (const size of sizes) {

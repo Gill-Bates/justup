@@ -16,6 +16,7 @@ import { devices } from "@playwright/test";
 import { test } from "./fixtures.mjs";
 import { waitForVisualStability } from "./harness.mjs";
 import { resolvePythonExecutable } from "./test-support.mjs";
+import { collectPageErrors } from "./page-errors.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const VIEWPORTS = [{ name: "1920x1080", width: 1920, height: 1080 }, { name: "1280x800", width: 1280, height: 800 }];
@@ -69,7 +70,7 @@ async function open(browser, app, adminState, viewport, theme, role, reply) {
 		page = await context.newPage();
 	}
 	const errors = [];
-	page.on("pageerror", (error) => errors.push(String(error)));
+	collectPageErrors(page, errors);
 	let release;
 	const gate = new Promise((resolve) => { release = resolve; });
 	await page.route("**/ui/fragments/traceroute/*", async (route) => {
@@ -237,7 +238,7 @@ for (const viewport of IPAD_VIEWPORTS) {
 		const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height }, storageState: adminState });
 		const page = await context.newPage();
 		const errors = [];
-		page.on("pageerror", (error) => errors.push(String(error)));
+		collectPageErrors(page, errors);
 		const body = render(IPAD_PAYLOAD);
 		await page.route("**/ui/fragments/traceroute/*", (route) => route.fulfill({ status: 200, contentType: "text/html", headers: { "X-Measured-At": String(Date.now()) }, body }));
 		try {

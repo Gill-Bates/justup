@@ -11,6 +11,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test as base } from "@playwright/test";
 import { startStaticAppServer } from "./test-support.mjs";
+import { collectPageErrors } from "./page-errors.mjs";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const NETWORK = readFileSync(path.join(ROOT, "app", "templates", "settings", "network.html"), "utf8");
 const start = NETWORK.lastIndexOf('<div class="card', NETWORK.indexOf("data-public-egress"));
@@ -46,7 +47,7 @@ for (const viewport of VIEWPORTS) {
 			try {
 				const page = await context.newPage();
 				const errors = [];
-				page.on("pageerror", (e) => errors.push(String(e)));
+				collectPageErrors(page, errors);
 				page.on("console", (m) => { if (m.type() === "error" && !m.text().startsWith("Failed to load resource")) errors.push(m.text()); });
 				await page.goto(base);
 				await page.evaluate(async ({ t, v6 }) => {

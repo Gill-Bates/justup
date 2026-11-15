@@ -10,6 +10,7 @@
 import assert from "node:assert/strict";
 import { test } from "./fixtures.mjs";
 import { waitForVisualStability } from "./harness.mjs";
+import { collectPageErrors } from "./page-errors.mjs";
 const NOW = () => new Date().toISOString();
 const monitorTargets = (name) => [
 	{ name, is_enabled: true, enable_cert_expiration: true, enable_http_check: true, interval_seconds: 60, status: { cert_days_left: 12, cert_checked_at: NOW(), http_latency_ms: 812, updated_at: NOW() } },
@@ -26,8 +27,7 @@ async function open(browser, app, adminState, { viewport = { width: 1280, height
 	const context = await browser.newContext({ viewport, storageState: adminState });
 	const page = await context.newPage();
 	const errors = [];
-	// WebKit reports the live client's /health probe, cancelled by the test's own reload(), as a page error; only that message is dropped.
-	page.on("pageerror", (error) => { if (!/^Fetch API cannot load .*\/health due to access control checks\.?$/.test(String(error.message ?? error))) errors.push(String(error)); });
+	collectPageErrors(page, errors);
 	await page.goto(`${app.base}/`, { waitUntil: "load" });
 	const layout = await page.evaluate((spec) => {
 		const pick = new Function("widget", `return (${spec})(widget)`);

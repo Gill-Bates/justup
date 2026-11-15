@@ -8,6 +8,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import { renderTemplates, startStaticAppServer } from "./test-support.mjs";
+import { collectPageErrors } from "./page-errors.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const BASE_SMTP = {
@@ -80,7 +81,7 @@ test.describe("SMTP settings browser regressions @smtp-ui", () => {
 
 	test.beforeEach(({ page }) => {
 		browserErrors = [];
-		page.on("pageerror", (error) => browserErrors.push(String(error)));
+		collectPageErrors(page, browserErrors);
 	});
 
 	test.afterEach(() => expect(browserErrors).toEqual([]));

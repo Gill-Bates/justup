@@ -8,6 +8,7 @@
 import assert from "node:assert/strict";
 import { test } from "./fixtures.mjs";
 import { waitForVisualStability } from "./harness.mjs";
+import { collectPageErrors } from "./page-errors.mjs";
 
 const VIEWPORTS = [
 	{ name: "1280x720", width: 1280, height: 720 },
@@ -22,7 +23,7 @@ for (const viewport of VIEWPORTS) {
 			const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height }, storageState: adminState });
 			const page = await context.newPage();
 			const errors = [];
-			page.on("pageerror", (error) => errors.push(String(error)));
+			collectPageErrors(page, errors);
 			await page.route("**/alerts/summary**", (route) => route.fulfill({ json: { open: 2, acknowledged_24h: 1, started_24h: 5, resolved_24h: 3 } }));
 			try {
 				await page.goto(app.base + "/", { waitUntil: "load" });

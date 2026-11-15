@@ -8,6 +8,7 @@
 // valid address becomes a link (DESIGN.md DC-FORM-6..10, section 6.2).
 import assert from "node:assert/strict";
 import { test } from "./fixtures.mjs";
+import { collectPageErrors } from "./page-errors.mjs";
 
 const VIEWPORTS = [{ name: "1280x720", width: 1280, height: 720 }, { name: "390x844", width: 390, height: 844 }];
 
@@ -19,7 +20,7 @@ for (const viewport of VIEWPORTS) {
 			const native = [];
 			page.on("dialog", (dialog) => { native.push(dialog.type()); dialog.dismiss(); });
 			const errors = [];
-			page.on("pageerror", (error) => errors.push(String(error)));
+			collectPageErrors(page, errors);
 			try {
 				await page.goto(app.base + "/ui/settings", { waitUntil: "load" });
 				await page.evaluate((mode) => document.documentElement.setAttribute("data-bs-theme", mode), theme);

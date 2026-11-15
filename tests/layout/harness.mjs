@@ -15,6 +15,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { devices } from "playwright";
 import { applyTextEnlargement, cssViewport, effectiveZoom, resolvePythonExecutable, textEnlargement } from "./test-support.mjs";
+import { collectPageErrors } from "./page-errors.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(here, "../..");
@@ -754,7 +755,7 @@ async function auditDashboardGrid(browser, app, adminState, browserName, phase) 
 			...(role === "admin" ? { storageState: adminState } : {}) });
 		const page = await context.newPage();
 		const errors = [];
-		page.on("pageerror", (error) => errors.push(String(error)));
+		collectPageErrors(page, errors);
 		try {
 			let queuePayloadOverride = null;
 			let queueRequestFailure = false;
@@ -1848,7 +1849,7 @@ async function auditPage(browser, app, state, browserName, vp, pg) {
 	try {
 		const page = await context.newPage();
 		const chartInteractionCheck = pg.id === "target-dashboard-kpi" && vp.name === VIEWPORTS[0].name;
-		page.on("pageerror", (error) => errors.push(String(error)));
+		collectPageErrors(page, errors);
 		page.on("console", (message) => { if (message.type() === "error") consoleErrors.push(message.text()); });
 		try {
 			if (chartInteractionCheck) await installChartInteractionHooks(page);

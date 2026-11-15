@@ -12,6 +12,7 @@ import { expect } from "@playwright/test";
 import { test } from "./fixtures.mjs";
 import { waitForVisualStability } from "./harness.mjs";
 import { countStateBadges, waitForStateBadgeCount } from "./test-support.mjs";
+import { collectPageErrors } from "./page-errors.mjs";
 
 const CLS_BUDGET = 0.01;
 
@@ -19,7 +20,7 @@ async function open(browser, app, adminState, viewport, { transform = null } = {
 	const context = await browser.newContext({ viewport, storageState: adminState });
 	const page = await context.newPage();
 	const problems = [];
-	page.on("pageerror", (error) => problems.push(String(error)));
+	collectPageErrors(page, problems);
 	await page.addInitScript(() => {
 		window.__shifts = 0;
 		try { new PerformanceObserver((list) => { for (const entry of list.getEntries()) if (!entry.hadRecentInput) window.__shifts += entry.value; }).observe({ type: "layout-shift", buffered: true }); } catch { /* no layout-shift entries */ }

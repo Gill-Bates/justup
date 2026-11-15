@@ -11,6 +11,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test as base } from "@playwright/test";
 import { recipientScripts, startStaticAppServer } from "./test-support.mjs";
+import { collectPageErrors } from "./page-errors.mjs";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const MODALS = path.join(ROOT, "app", "templates", "settings", "modals.html");
 const SCRIPTS = recipientScripts();
@@ -136,7 +137,7 @@ for (const viewport of VIEWPORTS) {
 	for (const theme of ["light", "dark"]) {
 		test(`Edit Recipient hides the fields of a switched-off channel at ${viewport.name} ${theme} @modal @recipient-channels`, async ({ page, base }) => {
 			const errors = [];
-			page.on("pageerror", (e) => errors.push(String(e)));
+			collectPageErrors(page, errors);
 			page.on("console", (m) => { if (m.type() === "error" && !m.text().startsWith("Failed to load resource")) errors.push(m.text()); }); // the static harness has no favicon
 			await page.setViewportSize({ width: viewport.width, height: viewport.height });
 			await page.goto(base);

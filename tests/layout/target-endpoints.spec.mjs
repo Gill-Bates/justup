@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import { test } from "./fixtures.mjs";
 import { waitForVisualStability } from "./harness.mjs";
 import { readStateBadges } from "./test-support.mjs";
+import { collectPageErrors } from "./page-errors.mjs";
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const VIEWPORTS = [
 	{ name: "1920x1080", width: 1920, height: 1080 },
@@ -77,7 +78,7 @@ for (const viewport of VIEWPORTS) {
 				const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height }, storageState: adminState });
 				const page = await context.newPage();
 				const errors = [];
-				page.on("pageerror", (error) => errors.push(String(error)));
+				collectPageErrors(page, errors);
 				try {
 					await page.goto(`${app.base}/ui/targets/${ids[key]}`, { waitUntil: "load" });
 					await page.evaluate((mode) => document.documentElement.setAttribute("data-bs-theme", mode), theme);

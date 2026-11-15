@@ -7,6 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import { renderTemplates, startStaticAppServer } from "./test-support.mjs";
+import { collectPageErrors } from "./page-errors.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const BASE = { use_utc_dashboard: false, pdf_page_size: "a4", pdf_export_enabled: true, public_hostname: "", auth_required: true, rate_limit_auth: "10/minute", session_max_days: 1 };
@@ -67,7 +68,7 @@ test.describe("Public hostname field in Settings > General @public-hostname-ui",
 	});
 	test.beforeEach(({ page }) => {
 		browserErrors = [];
-		page.on("pageerror", (error) => browserErrors.push(String(error)));
+		collectPageErrors(page, browserErrors);
 	});
 	test.afterEach(() => expect(browserErrors).toEqual([]));
 

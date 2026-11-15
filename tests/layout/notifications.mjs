@@ -13,6 +13,7 @@ import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { waitForVisualStability } from "./harness.mjs";
+import { collectPageErrors } from "./page-errors.mjs";
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 // Absolute per-edge tolerance in CSS px, as in the dashboard geometry contract. Do not widen it.
@@ -298,7 +299,7 @@ async function auditNotificationRows(page, app, browserName, viewport) {
 	const findings = [];
 	const tag = (items, variant) => items.map((item) => ({ browser: browserName, vp: viewport.name, variant, ...item }));
 	const errors = [];
-	page.on("pageerror", (error) => errors.push(String(error)));
+	collectPageErrors(page, errors);
 	await page.goto(`${app.base}/ui/notifications?category=all`, { waitUntil: "load" });
 	await page.waitForSelector("#np-list .ju-notif-item");
 	const narrow = await page.evaluate(() => window.matchMedia("(width <= 991.98px)").matches);

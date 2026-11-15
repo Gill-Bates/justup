@@ -10,6 +10,7 @@ import assert from "node:assert/strict";
 import { expect } from "@playwright/test";
 import { test } from "./fixtures.mjs";
 import { waitForVisualStability } from "./harness.mjs";
+import { collectPageErrors } from "./page-errors.mjs";
 
 const NOW = new Date().toISOString();
 const ENTRIES = [
@@ -29,7 +30,7 @@ for (const viewport of VIEWPORTS) {
 			const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height }, storageState: adminState });
 			const page = await context.newPage();
 			const errors = [];
-			page.on("pageerror", (error) => errors.push(String(error)));
+			collectPageErrors(page, errors);
 			await page.route("**/settings/notification-queue/log**", (route) => route.fulfill({ json: { entries: ENTRIES, total: 3 } }));
 			try {
 				await page.goto(app.base + "/ui/settings", { waitUntil: "load" });
@@ -106,7 +107,7 @@ for (const viewport of TOOLBAR_VIEWPORTS) {
 			const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height }, storageState: adminState });
 			const page = await context.newPage();
 			const errors = [];
-			page.on("pageerror", (error) => errors.push(String(error)));
+			collectPageErrors(page, errors);
 			try {
 				await openSpooler(page, app, theme, { entries: ENTRIES, total: 3 });
 				const toolbar = page.locator(".spooler-toolbar");

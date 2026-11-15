@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import { expect, test as base } from "@playwright/test";
 import { test as appTest } from "./fixtures.mjs";
 import { applyTextEnlargement, recipientScripts, startStaticAppServer } from "./test-support.mjs";
+import { collectPageErrors } from "./page-errors.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const MODALS = path.join(ROOT, "app", "templates", "settings", "modals.html");
@@ -54,7 +55,7 @@ test("modal dismissal, focus and scroll-lock contracts @modal", async ({ page, b
 	const name = browserName;
 	const findings = [];
 	const errors = [];
-	page.on("pageerror", (e) => errors.push(String(e)));
+	collectPageErrors(page, errors);
 
 	await page.goto(modalBase);
 	const ids = await page.$$eval(".modal", (els) => els.map((el) => el.id));
@@ -95,7 +96,7 @@ test("modal semantics, focus and geometry @modal", async ({ page, browserName, m
 	const findings = [];
 	let checked = 0;
 	const errors = [];
-	page.on("pageerror", (e) => errors.push(String(e)));
+	collectPageErrors(page, errors);
 	await page.goto(modalBase);
 	const ids = await page.$$eval(".modal", (els) => els.map((el) => el.id));
 	if (!ids.length) findings.push(`${name}: no modals found`);
@@ -190,7 +191,7 @@ test("confirmAction keyboard behavior and concurrency @modal", async ({ page, br
 	const findings = [];
 	let checked = 0;
 	const errors = [];
-	page.on("pageerror", (e) => errors.push(String(e)));
+	collectPageErrors(page, errors);
 	await page.goto(modalBase);
 	// Shared confirmation dialog (window.confirmAction): Cancel/Escape resolve false, Confirm true once, backdrop never closes.
 	{
@@ -255,7 +256,7 @@ test("confirmAction keyboard behavior and concurrency @modal", async ({ page, br
 	const findings = [];
 	let checked = 0;
 	const errors = [];
-	page.on("pageerror", (e) => errors.push(String(e)));
+	collectPageErrors(page, errors);
 	await page.goto(modalBase);
 	// The real saveRecipient() (settings.recipients.js, network stubbed): switching "Enable for all Targets" off asks for
 	// confirmation from inside the open Edit dialog. Keyboard only; the dialog is handed over, never stacked.

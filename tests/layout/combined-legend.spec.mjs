@@ -10,6 +10,7 @@ import assert from "node:assert/strict";
 import { test } from "./fixtures.mjs";
 import { waitForVisualStability } from "./harness.mjs";
 import { waitForChartReady } from "./test-support.mjs";
+import { collectPageErrors } from "./page-errors.mjs";
 
 // Target 4 has HTTP, Ping and several TCP ports; ports 443 and 8443 carry measurements.
 const TARGET_PATH = "/ui/targets/4";
@@ -20,7 +21,7 @@ async function openTarget(browser, app, adminState, viewport) {
 	const context = await browser.newContext({ viewport: { width: viewport.w, height: viewport.h }, storageState: adminState });
 	const page = await context.newPage();
 	const problems = [];
-	page.on("pageerror", (error) => problems.push(String(error)));
+	collectPageErrors(page, problems);
 	page.on("console", (message) => { if (message.type() === "error") problems.push(message.text()); });
 	await page.goto(app.base + TARGET_PATH, { waitUntil: "load" });
 	await waitForChartReady(page);

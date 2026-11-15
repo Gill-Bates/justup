@@ -12,6 +12,7 @@ import { expect } from "@playwright/test";
 import { contrastRatio, test } from "./fixtures.mjs";
 import { waitForVisualStability } from "./harness.mjs";
 import { applyTextEnlargement, cssViewport, effectiveZoom, textEnlargement } from "./test-support.mjs";
+import { collectPageErrors } from "./page-errors.mjs";
 
 // Four distinct notions (DESIGN.md 1.2, DC-MEAS-1; helpers in test-support.mjs):
 //  - css-320x640 is the WCAG reflow equivalent of 400 % zoom (a CSS viewport 320 px wide);
@@ -35,7 +36,7 @@ async function openTargets(browser, app, adminState, viewport) {
 	});
 	const page = await context.newPage();
 	const problems = [];
-	page.on("pageerror", (error) => problems.push(String(error)));
+	collectPageErrors(page, problems);
 	page.on("console", (message) => { if (message.type() === "error") problems.push(message.text()); });
 	await page.goto(app.base + "/ui/targets", { waitUntil: "load" });
 	await applyTextEnlargement(page, viewport.textScale);

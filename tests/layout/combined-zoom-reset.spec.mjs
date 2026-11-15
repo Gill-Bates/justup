@@ -10,6 +10,7 @@ import { expect } from "@playwright/test";
 import { test } from "./fixtures.mjs";
 import { waitForVisualStability } from "./harness.mjs";
 import { waitForChartReady } from "./test-support.mjs";
+import { collectPageErrors } from "./page-errors.mjs";
 
 const TARGET_PATH = "/ui/targets/4";
 const THEMES = ["light", "dark"];
@@ -93,7 +94,7 @@ for (const theme of THEMES) {
 				const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, storageState: adminState });
 				const page = await context.newPage();
 				const problems = [];
-				page.on("pageerror", (error) => problems.push(String(error)));
+				collectPageErrors(page, problems);
 				await mockDetail(page, detail);
 				try {
 					await page.goto(app.base + TARGET_PATH, { waitUntil: "load" });

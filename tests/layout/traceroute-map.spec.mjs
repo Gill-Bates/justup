@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 import { test as base } from "@playwright/test";
 import { waitForVisualStability } from "./harness.mjs";
 import { resolvePythonExecutable, startStaticAppServer } from "./test-support.mjs";
+import { collectPageErrors } from "./page-errors.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const SHOTS = process.env.JUSTUP_TRACEROUTE_SHOTS;
@@ -138,7 +139,7 @@ for (const viewport of VIEWPORTS) {
 	for (const theme of ["light", "dark"]) {
 		test(`route map draws the chain, calm basemap and few names at ${viewport.name} ${theme} @traceroute-map`, async ({ page, base }) => {
 			const errors = [];
-			page.on("pageerror", (e) => errors.push(e.stack || String(e))); page.on("console", (m) => { if (m.type() === "error" || m.type() === "warning") errors.push(m.text()); });
+			collectPageErrors(page, errors, (e) => e.stack || String(e)); page.on("console", (m) => { if (m.type() === "error" || m.type() === "warning") errors.push(m.text()); });
 			await page.setViewportSize({ width: viewport.width, height: viewport.height });
 			await page.goto(base.url);
 			await page.waitForSelector(".traceroute-hop-marker", { timeout: 20000 }).catch((e) => { throw new Error("no markers; page errors: " + errors.join(" | ")); });
@@ -237,7 +238,7 @@ test("the web map keeps date-line hops in the short world copy @traceroute-map",
 		point(2, 10, -179, "East", "US", { map_role: "route", _destination: true }),
 	], 2);
 	const errors = [];
-	page.on("pageerror", (error) => errors.push(error.stack || String(error)));
+	collectPageErrors(page, errors, (e) => e.stack || String(e));
 	await page.setViewportSize({ width: 1280, height: 720 });
 	await page.goto(base.url);
 	await page.waitForSelector(".traceroute-hop-marker");
@@ -272,7 +273,7 @@ test("30 hops in repeated dense regions consolidate into region markers @tracero
 	});
 	base.setPoints(points, 30);
 	const errors = [];
-	page.on("pageerror", (error) => errors.push(error.stack || String(error)));
+	collectPageErrors(page, errors, (e) => e.stack || String(e));
 	await page.setViewportSize({ width: 1280, height: 720 });
 	await page.goto(base.url);
 	await page.waitForSelector(".traceroute-hop-marker");
