@@ -1,3 +1,8 @@
+## [1.0.4] - 2026-xx-xx
+
+<details markdown="1">
+<summary>Previous versions...</summary>
+
 ## [1.0.3] - 2026-11-15
 
 - `New` UDP checks and TCP/UDP port discovery are available in the target wizard and editor; admins can re-detect services before saving. Traceroute runs on Nmap, recognizes internet-exchange (IXP) locations, and the About page shows the Nmap version.
@@ -18,9 +23,6 @@
 - `Security` Oversized backup restore uploads are rejected with 413 while streaming, before authentication or full-body buffering.
 - `Security` Nmap scans run in an admin-only worker with only the `NET_RAW` capability.
 - `Security` A failed in-flight notification for a deleted recipient is not retried.
-
-<details markdown="1">
-<summary>Previous versions...</summary>
 
 ## [1.0.2] - 2026-11-03
 

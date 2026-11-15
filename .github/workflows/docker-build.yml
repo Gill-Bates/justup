@@ -1261,18 +1261,6 @@ jobs:
             const assetBase = `https://github.com/${context.repo.owner}/${context.repo.repo}/releases/download/${tagName}`;
             const trivyRows = archs.map(arch =>
               `| ${arch} | ${trivyStatus(arch)} | [trivy-${arch}.json](${assetBase}/trivy-${arch}.json) |`);
-            // Written by the image build (PROVENANCE.txt); a missing file or field fails the job.
-            function nmapField(arch, field) {
-              const text = fs.readFileSync(path.join('nmap-provenance', `nmap-provenance-${arch}.txt`), 'utf8');
-              const line = text.split('\n').find(l => l.startsWith(field + '='));
-              if (!line) {
-                throw new Error(`nmap-provenance-${arch}.txt lacks ${field}`);
-              }
-              return line.slice(field.length + 1).replace(/,/g, ', ');
-            }
-            const nmapRows = archs.map(arch =>
-              `| ${arch} | ${nmapField(arch, 'bundled_libraries')} | ${nmapField(arch, 'system_libraries')} |`);
-
             // The release title already carries the version, so the body starts with the image.
             const body = [
               '**Docker Image:** `docker pull ' + imageName + ':' + version + '`',
@@ -1289,20 +1277,6 @@ jobs:
               '| run | workflow details | [Actions Run](' + runUrl + ') |',
               '',
               '> Scanned with [Trivy](https://trivy.dev/) for HIGH and CRITICAL severity vulnerabilities (unfixed CVEs ignored).',
-              '',
-              '### Nmap composition',
-              '',
-              'Nmap is built from the signature-verified source, so Trivy sees only the Debian packages below. ' +
-                'The bundled libraries are compiled into the binary and are not covered by the Trivy scan. ' +
-                'Nmap and libpcap are checked against NVD by CPE (CRITICAL blocks the release; SBOM and report are attached); ' +
-                'libdnet and liblinear have no NVD CPE and are not scanned: review their CVEs against these versions.',
-              '',
-              'The exact Nmap source archive (' + `nmap-${nmapVersion}.tar.bz2` + ', licence: NPSL, https://nmap.org/npsl/), its signature and ' +
-                '`nmap-source-manifest.txt` (URL, SHA-256, image digest) are attached to this release; the image does not contain the archive.',
-              '',
-              '| Architecture | Bundled libraries (not scanned) | Debian packages (scanned) |',
-              '|---|---|---|',
-              ...nmapRows,
               '',
               '### Changelog',
               changelogSection || '_No matching CHANGELOG entry found for this version._',
