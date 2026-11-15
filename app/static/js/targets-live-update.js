@@ -241,12 +241,18 @@
 			userAction: userAction,
 			top: scroller ? scroller.scrollTop : 0,
 			anchor: userAction ? null : captureAnchor(),
+			atEnd: !!scroller && scroller.scrollTop > 0 && scroller.scrollTop >= scroller.scrollHeight - scroller.clientHeight - 1,
 			focus: captureFocus(),
 			order: order,
 		};
 	}
 
 	function realign(anchor) {
+		// A list that was scrolled to its end stays at its end while the loading cells change its height.
+		if (anchor.atEnd) {
+			scroller.scrollTop = scroller.scrollHeight - scroller.clientHeight;
+			return;
+		}
 		const row = rowOf(anchor.id);
 		if (!row || row.getBoundingClientRect().height <= 0) return;
 		const delta = row.getBoundingClientRect().top - scroller.getBoundingClientRect().top - anchor.offset;
@@ -265,6 +271,11 @@
 		realign(holdAnchor);
 	});
 
+	// Row heights can change after the last cell settled (fonts, wrapping); follow the container's height too.
+	if (window.ResizeObserver && scroller) {
+		new ResizeObserver(function () { if (holdAnchor) realign(holdAnchor); }).observe(container);
+	}
+
 	function finish(saved) {
 		if (saved.focus && !saved.focus.element.isConnected) {
 			const target = focusSuccessor(saved.focus, saved.order);
@@ -278,9 +289,13 @@
 			return;
 		}
 		const row = saved.anchor ? rowOf(saved.anchor.id) : null;
-		if (row && row.getBoundingClientRect().height > 0) {
+		if (saved.atEnd) {
+			// The swap reset scrollTop; a list that was at its end returns to the end of the new content.
+			holdAnchor = { atEnd: true };
+			realign(holdAnchor);
+		} else if (row && row.getBoundingClientRect().height > 0) {
 			holdAnchor = saved.anchor;
-			realign(saved.anchor);
+			realign(holdAnchor);
 		} else if (scroller.scrollTop !== saved.top) {
 			scroller.scrollTop = saved.top;
 		}

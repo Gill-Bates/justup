@@ -357,9 +357,12 @@ for (const viewport of SHORT_VIEWPORTS) {
 			const focusRow = async (id) => { await page.focus(`#targets-table tr[data-target-id="${id}"] td[data-label=Name] a`); drop = id; await refreshAndSettle(page); };
 			const focusedId = () => page.evaluate(() => document.activeElement.closest("tr")?.dataset.targetId ?? document.activeElement.id);
 			await focusRow(ids[1]);
+			// The handoff runs in htmx's settle step, which can still be pending when the request is done.
+			await page.waitForFunction((id) => document.activeElement.closest("tr")?.dataset.targetId === id, ids[2]).catch(() => {});
 			assert.equal(await focusedId(), ids[2], "focus did not move to the next row");
 			// The last row has no next row: the previous one takes over.
 			await focusRow(ids[ids.length - 1]);
+			await page.waitForFunction((id) => document.activeElement.closest("tr")?.dataset.targetId === id, ids[ids.length - 2]).catch(() => {});
 			assert.equal(await focusedId(), ids[ids.length - 2], "focus did not move to the previous row");
 			assert.deepEqual(problems, []);
 		} finally {
