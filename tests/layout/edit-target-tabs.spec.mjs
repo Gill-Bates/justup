@@ -19,6 +19,9 @@ import { applyScrollbarMode, probeScrollbar, SCROLLBAR_MODES, waitForVisualStabi
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const TARGET_ACTIONS = readFileSync(path.join(ROOT, "app", "templates", "target_form.html"), "utf8")
 	.match(/<div class="ui-form-actions sticky-actions sticky-actions--always[^>]*>[\s\S]*?<\/div>/)?.[0];
+const ALERT_FILTER_ACTIONS = readFileSync(path.join(ROOT, "app", "templates", "notifications", "_alerts_panel.html"), "utf8")
+	.match(/<div class="ui-form-actions sticky-actions[^>]*>[\s\S]*?<\/div>/)?.[0]
+	.replace(/\{%[\s\S]*?%\}/g, "");
 const plain = (w, h, extra = {}) => ({ name: `${w}x${h}`, width: w, height: h, dsf: 1, ...extra });
 const zoom = effectiveZoom;
 const tablet = (name, label) => ({ name: label, width: devices[name].viewport.width, height: devices[name].viewport.height, dsf: devices[name].deviceScaleFactor, descriptor: devices[name] });
@@ -35,7 +38,8 @@ const surfaceTest = test.extend({
 			root: ROOT,
 			renderPage: () => `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 				<link rel="stylesheet" href="/static/css/bootstrap.min.css"><link rel="stylesheet" href="/static/css/gentelella-layout.css"><link rel="stylesheet" href="/static/css/ui.css"></head>
-				<body><div class="ui-page"><main class="ju-content"><div class="card shadow-sm"><div class="card-body"><form id="target-form">${TARGET_ACTIONS}</form></div></div></main></div></body></html>`,
+				<body><div class="ui-page"><main class="ju-content"><div class="card shadow-sm"><div class="card-body"><form id="target-form">${TARGET_ACTIONS}</form></div></div>
+				<div class="card ui-card shadow-sm"><form id="alert-filters">${ALERT_FILTER_ACTIONS}</form></div></main></div></body></html>`,
 		});
 		try {
 			await use(server.baseUrl);
@@ -54,15 +58,25 @@ surfaceTest("target form action bar uses the card surface in both themes on desk
 			const surface = await page.evaluate(() => {
 				const actions = document.querySelector("#target-form .ui-form-actions");
 				const card = actions.closest(".card");
+				const filters = document.querySelector("#alert-filters .ui-form-actions");
+				const filterCard = filters.closest(".card");
 				return {
 					actions: getComputedStyle(actions).backgroundColor,
 					card: getComputedStyle(card).backgroundColor,
 					position: getComputedStyle(actions).position,
+					filterActions: getComputedStyle(filters).backgroundColor,
+					filterCard: getComputedStyle(filterCard).backgroundColor,
+					filterPosition: getComputedStyle(filters).position,
 				};
 			});
 			assert.equal(surface.actions, surface.card, `${theme} ${viewport.name}: action bar and card backgrounds differ (${JSON.stringify(surface)})`);
 			assert.notEqual(surface.actions, "rgba(0, 0, 0, 0)", `${theme} ${viewport.name}: sticky action bar is transparent`);
 			assert.equal(surface.position, "sticky", `${theme} ${viewport.name}: action bar is no longer sticky`);
+			if (viewport.width <= 767.98) {
+				assert.equal(surface.filterActions, surface.filterCard, `${theme} ${viewport.name}: alerts filter and card backgrounds differ (${JSON.stringify(surface)})`);
+				assert.notEqual(surface.filterActions, "rgba(0, 0, 0, 0)", `${theme} ${viewport.name}: alerts filter action bar is transparent`);
+				assert.equal(surface.filterPosition, "sticky", `${theme} ${viewport.name}: alerts filter action bar is no longer sticky`);
+			}
 		}
 	}
 });

@@ -355,14 +355,48 @@ test("Signal switch stays off while the Signal account is not registered @modal 
 	await page.evaluate(() => {
 		const json = (body) => ({ ok: true, status: 200, json: () => Promise.resolve(body) });
 		const rec = (phone) => json({ id: 1, name: "Martin", is_enabled: true, enable_for_all_targets: false, phone, email: "martin@example.com", targets: [] });
+		window.__signalRegistered = null;
+		window.__signalStatusResolved = false;
+		window.__signalStatusCalls = 0;
 		window.apiFetch = (url) => {
-			if (url === "/signal/status") return Promise.resolve(json({ reachable: true, registered: false, linked: false, accounts: [] }));
+			if (url === "/signal/status") {
+				window.__signalStatusCalls += 1;
+				return Promise.resolve({
+					ok: true,
+					status: 200,
+					json: () => {
+						window.__signalStatusResolved = true;
+						return Promise.resolve({ reachable: true, registered: window.__signalRegistered, linked: true, accounts: [] });
+					},
+				});
+			}
 			if (url === "/recipients/1") return Promise.resolve(rec(window.__phone));
 			if (url === "/recipients/2") return Promise.resolve(rec(""));
 			return Promise.resolve(json([]));
 		};
 		window.__phone = "";
 	});
+	await page.evaluate(() => {
+		const tab = document.createElement("button");
+		tab.id = "signal-tab";
+		tab.type = "button";
+		tab.addEventListener("click", () => { window.__signalTabClicks = (window.__signalTabClicks || 0) + 1; });
+		document.body.prepend(tab);
+	});
+	// An unknown status leaves the Add switch available because no negative result has been established.
+	await transitionModal(page, "addRecipientModal", "show");
+	await page.waitForFunction(() => window.__signalStatusResolved);
+	assert.equal(await page.isDisabled("#recipient-signal-enabled"), false);
+	assert.equal(await page.locator("#recipient-signal-gate").getAttribute("hidden"), "");
+	await transitionModal(page, "addRecipientModal", "hide");
+	// A definite negative gates Add and its link closes the dialog before opening Signal settings.
+	await page.evaluate(() => { window.__signalRegistered = false; window.__signalStatusResolved = false; });
+	await transitionModal(page, "addRecipientModal", "show");
+	await page.waitForFunction(() => window.__signalStatusResolved && !document.getElementById("recipient-signal-gate").hidden);
+	assert.equal(await page.isDisabled("#recipient-signal-enabled"), true);
+	await page.click("#recipient-signal-gate [data-open-signal-tab]");
+	await page.waitForFunction(() => !document.getElementById("addRecipientModal").classList.contains("show") && window.__signalTabClicks === 1);
+
 	const open = async () => {
 		await page.evaluate(() => window.SettingsPage.Recipients.editRecipient(1));
 		await page.waitForFunction(() => document.getElementById("editRecipientModal").classList.contains("show") && !document.querySelector(".modal-backdrop.fade:not(.show)"));

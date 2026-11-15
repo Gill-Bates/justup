@@ -66,14 +66,19 @@ def test_definite_negative_is_reported_after_all_lookups_agree(monkeypatch):
 
 
 def test_transient_failure_is_not_reported_as_not_registered(monkeypatch, caplog):
-    backend = _Backend([SignalUnavailable("signal-cli timed out")] * 3)
+    raw_error = "signal-cli timed out " + "x" * 150
+    short_error = raw_error[: recipients._SIGNAL_ERROR_DETAIL_MAX]
+    backend = _Backend([SignalUnavailable(raw_error)] * 3)
     _use(monkeypatch, backend)
     with caplog.at_level(logging.WARNING, logger="app.api.recipients"):
         warning = recipients._check_signal_registration(PHONE)
     assert warning is not None
     assert "not registered with Signal" not in warning
-    assert "Could not verify" in warning and "signal-cli timed out" in warning
-    assert any(r.levelno == logging.WARNING and PHONE not in r.getMessage() for r in caplog.records)
+    assert "Could not verify" in warning and short_error in warning and raw_error not in warning
+    logged = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(logged) == 3
+    assert all(message.endswith(short_error) and PHONE not in message for message in logged)
+    assert raw_error not in caplog.text
 
 
 def test_transient_failure_then_answer_succeeds(monkeypatch):
