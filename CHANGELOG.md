@@ -1,4 +1,4 @@
-## [1.0.3] - 2026-11-14
+## [1.0.3] - 2026-11-15
 
 - `New` UDP checks and TCP/UDP port discovery are available in the target wizard and editor; admins can re-detect services before saving. Traceroute runs on Nmap, recognizes internet-exchange (IXP) locations, and the About page shows the Nmap version.
 - `New` Settings > General adds a **Public hostname** for notification links and an **Enable PDF Export** switch; Settings > Network shows public IPv4/IPv6 addresses with country, ASN, operator, and location. ASN resolution uses local GeoLite2 data.
