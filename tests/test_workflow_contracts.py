@@ -93,6 +93,8 @@ def test_release_is_a_verified_draft_before_it_is_published():
         release.index('tools/release-publish.py verify "$RUNNER_TEMP/release-published.json"'),
     ]
     assert steps == sorted(steps)
+    # Every --downloads path must be absolute: a relative one resolves outside RUNNER_TEMP.
+    assert re.findall(r"--downloads (\S+)", release) == ['"$release_downloads"', '"$RUNNER_TEMP/release-downloads"']
     # A published tag is never edited, replaced or deleted by the workflow.
     assert "createRelease" not in release and "updateRelease" not in release
     # The only delete is the removal of stale assets the plan listed for an unpublished draft.

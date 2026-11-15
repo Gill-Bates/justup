@@ -1434,7 +1434,7 @@ jobs:
           gh api "repos/${GH_REPO}/releases/${RELEASE_ID}" > "$RUNNER_TEMP/release-published.json"
           python3 tools/release-publish.py verify "$RUNNER_TEMP/release-published.json" \
             "$RUNNER_TEMP/expected-assets.json" --published \
-            --downloads release-downloads
+            --downloads "$RUNNER_TEMP/release-downloads"
           echo "Published v${VERSION} with $(jq '.assets | length' "$RUNNER_TEMP/release-published.json") verified assets"
 
       - name: Release already published
