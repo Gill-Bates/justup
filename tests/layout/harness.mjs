@@ -417,7 +417,7 @@ async function seed(browser, app) {
 		{ name: "wiedenest.de", group: "Websites", host: "example.net", enable_http_check: true, http_url: "https://example.net/" },
 		{ name: "a-very-long-hostname-without-break-opportunity.subdomain.example-corporation.com", group: "Websites", host: "example.edu", enable_ping: true, enable_http_check: true, http_url: "https://example.edu/", enable_tcp_connect: true, tcp_host: "example.edu", tcp_ports: "22,25,80,110,143,443,465,587,993,995,3306,5432,8080,8443" },
 	];
-	const recipient = { name: "Layout Recipient With A Rather Long Display Name", email: "a-very-long-recipient-address-without-breaks@subdomain.example-corporation-international.com", phone: "+4915112345678" };
+	const recipient = { name: "Layout Recipient With A Rather Long Display Name", email: "a-very-long-recipient-address-without-breaks@subdomain.example-corporation-international.com" };
 	const res = await page.evaluate(async ([ts, rc]) => {
 		const codes = [];
 		let fixtureTargetId = null;

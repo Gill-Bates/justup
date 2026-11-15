@@ -500,7 +500,7 @@ function buildStatusCodeChart(canvasId, data) {
   chart._themeHook = function (t) {
     chart.data.datasets[0].backgroundColor = colorsFor(t);
     chart.data.datasets[0].borderColor = t.bg;
-    _renderStatusDonutLegend(legendEl, keys, colorsFor(t), clsOf);
+    _renderStatusDonutLegend(legendEl, keys, colorsFor(t), clsOf, values, shares);
   };
   ctx.setAttribute("role", "img");
   ctx.setAttribute(

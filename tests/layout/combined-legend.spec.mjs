@@ -357,6 +357,11 @@ for (const viewport of VIEWPORTS) {
 					const center = document.getElementById("status-donut-total");
 					const centerRect = center.getBoundingClientRect();
 					const canvasRect = document.getElementById("chart-status-code").getBoundingClientRect();
+					const donut = window.Chart.getChart(document.getElementById("chart-status-code"));
+					const arc = donut.getDatasetMeta(0).data[0];
+					const { x: arcX, y: arcY, innerRadius } = arc.getProps(["x", "y", "innerRadius"], true);
+					const centerX = centerRect.left - canvasRect.left + centerRect.width / 2;
+					const centerY = centerRect.top - canvasRect.top + centerRect.height / 2;
 					return {
 						keyExists: !!document.getElementById("combined-status-key"),
 						classKeyText: Array.from(document.querySelectorAll("#combined-card .combined-swatch")).filter((s) => !s.closest("#combined-legend") && !s.closest("#status-donut-legend")).length,
@@ -366,6 +371,7 @@ for (const viewport of VIEWPORTS) {
 						})),
 						centerText: center.textContent.trim(),
 						centerInside: centerRect.left >= canvasRect.left && centerRect.right <= canvasRect.right && centerRect.top >= canvasRect.top && centerRect.bottom <= canvasRect.bottom,
+						centerInHole: Math.hypot(Math.abs(centerX - arcX) + centerRect.width / 2, Math.abs(centerY - arcY) + centerRect.height / 2) < innerRadius,
 						overlap: rects.some((a, i) => rects.some((b, j) => i < j && a.bottom > b.top + 1 && a.top < b.bottom - 1)),
 						titleShown: !!y.options.title.display,
 						titleText: y.options.title.text,
@@ -377,6 +383,7 @@ for (const viewport of VIEWPORTS) {
 				assert.ok(state.rows.length > 0 && state.rows.every((row) => /^(HTTP \d{3}|Error)/.test(row.name) && /\d.*\(.*%\)/.test(row.value)), `${theme}: each status has its count and share beside the ring (${JSON.stringify(state.rows)})`);
 				assert.match(state.centerText, /\d.*(?:checks|samples)/, `${theme}: total is shown in the donut center`);
 				assert.equal(state.centerInside, true, `${theme}: total stays inside the donut plot`);
+				assert.equal(state.centerInHole, true, `${theme}: total stays off the colored ring`);
 				assert.equal(state.overlap, false, `${theme}: legend rows do not overlap`);
 				if (state.titleShown) assert.match(state.titleText, /\(ms\)/, `${theme}: axis title names the unit`);
 				else assert.ok(state.ticks.length > 0 && state.ticks.every((label) => /\bms$/.test(label)), `${theme}: ticks carry the unit (${state.ticks})`);
