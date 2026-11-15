@@ -270,15 +270,14 @@ test("Signal switch stays off while the Signal account is not registered @modal 
 	});
 	const open = async () => {
 		await page.evaluate(() => window.SettingsPage.Recipients.editRecipient(1));
-		await page.waitForFunction(() => document.getElementById("editRecipientModal").classList.contains("show"));
+		await page.waitForFunction(() => document.getElementById("editRecipientModal").classList.contains("show") && !document.querySelector(".modal-backdrop.fade:not(.show)"));
 	};
 	// No phone saved: the switch is locked and the hint explains why.
 	await open();
 	await page.waitForSelector("#edit-recipient-signal-gate:not([hidden])");
 	assert.equal(await page.isDisabled("#edit-recipient-signal-enabled"), true);
 	assert.equal(await page.getAttribute("#edit-recipient-signal-enabled", "aria-disabled"), "true");
-	await page.evaluate(() => bootstrap.Modal.getInstance(document.getElementById("editRecipientModal")).hide());
-	await page.waitForFunction(() => !document.getElementById("editRecipientModal").classList.contains("show"));
+	await transitionModal(page, "editRecipientModal", "hide");
 	// Signal already active: shown and switchable off, but not back on.
 	await page.evaluate(() => { window.__phone = "+4915112345678"; });
 	await open();

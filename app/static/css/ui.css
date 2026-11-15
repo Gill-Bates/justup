@@ -1948,6 +1948,11 @@ textarea.smtp-editor-frame {
 	color: var(--bs-warning-text-emphasis);
 }
 
+/* On a text-bg-warning toast the contrast colour of the background applies, not the emphasis token. */
+.toast .ju-warning {
+	color: inherit;
+}
+
 .ju-warning > .material-icons {
 	flex: none;
 	font-size: 1em;

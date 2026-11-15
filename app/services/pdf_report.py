@@ -15,7 +15,6 @@ import logging
 import math
 import re
 import threading
-from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, tzinfo
 from pathlib import Path
@@ -23,14 +22,6 @@ from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urlparse
 from xml.sax.saxutils import escape as _xml_escape
 
-import matplotlib as mpl
-
-mpl.use("Agg")  # Non-interactive backend for server
-import matplotlib.dates as mdates
-import matplotlib.pyplot as plt
-import matplotlib.ticker as mticker
-from matplotlib.lines import Line2D
-from matplotlib.patches import Patch, Rectangle
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4, LETTER
 from reportlab.lib.styles import ParagraphStyle
@@ -42,7 +33,6 @@ from reportlab.pdfbase.ttfonts import ShapedStr, TTFont, shapeStr
 # ReportLab embeds the IBM Plex Sans and Material Icons fonts in each PDF.
 from reportlab.platypus import (
     Flowable,
-    Image,
     KeepTogether,
     LongTable,
     PageBreak,
@@ -56,6 +46,7 @@ from reportlab.platypus.doctemplate import ActionFlowable
 from reportlab.rl_config import defaultPageSize  # noqa: F401 - ensure config is loaded
 
 from app.services import geo_resolver as gr
+from app.services import pdf_charts
 from app.services.flag_images import load_flags, normalize_country_code
 from app.services.pdf_logo import LogoFlowable, draw_logo, logo_aspect
 from app.services.pdf_route_map import (
@@ -137,9 +128,6 @@ def _clean_site_title(raw: Any, font_name: str) -> str:
     return text
 
 
-# matplotlib is not thread-safe for parallel plot generation: serialize all PDF generation.
-_PDF_LOCK = threading.Lock()
-
 # Constants
 
 FONT_DIR = Path(__file__).parent.parent / "static" / "fonts"
@@ -205,9 +193,6 @@ SPACE_SM = 2 * mm  # Small: inner cell padding
 SPACE_MD = 4 * mm  # Medium: between elements
 SPACE_LG = 8 * mm  # Large: section spacing
 SPACE_XL = 12 * mm  # Extra large: page breaks, major sections
-
-# DPI for all images embedded into PDFs (charts, maps, etc.)
-PDF_DPI = 600
 
 
 # Traceroute route data
@@ -520,90 +505,6 @@ def _get_font_bold() -> str:
     return "IBMPlexSans-Bold"
 
 
-# Matplotlib Chart Generation
-
-# Guard to prevent repeated matplotlib style setup (global state)
-_mpl_initialized = False
-_mpl_init_lock = threading.Lock()
-
-
-def _setup_matplotlib_style() -> None:
-    """
-    Configure matplotlib for consistent, high-quality charts with IBM Plex Sans.
-
-    Explicitly registers the local IBM Plex Sans TTF files with matplotlib's font
-    manager to ensure chart labels match the rest of the PDF.
-
-    Only runs once to avoid repeated global state modifications.
-    """
-    global _mpl_initialized
-    if _mpl_initialized:
-        return
-
-    with _mpl_init_lock:
-        if _mpl_initialized:
-            return
-
-        _register_fonts()
-
-        from matplotlib import font_manager
-
-        font_manager.fontManager.addfont(str(FONT_DIR / "IBMPlexSans-Regular.ttf"))
-        font_manager.fontManager.addfont(str(FONT_DIR / "IBMPlexSans-Bold.ttf"))
-
-        # Base style, with a fallback for matplotlib versions that renamed it.
-        try:
-            plt.style.use("seaborn-v0_8-whitegrid")
-        except OSError:
-            _log.debug("seaborn-v0_8-whitegrid not available, using default style")
-            plt.style.use("default")
-
-        # The style resets rcParams, so set them (incl. IBM Plex Sans) afterwards.
-        font_config = {
-            "font.family": "sans-serif",
-            "font.sans-serif": ["IBM Plex Sans"],
-            "font.weight": "regular",
-            "mathtext.default": "regular",
-        }
-
-        plt.rcParams.update(
-            {
-                **font_config,
-                "font.size": 9,
-                "axes.titlesize": 11,
-                "axes.labelsize": 9,
-                "xtick.labelsize": 8,
-                "ytick.labelsize": 8,
-                "legend.fontsize": 11,
-                "figure.dpi": PDF_DPI,
-                "savefig.dpi": PDF_DPI,
-                "axes.linewidth": 0.5,
-                "grid.linewidth": 0.3,
-                "lines.linewidth": 1.5,
-                "axes.facecolor": "#ffffff",
-                "figure.facecolor": "#ffffff",
-                "axes.edgecolor": "#e9ecef",
-                "grid.color": "#e9ecef",
-            }
-        )
-
-        _mpl_initialized = True
-        _log.debug("matplotlib configured with font.sans-serif=%s", plt.rcParams["font.sans-serif"])
-
-
-@contextmanager
-def _safe_figure(*args, **kwargs):
-    """Context manager ensuring matplotlib figures are closed on exception.
-
-    Prevents memory leaks from unclosed figures when chart rendering fails.
-    """
-    fig, ax = plt.subplots(*args, **kwargs)
-    try:
-        yield fig, ax
-    finally:
-        plt.close(fig)
-
-
 # Shadow layer constants for soft shadow effect (CSS-like box-shadow blur)
 _SHADOW_LAYERS = [(2.0, 0.015), (1.5, 0.03), (1.0, 0.05), (0.6, 0.07)]
 
@@ -677,42 +578,6 @@ def _break_gaps(ts: list[datetime], vals: list[float]) -> tuple[list[datetime], 
         out_t.append(ts[i])
         out_v.append(vals[i])
     return out_t, out_v
-
-
-def _plot_series(
-    ax, ts: list[datetime], vals: list[float], color: str, *, ymax: float | None = None, label: str = "Measured"
-) -> Any:
-    """Plot a measured series: gaps stay open, isolated samples get a marker, values above ymax sit on the edge."""
-    bt, bv = _break_gaps(ts, vals)
-    if ymax is not None:
-        bv = [min(v, ymax) for v in bv]
-    ax.fill_between(bt, bv, alpha=0.14, color=color, linewidth=0)
-    (line,) = ax.plot(bt, bv, color=color, linewidth=1.1, label=label)
-    iso = [
-        i
-        for i in range(len(bt))
-        if not math.isnan(bv[i]) and (i == 0 or math.isnan(bv[i - 1])) and (i == len(bt) - 1 or math.isnan(bv[i + 1]))
-    ]
-    if iso:
-        ax.plot([bt[i] for i in iso], [bv[i] for i in iso], linestyle="none", marker="o", markersize=2.5, color=color)
-    return line
-
-
-def _apply_axis_style(ax, *, grid_x: bool = False, grid_y: bool = True) -> None:
-    """Shared spines, grid and ticks of every report chart; grids are always set explicitly."""
-    ax.spines["top"].set_visible(False)
-    ax.spines["right"].set_visible(False)
-    for axis, enabled in (("y", grid_y), ("x", grid_x)):
-        if enabled:
-            ax.grid(True, axis=axis, alpha=0.6)
-        else:
-            ax.grid(False, axis=axis)
-    ax.tick_params(axis="both", length=2.5, width=0.5, labelsize=8, colors="#495057")
-
-
-def _style_axes(ax, *, from_date: datetime, to_date: datetime) -> None:
-    _apply_axis_style(ax)
-    _format_time_axis(ax, from_date=from_date, to_date=to_date)
 
 
 # Latency scale and peaks
@@ -849,83 +714,8 @@ def _overflow_values(view: _LatencyView, top: float) -> list[float]:
     return medians + [p.value for p in view.peaks if p.value > top]
 
 
-def _draw_latency(
-    ax,
-    view: _LatencyView,
-    color: str,
-    *,
-    top: float,
-    from_date: datetime,
-    to_date: datetime,
-    max_labels: int = 3,
-) -> list[Any]:
-    """Draw median line, peak bars and above-scale markers on a prepared linear axis; returns legend handles."""
-    span = to_date - from_date
-    label = "Median per interval" if view.has_intervals else "Measured"
-    handles = [_plot_series(ax, view.ts, view.vals, color, ymax=top, label=label)]
-    marks: list[tuple[datetime, float, float]] = []  # x, drawn y, real value
-    for p in view.peaks[:_MAX_PEAK_MARKS]:
-        centre = p.start + (p.end - p.start) / 2
-        y = min(p.value, top)
-        # The bar spans only the real interval; a thin stem and a point marker keep it visible without
-        # implying a longer event than the aggregation interval.
-        ax.hlines(y, p.start, p.end, color=PEAK_COLOR, linewidth=1.6, zorder=4)
-        ax.vlines(centre, min(p.median, y), y, color=PEAK_COLOR, linewidth=0.9, zorder=4)
-        ax.plot([centre], [y], linestyle="none", marker="o", markersize=2.8, color=PEAK_COLOR, zorder=4)
-        marks.append((centre, y, p.value))
-    if view.peaks:
-        handles.append(Line2D([], [], color=PEAK_COLOR, linewidth=0.9, marker="o", markersize=2.8, label=_PEAK_LABEL))
-    median_over = [(t, top, v) for t, v in zip(view.ts, view.vals, strict=True) if not math.isnan(v) and v > top]
-    over_marks = median_over + [m for m in marks if m[2] > top]
-    if over_marks:
-        ax.plot(
-            [m[0] for m in over_marks],
-            [top] * len(over_marks),
-            linestyle="none",
-            marker="^",
-            markersize=4,
-            color="#343a40",
-            zorder=5,
-            clip_on=False,
-        )
-        handles.append(Line2D([], [], linestyle="none", marker="^", markersize=4, color="#343a40", label=_ABOVE_LABEL))
-    # Above-scale marks are always labelled (the legend promises it); close neighbours are stacked
-    # downwards instead of dropped. Other peaks stay capped and skip crowded spots.
-    placed: list[tuple[datetime, bool]] = []  # x, is above scale
-    for x, y, real in sorted([*marks, *median_over], key=lambda m: -m[2]):
-        over = real > top
-        near = [o for o, o_over in placed if abs(x - o) < span * 0.12 and (o_over or not over)]
-        if not over and (sum(1 for _, o in placed if not o) >= max_labels or near):
-            continue
-        stack = len(near) if over else 0
-        placed.append((x, over))
-        frac = (x - from_date) / span if span else 0.5
-        high = y >= top * 0.88
-        ax.annotate(
-            _fmt_ms_value(real),
-            (x, y),
-            xytext=(-4 if frac > 0.5 else 4, (-4 if high else 4) - (9 * stack if high else -9 * stack)),
-            textcoords="offset points",
-            ha="right" if frac > 0.5 else "left",  # beside the peak stem, never across it
-            va="top" if high else "bottom",
-            fontsize=7,
-            color=PEAK_COLOR if real > view.cap else "#343a40",
-            annotation_clip=False,
-        )
-    return handles
-
-
 def _tick_step(ticks: list[float]) -> float:
     return ticks[1] - ticks[0] if len(ticks) > 1 else 1.0
-
-
-def _y_axis(ax, ticks: list[float], top: float, *, label: str | None = None) -> None:
-    ax.set_ylim(0, top)
-    ax.set_yticks(ticks)
-    step = _tick_step(ticks)
-    ax.yaxis.set_major_formatter(mticker.FuncFormatter(_fmt_tick(step)))
-    if label:
-        ax.set_ylabel(label, fontsize=8, color="#495057")
 
 
 def _left_margin(ticks: list[float], width: float, has_label: bool = True) -> float:
@@ -944,29 +734,6 @@ def _latency_plot_left_in(data: list[dict], from_date: datetime, sla_threshold_m
     return _left_margin(ticks, width, has_label=False) * width
 
 
-def _keep_tick_labels_inside(fig) -> None:
-    """Axes run edge to edge; a tick label at the border is aligned inward instead of being clipped."""
-    fig.canvas.draw()
-    renderer = fig.canvas.get_renderer()
-    width = fig.bbox.width
-    for ax in fig.axes:
-        for label in ax.get_xticklabels():
-            if not label.get_visible() or not label.get_text():
-                continue
-            box = label.get_window_extent(renderer)
-            if box.x0 < 0:
-                label.set_ha("left")
-            elif box.x1 > width:
-                label.set_ha("right")
-
-
-def _fig_png(fig) -> bytes:
-    _keep_tick_labels_inside(fig)
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=PDF_DPI, facecolor="white", edgecolor="none", bbox_inches=None, pad_inches=0)
-    return buf.getvalue()
-
-
 def _create_line_chart(
     data: list[dict],
     *,
@@ -980,8 +747,8 @@ def _create_line_chart(
     threshold_label: str | None = None,
     legend_below: bool = False,
     plot_left_in: float | None = None,
-) -> bytes | None:
-    """Create a latency time-series chart; measurements and the SLA threshold are drawn distinctly.
+) -> pdf_charts.ChartFlowable | None:
+    """Create a vector latency chart; measurements and the SLA threshold are drawn distinctly.
 
     plot_left_in fixes the plot's left edge so the chapter's time axes line up.
     """
@@ -993,77 +760,37 @@ def _create_line_chart(
     if not valid:
         return None
 
-    _setup_matplotlib_style()
+    font = _get_font()
     view = _build_view(data, tz)
     top, ticks = _axis_scale([view], sla_threshold_ms)
-    with _safe_figure(figsize=(width, height)) as (fig, ax):
-        handles = _draw_latency(ax, view, color, top=top, from_date=from_date, to_date=to_date)
-        if sla_threshold_ms:
-            sla_label = threshold_label or f"SLA threshold ({sla_threshold_ms} ms)"
-            if sla_threshold_ms <= top:
-                handles.append(
-                    ax.axhline(
-                        sla_threshold_ms,
-                        linestyle=(0, (5, 3)),
-                        linewidth=1.1,
-                        color=CHART_COLORS["sla"],
-                        label=sla_label,
-                    )
-                )
-            else:  # far above the data: keep the scale readable, mark the edge and say so in the legend
-                handles.append(
-                    Line2D([], [], linestyle=(0, (5, 3)), color=CHART_COLORS["sla"], label=f"{sla_label} – above scale")
-                )
-                ax.plot(
-                    [1.0],
-                    [1.0],
-                    transform=ax.transAxes,
-                    linestyle="none",
-                    marker="^",
-                    markersize=4,
-                    color=CHART_COLORS["sla"],
-                    clip_on=False,
-                    zorder=5,
-                )
-                ax.annotate(
-                    f"SLA {sla_threshold_ms:,} ms (above scale)",
-                    xy=(1.0, 1.0),
-                    xycoords="axes fraction",
-                    xytext=(-7, -2),
-                    textcoords="offset points",
-                    ha="right",
-                    va="top",
-                    fontsize=7,
-                    color="#8a5200",
-                    annotation_clip=False,
-                )
-        _y_axis(ax, ticks, top, label=ylabel)
-        ax.yaxis.label.set_rotation(0)
-        ax.yaxis.label.set_horizontalalignment("left")
-        ax.yaxis.label.set_verticalalignment("bottom")
-        _style_axes(ax, from_date=from_date, to_date=to_date)
-        legend_position = (
-            {"loc": "upper center", "bbox_to_anchor": (0.5, -0.26)}
-            if legend_below
-            else {
-                "loc": "lower right",
-                "bbox_to_anchor": (1.0, 1.0),
-            }
-        )
-        ax.legend(
-            handles=handles,
-            **legend_position,
-            ncol=len(handles) if len(handles) <= 3 else 2,
-            frameon=False,
-            fontsize=8,
-            borderaxespad=0.2,
-        )
-        top_edge = 0.98 if legend_below else 0.88 if len(handles) <= 3 else 0.82
-        left = _left_margin(ticks, width, has_label=False) if plot_left_in is None else plot_left_in / width
-        fig.subplots_adjust(left=left, right=1.0, top=top_edge, bottom=0.31)
-        # Put the unit above the plot so the axis needs space only for its tick labels.
-        ax.yaxis.set_label_coords(0.0, 1.02)
-        return _fig_png(fig)
+    series_ts, series_vals = _break_gaps(view.ts, view.vals)
+    peaks = [(peak.start, peak.end, peak.value, peak.median) for peak in view.peaks]
+    overflow = [
+        (stamp, value) for stamp, value in zip(view.ts, view.vals, strict=True) if not math.isnan(value) and value > top
+    ] + [(peak.start + (peak.end - peak.start) / 2, peak.value) for peak in view.peaks if peak.value > top]
+    plot_left = _left_margin(ticks, width, has_label=False) * width if plot_left_in is None else plot_left_in
+    return pdf_charts.line_chart(
+        width=width * 72,
+        height=height * 72,
+        times=series_ts,
+        values=series_vals,
+        start=from_date,
+        end=to_date,
+        color=color,
+        ylabel=ylabel,
+        top=top,
+        ticks=ticks,
+        peaks=peaks,
+        overflow=overflow,
+        sla=sla_threshold_ms or None,
+        sla_label=threshold_label,
+        plot_left=plot_left * 72,
+        legend_below=legend_below,
+        timezone=tz,
+        font=font,
+        draw_text=_draw_text,
+        text_width=_text_width,
+    )
 
 
 def _create_response_time_chart(
@@ -1075,8 +802,8 @@ def _create_response_time_chart(
     sla_threshold_ms: int | None = None,
     threshold_label: str | None = None,
     plot_left_in: float | None = None,
-) -> bytes | None:
-    """Create a response time chart as PNG bytes."""
+) -> pdf_charts.ChartFlowable | None:
+    """Create a vector response time chart."""
     return _create_line_chart(
         data,
         from_date=from_date,
@@ -1101,8 +828,8 @@ def _create_ping_chart(
     sla_threshold_ms: int | None = None,
     threshold_label: str | None = None,
     plot_left_in: float | None = None,
-) -> bytes | None:
-    """Create a ping latency chart as PNG bytes."""
+) -> pdf_charts.ChartFlowable | None:
+    """Create a vector ping latency chart."""
     return _create_line_chart(
         data,
         from_date=from_date,
@@ -1124,8 +851,8 @@ def _create_tcp_chart(
     width: float = 6.7,
     height: float = 2.5,
     plot_left_in: float | None = None,
-) -> bytes | None:
-    """Create a TCP latency chart as PNG bytes."""
+) -> pdf_charts.ChartFlowable | None:
+    """Create a vector TCP latency chart."""
     return _create_line_chart(
         data,
         from_date=from_date,
@@ -1147,7 +874,7 @@ def _as_series(data: AvailabilitySeries | list[dict] | None, interval_seconds: f
 
 def _uptime_blocks(
     series: AvailabilitySeries, from_date: datetime, to_date: datetime, tz: tzinfo
-) -> dict[str, list[tuple[float, float]]]:
+) -> dict[str, list[tuple[datetime, datetime]]]:
     """Up and down blocks of the status strip, one per run; a gap between runs stays empty.
 
     A run reaches up to the next run when that is within three median sample spacings, otherwise one
@@ -1156,8 +883,8 @@ def _uptime_blocks(
     runs = series.measured_runs
     step = series.median_step or timedelta(minutes=1)
     limit = step * 3
-    min_width = (to_date - from_date) * 0.004  # keep short outages visible in print
-    blocks: dict[str, list[tuple[float, float]]] = {"up": [], "down": []}
+    min_width = (to_date.astimezone(UTC) - from_date.astimezone(UTC)) * 0.004  # keep short outages visible in print
+    blocks: dict[str, list[tuple[datetime, datetime]]] = {"up": [], "down": []}
     for i, run in enumerate(runs):
         first, last = _to_tz(run.first, tz), _to_tz(run.last, tz)
         nxt = _to_tz(runs[i + 1].first, tz) if i + 1 < len(runs) else None
@@ -1174,7 +901,7 @@ def _uptime_blocks(
             # The last sample's own block is widened too and may reach past the end of the run.
             if last_end > last_start and last_end - last_start < min_width:
                 end = max(end, last_start + min_width)
-        blocks[key].append((mdates.date2num(start), mdates.date2num(end) - mdates.date2num(start)))
+        blocks[key].append((start, end))
     return blocks
 
 
@@ -1185,8 +912,8 @@ def _create_uptime_chart(
     width: float = 6.7,
     height: float = 1.45,
     plot_left_in: float = 0.0,
-) -> bytes | None:
-    """Create an availability status strip as PNG bytes.
+) -> pdf_charts.ChartFlowable | None:
+    """Create an availability status strip as vector shapes.
 
     Up and Down intervals are drawn as blocks; periods without samples stay empty.
     plot_left_in leaves the Y-axis gutter of the latency charts empty so the time axes align.
@@ -1197,51 +924,45 @@ def _create_uptime_chart(
         return None
     blocks = _uptime_blocks(series, from_date, to_date, tz)
 
-    _setup_matplotlib_style()
-    with _safe_figure(figsize=(width, height)) as (fig, ax):
-        ax.broken_barh(blocks["up"], (0, 1), facecolors=CHART_COLORS["uptime_up"], linewidth=0)
-        ax.broken_barh(blocks["down"], (0, 1), facecolors=CHART_COLORS["uptime_down"], linewidth=0)
-        ax.set_ylim(0, 1)
-        ax.set_yticks([])
-        _style_axes(ax, from_date=from_date, to_date=to_date)
-        ax.spines["left"].set_visible(False)
-        ax.grid(False)
-        ax.legend(
-            handles=[
-                Patch(facecolor=CHART_COLORS["uptime_up"], label="Up"),
-                Patch(facecolor=CHART_COLORS["uptime_down"], label="Down"),
-                Patch(facecolor="#ffffff", edgecolor="#adb5bd", linewidth=0.6, label="No measurement"),
-            ],
-            loc="lower right",
-            bbox_to_anchor=(1.0, 1.0),
-            ncol=3,
-            frameon=False,
-            fontsize=8,
-            borderaxespad=0.2,
-        )
-        fig.subplots_adjust(left=plot_left_in / width, right=1.0, top=0.80, bottom=0.42)
-        return _fig_png(fig)
+    return pdf_charts.uptime_chart(
+        width=width * 72,
+        height=height * 72,
+        start=from_date,
+        end=to_date,
+        blocks=blocks,
+        plot_left=plot_left_in * 72,
+        timezone=tz,
+        font=_get_font(),
+        draw_text=_draw_text,
+        text_width=_text_width,
+    )
 
 
 def _coverage_blocks(
     stamps: list[datetime], interval: timedelta, from_date: datetime, to_date: datetime
-) -> list[tuple[float, float]]:
+) -> list[tuple[datetime, datetime]]:
     """Observed spans: each check covers one configured interval, so the sum matches coverage_pct."""
     return _coverage_span_blocks([(t, t) for t in sorted(stamps)], interval, from_date, to_date)
 
 
 def _coverage_span_blocks(
     spans: list[tuple[datetime, datetime]], interval: timedelta, from_date: datetime, to_date: datetime
-) -> list[tuple[float, float]]:
+) -> list[tuple[datetime, datetime]]:
     """Like ``_coverage_blocks`` for runs: checks from the first to the last sample of a span are contiguous."""
     blocks: list[tuple[datetime, datetime]] = []
+    start_utc, end_utc = from_date.astimezone(UTC), to_date.astimezone(UTC)
     for first, last in spans:
-        end = min(last + interval, to_date)
-        if blocks and first <= blocks[-1][1]:
-            blocks[-1] = (blocks[-1][0], max(blocks[-1][1], end))
-        elif end > first:
-            blocks.append((first, end))
-    return [(mdates.date2num(a), mdates.date2num(b) - mdates.date2num(a)) for a, b in blocks if b > from_date]
+        first_utc, last_utc = first.astimezone(UTC), last.astimezone(UTC)
+        observed_start = max(first_utc, start_utc)
+        observed_end = min(last_utc + interval, end_utc)
+        if blocks and observed_start <= blocks[-1][1].astimezone(UTC):
+            prior_start, prior_end = blocks[-1]
+            merged_end = max(prior_end.astimezone(UTC), observed_end).astimezone(from_date.tzinfo or UTC)
+            blocks[-1] = (prior_start, merged_end)
+        elif observed_end > observed_start:
+            localized = from_date.tzinfo or UTC
+            blocks.append((observed_start.astimezone(localized), observed_end.astimezone(localized)))
+    return blocks
 
 
 def _create_coverage_bar(
@@ -1252,8 +973,8 @@ def _create_coverage_bar(
     height: float = 0.7,
     interval_seconds: float = 60,
     plot_left_in: float = 0.0,
-) -> bytes | None:
-    """Compact bar over the whole reporting period: where checks exist and where the period is empty."""
+) -> pdf_charts.ChartFlowable | None:
+    """Compact vector bar over the whole period, separating checks from empty time."""
     tz = _report_tz(from_date)
     if isinstance(data, AvailabilitySeries):
         spans = [(_to_tz(run.first, tz), _to_tz(run.last, tz)) for run in data.measured_runs]
@@ -1262,44 +983,18 @@ def _create_coverage_bar(
         spans = [(t, t) for t, v in zip(ts, vals, strict=True) if not math.isnan(v)]
     if not spans:
         return None
-    _setup_matplotlib_style()
     blocks = _coverage_span_blocks(spans, timedelta(seconds=interval_seconds), from_date, to_date)
-    with _safe_figure(figsize=(width, height)) as (fig, ax):
-        ax.broken_barh(
-            [(mdates.date2num(from_date), mdates.date2num(to_date) - mdates.date2num(from_date))],
-            (0, 1),
-            facecolors="#ffffff",
-            edgecolor="#adb5bd",
-            hatch="////",
-            linewidth=0.6,
-        )
-        ax.broken_barh(
-            blocks,
-            (0, 1),
-            facecolors=CHART_COLORS["response_time"],
-            linewidth=0.3,
-            edgecolor=CHART_COLORS["response_time"],
-        )
-        ax.set_ylim(0, 1)
-        ax.set_yticks([])
-        _style_axes(ax, from_date=from_date, to_date=to_date)
-        ax.spines["left"].set_visible(False)
-        ax.set_xlabel("")  # the period is stated in the chapter subtitle
-        ax.grid(False)
-        ax.legend(
-            handles=[
-                Patch(facecolor=CHART_COLORS["response_time"], label="Checks recorded"),
-                Patch(facecolor="#ffffff", edgecolor="#adb5bd", hatch="////", linewidth=0.6, label="No measurement"),
-            ],
-            loc="lower right",
-            bbox_to_anchor=(1.0, 1.0),
-            ncol=2,
-            frameon=False,
-            fontsize=8,
-            borderaxespad=0.2,
-        )
-        fig.subplots_adjust(left=plot_left_in / width, right=1.0, top=0.62, bottom=0.42)
-        return _fig_png(fig)
+    return pdf_charts.coverage_chart(
+        width=width * 72,
+        height=height * 72,
+        start=from_date,
+        end=to_date,
+        blocks=blocks,
+        plot_left=plot_left_in * 72,
+        font=_get_font(),
+        draw_text=_draw_text,
+        text_width=_text_width,
+    )
 
 
 def _port_scales(port_data: dict[int, list[dict]], tz) -> tuple[dict, dict, list[float]]:
@@ -1318,8 +1013,8 @@ def _create_multi_port_tcp_chart(
     width: float = 6.7,
     height: float | None = None,  # Auto-calculated based on number of ports
     plot_left_in: float | None = None,
-) -> bytes | None:
-    """Create a small-multiples TCP latency chart with one panel per port.
+) -> pdf_charts.ChartFlowable | None:
+    """Create a native vector small-multiples TCP chart with one panel per port.
 
     Panels share the time axis; they share the Y scale only when the ports are comparable (see
     _ports_share_scale), otherwise each panel gets its own scale.
@@ -1333,7 +1028,6 @@ def _create_multi_port_tcp_chart(
     if not any(not math.isnan(v) for _, vals in series.values() for v in vals):
         return None
 
-    _setup_matplotlib_style()
     sorted_ports = list(series)
     num_ports = len(sorted_ports)
     if height is None:
@@ -1341,45 +1035,41 @@ def _create_multi_port_tcp_chart(
 
     views, scales, widest = _port_scales(port_data, tz)
 
-    with _safe_figure(nrows=num_ports, ncols=1, figsize=(width, height), sharex=True, squeeze=False) as (fig, axes):
-        flat_axes = axes.flatten()
-        handles: dict[str, Any] = {}
-        for idx, port in enumerate(sorted_ports):
-            ax = flat_axes[idx]
-            color = TCP_PORT_COLORS[idx % len(TCP_PORT_COLORS)]
-            top, ticks = scales[port]
-            for h in _draw_latency(ax, views[port], color, top=top, from_date=from_date, to_date=to_date, max_labels=1):
-                handles.setdefault(h.get_label(), h)
-            ax.text(
-                0.0,
-                1.04,
-                f"Port {port}",
-                transform=ax.transAxes,
-                fontsize=8,
-                fontweight="bold",
-                color=color,
-                va="bottom",
-            )
-            _y_axis(ax, ticks, top)
-            _apply_axis_style(ax, grid_x=False)  # the x grid of the TCP panels stays off
-
-        # Median entries differ in colour per port; the legend only explains peaks and overflow markers.
-        legend_handles = [h for k, h in handles.items() if k in (_PEAK_LABEL, _ABOVE_LABEL)]
-        if legend_handles:
-            flat_axes[0].legend(
-                handles=legend_handles,
-                loc="lower right",
-                bbox_to_anchor=(1.0, 1.0),
-                ncol=len(legend_handles),
-                frameon=False,
-                fontsize=8,
-                borderaxespad=0.2,
-            )
-        _format_time_axis(flat_axes[-1], from_date=from_date, to_date=to_date)
-        left = _left_margin(widest, width, has_label=False) if plot_left_in is None else plot_left_in / width
-        fig.text(0.0, 0.99, "TCP latency (ms)", ha="left", va="top", fontsize=8, color="#495057")
-        fig.subplots_adjust(left=left, right=1.0, top=1 - 0.3 / height, bottom=min(0.34, 0.65 / height), hspace=0.6)
-        return _fig_png(fig)
+    panels = []
+    for idx, port in enumerate(sorted_ports):
+        view = views[port]
+        top, ticks = scales[port]
+        times, values = _break_gaps(view.ts, view.vals)
+        overflow = [
+            (stamp, value)
+            for stamp, value in zip(view.ts, view.vals, strict=True)
+            if not math.isnan(value) and value > top
+        ] + [(peak.start + (peak.end - peak.start) / 2, peak.value) for peak in view.peaks if peak.value > top]
+        panels.append(
+            {
+                "port": port,
+                "color": TCP_PORT_COLORS[idx % len(TCP_PORT_COLORS)],
+                "top": top,
+                "ticks": ticks,
+                "times": times,
+                "values": values,
+                "peaks": [(peak.start, peak.end, peak.value, peak.median) for peak in view.peaks],
+                "overflow": overflow,
+            }
+        )
+    plot_left = _left_margin(widest, width, has_label=False) * width if plot_left_in is None else plot_left_in
+    return pdf_charts.multi_port_chart(
+        width=width * 72,
+        height=height * 72,
+        ports=panels,
+        start=from_date,
+        end=to_date,
+        plot_left=plot_left * 72,
+        timezone=tz,
+        font=_get_font(),
+        draw_text=_draw_text,
+        text_width=_text_width,
+    )
 
 
 def _http_class_label(code: int) -> str:
@@ -1411,10 +1101,17 @@ def _status_counts(data: list[dict]) -> dict[int, int]:
     return counts
 
 
+def _mix(hex_color: str, amount: float) -> str:
+    """Blend a color toward white so slices from one status class remain distinct."""
+    value = hex_color.lstrip("#")
+    rgb = [int(value[i : i + 2], 16) for i in (0, 2, 4)]
+    return "#" + "".join(f"{round(channel + (255 - channel) * amount):02x}" for channel in rgb)
+
+
 def _create_status_code_chart(
     data: list[dict], width: float = 6.7, height: float | None = None, *, exact: bool = False
-) -> bytes | None:
-    """Create an HTTP status code distribution as a labelled donut with a legend table.
+) -> pdf_charts.ChartFlowable | None:
+    """Create an HTTP status distribution as a vector donut and legend table.
 
     Counts are stored samples (history may be rolled up), not exact per-check counts.
     """
@@ -1422,7 +1119,6 @@ def _create_status_code_chart(
     if not status_counts:
         return None
 
-    _setup_matplotlib_style()
     codes = sorted(status_counts)
     counts = [status_counts[c] for c in codes]
     total = sum(counts)
@@ -1436,71 +1132,15 @@ def _create_status_code_chart(
         shade = seen.get(code // 100, 0)
         seen[code // 100] = shade + 1
         slice_colors.append(_mix(base[code // 100], 0.28 * min(shade, 3)))
-
-    fig = plt.figure(figsize=(width, height))
-    try:
-        side = min(height * 0.92, width * 0.36)
-        ax = fig.add_axes([0.02, (1 - side / height) / 2, side / width, side / height])
-        ax.pie(
-            counts,
-            colors=slice_colors,
-            startangle=90,
-            counterclock=False,
-            wedgeprops={"width": 0.42, "edgecolor": "white", "linewidth": 1.2},
-        )
-        ax.text(0, 0.08, f"{total:,}", ha="center", va="center", fontsize=13, fontweight="bold", color="#12294a")
-        ax.text(0, -0.2, "checks" if exact else "samples", ha="center", va="center", fontsize=8, color="#6c757d")
-        ax.axis("equal")
-
-        x0 = side / width + 0.07
-        row_h = min(0.2, 0.84 / max(len(codes), 1)) * 1.0
-        y = 0.5 + row_h * (len(codes) - 1) / 2 + 0.04
-        fig.text(x0, min(y + row_h, 0.97), "Status code", fontsize=8, color="#6c757d")
-        fig.text(
-            x0 + 0.40, min(y + row_h, 0.97), "Checks" if exact else "Samples", fontsize=8, color="#6c757d", ha="right"
-        )
-        fig.text(x0 + 0.52, min(y + row_h, 0.97), "Share", fontsize=8, color="#6c757d", ha="right")
-        for code, count, color in zip(codes, counts, slice_colors, strict=True):
-            fig.patches.append(
-                Rectangle((x0, y - 0.012), 0.016, 0.045, transform=fig.transFigure, facecolor=color, edgecolor="none")
-            )
-            fig.text(
-                x0 + 0.03,
-                y,
-                f"{('HTTP ' + str(code)) if code else 'Error'}  {_http_class_label(code)}",
-                fontsize=8.5,
-                color="#212529",
-                va="baseline",
-            )
-            fig.text(x0 + 0.40, y, f"{count:,}", fontsize=8.5, color="#212529", ha="right")
-            fig.text(x0 + 0.52, y, f"{count / total * 100:.1f} %", fontsize=8.5, color="#212529", ha="right")
-            y -= row_h
-        return _fig_png(fig)
-    finally:
-        plt.close(fig)
-
-
-def _mix(hex_color: str, amount: float) -> str:
-    """Blend a hex color toward white (amount 0..1) to tell codes of one class apart."""
-    c = hex_color.lstrip("#")
-    rgb = [int(c[i : i + 2], 16) for i in (0, 2, 4)]
-    return "#" + "".join(f"{round(v + (255 - v) * amount):02x}" for v in rgb)
-
-
-def _format_time_axis(ax, *, from_date: datetime, to_date: datetime) -> None:
-    """Fixed x-limits from the report period, readable tick labels and an explicit time zone."""
-    tz = _report_tz(from_date)
-    ax.set_xlim(from_date, to_date)
-    span = (to_date - from_date).total_seconds()
-    ax.xaxis.set_major_locator(mdates.AutoDateLocator(tz=tz, minticks=4, maxticks=8))
-    fmt = "%H:%M" if span <= 24 * 3600 else "%m-%d %H:%M" if span <= 3 * 24 * 3600 else "%m-%d"
-    ax.xaxis.set_major_formatter(mdates.DateFormatter(fmt, tz=tz))
-    plt.setp(ax.xaxis.get_majorticklabels(), rotation=0, ha="center")
-    ax.set_xlabel(
-        f"{from_date:%Y-%m-%d %H:%M} – {_to_tz(to_date, tz):%Y-%m-%d %H:%M} ({_tz_label(from_date)})",
-        fontsize=8,
-        color="#6c757d",
-        labelpad=6,
+    return pdf_charts.status_code_chart(
+        width=width * 72,
+        height=height * 72,
+        codes=list(zip(codes, counts, slice_colors, strict=True)),
+        total=total,
+        exact=exact,
+        font=_get_font(),
+        font_bold=_get_font_bold(),
+        draw_text=_draw_text,
     )
 
 
@@ -4072,19 +3712,13 @@ class PDFReportBuilder:
             note += " Values above a panel's axis are marked at its top edge."
         return note
 
-    def _add_chart_section(self, title: str, chart_bytes: bytes, note: str | None = None, max_height_mm: float = 175):
-        """Add a chart at full content width with its title and a data-backed caption, kept together."""
-        img = Image(io.BytesIO(chart_bytes))
-        aspect = img.imageWidth / img.imageHeight
-        img.drawWidth = self.content_width
-        img.drawHeight = self.content_width / aspect
-        max_height = max_height_mm * mm
-        if img.drawHeight > max_height:
-            img.drawHeight = max_height
-            img.drawWidth = max_height * aspect
-        img.hAlign = "LEFT"
-
-        block: list[Any] = [Paragraph(_esc(title), self.styles["chart_title"]), img]
+    def _add_chart_section(
+        self, title: str, chart: pdf_charts.ChartFlowable, note: str | None = None, max_height_mm: float = 175
+    ):
+        """Add a vector chart at full content width with its title and data-backed caption."""
+        chart.hAlign = "LEFT"
+        chart.max_height = max_height_mm * mm
+        block: list[Any] = [Paragraph(_esc(title), self.styles["chart_title"]), chart]
         block.append(Paragraph(_esc(note) if note else "", self.styles["chart_note"]))
         self.elements.append(KeepTogether(block))
 
@@ -4268,10 +3902,9 @@ def generate_pdf_report(report_data: ReportData, page_size: str = "a4") -> bytes
     Returns:
         PDF file as bytes.
 
-    Note: This function is serialized with a global lock (Task 6).
-    matplotlib is not reentrant - parallel PDF generation can corrupt charts/fonts.
+    ReportLab builds each document with an independent canvas. Font registration is guarded once
+    during builder construction; rendering itself has no shared charting-library state.
     """
     builder = PDFReportBuilder(report_data, page_size)
     builder.prefetch_external_data()
-    with _PDF_LOCK:
-        return builder.build()
+    return builder.build()

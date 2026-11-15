@@ -318,8 +318,8 @@ class PDFWorker:
                         timeout=120.0,
                     )
                 except TimeoutError:
-                    # wait_for only stops waiting: the render thread (and the matplotlib lock) keeps
-                    # running until it finishes; concurrency is bounded by the cpu_executor size.
+                    # wait_for only stops waiting: the render thread keeps running until it finishes;
+                    # concurrency is bounded by the cpu_executor size.
                     _log.warning("PDF job %s timed out after 120s; render thread may still be running", _job.job_id)
                     raise RuntimeError(f"PDF generation timed out after 120s for target {_job.target_id}") from None
 

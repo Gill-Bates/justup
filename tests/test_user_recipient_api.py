@@ -12,9 +12,8 @@ import sqlite3
 from pathlib import Path
 
 import pytest
-from fastapi import HTTPException
 from cryptography.fernet import Fernet
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from app.api import recipients, users

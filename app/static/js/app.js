@@ -151,19 +151,23 @@
 
 			// Prevent HTML injection: build DOM nodes, set textContent
 			bodyEl.replaceChildren();
+			// Dark close glyph on the yellow warning background; white on the other variants.
+			toastEl.querySelector('.btn-close')?.classList.toggle('btn-close-white', variant !== 'warning');
 			if (variant === 'warning') {
 				window.JuWarning.append(bodyEl, message);
-			} else if (iconName) {
-				var icon = document.createElement('span');
-				icon.className = 'material-icons me-2';
-				icon.style.fontSize = '20px';
-				icon.style.verticalAlign = 'middle';
-				icon.textContent = iconName;
-				bodyEl.appendChild(icon);
+			} else {
+				if (iconName) {
+					var icon = document.createElement('span');
+					icon.className = 'material-icons me-2';
+					icon.style.fontSize = '20px';
+					icon.style.verticalAlign = 'middle';
+					icon.textContent = iconName;
+					bodyEl.appendChild(icon);
+				}
+				var span = document.createElement('span');
+				span.textContent = String(message);
+				bodyEl.appendChild(span);
 			}
-			var span = document.createElement('span');
-			span.textContent = String(message);
-			bodyEl.appendChild(span);
 
 			var toast = bootstrap.Toast.getOrCreateInstance(toastEl, { delay: 4000 });
 			toast.show();

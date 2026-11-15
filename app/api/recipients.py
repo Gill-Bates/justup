@@ -84,65 +84,85 @@ def _normalize_phone_or_400(phone: str) -> str:
         raise HTTPException(status_code=400, detail=f"Invalid phone number: {e}") from e
 
 
-def _signal_registration_status(phone: str, *, force_refresh: bool = False) -> bool | None:
-    """Check if phone is registered with Signal.
+_SIGNAL_LOOKUP_RETRY_DELAYS = (0.5, 1.5)  # backoff; signal-cli may answer a first lookup falsely
+_SIGNAL_ERROR_DETAIL_MAX = 120
 
-    Centralized low-level function used by both warning generation and
-    verification API. Caches results for 24h using time.monotonic().
-    Thread-safe via _SIGNAL_CACHE_LOCK. ``force_refresh`` skips the cache read; a fresh
-    result replaces the cache entry.
 
-    Args:
-            phone: E.164 formatted phone number
-            force_refresh: Bypass the cached value once (explicit user re-check only)
+def _short_error(exc: BaseException) -> str:
+    """Single-line, truncated signal-cli error text for logs and API warnings (numbers masked by the backend)."""
+    text = " ".join(str(exc).split()) or type(exc).__name__
+    return text[:_SIGNAL_ERROR_DETAIL_MAX]
 
-    Returns:
-            True if registered, False if not registered, None if check unavailable
+
+def _signal_registration_lookup(phone: str, *, force_refresh: bool = False) -> tuple[bool | None, str | None]:
+    """Check if phone is registered with Signal: (status, error).
+
+    status is True/False for a definite answer and None when the check failed or is unavailable; error then
+    carries the reason. A negative answer is re-checked and cached only when all lookups agree; a transient
+    failure is retried with backoff. Answers are cached for 24h (thread-safe).
     """
     now = time.monotonic()
-
+    masked = mask_phone(phone)
     if not force_refresh:
         with _SIGNAL_CACHE_LOCK:
-            if phone in _SIGNAL_REGISTRATION_CACHE:
-                is_registered, cached_at = _SIGNAL_REGISTRATION_CACHE[phone]
-                if (now - cached_at) < _SIGNAL_CACHE_TTL:
-                    return is_registered
+            cached = _SIGNAL_REGISTRATION_CACHE.get(phone)
+        if cached is not None and (now - cached[1]) < _SIGNAL_CACHE_TTL:
+            return cached[0], None
+
+    from ..services.notifications.signal_backend import get_signal_backend
+    from ..services.notifications.signal_errors import SignalNotRegistered, SignalTimeout, SignalUnavailable
 
     try:
-        from ..services.notifications.signal_backend import get_signal_backend
-        from ..services.notifications.signal_errors import (
-            SignalNotRegistered,
-            SignalUnavailable,
-        )
-
         backend = get_signal_backend()
         accounts = backend.list_accounts()
         if not accounts:
-            _log.debug("No Signal accounts registered, skipping registration check")
-            return None
-
+            _log.info("Signal check for %s skipped: no Signal account registered", masked)
+            return None, None
         sender = accounts[0]
-        is_registered = backend.check_user_registered(phone, sender=sender)
+    except (SignalUnavailable, SignalTimeout) as exc:
+        _log.warning("Signal check for %s failed: %s", masked, _short_error(exc))
+        return None, _short_error(exc)
 
-        # Cache the result (thread-safe write with LRU eviction)
-        with _SIGNAL_CACHE_LOCK:
-            if len(_SIGNAL_REGISTRATION_CACHE) >= _SIGNAL_CACHE_MAX_SIZE:
-                oldest_key = min(_SIGNAL_REGISTRATION_CACHE, key=lambda k: _SIGNAL_REGISTRATION_CACHE[k][1])
-                del _SIGNAL_REGISTRATION_CACHE[oldest_key]
-            _SIGNAL_REGISTRATION_CACHE[phone] = (is_registered, now)
+    last_error: str | None = None
+    # An explicit re-check is one lookup per click (rate limited); the user repeats it when in doubt.
+    attempts = 1 if force_refresh else len(_SIGNAL_LOOKUP_RETRY_DELAYS) + 1
+    for attempt in range(attempts):
+        if attempt:
+            time.sleep(_SIGNAL_LOOKUP_RETRY_DELAYS[attempt - 1])
+        try:
+            is_registered = backend.check_user_registered(phone, sender=sender)
+        except (SignalUnavailable, SignalTimeout) as exc:
+            last_error = _short_error(exc)
+            _log.warning("Signal check for %s failed (attempt %d): %s", masked, attempt + 1, last_error)
+            continue
+        except SignalNotRegistered as exc:
+            _log.warning("Signal check for %s failed: sender not registered (%s)", masked, _short_error(exc))
+            return None, _short_error(exc)
+        except Exception as exc:  # noqa: BLE001 - Signal-check boundary: any failure degrades to unknown registration
+            _log.error("Signal check for %s failed: %s", masked, type(exc).__name__)
+            return None, type(exc).__name__
+        if is_registered:
+            with _SIGNAL_CACHE_LOCK:
+                if len(_SIGNAL_REGISTRATION_CACHE) >= _SIGNAL_CACHE_MAX_SIZE:
+                    oldest_key = min(_SIGNAL_REGISTRATION_CACHE, key=lambda k: _SIGNAL_REGISTRATION_CACHE[k][1])
+                    del _SIGNAL_REGISTRATION_CACHE[oldest_key]
+                _SIGNAL_REGISTRATION_CACHE[phone] = (True, time.monotonic())
+            _log.info("Signal check for %s: registered", masked)
+            return True, None
+        _log.info("Signal check for %s: reported not registered (attempt %d)", masked, attempt + 1)
+        last_error = None
+    if last_error is not None:
+        return None, last_error
+    # Cached only after every lookup agreed; the explicit re-check bypasses it.
+    with _SIGNAL_CACHE_LOCK:
+        _SIGNAL_REGISTRATION_CACHE[phone] = (False, time.monotonic())
+    _log.warning("Signal check for %s: not registered after %d lookup(s)", masked, attempts)
+    return False, None
 
-        return is_registered
 
-    except SignalNotRegistered:
-        _log.debug("No Signal sender configured")
-        return None
-    except SignalUnavailable:
-        _log.debug("Signal backend unavailable")
-        return None
-    except Exception as e:  # noqa: BLE001 - Signal-check boundary: any failure degrades to unknown registration
-        # Type only: the message may carry the phone number.
-        _log.debug("Error checking Signal registration: %s", type(e).__name__)
-        return None
+def _signal_registration_status(phone: str, *, force_refresh: bool = False) -> bool | None:
+    """Registration of phone: True, False, or None when the check failed or is unavailable."""
+    return _signal_registration_lookup(phone, force_refresh=force_refresh)[0]
 
 
 def _cached_signal_age(phone: str) -> tuple[bool, float] | None:
@@ -200,23 +220,19 @@ def _signal_busy() -> HTTPException:
 
 
 def _check_signal_registration(phone: str) -> str | None:
-    """Check if phone is registered with Signal, return warning if not.
+    """Warning text if phone is not (verifiably) registered with Signal, else None.
 
-    Uses _signal_registration_status() for actual check.
-
-    Returns:
-            Warning message if not registered, None if registered or check unavailable
+    A definite negative and a failed check are reported differently; a failure never reads as "not registered".
     """
-    registration_status = _signal_registration_status(phone)
-
-    # None = check unavailable, True = registered -> no warning
-    if registration_status is None or registration_status is True:
+    status_, error = _signal_registration_lookup(phone)
+    if status_ is True or (status_ is None and error is None):
         return None
-
-    return (
-        f"The provided phone number ({mask_phone(phone)}) is not registered with Signal. "
-        "Signal notifications will fail."
-    )
+    if status_ is False:
+        return (
+            f"The provided phone number ({mask_phone(phone)}) is not registered with Signal. "
+            "Signal notifications will fail."
+        )
+    return f"Could not verify whether {mask_phone(phone)} is registered with Signal ({error}). Try again later."
 
 
 def _require_signal_account() -> None:
