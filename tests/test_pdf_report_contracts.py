@@ -16,11 +16,8 @@ import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-import matplotlib.colors as mcolors
-import matplotlib.dates as mdates
 import pytest
-from matplotlib.backends.backend_agg import FigureCanvasAgg
-from matplotlib.collections import LineCollection
+from reportlab.pdfgen.canvas import Canvas
 from reportlab.platypus import SimpleDocTemplate
 
 from app.services import pdf_logo, pdf_report
@@ -1420,7 +1417,7 @@ def test_coverage_bar_uses_the_configured_interval_not_the_spacing_of_measuremen
     offsets = [0, 55, 61, 125, 400, 3600, 7300, 7360, 20000, 40000, 40030, 70000]  # irregular, in minutes*1s
     stamps = [start + timedelta(seconds=o) for o in offsets]
     blocks = pdf_report._coverage_blocks(stamps, timedelta(seconds=60), start, end)
-    drawn_share = sum(w for _, w in blocks) / (mdates.date2num(end) - mdates.date2num(start)) * 100
+    drawn_share = sum((b - a).total_seconds() for a, b in blocks) / (end - start).total_seconds() * 100
     data = ReportData(
         target={"interval_seconds": 60},
         from_date=start,
@@ -1437,11 +1434,11 @@ def test_coverage_bar_uses_the_configured_interval_not_the_spacing_of_measuremen
     assert len(blocks) > 1  # gaps stay gaps
     hourly = [start + timedelta(hours=h) for h in range(25)]
     one_day = pdf_report._coverage_blocks(hourly[:24], timedelta(seconds=60), start, end)
-    assert sum(w for _, w in one_day) / (mdates.date2num(end) - mdates.date2num(start)) < 0.03
-    png = pdf_report._create_coverage_bar(
+    assert sum((b - a).total_seconds() for a, b in one_day) / (end - start).total_seconds() < 0.03
+    chart = pdf_report._create_coverage_bar(
         [{"ts": t.isoformat(), "value": 1} for t in hourly[:24]], start, end, interval_seconds=60
     )
-    assert png and png.startswith(b"\x89PNG")
+    assert isinstance(chart, pdf_report.pdf_charts.ChartFlowable)
 
 
 def test_coverage_indicator_and_low_coverage_caveat():

@@ -1715,7 +1715,7 @@ def _build_route_entries(
         if node["kind"] == "group":
             members = node["members"]
             latencies = [lat for m in members if (lat := _hop_latency(by_hop.get(m["hop"]))) is not None]
-            span = f"{locale.format_number(node['first_hop'])}–{locale.format_number(node['last_hop'])}"
+            span = f"{node['first_hop']}–{node['last_hop']}"
             first_note = f" · includes {FIRST_HOP_LABEL.lower()}" if members[0]["kind"] == "first" else ""
             if members[0]["location"] == "unlocated":
                 title, detail = f"{locale.format_number(node['count'])} measured hops", [f"{LOCATION_UNKNOWN}{first_note}"]
@@ -1734,7 +1734,7 @@ def _build_route_entries(
             )
             continue
         hop = by_hop.get(node["hop"])
-        span = locale.format_number(node["hop"]) if node.get("hop") is not None else node["label"]
+        span = node["label"]
         place = _place(node["city"], node["country"])
         lat = _hop_latency(hop)
         if node["kind"] in ("destination", "single"):
@@ -3050,7 +3050,10 @@ class PDFReportBuilder:
             elif cert.expiry.verdict is Verdict.UNKNOWN:
                 days = ("No result", "unknown")
             else:
-                days = (f"{cert.days_remaining} days", "pass" if cert.days_remaining > 30 else "warn")
+                days = (
+                    f"{self.locale.format_number(cert.days_remaining)} days",
+                    "pass" if cert.days_remaining > 30 else "warn",
+                )
             validity_state = {Verdict.SECURE: "pass", Verdict.INSECURE: "fail"}.get(cert.expiry.verdict, "unknown")
             key_text = f"{cert.key_type} {cert.key_size}-bit" if cert.key_size else cert.key_type
             sans = "<br/>".join(_esc(s) for s in cert.san) if cert.san else "none"
@@ -3061,8 +3064,9 @@ class PDFReportBuilder:
                 (
                     "Validity",
                     Paragraph(
-                        f"{cert.valid_from:%Y-%m-%d} – {cert.valid_until:%Y-%m-%d} "
-                        f"({cert.valid_from.tzname() or 'UTC'})",
+                        f"{self.locale.format_datetime(_to_tz(cert.valid_from, self.tz), 'date')} – "
+                        f"{self.locale.format_datetime(_to_tz(cert.valid_until, self.tz), 'date')} "
+                        f"({_tz_label(cert.valid_from)})",
                         token,
                     ),
                     validity_state,
@@ -3856,7 +3860,7 @@ class PDFReportBuilder:
         peaks = sorted(((port, p) for port, v in views.items() for p in v.peaks[:1]), key=lambda i: -i[1].value)[:3]
         if peaks:
             note += " Highest peaks within an interval (exact time unknown): " + "; ".join(
-                f"port {locale.format_number(port)} {_peak_text(p, tz, locale)}" for port, p in peaks
+                f"port {port} {_peak_text(p, tz, locale)}" for port, p in peaks
             )
             note += "."
         if any(v.no_max_intervals for v in views.values()):
@@ -3921,7 +3925,7 @@ class PDFReportBuilder:
                 badge = self._small_badge("RESOLVED", COLORS["success"])
             rows.append(
                 [
-                    Paragraph(str(i), st["td_muted"]),
+                    Paragraph(self.locale.format_number(i), st["td_muted"]),
                     Paragraph(_fmt_dt(event.start, self.tz, self.locale), st["td"]),
                     Paragraph(end_text, st["td"]),
                     Paragraph(duration, st["td"]),
