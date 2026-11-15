@@ -12,6 +12,7 @@ import sqlite3
 from pathlib import Path
 
 import pytest
+from fastapi import HTTPException
 from cryptography.fernet import Fernet
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -34,6 +35,7 @@ def _env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(crypto, "_primary_key", None)
     # The Signal registration lookup talks to signal-cli; it is not part of this contract.
     monkeypatch.setattr(recipients, "_check_signal_registration", lambda _phone: None)
+    monkeypatch.setattr(recipients, "_require_signal_account", lambda: None)
 
 
 @pytest.fixture
@@ -619,3 +621,15 @@ def test_delete_of_a_user_promoted_in_between_is_refused_and_deletes_nothing(cli
     assert response.status_code == 403, response.text
     assert sqlite_db.get_user(conn, uid)["is_admin"] == 1
     assert sqlite_db.get_user_recipient(conn, uid) is not None  # the recipient stayed as well
+
+
+def test_enabling_signal_without_a_registered_account_is_409_and_writes_nothing(client, conn, monkeypatch):
+    def refuse() -> None:
+        raise HTTPException(status_code=409, detail="Signal account is not registered.")
+
+    monkeypatch.setattr(recipients, "_require_signal_account", refuse)
+    response = client.post("/recipients", json={"name": "Sig", "phone": PHONE, "email": None})
+    assert response.status_code == 409
+    assert sqlite_db.get_recipient_by_phone(conn, PHONE) is None
+    # Email-only recipients never touch the Signal gate.
+    assert client.post("/recipients", json={"name": "Mail", "email": "a@example.com"}).status_code in (200, 201)

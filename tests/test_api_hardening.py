@@ -453,7 +453,10 @@ class TestRecipients:
         assert env["admin"].call("PATCH", f"/recipients/{rid}", {"phone": "abc"}).status_code == 422
         assert env["admin"].call("POST", "/recipients", {"name": "B", "phone": "abc"}).status_code == 422
 
-    def test_at_least_one_channel_is_required_and_a_switched_off_channel_is_cleared(self, env):
+    def test_at_least_one_channel_is_required_and_a_switched_off_channel_is_cleared(self, env, monkeypatch):
+        from app.api import recipients as recipients_api
+
+        monkeypatch.setattr(recipients_api, "_require_signal_account", lambda: None)
         no_channel = env["admin"].call("POST", "/recipients", {"name": "B"})
         assert no_channel.status_code == 422
         both = env["admin"].call(

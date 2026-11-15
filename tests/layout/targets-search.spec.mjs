@@ -105,6 +105,41 @@ const api = (page, url, method, body) => page.evaluate(async ([target, verb, pay
 	return { status: response.status, body: verb === "DELETE" ? null : await response.json() };
 }, [url, method, body]);
 
+test("Checks columns align across named and Ungrouped groups @targets-search", async ({ browser, app, adminState }) => {
+	const { context, page } = await openTargets(browser, app, adminState, { width: 1280, height: 800 });
+	let targetId;
+	try {
+		const created = await api(page, "/targets", "POST", {
+			name: "ungrouped-column-alignment",
+			group: "",
+			host: "ungrouped-column-alignment.example.org",
+			enable_tcp_connect: true,
+			tcp_host: "ungrouped-column-alignment.example.org",
+			tcp_ports: "25,587",
+		});
+		assert.equal(created.status, 201, JSON.stringify(created.body));
+		targetId = created.body.id;
+		await page.evaluate(() => window.htmx.trigger(document.getElementById("targets-table"), "refresh"));
+		await page.getByText("ungrouped-column-alignment", { exact: true }).waitFor();
+
+		const columns = await page.evaluate(() => {
+			const groups = [...document.querySelectorAll("#targets-table .accordion-item")];
+			const named = groups.find((group) => group.querySelector(".accordion-button strong")?.textContent.trim() === "Websites");
+			const ungrouped = groups.find((group) => group.querySelector(".accordion-button")?.textContent.includes("Ungrouped"));
+			const positions = (group) => ({
+				header: group.querySelector("thead th:nth-child(3)").getBoundingClientRect().left,
+				body: group.querySelector('tbody td[data-label="Checks"]').getBoundingClientRect().left,
+			});
+			return { named: positions(named), ungrouped: positions(ungrouped) };
+		});
+		assert.ok(Math.abs(columns.named.header - columns.ungrouped.header) <= 1, "Checks headers should share one column edge");
+		assert.ok(Math.abs(columns.named.body - columns.ungrouped.body) <= 1, "Checks cells should share one column edge");
+	} finally {
+		if (targetId !== undefined) assert.ok([200, 204].includes((await api(page, `/targets/${targetId}`, "DELETE")).status), "cleanup delete");
+		await context.close();
+	}
+});
+
 for (const viewport of VIEWPORTS) {
 	test(`targets search filters, restores groups and survives polling at ${viewport.name} @targets-search`, async ({ browser, app, adminState }) => {
 		const { context, page, problems } = await openTargets(browser, app, adminState, viewport);

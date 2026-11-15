@@ -1822,6 +1822,7 @@ def test_recheck_signal_errors_are_sanitized(conn, monkeypatch, caplog):
 def test_duplicate_phone_create_race_maps_to_409(conn, monkeypatch):
     client = _client(conn, recipients.router, user=_mk_user(conn, "adm", admin=True))
     monkeypatch.setattr(recipients, "_check_signal_registration", lambda phone: None)
+    monkeypatch.setattr(recipients, "_require_signal_account", lambda: None)
     body = {"name": "A", "phone": "+4915112345678"}
     assert client.post("/recipients", json=body).status_code == 201
     # Simulate the lost race: the pre-check no longer sees the first row.
@@ -1835,6 +1836,7 @@ def test_duplicate_phone_create_race_maps_to_409(conn, monkeypatch):
 def test_duplicate_phone_update_race_maps_to_409(conn, monkeypatch):
     client = _client(conn, recipients.router, user=_mk_user(conn, "adm", admin=True))
     monkeypatch.setattr(recipients, "_check_signal_registration", lambda phone: None)
+    monkeypatch.setattr(recipients, "_require_signal_account", lambda: None)
     sqlite_db.create_recipient(conn, name="A", phone="+4915112345678")
     other = sqlite_db.create_recipient(conn, name="B", phone="+4915187654321")
     monkeypatch.setattr(sqlite_db, "get_recipient_by_phone", lambda c, p: None)

@@ -93,6 +93,8 @@ for (const viewport of VIEWPORTS) {
 			assert.equal(await emptyHidden(), false);
 			assert.equal(await page.textContent("#recipients-search-term"), '"zzz"');
 			assert.equal(await status(), "No recipients found");
+			assert.equal(await page.getAttribute("#recipients-search-status", "role"), "status");
+			assert.equal(await page.getAttribute("#recipients-search-status", "aria-live"), "polite");
 			assert.equal(await page.evaluate(() => document.querySelector("#recipients-list table").hidden), true);
 
 			// A reload (save, delete, pause) re-applies the query to the new rows.

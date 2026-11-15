@@ -533,6 +533,38 @@ function syncChannelFields(scope) {
 	const hint = scope.querySelector('[data-channel-hint]');
 	if (hint) hint.hidden = !anyOn;
 }
+// Signal switch gate: without a registered Signal account (same /signal/status as the Signal tab)
+// Signal cannot be switched on; an already active switch may only be switched off.
+let _signalAccountOk = null; // null = unknown, never blocks
+async function refreshSignalAccountStatus() {
+	try {
+		const response = await window.apiFetch('/signal/status');
+		if (!response.ok) return;
+		const data = await response.json();
+		if (data && typeof data.registered === 'boolean') {
+			_signalAccountOk = data.registered === true && data.reachable !== false;
+		}
+	} catch (error) {
+		console.warn('Signal status unavailable:', error);
+	}
+}
+function applySignalGate(scope) {
+	const toggle = scope?.querySelector('input[id$="signal-enabled"]');
+	const hint = scope?.querySelector('[data-signal-gate]');
+	if (!toggle || !hint) return;
+	const blocked = _signalAccountOk === false;
+	hint.hidden = !blocked;
+	const lock = blocked && !toggle.checked;
+	toggle.disabled = lock;
+	if (lock) toggle.setAttribute('aria-disabled', 'true');
+	else toggle.removeAttribute('aria-disabled');
+}
+async function openSignalGate(dialog) {
+	applySignalGate(dialog);
+	await refreshSignalAccountStatus();
+	applySignalGate(dialog);
+	syncChannelFields(dialog);
+}
 // Edit Recipient - open modal
 async function editRecipient(recipientId) {
 	try {
@@ -762,8 +794,6 @@ async function saveRecipient() {
 	}
 	if (btn.disabled) return;
 
-	const originalBtnText = btn.innerHTML;
-	
 	const recipientId = document.getElementById('edit-recipient-id')?.value;
 	const name = document.getElementById('edit-recipient-name')?.value?.trim();
 	const signalEnabled = document.getElementById('edit-recipient-signal-enabled')?.checked ?? false;
@@ -798,37 +828,49 @@ async function saveRecipient() {
 				message: `Saving with "Enable for all Targets" off removes this recipient from ${count} ${count === 1 ? 'target' : 'targets'}, including manually assigned targets.`,
 				confirmLabel: 'Remove from all targets',
 			});
-			if (!confirmed) return;
+			if (!confirmed) {
+				_saveInFlight = false;
+				return;
+			}
 		}
-		btn.disabled = true;
-
+		// Optimistic close: the request continues in the background and reports through a toast.
+		// The form keeps its values, so a failure reopens the dialog without data loss.
 		const payload = recipientPayload({ name, isEnabled, enableForAllTargets, signalEnabled, emailEnabled, phone, email });
-		
+		const hidden = new Promise((resolve) => editModal.addEventListener('hidden.bs.modal', resolve, { once: true }));
+		bootstrap.Modal.getInstance(editModal)?.hide();
+		_saveInFlight = false;
+		void submitRecipientUpdate(recipientId, payload, name, errorDiv, editModal, hidden);
+	} catch (error) {
+		console.error('Save recipient error:', error);
+		_saveInFlight = false;
+	}
+}
+
+// Background PATCH of an edited recipient; a failure reopens the dialog with the error.
+async function submitRecipientUpdate(recipientId, payload, name, errorDiv, editModal, hidden) {
+	const reopen = async (message) => {
+		await hidden; // Bootstrap ignores show() while the hide transition runs
+		errorDiv.textContent = message;
+		errorDiv.classList.remove('d-none');
+		(bootstrap.Modal.getInstance(editModal) || new bootstrap.Modal(editModal)).show();
+		window.justUpToast.show(`Saving "${name}" failed: ${message}`, 'danger');
+	};
+	try {
 		const response = await window.apiFetch(`/recipients/${recipientId}`, {
 			method: 'PATCH',
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify(payload),
 		});
-		
 		if (response.ok) {
 			const data = await response.json();
-			bootstrap.Modal.getInstance(document.getElementById('editRecipientModal'))?.hide();
 			loadRecipients();
-			
 			toastSaveResult(data, 'Recipient updated successfully');
 		} else {
-			const errorMsg = await extractApiError(response, 'Failed to update recipient');
-			errorDiv.textContent = errorMsg;
-			errorDiv.classList.remove('d-none');
+			await reopen(await extractApiError(response, 'Failed to update recipient'));
 		}
 	} catch (error) {
 		console.error('Save recipient error:', error);
-		errorDiv.textContent = 'Network error. Please check your connection.';
-		errorDiv.classList.remove('d-none');
-	} finally {
-		_saveInFlight = false;
-		btn.disabled = false;
-		btn.innerHTML = originalBtnText;
+		await reopen('Network error. Please check your connection.');
 	}
 }
 
@@ -894,9 +936,17 @@ document.addEventListener('DOMContentLoaded', () => {
 	for (const id of ['addRecipientModal', 'editRecipientModal']) {
 		const dialog = document.getElementById(id);
 		if (!dialog) continue;
-		dialog.addEventListener('show.bs.modal', () => syncChannelFields(dialog));
+		dialog.addEventListener('show.bs.modal', () => { syncChannelFields(dialog); openSignalGate(dialog); });
 		dialog.addEventListener('change', (e) => {
-			if (e.target.matches('.ju-channel input[role="switch"]')) syncChannelFields(dialog);
+			if (e.target.matches('.ju-channel input[role="switch"]')) {
+				syncChannelFields(dialog);
+				applySignalGate(dialog);
+			}
+		});
+		dialog.querySelector('[data-open-signal-tab]')?.addEventListener('click', (e) => {
+			e.preventDefault();
+			bootstrap.Modal.getInstance(dialog)?.hide();
+			document.getElementById('signal-tab')?.click();
 		});
 	}
 	// Test message buttons and unsaved-change detection in the edit dialog

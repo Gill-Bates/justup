@@ -281,10 +281,12 @@
 						{# Signal Channel #}
 						<div class="ju-channel">
 							<div class="ju-switch form-check form-switch">
-								<input type="checkbox" role="switch" class="form-check-input" id="recipient-signal-enabled" aria-controls="recipient-phone-container">
+								<input type="checkbox" role="switch" class="form-check-input" id="recipient-signal-enabled" aria-controls="recipient-phone-container" aria-describedby="recipient-signal-gate">
 								<label class="form-check-label" for="recipient-signal-enabled"><span
 										class="material-icons ju-icon-inline" aria-hidden="true">sms</span>Signal</label>
 							</div>
+							<div class="form-text" id="recipient-signal-gate" data-signal-gate hidden>Signal account not registered. Register it under
+								<a href="#signal-pane" data-open-signal-tab>Settings &gt; Signal</a> first.</div>
 							<div class="ju-channel-body" id="recipient-phone-container">
 								<label for="recipient-phone" class="visually-hidden">Signal phone number</label>
 								<input type="tel" inputmode="tel" class="form-control" id="recipient-phone"
@@ -365,10 +367,12 @@
 						<div class="ju-channel">
 							<div class="ju-switch form-check form-switch">
 								<input type="checkbox" role="switch" class="form-check-input"
-									id="edit-recipient-signal-enabled" aria-controls="edit-recipient-phone-container">
+									id="edit-recipient-signal-enabled" aria-controls="edit-recipient-phone-container" aria-describedby="edit-recipient-signal-gate">
 								<label class="form-check-label" for="edit-recipient-signal-enabled"><span
 										class="material-icons ju-icon-inline" aria-hidden="true">sms</span>Signal</label>
 							</div>
+							<div class="form-text" id="edit-recipient-signal-gate" data-signal-gate hidden>Signal account not registered. Register it under
+								<a href="#signal-pane" data-open-signal-tab>Settings &gt; Signal</a> first.</div>
 							<div class="ju-channel-body" id="edit-recipient-phone-container">
 								<label for="edit-recipient-phone" class="visually-hidden">Signal phone number</label>
 								<input type="tel" inputmode="tel" class="form-control" id="edit-recipient-phone"

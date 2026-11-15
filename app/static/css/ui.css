@@ -1278,6 +1278,19 @@ textarea.smtp-editor-frame {
 	width: 100%;
 }
 
+@container ju-table (width >=40rem) {
+	/* Separate target-group tables need one shared column grid, regardless of row content. */
+	.ui-page .targets-table {
+		table-layout: fixed;
+	}
+
+	.ui-page .targets-table>thead>tr>th:nth-child(1) { width: 4%; }
+	.ui-page .targets-table>thead>tr>th:nth-child(2) { width: 38%; }
+	.ui-page .targets-table>thead>tr>th:nth-child(3) { width: 28%; }
+	.ui-page .targets-table>thead>tr>th:nth-child(4) { width: 15%; }
+	.ui-page .targets-table>thead>tr>th:nth-child(5) { width: 15%; }
+}
+
 .ju-data-table>thead>tr>th {
 	white-space: nowrap;
 }

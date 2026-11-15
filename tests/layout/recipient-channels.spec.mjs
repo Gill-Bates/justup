@@ -223,3 +223,69 @@ for (const viewport of VIEWPORTS) {
 		});
 	}
 }
+
+test("Edit Recipient closes on Save before the server answers and reopens on failure @modal @recipient-channels", async ({ page, base }) => {
+	const errors = [];
+	collectPageErrors(page, errors);
+	await page.goto(base);
+	await page.evaluate(() => {
+		window.__toasts = [];
+		window.justUpToast = { show: (m, t) => window.__toasts.push([t, m]) };
+		const json = (body) => ({ ok: true, status: 200, json: () => Promise.resolve(body) });
+		window.apiFetch = (url, options) => {
+			if (options && options.method === "PATCH") {
+				return new Promise((resolve) => { window.__finishPatch = resolve; });
+			}
+			if (url === "/recipients/1") return Promise.resolve(json({ id: 1, name: "Martin", is_enabled: true, enable_for_all_targets: false, phone: "", email: "martin@example.com", targets: [] }));
+			return Promise.resolve(json([]));
+		};
+	});
+	await page.evaluate(() => window.SettingsPage.Recipients.editRecipient(1));
+	await page.waitForFunction(() => document.getElementById("editRecipientModal").classList.contains("show"));
+	await page.click("#edit-recipient-btn");
+	await page.waitForFunction(() => !document.getElementById("editRecipientModal").classList.contains("show"));
+	assert.equal(await page.evaluate(() => typeof window.__finishPatch), "function", "request still pending");
+	await page.evaluate(() => window.__finishPatch({ ok: false, status: 500, headers: new Headers(), text: () => Promise.resolve("boom"), json: () => Promise.resolve({ detail: "Backend exploded" }), clone() { return this; } }));
+	await page.waitForFunction(() => document.getElementById("editRecipientModal").classList.contains("show"));
+	assert.equal(await page.inputValue("#edit-recipient-name"), "Martin", "form values lost");
+	await page.waitForFunction(() => window.__toasts.some(([t]) => t === "danger"));
+	assert.equal(await page.isVisible("#edit-recipient-error"), true);
+	assert.deepEqual(errors, [], errors.join("\n"));
+});
+
+test("Signal switch stays off while the Signal account is not registered @modal @recipient-channels", async ({ page, base }) => {
+	const errors = [];
+	collectPageErrors(page, errors);
+	await page.goto(base);
+	await page.evaluate(() => {
+		const json = (body) => ({ ok: true, status: 200, json: () => Promise.resolve(body) });
+		const rec = (phone) => json({ id: 1, name: "Martin", is_enabled: true, enable_for_all_targets: false, phone, email: "martin@example.com", targets: [] });
+		window.apiFetch = (url) => {
+			if (url === "/signal/status") return Promise.resolve(json({ reachable: true, registered: false, linked: false, accounts: [] }));
+			if (url === "/recipients/1") return Promise.resolve(rec(window.__phone));
+			if (url === "/recipients/2") return Promise.resolve(rec(""));
+			return Promise.resolve(json([]));
+		};
+		window.__phone = "";
+	});
+	const open = async () => {
+		await page.evaluate(() => window.SettingsPage.Recipients.editRecipient(1));
+		await page.waitForFunction(() => document.getElementById("editRecipientModal").classList.contains("show"));
+	};
+	// No phone saved: the switch is locked and the hint explains why.
+	await open();
+	await page.waitForSelector("#edit-recipient-signal-gate:not([hidden])");
+	assert.equal(await page.isDisabled("#edit-recipient-signal-enabled"), true);
+	assert.equal(await page.getAttribute("#edit-recipient-signal-enabled", "aria-disabled"), "true");
+	await page.evaluate(() => bootstrap.Modal.getInstance(document.getElementById("editRecipientModal")).hide());
+	await page.waitForFunction(() => !document.getElementById("editRecipientModal").classList.contains("show"));
+	// Signal already active: shown and switchable off, but not back on.
+	await page.evaluate(() => { window.__phone = "+4915112345678"; });
+	await open();
+	await page.waitForSelector("#edit-recipient-signal-gate:not([hidden])");
+	assert.equal(await page.isDisabled("#edit-recipient-signal-enabled"), false);
+	assert.equal(await page.isChecked("#edit-recipient-signal-enabled"), true);
+	await page.uncheck("#edit-recipient-signal-enabled");
+	await page.waitForFunction(() => document.getElementById("edit-recipient-signal-enabled").disabled);
+	assert.deepEqual(errors, [], errors.join("\n"));
+});

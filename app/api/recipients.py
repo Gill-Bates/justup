@@ -219,6 +219,20 @@ def _check_signal_registration(phone: str) -> str | None:
     )
 
 
+def _require_signal_account() -> None:
+    """Reject enabling Signal while the sender account is missing or not registered (same status as /signal/status)."""
+    from ..services.notifications.signal_backend import get_signal_backend
+    from ..services.notifications.signal_errors import SignalTimeout, SignalUnavailable
+
+    detail = "Signal account is not registered. Register it under Settings > Signal first."
+    try:
+        st = get_signal_backend().status()
+    except (SignalUnavailable, SignalTimeout) as exc:
+        raise HTTPException(status_code=409, detail=detail) from exc
+    if not (st.reachable and st.registered):
+        raise HTTPException(status_code=409, detail=detail)
+
+
 def _row_to_public(row: Mapping[str, Any], targets: Sequence[Mapping[str, Any]] | None = None) -> RecipientPublic:
     return RecipientPublic(
         id=int(row["id"]),
@@ -369,6 +383,7 @@ def create_recipient(payload: RecipientCreate, conn=Depends(get_conn), _user=Dep
         if existing:
             raise HTTPException(status_code=409, detail="Phone number already exists")
 
+        _require_signal_account()
         signal_warning = _check_signal_registration(normalized_phone)
         if signal_warning:
             warnings.append(signal_warning)
@@ -407,6 +422,8 @@ def update_recipient(recipient_id: int, payload: RecipientUpdate, conn=Depends(g
         raise HTTPException(status_code=404, detail="Recipient not found")
     normalized_phone = _normalize_phone_or_400(payload.phone) if update_data.get("phone") else None
     if normalized_phone is not None and normalized_phone != known["phone"]:
+        # A phone already saved stays editable while the account is broken; only newly enabling Signal is refused.
+        _require_signal_account()
         signal_warning = _check_signal_registration(normalized_phone)
         if signal_warning:
             warnings.append(signal_warning)

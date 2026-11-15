@@ -200,7 +200,7 @@ async def _lifespan(app: FastAPI):
         external_count = pop_locations.count_external_pop_locations(conn)
 
         if external_count == 0:
-            _log.warning("POP locations: %d entries (seed-only, no external imports yet)", pop_count)
+            _log.debug("POP locations: %d entries (seed-only, no external imports yet)", pop_count)
         else:
             _log.info(
                 "POP locations: %d total (%d active, %d from external sources)", pop_count, active_count, external_count
