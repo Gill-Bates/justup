@@ -10,6 +10,8 @@ from datetime import UTC, datetime, timedelta, tzinfo
 from reportlab.lib import colors
 from reportlab.platypus import Flowable
 
+from app.services.pdf_locale import DEFAULT_PDF_LOCALE, PDFLocale
+
 DrawText = Callable[..., None]
 TextWidth = Callable[[str, str, float], float]
 
@@ -63,12 +65,14 @@ def _date_ticks(start: datetime, end: datetime, count: int = 5) -> list[datetime
     return [(start_utc + span * index / (count - 1)).astimezone(start.tzinfo or UTC) for index in range(count)]
 
 
-def _date_label(value: datetime, span: timedelta) -> str:
+def _date_label(value: datetime, span: timedelta, locale: PDFLocale) -> str:
     if span <= timedelta(days=1):
-        return value.strftime("%H:%M")
-    if span <= timedelta(days=3):
-        return value.strftime("%m-%d %H:%M")
-    return value.strftime("%m-%d")
+        style = "time"
+    elif span <= timedelta(days=3):
+        style = "monthDayTime"
+    else:
+        style = "monthDay"
+    return locale.format_datetime(value, style)
 
 
 def _text(
@@ -99,6 +103,7 @@ def _axis_x(
     tz: tzinfo,
     draw_text: DrawText,
     font: str,
+    locale: PDFLocale,
     xlabel: bool = True,
     grid: bool = True,
 ) -> None:
@@ -115,10 +120,22 @@ def _axis_x(
         canvas.setStrokeColor(_color("#495057"))
         canvas.line(px, y, px, y - 2.5)
         align = "left" if index == 0 else "right" if index == 4 else "center"
-        _text(canvas, draw_text, px, y - 13, _date_label(tick.astimezone(tz), span), font=font, size=7, align=align)
+        _text(
+            canvas,
+            draw_text,
+            px,
+            y - 13,
+            _date_label(tick.astimezone(tz), span, locale),
+            font=font,
+            size=7,
+            align=align,
+        )
     if xlabel:
         local_start, local_end = start.astimezone(tz), end.astimezone(tz)
-        label = f"{local_start:%Y-%m-%d %H:%M} – {local_end:%Y-%m-%d %H:%M} ({local_start.tzname() or 'UTC'})"
+        label = (
+            f"{locale.format_datetime(local_start)} – {locale.format_datetime(local_end)} "
+            f"({local_start.tzname() or 'UTC'})"
+        )
         _text(canvas, draw_text, x + width / 2, y - 29, label, font=font, size=7, color="#6c757d", align="center")
 
 
@@ -127,20 +144,37 @@ def _legend(
     entries: list[tuple[str, str, str]],
     *,
     x: float,
+    max_width: float,
     y: float,
     font: str,
     size: float,
     text_width: TextWidth,
     draw_text: DrawText,
     columns: int = 2,
+    align: str = "left",
 ) -> None:
     if not entries:
         return
-    col_width = max((text_width(label, font, size) for label, _, _ in entries), default=0) + 22
-    col_width = max(col_width, 54)
+    columns = min(columns, len(entries))
+    widths = []
+    while columns > 1:
+        widths = [
+            max((text_width(entries[i][0], font, size) + 22 for i in range(column, len(entries), columns)), default=54)
+            for column in range(columns)
+        ]
+        if sum(widths) <= max_width:
+            break
+        columns -= 1
+    if columns == 1:
+        widths = [min(max_width, max(text_width(label, font, size) + 22 for label, _, _ in entries))]
+    total_width = sum(widths)
+    if align == "right":
+        x -= total_width
+    elif align == "center":
+        x += (max_width - total_width) / 2
     for index, (label, kind, shade) in enumerate(entries):
         row, column = divmod(index, columns)
-        left = x + column * col_width
+        left = x + sum(widths[:column])
         baseline = y - row * 11
         canvas.setStrokeColor(_color(shade))
         canvas.setFillColor(_color(shade))
@@ -197,6 +231,7 @@ def _draw_series(
     max_labels: int,
     draw_text: DrawText,
     font: str,
+    locale: PDFLocale,
 ) -> list[tuple[str, str, str]]:
     span = max((end.astimezone(UTC) - start.astimezone(UTC)).total_seconds(), 1)
 
@@ -260,7 +295,7 @@ def _draw_series(
             canvas.drawPath(path, fill=1, stroke=0)
 
     placed: list[tuple[datetime, bool]] = []
-    candidates = [*marks, *overflow_marks]
+    candidates = list(dict.fromkeys((*marks, *overflow_marks)))
     for stamp, real in sorted(candidates, key=lambda item: -item[1]):
         above = real > top
         nearby = [
@@ -274,12 +309,13 @@ def _draw_series(
         label_y = y + height - 8 - 9 * stack if py(real) >= y + height * 0.88 else py(real) + 4 + 9 * stack
         align = "right" if (stamp - start) / max(end - start, timedelta(seconds=1)) > 0.5 else "left"
         shade = "#b02a5b" if real > max(top * 3, 1.0) else "#343a40"
+        number = locale.format_number(real, max_fraction=0 if real >= 10 else 1, min_fraction=0 if real >= 10 else 1)
         _text(
             canvas,
             draw_text,
             px(stamp) + (-4 if align == "right" else 4),
             label_y,
-            f"{real:,.0f} ms" if real >= 10 else f"{real:.1f} ms",
+            f"{number} ms",
             font=font,
             size=7,
             color=shade,
@@ -317,6 +353,7 @@ def line_chart(
     font: str,
     draw_text: DrawText,
     text_width: TextWidth,
+    locale: PDFLocale = DEFAULT_PDF_LOCALE,
     max_labels: int = 3,
 ) -> ChartFlowable:
     def draw(canvas):
@@ -332,7 +369,7 @@ def line_chart(
         for value in ticks:
             y = plot_y + plot_height * value / top
             canvas.line(plot_x, y, width, y)
-            label = f"{value:,.0f}" if step >= 1 else f"{value:g}"
+            label = locale.format_number(value) if step >= 1 else locale.format_number(value, max_fraction=6)
             _text(canvas, draw_text, plot_x - 4, y - 2, label, font=font, size=8, align="right")
         canvas.setStrokeColor(_color("#adb5bd"))
         canvas.line(plot_x, plot_y, plot_x, plot_y + plot_height)
@@ -356,6 +393,7 @@ def line_chart(
             max_labels=max_labels,
             draw_text=draw_text,
             font=font,
+            locale=locale,
         )
         if sla is not None:
             name = sla_label or f"SLA threshold ({sla:g} ms)"
@@ -382,7 +420,7 @@ def line_chart(
                     draw_text,
                     width - 8,
                     cy - 8,
-                    f"SLA {sla:,.0f} ms (above scale)",
+                    f"SLA {locale.format_number(sla)} ms (above scale)",
                     font=font,
                     size=7,
                     color="#8a5200",
@@ -398,43 +436,36 @@ def line_chart(
             tz=timezone,
             draw_text=draw_text,
             font=font,
+            locale=locale,
         )
         if legend_below:
             _legend(
                 canvas,
                 entries,
-                x=max(
-                    plot_x,
-                    (
-                        width
-                        - min(
-                            width - plot_x,
-                            2 * max((text_width(label, font, 8) + 22 for label, _, _ in entries), default=54),
-                        )
-                    )
-                    / 2,
-                ),
+                x=plot_x,
+                max_width=width - plot_x,
                 y=18,
                 font=font,
                 size=8,
                 text_width=text_width,
                 draw_text=draw_text,
                 columns=2,
+                align="center",
             )
         else:
             columns = 2 if len(entries) > 3 else len(entries)
-            widest = max((text_width(label, font, 8) + 22 for label, _, _ in entries), default=54)
-            legend_width = min(width - plot_x, widest * columns)
             _legend(
                 canvas,
                 entries,
-                x=width - legend_width,
+                x=width,
+                max_width=width - plot_x,
                 y=height - 13,
                 font=font,
                 size=8,
                 text_width=text_width,
                 draw_text=draw_text,
                 columns=columns,
+                align="right",
             )
 
     return ChartFlowable(width, height, draw)
@@ -452,6 +483,7 @@ def uptime_chart(
     font: str,
     draw_text: DrawText,
     text_width: TextWidth,
+    locale: PDFLocale = DEFAULT_PDF_LOCALE,
 ) -> ChartFlowable:
     def draw(canvas):
         plot_x, plot_width = max(0, plot_left), width - max(0, plot_left)
@@ -477,19 +509,21 @@ def uptime_chart(
             tz=timezone,
             draw_text=draw_text,
             font=font,
+            locale=locale,
         )
         entries = [("Up", "square", "#198754"), ("Down", "square", "#dc3545"), ("No measurement", "outline", "#adb5bd")]
-        legend_width = sum(text_width(label, font, 8) + 28 for label, _, _ in entries)
         _legend(
             canvas,
             entries,
-            x=max(plot_x, width - legend_width),
+            x=width,
+            max_width=width - plot_x,
             y=height - 14,
             font=font,
             size=8,
             text_width=text_width,
             draw_text=draw_text,
             columns=3,
+            align="right",
         )
 
     return ChartFlowable(width, height, draw)
@@ -503,17 +537,20 @@ def coverage_chart(
     end: datetime,
     blocks: list[tuple[datetime, datetime]],
     plot_left: float,
+    timezone: tzinfo,
     font: str,
     draw_text: DrawText,
     text_width: TextWidth,
+    locale: PDFLocale = DEFAULT_PDF_LOCALE,
 ) -> ChartFlowable:
     def draw(canvas):
         plot_x, plot_width = max(0, plot_left), width - max(0, plot_left)
-        plot_y, bar_height = 25, 14
+        plot_y, bar_height = 20, 12
         canvas.saveState()
         clip = canvas.beginPath()
         clip.rect(plot_x, plot_y, plot_width, bar_height)
         canvas.clipPath(clip, stroke=0, fill=0)
+        canvas.setFillColor(colors.white)
         canvas.setStrokeColor(_color("#adb5bd"))
         canvas.setLineWidth(0.6)
         canvas.rect(plot_x, plot_y, plot_width, bar_height, fill=1, stroke=1)
@@ -530,18 +567,32 @@ def coverage_chart(
         canvas.restoreState()
         canvas.setStrokeColor(_color("#adb5bd"))
         canvas.rect(plot_x, plot_y, plot_width, bar_height, fill=0, stroke=1)
+        _axis_x(
+            canvas,
+            x=plot_x,
+            y=plot_y,
+            width=plot_width,
+            start=start,
+            end=end,
+            tz=timezone,
+            draw_text=draw_text,
+            font=font,
+            locale=locale,
+            xlabel=False,
+        )
         entries = [("Checks recorded", "square", "#2b5fa8"), ("No measurement", "outline", "#adb5bd")]
-        legend_width = sum(text_width(label, font, 8) + 28 for label, _, _ in entries)
         _legend(
             canvas,
             entries,
-            x=max(plot_x, width - legend_width),
-            y=height - 16,
+            x=width,
+            max_width=width - plot_x,
+            y=height - 6,
             font=font,
             size=8,
             text_width=text_width,
             draw_text=draw_text,
             columns=2,
+            align="right",
         )
 
     return ChartFlowable(width, height, draw)
@@ -559,6 +610,7 @@ def multi_port_chart(
     font: str,
     draw_text: DrawText,
     text_width: TextWidth,
+    locale: PDFLocale = DEFAULT_PDF_LOCALE,
 ) -> ChartFlowable:
     def draw(canvas):
         plot_x = max(plot_left, 18)
@@ -583,7 +635,7 @@ def multi_port_chart(
                     draw_text,
                     plot_x - 4,
                     py - 2,
-                    f"{value:,.0f}" if step >= 1 else f"{value:g}",
+                    locale.format_number(value) if step >= 1 else locale.format_number(value, max_fraction=6),
                     font=font,
                     size=7,
                     align="right",
@@ -609,6 +661,7 @@ def multi_port_chart(
                 max_labels=1,
                 draw_text=draw_text,
                 font=font,
+                locale=locale,
             )
             for entry in entries:
                 keep = entry[0] in ("Peak within interval (bucket maximum)", "Above scale (value labelled)")
@@ -627,18 +680,21 @@ def multi_port_chart(
             tz=timezone,
             draw_text=draw_text,
             font=font,
+            locale=locale,
         )
         if shared_entries:
             _legend(
                 canvas,
                 shared_entries,
-                x=max(plot_x, width - 230),
+                x=width,
+                max_width=width - plot_x,
                 y=height - 13,
                 font=font,
                 size=8,
                 text_width=text_width,
                 draw_text=draw_text,
-                columns=len(shared_entries),
+                columns=2,
+                align="right",
             )
 
     return ChartFlowable(width, height, draw)
@@ -654,6 +710,7 @@ def status_code_chart(
     font: str,
     font_bold: str,
     draw_text: DrawText,
+    locale: PDFLocale = DEFAULT_PDF_LOCALE,
 ) -> ChartFlowable:
     def draw(canvas):
         side = min(height * 0.92, width * 0.36)
@@ -669,7 +726,17 @@ def status_code_chart(
             angle += extent
         canvas.setFillColor(colors.white)
         canvas.circle(cx, cy, radius * 0.58, fill=1, stroke=0)
-        _text(canvas, draw_text, cx, cy + 3, f"{total:,}", font=font_bold, size=13, color="#12294a", align="center")
+        _text(
+            canvas,
+            draw_text,
+            cx,
+            cy + 3,
+            locale.format_number(total),
+            font=font_bold,
+            size=13,
+            color="#12294a",
+            align="center",
+        )
         _text(
             canvas,
             draw_text,
@@ -707,7 +774,7 @@ def status_code_chart(
                 draw_text,
                 x0 + width * 0.39,
                 row_y,
-                f"{count:,}",
+                locale.format_number(count),
                 font=font,
                 size=8.5,
                 color="#212529",
@@ -718,7 +785,7 @@ def status_code_chart(
                 draw_text,
                 width - 2,
                 row_y,
-                f"{count / max(total, 1) * 100:.1f} %",
+                locale.format_percent(count / max(total, 1) * 100, 1),
                 font=font,
                 size=8.5,
                 color="#212529",

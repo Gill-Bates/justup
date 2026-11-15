@@ -15,6 +15,65 @@
 // Reentrancy guard: prevents double-click from spawning parallel requests
 let _pdfRequestInFlight = false;
 
+function _localeDatePattern(locale, options, sample) {
+  return new Intl.DateTimeFormat(locale, { ...options, calendar: "gregory", timeZone: "UTC" })
+    .formatToParts(sample)
+    .map(({ type, value }) => ({
+      type,
+      sample: value,
+      pad: options[type] === "2-digit",
+    }));
+}
+
+function _pdfLocaleProfile() {
+  const locale = new Intl.DateTimeFormat().resolvedOptions().locale || navigator.language || "en-US";
+  const sample = new Date(Date.UTC(2006, 10, 21, 17, 43));
+  const numberParts = new Intl.NumberFormat(locale, {
+    style: "decimal",
+    useGrouping: true,
+    maximumFractionDigits: 2,
+  }).formatToParts(1234567890.12);
+  const integerGroups = numberParts.filter((part) => part.type === "integer").map((part) => Array.from(part.value).length);
+  const percentParts = new Intl.NumberFormat(locale, {
+    style: "percent",
+    maximumFractionDigits: 1,
+  }).formatToParts(0.1);
+  const firstNumber = percentParts.findIndex((part) => part.type === "integer");
+  let lastNumber = firstNumber;
+  for (let i = firstNumber; i < percentParts.length; i += 1) {
+    if (["integer", "group", "decimal", "fraction"].includes(percentParts[i].type)) lastNumber = i;
+  }
+  const digitFormatter = new Intl.NumberFormat(locale, { useGrouping: false, maximumFractionDigits: 0 });
+  const partFor = (hour) => new Intl.DateTimeFormat(locale, {
+    hour: "numeric",
+    calendar: "gregory",
+    timeZone: "UTC",
+  }).formatToParts(new Date(Date.UTC(2006, 10, 21, hour))).find((part) => part.type === "dayPeriod")?.value || "";
+
+  return {
+    locale,
+    hourCycle: new Intl.DateTimeFormat(locale, { hour: "numeric", calendar: "gregory", timeZone: "UTC" })
+      .resolvedOptions().hourCycle,
+    dayPeriod: { am: partFor(9), pm: partFor(21) },
+    number: {
+      digits: Array.from({ length: 10 }, (_, digit) => digitFormatter.format(digit)),
+      decimal: numberParts.find((part) => part.type === "decimal")?.value || ".",
+      group: numberParts.find((part) => part.type === "group")?.value || "",
+      integerGroups,
+      minus: new Intl.NumberFormat(locale).formatToParts(-1).find((part) => part.type === "minusSign")?.value || "−",
+      percentPrefix: percentParts.slice(0, firstNumber).map((part) => part.value).join(""),
+      percentSuffix: percentParts.slice(lastNumber + 1).map((part) => part.value).join(""),
+    },
+    dates: {
+      time: _localeDatePattern(locale, { hour: "2-digit", minute: "2-digit" }, sample),
+      date: _localeDatePattern(locale, { year: "numeric", month: "numeric", day: "numeric" }, sample),
+      monthDay: _localeDatePattern(locale, { month: "numeric", day: "numeric" }, sample),
+      monthDayTime: _localeDatePattern(locale, { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }, sample),
+      fullDateTime: _localeDatePattern(locale, { year: "numeric", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }, sample),
+    },
+  };
+}
+
 /**
  * Get PDF export button elements (centralized DOM lookup).
  * @private
@@ -113,7 +172,10 @@ async function downloadPdfReport(targetId, pdfPageSize) {
 
     const response = await apiFetch(
       `/reports/targets/${targetId}/pdf/request?${params}`,
-      { method: "POST" },
+      {
+        method: "POST",
+        headers: { "X-Justup-Locale-Profile": encodeURIComponent(JSON.stringify(_pdfLocaleProfile())) },
+      },
     );
 
     if (!response.ok) {

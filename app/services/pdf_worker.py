@@ -21,13 +21,14 @@ import traceback
 import uuid
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from ..utils import maintenance
 from ..utils.report_metrics import collect_report_inputs, report_filename
+from .pdf_locale import PDFLocale
 
 _log = logging.getLogger(__name__)
 
@@ -301,6 +302,7 @@ class PDFWorker:
                     target=_job.target_dict,
                     from_date=_job.from_date,
                     to_date=_job.to_date,
+                    locale=_job.locale,
                     **metrics,
                 )
 
@@ -447,6 +449,7 @@ class PDFJobRequest:
     db_path: Path
     tsdb_dir: Path
     profile: str = "pdf"
+    locale: PDFLocale = field(default_factory=PDFLocale.default)
 
 
 _worker: PDFWorker | None = None

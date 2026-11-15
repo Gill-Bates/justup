@@ -15,7 +15,7 @@ import logging
 import math
 import re
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta, tzinfo
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -48,6 +48,7 @@ from reportlab.rl_config import defaultPageSize  # noqa: F401 - ensure config is
 from app.services import geo_resolver as gr
 from app.services import pdf_charts
 from app.services.flag_images import load_flags, normalize_country_code
+from app.services.pdf_locale import DEFAULT_PDF_LOCALE, PDFLocale
 from app.services.pdf_logo import LogoFlowable, draw_logo, logo_aspect
 from app.services.pdf_route_map import (
     DESTINATION_COLOR,
@@ -324,6 +325,7 @@ class ReportData:
     display_data: dict[str, list[dict]] | None = None
     status_counts_exact: bool = False
     downtime_periods: list[DowntimePeriod] | None = None
+    locale: PDFLocale = field(default_factory=PDFLocale.default)
 
     def __post_init__(self) -> None:
         self.uptime_data = _as_series(self.uptime_data, _target_interval_seconds(self.target))
@@ -686,8 +688,12 @@ def _axis_scale(views: list[_LatencyView], sla_ms: float | None = None, target: 
     return ticks[-1], ticks
 
 
-def _fmt_tick(step: float):
-    return (lambda v, _pos: f"{v:,.0f}") if step >= 1 else (lambda v, _pos: f"{v:g}")
+def _fmt_tick(step: float, locale: PDFLocale = DEFAULT_PDF_LOCALE):
+    return (
+        (lambda value, _pos: locale.format_number(value))
+        if step >= 1
+        else (lambda value, _pos: locale.format_number(value, max_fraction=6))
+    )
 
 
 def _ports_share_scale(views: list[_LatencyView]) -> bool:
@@ -696,17 +702,21 @@ def _ports_share_scale(views: list[_LatencyView]) -> bool:
     return max(tops) <= 8 * min(tops)
 
 
-def _fmt_ms_value(value: float) -> str:
-    return f"{value:,.0f} ms" if value >= 10 else f"{value:,.1f} ms"
+def _fmt_ms_value(value: float, locale: PDFLocale = DEFAULT_PDF_LOCALE) -> str:
+    places = 0 if value >= 10 else 1
+    return f"{locale.format_number(value, max_fraction=places, min_fraction=places)} ms"
 
 
-def _fmt_interval(start: datetime, end: datetime) -> str:
+def _fmt_interval(start: datetime, end: datetime, locale: PDFLocale = DEFAULT_PDF_LOCALE) -> str:
     same_day = start.date() == end.date()
-    return f"{start:%m-%d %H:%M}–{end:%H:%M}" if same_day else f"{start:%m-%d %H:%M}–{end:%m-%d %H:%M}"
+    first = locale.format_datetime(start, "monthDayTime")
+    last = locale.format_datetime(end, "time" if same_day else "monthDayTime")
+    return f"{first}–{last}"
 
 
-def _peak_text(peak: _Peak, tz: tzinfo) -> str:
-    return f"{_fmt_ms_value(peak.value)} ({_fmt_interval(peak.start.astimezone(tz), peak.end.astimezone(tz))})"
+def _peak_text(peak: _Peak, tz: tzinfo, locale: PDFLocale = DEFAULT_PDF_LOCALE) -> str:
+    interval = _fmt_interval(peak.start.astimezone(tz), peak.end.astimezone(tz), locale)
+    return f"{_fmt_ms_value(peak.value, locale)} ({interval})"
 
 
 def _overflow_values(view: _LatencyView, top: float) -> list[float]:
@@ -718,20 +728,29 @@ def _tick_step(ticks: list[float]) -> float:
     return ticks[1] - ticks[0] if len(ticks) > 1 else 1.0
 
 
-def _left_margin(ticks: list[float], width: float, has_label: bool = True) -> float:
+def _left_margin(
+    ticks: list[float], width: float, has_label: bool = True, locale: PDFLocale = DEFAULT_PDF_LOCALE
+) -> float:
     """Figure fraction for the Y tick labels and optional side title, derived from the widest tick label."""
     step = _tick_step(ticks)
-    chars = max(len(_fmt_tick(step)(t, 0)) for t in ticks)
+    formatter = _fmt_tick(step, locale)
+    chars = max(len(formatter(t, 0)) for t in ticks)
     return min(0.25, (0.14 + 0.075 * chars + (0.22 if has_label else 0)) / width)
 
 
-def _latency_plot_left_in(data: list[dict], from_date: datetime, sla_threshold_ms: int | None, width: float) -> float:
+def _latency_plot_left_in(
+    data: list[dict],
+    from_date: datetime,
+    sla_threshold_ms: int | None,
+    width: float,
+    locale: PDFLocale = DEFAULT_PDF_LOCALE,
+) -> float:
     """Inches a latency chart reserves left of its plot area for the Y tick labels (0 without data)."""
     tz = _report_tz(from_date)
     if not data or all(math.isnan(v) for v in _parse_series(data, tz)[1]):
         return 0.0
     ticks = _axis_scale([_build_view(data, tz)], sla_threshold_ms)[1]
-    return _left_margin(ticks, width, has_label=False) * width
+    return _left_margin(ticks, width, has_label=False, locale=locale) * width
 
 
 def _create_line_chart(
@@ -747,6 +766,7 @@ def _create_line_chart(
     threshold_label: str | None = None,
     legend_below: bool = False,
     plot_left_in: float | None = None,
+    locale: PDFLocale = DEFAULT_PDF_LOCALE,
 ) -> pdf_charts.ChartFlowable | None:
     """Create a vector latency chart; measurements and the SLA threshold are drawn distinctly.
 
@@ -768,7 +788,9 @@ def _create_line_chart(
     overflow = [
         (stamp, value) for stamp, value in zip(view.ts, view.vals, strict=True) if not math.isnan(value) and value > top
     ] + [(peak.start + (peak.end - peak.start) / 2, peak.value) for peak in view.peaks if peak.value > top]
-    plot_left = _left_margin(ticks, width, has_label=False) * width if plot_left_in is None else plot_left_in
+    plot_left = (
+        _left_margin(ticks, width, has_label=False, locale=locale) * width if plot_left_in is None else plot_left_in
+    )
     return pdf_charts.line_chart(
         width=width * 72,
         height=height * 72,
@@ -790,6 +812,7 @@ def _create_line_chart(
         font=font,
         draw_text=_draw_text,
         text_width=_text_width,
+        locale=locale,
     )
 
 
@@ -802,6 +825,7 @@ def _create_response_time_chart(
     sla_threshold_ms: int | None = None,
     threshold_label: str | None = None,
     plot_left_in: float | None = None,
+    locale: PDFLocale = DEFAULT_PDF_LOCALE,
 ) -> pdf_charts.ChartFlowable | None:
     """Create a vector response time chart."""
     return _create_line_chart(
@@ -816,6 +840,7 @@ def _create_response_time_chart(
         threshold_label=threshold_label,
         legend_below=True,
         plot_left_in=plot_left_in,
+        locale=locale,
     )
 
 
@@ -828,6 +853,7 @@ def _create_ping_chart(
     sla_threshold_ms: int | None = None,
     threshold_label: str | None = None,
     plot_left_in: float | None = None,
+    locale: PDFLocale = DEFAULT_PDF_LOCALE,
 ) -> pdf_charts.ChartFlowable | None:
     """Create a vector ping latency chart."""
     return _create_line_chart(
@@ -841,6 +867,7 @@ def _create_ping_chart(
         sla_threshold_ms=sla_threshold_ms,
         threshold_label=threshold_label,
         plot_left_in=plot_left_in,
+        locale=locale,
     )
 
 
@@ -851,6 +878,7 @@ def _create_tcp_chart(
     width: float = 6.7,
     height: float = 2.5,
     plot_left_in: float | None = None,
+    locale: PDFLocale = DEFAULT_PDF_LOCALE,
 ) -> pdf_charts.ChartFlowable | None:
     """Create a vector TCP latency chart."""
     return _create_line_chart(
@@ -862,6 +890,7 @@ def _create_tcp_chart(
         width=width,
         height=height,
         plot_left_in=plot_left_in,
+        locale=locale,
     )
 
 
@@ -912,6 +941,7 @@ def _create_uptime_chart(
     width: float = 6.7,
     height: float = 1.45,
     plot_left_in: float = 0.0,
+    locale: PDFLocale = DEFAULT_PDF_LOCALE,
 ) -> pdf_charts.ChartFlowable | None:
     """Create an availability status strip as vector shapes.
 
@@ -935,6 +965,7 @@ def _create_uptime_chart(
         font=_get_font(),
         draw_text=_draw_text,
         text_width=_text_width,
+        locale=locale,
     )
 
 
@@ -973,6 +1004,7 @@ def _create_coverage_bar(
     height: float = 0.7,
     interval_seconds: float = 60,
     plot_left_in: float = 0.0,
+    locale: PDFLocale = DEFAULT_PDF_LOCALE,
 ) -> pdf_charts.ChartFlowable | None:
     """Compact vector bar over the whole period, separating checks from empty time."""
     tz = _report_tz(from_date)
@@ -991,18 +1023,22 @@ def _create_coverage_bar(
         end=to_date,
         blocks=blocks,
         plot_left=plot_left_in * 72,
+        timezone=tz,
         font=_get_font(),
         draw_text=_draw_text,
         text_width=_text_width,
+        locale=locale,
     )
 
 
-def _port_scales(port_data: dict[int, list[dict]], tz) -> tuple[dict, dict, list[float]]:
+def _port_scales(
+    port_data: dict[int, list[dict]], tz, locale: PDFLocale = DEFAULT_PDF_LOCALE
+) -> tuple[dict, dict, list[float]]:
     """Per-port views and Y scales plus the tick list with the widest labels."""
     views = {port: _build_view(data, tz) for port, data in sorted(port_data.items())}
     shared = _ports_share_scale(list(views.values()))
     scales = {port: _axis_scale(list(views.values()) if shared else [views[port]], target=3) for port in views}
-    widest = max((s[1] for s in scales.values()), key=lambda t: len(_fmt_tick(_tick_step(t))(t[-1], 0)))
+    widest = max((s[1] for s in scales.values()), key=lambda t: len(_fmt_tick(_tick_step(t), locale)(t[-1], 0)))
     return views, scales, widest
 
 
@@ -1013,6 +1049,7 @@ def _create_multi_port_tcp_chart(
     width: float = 6.7,
     height: float | None = None,  # Auto-calculated based on number of ports
     plot_left_in: float | None = None,
+    locale: PDFLocale = DEFAULT_PDF_LOCALE,
 ) -> pdf_charts.ChartFlowable | None:
     """Create a native vector small-multiples TCP chart with one panel per port.
 
@@ -1033,7 +1070,7 @@ def _create_multi_port_tcp_chart(
     if height is None:
         height = min(7.5, max(1.9, num_ports * 1.0 + 0.6))
 
-    views, scales, widest = _port_scales(port_data, tz)
+    views, scales, widest = _port_scales(port_data, tz, locale)
 
     panels = []
     for idx, port in enumerate(sorted_ports):
@@ -1057,7 +1094,9 @@ def _create_multi_port_tcp_chart(
                 "overflow": overflow,
             }
         )
-    plot_left = _left_margin(widest, width, has_label=False) * width if plot_left_in is None else plot_left_in
+    plot_left = (
+        _left_margin(widest, width, has_label=False, locale=locale) * width if plot_left_in is None else plot_left_in
+    )
     return pdf_charts.multi_port_chart(
         width=width * 72,
         height=height * 72,
@@ -1069,6 +1108,7 @@ def _create_multi_port_tcp_chart(
         font=_get_font(),
         draw_text=_draw_text,
         text_width=_text_width,
+        locale=locale,
     )
 
 
@@ -1109,7 +1149,12 @@ def _mix(hex_color: str, amount: float) -> str:
 
 
 def _create_status_code_chart(
-    data: list[dict], width: float = 6.7, height: float | None = None, *, exact: bool = False
+    data: list[dict],
+    width: float = 6.7,
+    height: float | None = None,
+    *,
+    exact: bool = False,
+    locale: PDFLocale = DEFAULT_PDF_LOCALE,
 ) -> pdf_charts.ChartFlowable | None:
     """Create an HTTP status distribution as a vector donut and legend table.
 
@@ -1141,6 +1186,7 @@ def _create_status_code_chart(
         font=_get_font(),
         font_bold=_get_font_bold(),
         draw_text=_draw_text,
+        locale=locale,
     )
 
 
@@ -1507,46 +1553,50 @@ class SuccessCheckCircle(Flowable):
 # Formatting helpers
 
 
-def _fmt_pct(value: float | None) -> str:
+def _fmt_pct(value: float | None, locale: PDFLocale = DEFAULT_PDF_LOCALE) -> str:
     """Format an availability percentage; only a perfect run reads 100 %."""
     if value is None:
         return "n/a"
     if value >= 100:
-        return "100%"
-    return f"{min(value, _IMPERFECT_CEILING_PCT):.2f}%"
+        return locale.format_percent(100, 0)
+    return locale.format_percent(min(value, _IMPERFECT_CEILING_PCT), 2)
 
 
-def _fmt_ms(value: float | None) -> str:
-    return "n/a" if value is None else f"{value:,.0f} ms"
+def _fmt_ms(value: float | None, locale: PDFLocale = DEFAULT_PDF_LOCALE) -> str:
+    return "n/a" if value is None else f"{locale.format_number(value)} ms"
 
 
-def _fmt_duration(minutes: int | None) -> str:
+def _fmt_duration(minutes: int | None, locale: PDFLocale = DEFAULT_PDF_LOCALE) -> str:
     if minutes is None:
         return "—"
     if minutes < 1:
         return "< 1 min"
     days, rest = divmod(minutes, 1440)
     hours, mins = divmod(rest, 60)
-    parts = [f"{days}d"] if days else []
+    parts = [f"{locale.format_number(days)}d"] if days else []
     if hours or days:
-        parts.append(f"{hours}h")
-    parts.append(f"{mins}m")
+        parts.append(f"{locale.format_number(hours)}h")
+    parts.append(f"{locale.format_number(mins)}m")
     return " ".join(parts)
 
 
-def _span_text(start: datetime, end: datetime) -> str:
+def _span_text(start: datetime, end: datetime, locale: PDFLocale = DEFAULT_PDF_LOCALE) -> str:
     seconds = max(0, int((end - start).total_seconds()))
     days, rest = divmod(seconds, 86400)
     hours = rest // 3600
     if days and not hours:
-        return f"{days} day{'s' if days != 1 else ''}"
+        return f"{locale.format_number(days)} day{'s' if days != 1 else ''}"
     if days:
-        return f"{days} d {hours} h"
-    return f"{hours} hour{'s' if hours != 1 else ''}" if hours else f"{rest // 60} min"
+        return f"{locale.format_number(days)} d {locale.format_number(hours)} h"
+    return (
+        f"{locale.format_number(hours)} hour{'s' if hours != 1 else ''}"
+        if hours
+        else f"{locale.format_number(rest // 60)} min"
+    )
 
 
-def _fmt_dt(value: datetime, tz: tzinfo) -> str:
-    return _to_tz(value, tz).strftime("%Y-%m-%d %H:%M")
+def _fmt_dt(value: datetime, tz: tzinfo, locale: PDFLocale = DEFAULT_PDF_LOCALE) -> str:
+    return locale.format_datetime(_to_tz(value, tz))
 
 
 # Status kinds -> (accent, soft background, text color)
@@ -1631,7 +1681,10 @@ def _pdf_group_key(node: dict[str, Any]) -> str | None:
 
 
 def _build_route_entries(
-    display_hops: list[dict[str, Any]], target_ip: str | None, destination_place: str = ""
+    display_hops: list[dict[str, Any]],
+    target_ip: str | None,
+    destination_place: str = "",
+    locale: PDFLocale = DEFAULT_PDF_LOCALE,
 ) -> dict[str, Any]:
     """Turn traced hops into the entries of the vertical route diagram.
 
@@ -1662,28 +1715,39 @@ def _build_route_entries(
         if node["kind"] == "group":
             members = node["members"]
             latencies = [lat for m in members if (lat := _hop_latency(by_hop.get(m["hop"]))) is not None]
-            span = f"{node['first_hop']}–{node['last_hop']}"
+            span = f"{locale.format_number(node['first_hop'])}–{locale.format_number(node['last_hop'])}"
             first_note = f" · includes {FIRST_HOP_LABEL.lower()}" if members[0]["kind"] == "first" else ""
             if members[0]["location"] == "unlocated":
-                title, detail = f"{node['count']} measured hops", [f"{LOCATION_UNKNOWN}{first_note}"]
+                title, detail = f"{locale.format_number(node['count'])} measured hops", [f"{LOCATION_UNKNOWN}{first_note}"]
             else:
                 title = _place(members[0]["city"], members[0]["country"])
-                detail = [f"{node['count']} hops measured{first_note}"]
-            right = f"{min(latencies):.1f}–{max(latencies):.1f} ms" if latencies else ""
+                detail = [f"{locale.format_number(node['count'])} hops measured{first_note}"]
+            right = (
+                f"{locale.format_number(min(latencies), max_fraction=1, min_fraction=1)}–"
+                f"{locale.format_number(max(latencies), max_fraction=1, min_fraction=1)} ms"
+                if latencies
+                else ""
+            )
             flag = None if members[0]["location"] == "unlocated" else normalize_country_code(members[0]["country"])
             entries.append(
                 {"state": "measured", "span": span, "title": title, "detail": detail, "right": right, "flag": flag}
             )
             continue
         hop = by_hop.get(node["hop"])
-        span = node["label"]
+        span = locale.format_number(node["hop"]) if node.get("hop") is not None else node["label"]
         place = _place(node["city"], node["country"])
         lat = _hop_latency(hop)
         if node["kind"] in ("destination", "single"):
             ok = node["measurement"] == "measured"
             detail = [node["ip"] or node["host"] or "address unknown"]
             detail.append(destination_place or place or LOCATION_UNKNOWN)
-            right = f"{lat:.1f} ms · measured" if ok and lat else STATE_NO_REPLY if not ok else "measured"
+            right = (
+                f"{locale.format_number(lat, max_fraction=1, min_fraction=1)} ms · measured"
+                if ok and lat
+                else STATE_NO_REPLY
+                if not ok
+                else "measured"
+            )
             title = "Destination" if ok else f"Destination · {STATE_NOT_REACHED}"
             entries.append(
                 {
@@ -1717,7 +1781,11 @@ def _build_route_entries(
                     "span": span,
                     "title": title,
                     "detail": detail,
-                    "right": f"{lat:.1f} ms · measured" if lat else "measured",
+                    "right": (
+                        f"{locale.format_number(lat, max_fraction=1, min_fraction=1)} ms · measured"
+                        if lat
+                        else "measured"
+                    ),
                     # The flag precedes the place: the title, or the place line of the first hop.
                     "flag": None if first else flag,
                     "detail_flag": (len(detail) - 1, flag) if first and flag else None,
@@ -2000,6 +2068,7 @@ class PDFReportBuilder:
         # SimpleDocTemplate frames carry 6 pt padding per side; full-width flowables must fit inside it
         self.content_width = self.width - 2 * self.margin - 12
         self.tz = _report_tz(report_data.from_date)
+        self.locale = report_data.locale
         self.font = _get_font()
         self.font_regular = self.font  # Alias for consistency
         self.font_bold = _get_font_bold()
@@ -2355,11 +2424,17 @@ class PDFReportBuilder:
 
     def _coverage_gap_text(self) -> str:
         cov = self.kpis.coverage_pct
-        return f"Not enough measurement data for the remaining {100 - cov:.1f}% of the reporting period."
+        return (
+            "Not enough measurement data for the remaining "
+            f"{self.locale.format_percent(100 - cov, 1)} of the reporting period."
+        )
 
     def _coverage_hint(self) -> str:
         kpis = self.kpis
-        return f"{kpis.up_count:,}/{kpis.total_checks:,} measurements · data coverage {kpis.coverage_pct:g}%"
+        return (
+            f"{self.locale.format_number(kpis.up_count)}/{self.locale.format_number(kpis.total_checks)} "
+            f"measurements · data coverage {self.locale.format_percent(kpis.coverage_pct, 0)}"
+        )
 
     def _status_info(self) -> tuple[str, str, str]:
         """Return (label, detail, kind) from measured availability and data coverage."""
@@ -2372,16 +2447,21 @@ class PDFReportBuilder:
         if level == "none":
             return (
                 "Insufficient data",
-                f"{_fmt_pct(kpis.uptime_percent)} of recorded checks successful. {self._coverage_gap_text()}",
+                (
+                    f"{_fmt_pct(kpis.uptime_percent, self.locale)} of recorded checks successful. "
+                    f"{self._coverage_gap_text()}"
+                ),
                 "unknown",
             )
         # Sparse data cannot prove availability for the whole period: name it a success rate.
         noun = "of recorded checks successful" if self._is_low_coverage() else "availability"
         detail = (
-            f"{_fmt_pct(kpis.uptime_percent)} {noun} · {kpis.down_count} of {kpis.total_checks} checks failed{tail}"
+            f"{_fmt_pct(kpis.uptime_percent, self.locale)} {noun} · "
+            f"{self.locale.format_number(kpis.down_count)} of {self.locale.format_number(kpis.total_checks)} "
+            f"checks failed{tail}"
         )
         if self._is_low_coverage():
-            detail += f" · Low data coverage ({kpis.coverage_pct:g}% of the period)"
+            detail += f" · Low data coverage ({self.locale.format_percent(kpis.coverage_pct, 0)} of the period)"
         if level == "ok":
             return "Operational", detail, "success"
         if level == "warn":
@@ -2478,8 +2558,8 @@ class PDFReportBuilder:
         self.elements.append(Paragraph("REPORTING PERIOD", period_label))
         self.elements.append(
             Paragraph(
-                f"{_fmt_dt(from_date, self.tz)} – {_fmt_dt(to_date, self.tz)} {_tz_label(from_date)} "
-                f"({_span_text(from_date, to_date)})",
+                f"{_fmt_dt(from_date, self.tz, self.locale)} – {_fmt_dt(to_date, self.tz, self.locale)} "
+                f"{_tz_label(from_date)} ({_span_text(from_date, to_date, self.locale)})",
                 period_style,
             )
         )
@@ -2550,7 +2630,7 @@ class PDFReportBuilder:
         width, height = 100 * mm, 34 * mm
         hero_card = RoundedKPICard(
             label=label,
-            value=_fmt_pct(pct),
+            value=_fmt_pct(pct, self.locale),
             width=width,
             height=height,
             value_color=color,
@@ -2572,21 +2652,27 @@ class PDFReportBuilder:
         gap = 5 * mm
         card_width = (self.content_width - 2 * gap) / 3
         has_checks = kpis.total_checks > 0
-        samples = f"{kpis.response_samples:,} samples" if kpis.response_samples else "no measurements"
+        samples = (
+            f"{self.locale.format_number(kpis.response_samples)} samples"
+            if kpis.response_samples
+            else "no measurements"
+        )
         down_color = COLORS["danger"] if kpis.downtime_minutes > 0 else COLORS["dark"]
         quiet_low_coverage = self._is_low_coverage() and kpis.down_count == 0
 
         specs = [
-            ("AVERAGE RESPONSE", _fmt_ms(kpis.avg_response_ms), COLORS["dark"], samples),
+            ("AVERAGE RESPONSE", _fmt_ms(kpis.avg_response_ms, self.locale), COLORS["dark"], samples),
             (
                 "MAXIMUM RESPONSE",
-                _fmt_ms(kpis.max_response_ms),
+                _fmt_ms(kpis.max_response_ms, self.locale),
                 COLORS["dark"],
                 "slowest sample" if kpis.max_response_ms is not None else samples,
             ),
             (
                 "ESTIMATED DOWNTIME",
-                "n/a" if quiet_low_coverage or not has_checks else f"≈ {kpis.downtime_minutes:,} min",
+                "n/a"
+                if quiet_low_coverage or not has_checks
+                else f"≈ {self.locale.format_number(kpis.downtime_minutes)} min",
                 COLORS["muted"] if quiet_low_coverage or not has_checks else down_color,
                 "in observed checks"
                 if quiet_low_coverage
@@ -2724,7 +2810,8 @@ class PDFReportBuilder:
     def _period_text(self) -> str:
         data = self.report_data
         return (
-            f"Reporting period {_fmt_dt(data.from_date, self.tz)} – {_fmt_dt(data.to_date, self.tz)} "
+            f"Reporting period {_fmt_dt(data.from_date, self.tz, self.locale)} – "
+            f"{_fmt_dt(data.to_date, self.tz, self.locale)} "
             f"{_tz_label(data.from_date)}"
         )
 
@@ -3014,7 +3101,7 @@ class PDFReportBuilder:
             )
         scanned = self._ssl_scanned_at
         when = (
-            f"{_fmt_dt(_to_tz(scanned, self.tz), self.tz)} {_tz_label(self.report_data.from_date)}"
+            f"{_fmt_dt(_to_tz(scanned, self.tz), self.tz, self.locale)} {_tz_label(self.report_data.from_date)}"
             if scanned
             else "not recorded"
         )
@@ -3458,6 +3545,7 @@ class PDFReportBuilder:
                 width=width,
                 interval_seconds=_interval_seconds(data),
                 plot_left_in=left_in,
+                locale=self.locale,
             )
             if bar:
                 self._add_chart_section(
@@ -3465,7 +3553,7 @@ class PDFReportBuilder:
                     bar,
                     f"Checks cover {kpis.coverage_pct:g}% of the reporting period. {self._coverage_gap_text()} "
                     f"The charts below show only the measured window "
-                    f"{_fmt_dt(c_from, self.tz)} – {_fmt_dt(c_to, self.tz)}.",
+                    f"{_fmt_dt(c_from, self.tz, self.locale)} – {_fmt_dt(c_to, self.tz, self.locale)}.",
                 )
                 added += 1
 
@@ -3476,13 +3564,20 @@ class PDFReportBuilder:
             width=width,
             height=1.0 if window else 1.45,
             plot_left_in=left_in,
+            locale=self.locale,
         )
         if uptime_chart:
-            rate = _fmt_pct(kpis.uptime_percent)
+            rate = _fmt_pct(kpis.uptime_percent, self.locale)
             if self._is_low_coverage():
                 rate += f" of recorded checks, {kpis.coverage_pct:g}% coverage"
-            note = f"{kpis.up_count:,} of {kpis.total_checks:,} checks up ({rate})"
-            note += f" · {len(self.downtime_events)} downtime event{'s' if len(self.downtime_events) != 1 else ''}"
+            note = (
+                f"{self.locale.format_number(kpis.up_count)} of {self.locale.format_number(kpis.total_checks)} "
+                f"checks up ({rate})"
+            )
+            note += (
+                f" · {self.locale.format_number(len(self.downtime_events))} downtime event"
+                f"{'s' if len(self.downtime_events) != 1 else ''}"
+            )
             self._add_chart_section(
                 "Availability Timeline" + zoom,
                 uptime_chart,
@@ -3500,12 +3595,13 @@ class PDFReportBuilder:
             sla_threshold_ms=int(sla_response_ms) if sla_response_ms else None,
             threshold_label=response_label,
             plot_left_in=left_in,
+            locale=self.locale,
         )
         if response_chart:
             self._add_chart_section(
                 "Response Time" + zoom,
                 response_chart,
-                self._latency_note(data.http_data, display.get("http_ms"), self.tz, sla_response_ms),
+                self._latency_note(data.http_data, display.get("http_ms"), self.tz, sla_response_ms, self.locale),
             )
             added += 1
 
@@ -3521,12 +3617,13 @@ class PDFReportBuilder:
                 sla_threshold_ms=int(sla_ping_ms) if sla_ping_ms else None,
                 threshold_label=ping_label,
                 plot_left_in=left_in,
+                locale=self.locale,
             )
             if ping_chart:
                 self._add_chart_section(
                     "Ping Latency" + zoom,
                     ping_chart,
-                    self._latency_note(data.ping_data, display.get("ping_ms"), self.tz, sla_ping_ms),
+                    self._latency_note(data.ping_data, display.get("ping_ms"), self.tz, sla_ping_ms, self.locale),
                 )
                 added += 1
 
@@ -3538,9 +3635,14 @@ class PDFReportBuilder:
                     port: display.get(f"tcp_ms_{port}", points) for port, points in data.tcp_port_data.items()
                 }
                 tcp_chart = _create_multi_port_tcp_chart(
-                    display_ports, from_date=c_from, to_date=c_to, width=width, plot_left_in=left_in
+                    display_ports,
+                    from_date=c_from,
+                    to_date=c_to,
+                    width=width,
+                    plot_left_in=left_in,
+                    locale=self.locale,
                 )
-                note = self._multi_port_note(display_ports, self.tz)
+                note = self._multi_port_note(display_ports, self.tz, self.locale)
             if not tcp_chart and data.tcp_data:
                 tcp_chart = _create_tcp_chart(
                     display.get("tcp_ms", data.tcp_data),
@@ -3548,8 +3650,9 @@ class PDFReportBuilder:
                     to_date=c_to,
                     width=width,
                     plot_left_in=left_in,
+                    locale=self.locale,
                 )
-                note = self._latency_note(data.tcp_data, display.get("tcp_ms"), self.tz)
+                note = self._latency_note(data.tcp_data, display.get("tcp_ms"), self.tz, locale=self.locale)
             if tcp_chart:
                 self._add_chart_section("TCP Latency" + zoom, tcp_chart, note)
                 added += 1
@@ -3571,13 +3674,17 @@ class PDFReportBuilder:
         from_date = window[0] if window else c_from_default
         gutters = [
             _latency_plot_left_in(
-                display.get("http_ms", data.http_data), from_date, int(sla[0]) if sla[0] else None, width
+                display.get("http_ms", data.http_data), from_date, int(sla[0]) if sla[0] else None, width, self.locale
             )
         ]
         if data.target.get("enable_ping") and data.ping_data:
             gutters.append(
                 _latency_plot_left_in(
-                    display.get("ping_ms", data.ping_data), from_date, int(sla[1]) if sla[1] else None, width
+                    display.get("ping_ms", data.ping_data),
+                    from_date,
+                    int(sla[1]) if sla[1] else None,
+                    width,
+                    self.locale,
                 )
             )
         if data.target.get("enable_tcp_connect"):
@@ -3585,9 +3692,19 @@ class PDFReportBuilder:
                 ports = {port: display.get(f"tcp_ms_{port}", pts) for port, pts in data.tcp_port_data.items()}
                 ports = {port: pts for port, pts in ports.items() if pts}
                 if ports:
-                    gutters.append(_left_margin(_port_scales(ports, _report_tz(from_date))[2], width, False) * width)
+                    gutters.append(
+                        _left_margin(
+                            _port_scales(ports, _report_tz(from_date), self.locale)[2],
+                            width,
+                            False,
+                            self.locale,
+                        )
+                        * width
+                    )
             if data.tcp_data:
-                gutters.append(_latency_plot_left_in(display.get("tcp_ms", data.tcp_data), from_date, None, width))
+                gutters.append(
+                    _latency_plot_left_in(display.get("tcp_ms", data.tcp_data), from_date, None, width, self.locale)
+                )
         return max(gutters)
 
     def _detail_window(self) -> tuple[datetime, datetime] | None:
@@ -3625,14 +3742,20 @@ class PDFReportBuilder:
             else "Counts are stored samples; history may be rolled up, so they are not exact per-check counts."
         )
         if len(counts) > 1:
-            chart = _create_status_code_chart(data.status_code_data, width=width, exact=data.status_counts_exact)
+            chart = _create_status_code_chart(
+                data.status_code_data, width=width, exact=data.status_counts_exact, locale=self.locale
+            )
             if chart:
                 self._add_chart_section("HTTP Status Codes", chart, note)
             return bool(chart)
         (code, count), total = next(iter(counts.items())), sum(counts.values())
         color = colors.HexColor(_STATUS_CLASS_COLORS[code // 100])
         label = f"HTTP {code}" if code else "Error"
-        summary = f"<b>{_esc(label)}</b> {_esc(_http_class_label(code))}: {count:,} of {total:,} {unit} (100%)"
+        summary = (
+            f"<b>{_esc(label)}</b> {_esc(_http_class_label(code))}: "
+            f"{self.locale.format_number(count)} of {self.locale.format_number(total)} {unit} "
+            f"({self.locale.format_percent(100, 0)})"
+        )
         self.elements.append(
             KeepTogether(
                 [
@@ -3652,6 +3775,7 @@ class PDFReportBuilder:
         display_points: list[dict] | None = None,
         tz: tzinfo = UTC,
         sla_ms: float | None = None,
+        locale: PDFLocale = DEFAULT_PDF_LOCALE,
     ) -> str | None:
         """Caption of a latency chart: summary statistics plus what the chart shows beyond them."""
         values = _valid_values(points)
@@ -3659,22 +3783,27 @@ class PDFReportBuilder:
             return None
         reported_max = max(values)
         average = sum(values) / len(values)
-        note = f"Average {average:,.0f} ms · maximum {reported_max:,.0f} ms · {len(values):,} measurements"
+        note = (
+            f"Average {_fmt_ms_value(average, locale)} · maximum {_fmt_ms_value(reported_max, locale)} · "
+            f"{locale.format_number(len(values))} measurements"
+        )
         if display_points:
             view = _build_view(display_points, tz)
-            extra = [_peak_text(p, tz) for p in view.peaks[:3]]
+            extra = [_peak_text(p, tz, locale) for p in view.peaks[:3]]
             if extra:
                 note += ". Highest peaks within an interval (exact time unknown): " + "; ".join(extra)
                 if len(view.peaks) > len(extra):
                     note += f"; {len(view.peaks) - len(extra)} further not listed"
             if view.highest_max is not None and view.highest_max > reported_max + 0.5:
                 note += (
-                    f". The interval maxima include all retained checks and reach {_fmt_ms_value(view.highest_max)}, "
+                    ". The interval maxima include all retained checks and reach "
+                    f"{_fmt_ms_value(view.highest_max, locale)}, "
                     "above the maximum of the plotted sample series"
                 )
             if view.no_max_intervals and view.has_intervals:
                 note += (
-                    f". Peaks are unavailable for {view.no_max_intervals:,} of {view.intervals:,} intervals "
+                    f". Peaks are unavailable for {locale.format_number(view.no_max_intervals)} of "
+                    f"{locale.format_number(view.intervals)} intervals "
                     "(rolled-up history)"
                 )
             elif view.no_max_intervals:
@@ -3684,13 +3813,14 @@ class PDFReportBuilder:
             if over:
                 plural = "s" if len(over) != 1 else ""
                 note += (
-                    f". {len(over)} value{plural} above the axis, highest {_fmt_ms_value(max(over))}, "
+                    f". {locale.format_number(len(over))} value{plural} above the axis, "
+                    f"highest {_fmt_ms_value(max(over), locale)}, "
                     "marked at the top edge"
                 )
         return note
 
     @staticmethod
-    def _multi_port_note(port_data: dict[int, list[dict]], tz: tzinfo) -> str:
+    def _multi_port_note(port_data: dict[int, list[dict]], tz: tzinfo, locale: PDFLocale = DEFAULT_PDF_LOCALE) -> str:
         """Caption of the per-port TCP chart, including the real scale mode and the highest peaks."""
         views = {port: _build_view(points, tz) for port, points in sorted(port_data.items()) if points}
         if not views:
@@ -3702,7 +3832,7 @@ class PDFReportBuilder:
         peaks = sorted(((port, p) for port, v in views.items() for p in v.peaks[:1]), key=lambda i: -i[1].value)[:3]
         if peaks:
             note += " Highest peaks within an interval (exact time unknown): " + "; ".join(
-                f"port {port} {_peak_text(p, tz)}" for port, p in peaks
+                f"port {locale.format_number(port)} {_peak_text(p, tz, locale)}" for port, p in peaks
             )
             note += "."
         if any(v.no_max_intervals for v in views.values()):
@@ -3759,16 +3889,16 @@ class PDFReportBuilder:
             if event.end is None:
                 end_text = "—"
                 minutes = int((last_sample - _to_tz(event.start, self.tz)).total_seconds() / 60)
-                duration = f"≥ {_fmt_duration(max(minutes, 0))}"
+                duration = f"≥ {_fmt_duration(max(minutes, 0), self.locale)}"
                 badge = self._small_badge("ONGOING", COLORS["danger"])
             else:
-                end_text = _fmt_dt(event.end, self.tz)
-                duration = _fmt_duration(event.duration_minutes)
+                end_text = _fmt_dt(event.end, self.tz, self.locale)
+                duration = _fmt_duration(event.duration_minutes, self.locale)
                 badge = self._small_badge("RESOLVED", COLORS["success"])
             rows.append(
                 [
                     Paragraph(str(i), st["td_muted"]),
-                    Paragraph(_fmt_dt(event.start, self.tz), st["td"]),
+                    Paragraph(_fmt_dt(event.start, self.tz, self.locale), st["td"]),
                     Paragraph(end_text, st["td"]),
                     Paragraph(duration, st["td"]),
                     badge,

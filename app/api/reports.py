@@ -20,6 +20,7 @@ from fastapi.responses import FileResponse, Response
 from starlette.concurrency import run_in_threadpool
 
 from ..db import sqlite as sqlite_db
+from ..services.pdf_locale import from_request_headers
 from ..services.pdf_report import ReportData, generate_pdf_report
 from ..services.pdf_worker import (
     PDF_DISABLED_ERROR,
@@ -188,6 +189,9 @@ async def get_target_pdf_report(
         target=target_dict,
         from_date=from_date,
         to_date=to_date,
+        locale=from_request_headers(
+            request.headers.get("x-justup-locale-profile"), request.headers.get("accept-language")
+        ),
         **{**inputs, "tcp_port_data": inputs["tcp_port_data"] or None},
     )
 
@@ -252,6 +256,9 @@ async def request_pdf_report(
         to_date=to_date,
         profile="pdf",
         page_size=page_size,
+        locale=from_request_headers(
+            request.headers.get("x-justup-locale-profile"), request.headers.get("accept-language")
+        ),
         db_path=db_path,
         tsdb_dir=Path(tsdb_dir),
     )
