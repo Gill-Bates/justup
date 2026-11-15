@@ -18,36 +18,6 @@ const plain = (v) => JSON.parse(JSON.stringify(v));
 const T0 = Date.parse("2026-01-01T00:00:00Z");
 const pt = (min, value) => ({ ts: new Date(T0 + min * 60000).toISOString(), value });
 
-test("status donut labels are solid black without an outline", () => {
-  const builderSrc = readFileSync(new URL("../../app/static/js/charts/chart-builder.js", import.meta.url), "utf8");
-  const context = {
-    formatChartCount: String,
-    formatChartShare: (share) => `${(share * 100).toFixed(1)}%`,
-    document: { body: {} },
-    getComputedStyle: () => ({ fontFamily: "TestSans" }),
-  };
-  vm.runInNewContext(builderSrc, context);
-  const drawn = [];
-  const canvas = {
-    save() {},
-    restore() {},
-    measureText: () => ({ width: 40 }),
-    strokeText: () => drawn.push({ type: "stroke" }),
-    fillText(text, x, y) { drawn.push({ type: "fill", text, x, y, color: this.fillStyle }); },
-  };
-  const chart = {
-    ctx: canvas,
-    getDataVisibility: () => true,
-    getDatasetMeta: () => ({ data: [{ getProps: () => ({
-      x: 100, y: 100, startAngle: -Math.PI / 2, endAngle: Math.PI / 2,
-      innerRadius: 60, outerRadius: 90,
-    }) }] }),
-  };
-  context._drawStatusDonutLabels(chart, [379], [1]);
-  assert.deepEqual(drawn, [{ type: "fill", text: "379 (100.0%)", x: 175, y: 100, color: "#000000" }]);
-  assert.equal(canvas.font, "600 12px TestSans");
-});
-
 function controlledTimers() {
   let nextId = 0;
   const pending = new Map();

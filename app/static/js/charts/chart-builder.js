@@ -365,7 +365,7 @@ function buildAvailabilitySeriesChart(canvasId, data) {
 /**
  * Fill the HTML legend under the donut with status code and class per segment.
  */
-function _renderStatusDonutLegend(listEl, keys, colors, clsOf) {
+function _renderStatusDonutLegend(listEl, keys, colors, clsOf, values, shares) {
   if (!listEl) return;
   listEl.textContent = "";
   keys.forEach((k, i) => {
@@ -378,35 +378,11 @@ function _renderStatusDonutLegend(listEl, keys, colors, clsOf) {
       name.appendChild(_el("span", "combined-donut-legend-class", cls.label));
     }
     item.appendChild(name);
+    item.appendChild(_el("span", "combined-donut-legend-value",
+      formatChartCount(values[i]) + " (" + formatChartShare(shares[i]) + ")"));
     listEl.appendChild(item);
   });
   listEl.hidden = false;
-}
-
-/** Draw each segment's count and share on the ring when the arc has room for a legible label. */
-function _drawStatusDonutLabels(chart, values, shares) {
-  const arcs = chart.getDatasetMeta(0).data;
-  const ctx = chart.ctx;
-  ctx.save();
-  ctx.font = "600 12px " + (getComputedStyle(document.body).fontFamily || "sans-serif");
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillStyle = "#000000";
-  values.forEach((value, index) => {
-    const arc = arcs[index];
-    if (!arc || !chart.getDataVisibility(index)) return;
-    const { x, y, startAngle, endAngle, innerRadius, outerRadius } = arc.getProps(
-      ["x", "y", "startAngle", "endAngle", "innerRadius", "outerRadius"], true,
-    );
-    const middleRadius = (innerRadius + outerRadius) / 2;
-    const label = formatChartCount(value) + " (" + formatChartShare(shares[index]) + ")";
-    if (Math.abs(endAngle - startAngle) * middleRadius < ctx.measureText(label).width + 8) return;
-    const angle = (startAngle + endAngle) / 2;
-    const labelX = x + Math.cos(angle) * middleRadius;
-    const labelY = y + Math.sin(angle) * middleRadius;
-    ctx.fillText(label, labelX, labelY);
-  });
-  ctx.restore();
 }
 
 /**
@@ -463,9 +439,12 @@ function buildStatusCodeChart(canvasId, data) {
   }
   if (wrap) wrap.hidden = false;
   if (emptyEl) emptyEl.hidden = true;
+  const total = keys.reduce((sum, k) => sum + statusCounts[k], 0);
   if (totalEl) {
-    const total = keys.reduce((sum, k) => sum + statusCounts[k], 0);
-    totalEl.textContent = formatChartCount(total) + " " + unit;
+    totalEl.textContent = "";
+    totalEl.appendChild(_el("strong", "combined-donut-total-count", formatChartCount(total)));
+    totalEl.appendChild(_el("span", "combined-donut-total-unit", exact ? "checks" : "samples"));
+    totalEl.setAttribute("aria-label", formatChartCount(total) + " " + unit);
     totalEl.hidden = false;
   }
 
@@ -477,8 +456,7 @@ function buildStatusCodeChart(canvasId, data) {
   const values = keys.map((k) => statusCounts[k]);
   const shares = chartShares(values);
   const theme = appState.theme;
-  const labelState = { values, shares };
-  _renderStatusDonutLegend(legendEl, keys, colorsFor(theme), clsOf);
+  _renderStatusDonutLegend(legendEl, keys, colorsFor(theme), clsOf, values, shares);
   const chart = _createOrUpdateChart(canvasId, ctx, {
     type: "doughnut",
     options: {
@@ -505,13 +483,6 @@ function buildStatusCodeChart(canvasId, data) {
         },
       },
     },
-    plugins: [{
-      id: "statusDonutLabels",
-      afterDatasetsDraw(chart) {
-        const labels = chart._statusDonutLabels || labelState;
-        if (labels) _drawStatusDonutLabels(chart, labels.values, labels.shares);
-      },
-    }],
     data: {
       labels: labels,
       datasets: [
@@ -524,7 +495,6 @@ function buildStatusCodeChart(canvasId, data) {
       ],
     },
   });
-  chart._statusDonutLabels = labelState;
   chart.update("none");
   chart._fixedLegend = true;
   chart._themeHook = function (t) {

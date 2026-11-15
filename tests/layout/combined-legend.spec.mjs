@@ -343,7 +343,7 @@ test("peaks render as red triangles with solid stems to the median and no connec
 });
 
 for (const viewport of VIEWPORTS) {
-	test(`status donut legend shows code and class only, y axis shows its unit at ${viewport.w}x${viewport.h} @combined-legend`, async ({ browser, app, adminState }) => {
+	test(`status donut values are readable beside the ring at ${viewport.w}x${viewport.h} @combined-legend`, async ({ browser, app, adminState }) => {
 		const { context, page, problems } = await openTarget(browser, app, adminState, viewport);
 		try {
 			await page.waitForFunction(() => document.querySelectorAll("#status-donut-legend li").length > 0, null, { timeout: 30000 });
@@ -354,13 +354,18 @@ for (const viewport of VIEWPORTS) {
 					const chart = window.Chart.getChart(document.getElementById("chart-combined"));
 					const y = chart.scales.y;
 					const rects = items.map((li) => li.getBoundingClientRect());
+					const center = document.getElementById("status-donut-total");
+					const centerRect = center.getBoundingClientRect();
+					const canvasRect = document.getElementById("chart-status-code").getBoundingClientRect();
 					return {
 						keyExists: !!document.getElementById("combined-status-key"),
 						classKeyText: Array.from(document.querySelectorAll("#combined-card .combined-swatch")).filter((s) => !s.closest("#combined-legend") && !s.closest("#status-donut-legend")).length,
 						rows: items.map((li) => ({
 							name: li.querySelector(".combined-donut-legend-name")?.textContent.trim(),
-							hasValue: !!li.querySelector(".combined-donut-legend-value"),
+							value: li.querySelector(".combined-donut-legend-value")?.textContent.trim(),
 						})),
+						centerText: center.textContent.trim(),
+						centerInside: centerRect.left >= canvasRect.left && centerRect.right <= canvasRect.right && centerRect.top >= canvasRect.top && centerRect.bottom <= canvasRect.bottom,
 						overlap: rects.some((a, i) => rects.some((b, j) => i < j && a.bottom > b.top + 1 && a.top < b.bottom - 1)),
 						titleShown: !!y.options.title.display,
 						titleText: y.options.title.text,
@@ -369,7 +374,9 @@ for (const viewport of VIEWPORTS) {
 				});
 				assert.equal(state.keyExists, false, `${theme}: the class key above the donut is gone`);
 				assert.equal(state.classKeyText, 0, `${theme}: no second swatch legend besides toggles and donut`);
-				assert.ok(state.rows.length > 0 && state.rows.every((row) => /^(HTTP \d{3}|Error)/.test(row.name) && !row.hasValue), `${theme}: every row has only code and class, no count/share value (${JSON.stringify(state.rows)})`);
+				assert.ok(state.rows.length > 0 && state.rows.every((row) => /^(HTTP \d{3}|Error)/.test(row.name) && /\d.*\(.*%\)/.test(row.value)), `${theme}: each status has its count and share beside the ring (${JSON.stringify(state.rows)})`);
+				assert.match(state.centerText, /\d.*(?:checks|samples)/, `${theme}: total is shown in the donut center`);
+				assert.equal(state.centerInside, true, `${theme}: total stays inside the donut plot`);
 				assert.equal(state.overlap, false, `${theme}: legend rows do not overlap`);
 				if (state.titleShown) assert.match(state.titleText, /\(ms\)/, `${theme}: axis title names the unit`);
 				else assert.ok(state.ticks.length > 0 && state.ticks.every((label) => /\bms$/.test(label)), `${theme}: ticks carry the unit (${state.ticks})`);

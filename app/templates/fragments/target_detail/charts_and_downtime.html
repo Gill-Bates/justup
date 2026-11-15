@@ -27,9 +27,9 @@
 			{% if target.enable_http_check %}
 			<section class="combined-donut" aria-labelledby="status-donut-title">
 				<h2 id="status-donut-title" class="combined-donut-title">HTTP status codes</h2>
-				<p id="status-donut-total" class="combined-donut-total" hidden></p>
 				<div id="status-donut-plot" class="combined-donut-plot">
 					<canvas id="chart-status-code" role="img" aria-label="HTTP status code distribution. Loading data."></canvas>
+					<p id="status-donut-total" class="combined-donut-total" hidden></p>
 				</div>
 				<ul id="status-donut-legend" class="combined-donut-legend" aria-label="HTTP status codes with counts and shares" hidden></ul>
 				<p id="status-donut-empty" class="combined-empty combined-empty--small" role="status" hidden></p>

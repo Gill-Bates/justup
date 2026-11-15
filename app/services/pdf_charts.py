@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+#
+# app/services/pdf_charts.py
+# Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
+#
+
 """Native ReportLab vector charts for PDF reports."""
 
 from __future__ import annotations
