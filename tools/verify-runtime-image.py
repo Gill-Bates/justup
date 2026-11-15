@@ -15,9 +15,9 @@ the mtr tools (mtr, mtr-packet and the mtr-tiny package entry; traceroute runs t
 Cargo/rustup/pip/Maven caches, a full JDK, .git
 directories, build source trees (Cargo.toml/Cargo.lock), object files (.o, .rlib, .obj and static
 .a archives), test caches, build credentials, and leftovers in /tmp, /var/tmp and /usr/src.
-Exceptions that are part of the shipped runtime, not of the build: static .a archives inside
-site-packages (numpy ships libnpymath.a) and objects in the CPython config-* directory of the
-base interpreter. pip, setuptools and wheel must be gone from the final file system (``fs``); the
+The only object-file exception is the CPython config-* directory of the base interpreter.
+The removed charting packages matplotlib, numpy and contourpy must be absent.
+pip, setuptools and wheel must be gone from the final file system (``fs``); the
 base image still carries them in its own layer, which the layer scan accepts by design (see
 package_tooling). Compiled shared libraries (.so) are never forbidden; the required
 libsignal JNI library is asserted instead.
@@ -74,6 +74,7 @@ FORBIDDEN_FILE_NAMES = frozenset({"Cargo.toml", "Cargo.lock"})
 OBJECT_SUFFIXES = (".o", ".rlib", ".obj")
 STATIC_SUFFIX = ".a"
 SITE_PACKAGES = re.compile(r"^/usr/local/lib/python3[0-9.]*/site-packages/")
+REMOVED_CHART_PACKAGES = re.compile(r"^(?:matplotlib|numpy|contourpy)(?:$|[._-])")
 CPYTHON_CONFIG = re.compile(r"^/usr/local/lib/python3[0-9.]*/config-[^/]+/")
 # Directories that must be empty in a fresh container.
 EMPTY_DIRS = ("/tmp", "/var/tmp", "/usr/src")  # noqa: S108 # paths inside the audited image
@@ -97,6 +98,10 @@ def violation(path: str, is_dir: bool = False) -> str | None:
     """Return the reason ``path`` (absolute, POSIX) breaks the contract, or None."""
     posix = PurePosixPath(path)
     name = posix.name
+    if site_packages := SITE_PACKAGES.match(path):
+        package = path[site_packages.end() :].split("/", 1)[0]
+        if REMOVED_CHART_PACKAGES.match(package):
+            return f"removed chart package {package}"
     for forbidden in FORBIDDEN_PATHS:
         if path == forbidden or path.startswith(forbidden + "/"):
             return f"forbidden location {forbidden}"
@@ -116,7 +121,7 @@ def violation(path: str, is_dir: bool = False) -> str | None:
         return f"build source file {name}"
     if name.endswith(OBJECT_SUFFIXES) and not CPYTHON_CONFIG.match(path):
         return f"object file {name}"
-    if name.endswith(STATIC_SUFFIX) and not SITE_PACKAGES.match(path):
+    if name.endswith(STATIC_SUFFIX):
         return f"static archive {name}"
     return None
 

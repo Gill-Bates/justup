@@ -101,8 +101,8 @@ for dir in "${REQUIRED_DIRS[@]}"; do
     fi
 done
 
-# Ensure cache dirs are writable after UID/GID remap
-for dir in /home/justup /home/justup/.matplotlib; do
+# Ensure the service home is writable after UID/GID remap
+for dir in /home/justup; do
     if [ -d "$dir" ]; then
         if [ "$(stat -c '%u:%g' "$dir")" != "$PUID:$PGID" ]; then
             chown "$PUID:$PGID" "$dir"

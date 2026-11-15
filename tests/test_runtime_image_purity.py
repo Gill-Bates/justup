@@ -46,7 +46,6 @@ def make_image_root(root: Path) -> Path:
         touch(root, path)
     touch(root, "usr/local/bin/python3")
     touch(root, "usr/lib/x86_64-linux-gnu/libz.so.1")
-    touch(root, "usr/local/lib/python3.13/site-packages/numpy/_core/lib/libnpymath.a")
     touch(root, "usr/local/lib/python3.13/config-3.13-x86_64-linux-gnu/python.o")
     (root / "tmp").mkdir()
     (root / "usr/src").mkdir(parents=True)
@@ -92,6 +91,12 @@ def test_clean_image_passes_and_required_native_libraries_are_not_flagged(tmp_pa
         "usr/lib/foo.o",
         "opt/target/release/deps/libx.rlib",
         "usr/lib/libfoo.a",
+        "usr/local/lib/python3.13/site-packages/matplotlib/__init__.py",
+        "usr/local/lib/python3.13/site-packages/numpy/__init__.py",
+        "usr/local/lib/python3.13/site-packages/contourpy/__init__.py",
+        "usr/local/lib/python3.13/site-packages/numpy-2.5.4.dist-info/METADATA",
+        "usr/local/lib/python3.13/site-packages/numpy.libs/libopenblas.so",
+        "usr/local/lib/python3.13/site-packages/other/libunused.a",
         "root/.docker/config.json",
         "root/.netrc",
         "usr/bin/autoconf",

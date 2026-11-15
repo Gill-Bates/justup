@@ -936,7 +936,6 @@ def _installed_dependencies() -> tuple[tuple[str, str], ...]:
         "httpx",
         "jinja2",
         "markdown",
-        "matplotlib",
         "pillow",
         "pydantic",
         "python-multipart",

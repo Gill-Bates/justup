@@ -562,7 +562,7 @@ RUN set -eu \
 
 # Non-root user with dedicated home directory (security: avoid HOME=/tmp)
 RUN groupadd -r justup && useradd -r -g justup justup \
- && mkdir -p /home/justup/.matplotlib \
+ && mkdir -p /home/justup \
  && chown -R justup:justup /home/justup
 # Dedicated identity of the Nmap worker (docker/entrypoint.sh): the only process that gets
 # CAP_NET_RAW. The web user joins its group solely to reach the worker's Unix socket.
@@ -638,7 +638,6 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 # Flexibility: Split JAVA heap sizes for easier runtime customization
 # Structure: /src/app/ = Python package, /app/ = workdir with data/config
 ENV HOME=/home/justup \
-    MPLCONFIGDIR=/home/justup/.matplotlib \
     XDG_DATA_HOME=/home/justup \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -647,8 +646,6 @@ ENV HOME=/home/justup \
     PYTHONIOENCODING=utf-8 \
     LANG=en_US.UTF-8 \
     LC_ALL=en_US.UTF-8 \
-    OPENBLAS_NUM_THREADS=1 \
-    OMP_NUM_THREADS=1 \
     JUSTUP_HOST=0.0.0.0 \
     JUSTUP_PORT=8000 \
     JUSTUP_DATA_DIR=/app/data \

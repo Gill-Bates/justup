@@ -396,7 +396,7 @@ def line_chart(
             locale=locale,
         )
         if sla is not None:
-            name = sla_label or f"SLA threshold ({sla:g} ms)"
+            name = sla_label or f"SLA threshold ({locale.format_number(sla, max_fraction=2)} ms)"
             if sla <= top:
                 y = plot_y + plot_height * sla / top
                 canvas.setStrokeColor(_color("#f0a202"))

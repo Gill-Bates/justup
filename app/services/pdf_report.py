@@ -2280,7 +2280,10 @@ class PDFReportBuilder:
         canvas.setFillColor(COLORS["muted"])
         now = datetime.now(tz=UTC)
         build_suffix = f" ({BUILD_INFO[:7]})" if BUILD_INFO and BUILD_INFO != "dev" else ""
-        footer_text = f"v{VERSION}{build_suffix} | © {now.year} Gill-Bates | Lightweight Uptime Monitor | "
+        footer_text = (
+            f"v{VERSION}{build_suffix} | © {self.locale.format_number(now.year)} Gill-Bates "
+            "| Lightweight Uptime Monitor | "
+        )
         footer_text_x = logo_x + logo_width + 2 * mm
         _draw_text(canvas, footer_text_x, 11 * mm, footer_text)
 
@@ -2318,10 +2321,16 @@ class PDFReportBuilder:
         canvas.linkURL(github_url, (github_x, 9 * mm, github_x + icon_width + github_label_width, 14 * mm), relative=0)
 
         # Right side: page number
-        _draw_text(canvas, self.width - self.margin, 11 * mm, f"Page {doc.page}", align="right")
+        _draw_text(
+            canvas,
+            self.width - self.margin,
+            11 * mm,
+            f"Page {self.locale.format_number(doc.page)}",
+            align="right",
+        )
 
         # Second line: Domain and timestamp
-        timestamp = now.strftime("%Y-%m-%d %H:%M UTC")
+        timestamp = f"{self.locale.format_datetime(now)} UTC"
         canvas.setFont(self.font, 8)
         right_text = f"Report generated at {timestamp}"
         room = self.content_width - _text_width(right_text, self.font, 8) - 4 * mm
@@ -2621,11 +2630,17 @@ class PDFReportBuilder:
                 level, COLORS["muted"]
             )
             if kpis.coverage_pct is None:
-                hint = f"{kpis.up_count:,} of {kpis.total_checks:,} checks successful"
+                hint = (
+                    f"{self.locale.format_number(kpis.up_count)} of "
+                    f"{self.locale.format_number(kpis.total_checks)} checks successful"
+                )
             elif self._is_low_coverage():
                 label, hint = "RECORDED CHECKS SUCCESSFUL", self._coverage_hint()
             else:
-                hint = f"{kpis.up_count:,} of {kpis.total_checks:,} checks successful · {kpis.coverage_pct:g}% coverage"
+                hint = (
+                    f"{self.locale.format_number(kpis.up_count)} of {self.locale.format_number(kpis.total_checks)} "
+                    f"checks successful · {self.locale.format_percent(kpis.coverage_pct, 0)} coverage"
+                )
 
         width, height = 100 * mm, 34 * mm
         hero_card = RoundedKPICard(
@@ -2746,9 +2761,10 @@ class PDFReportBuilder:
             thin_availability = d.metric_name == "Availability" and self._is_low_coverage()
             metric_text = "Check success rate" if thin_availability else d.metric_name
             dev_text = (
-                f"{d.deviation:+.2f} pp"
+                f"{self.locale.format_number(d.deviation, max_fraction=2, min_fraction=2, force_sign=True)} pp"
                 if d.metric_name == "Availability"
-                else f"{d.deviation:+.1f} {d.unit} ({d.deviation_pct:+.1f}%)"
+                else f"{self.locale.format_number(d.deviation, max_fraction=1, min_fraction=1, force_sign=True)} "
+                f"{d.unit} ({self.locale.format_percent(d.deviation_pct, 1, force_sign=True)})"
             )
             if thin_availability and d.is_compliant:
                 # Sparse data cannot prove compliance; a measured breach below keeps its number.
@@ -3254,14 +3270,17 @@ class PDFReportBuilder:
             parts.append(f"Destination {_esc(host)}")
         if info["synthetic"]:
             parts.append(f"address {_esc(info['synthetic'].get('ip'))}")
-        parts.append(f"{info['traced']} hops traced")
+        parts.append(f"{self.locale.format_number(info['traced'])} hops traced")
         if self._route_incomplete(info):
             parts.append(ROUTE_INCOMPLETE)
-        parts.append(f"{info['responding']} responding")
+        parts.append(f"{self.locale.format_number(info['responding'])} responding")
         reply = info["last_reply"]
         latency = _hop_latency(reply)
         if reply and latency:
-            parts.append(f"RTT at last responding hop {latency:.1f} ms")
+            parts.append(
+                "RTT at last responding hop "
+                f"{self.locale.format_number(latency, max_fraction=1, min_fraction=1)} ms"
+            )
         self._chapter_header("Network Path", " · ".join(parts))
         self._add_route_map(display_hops, geo_points)
         self._add_route_schematic(display_hops)
@@ -3291,7 +3310,7 @@ class PDFReportBuilder:
         synthetic = next((h.get("ip") for h in display_hops if h.get("_synthetic_destination")), None)
         ip = synthetic or info.get("ip")
         target_ip = ip if ip and ip != "-" else None
-        return _build_route_entries(display_hops, target_ip, self._destination_place())
+        return _build_route_entries(display_hops, target_ip, self._destination_place(), self.locale)
 
     def _add_route_map(self, display_hops: list[dict[str, Any]], geo_points: list[dict[str, Any]]):
         """Geographic route map above the diagram; it plots the same points as the web map."""
@@ -3377,7 +3396,11 @@ class PDFReportBuilder:
                 location = f"{city} ({country})" if city and country else city or _place("", country)
 
             lat = _hop_latency(hop)
-            latency = f"{lat:.1f} ms" if lat and not silent else "—"  # interpolated values are not measurements
+            latency = (
+                f"{self.locale.format_number(lat, max_fraction=1, min_fraction=1)} ms"
+                if lat and not silent
+                else "—"
+            )  # interpolated values are not measurements
 
             if synthetic:
                 badge = self._state_badge("blocked", STATE_NOT_REACHED)
@@ -3551,7 +3574,8 @@ class PDFReportBuilder:
                 self._add_chart_section(
                     "Data Coverage",
                     bar,
-                    f"Checks cover {kpis.coverage_pct:g}% of the reporting period. {self._coverage_gap_text()} "
+                    f"Checks cover {self.locale.format_percent(kpis.coverage_pct, 1)} of the reporting period. "
+                    f"{self._coverage_gap_text()} "
                     f"The charts below show only the measured window "
                     f"{_fmt_dt(c_from, self.tz, self.locale)} – {_fmt_dt(c_to, self.tz, self.locale)}.",
                 )
@@ -3569,7 +3593,7 @@ class PDFReportBuilder:
         if uptime_chart:
             rate = _fmt_pct(kpis.uptime_percent, self.locale)
             if self._is_low_coverage():
-                rate += f" of recorded checks, {kpis.coverage_pct:g}% coverage"
+                rate += f" of recorded checks, {self.locale.format_percent(kpis.coverage_pct, 1)} coverage"
             note = (
                 f"{self.locale.format_number(kpis.up_count)} of {self.locale.format_number(kpis.total_checks)} "
                 f"checks up ({rate})"
@@ -3972,10 +3996,11 @@ class PDFReportBuilder:
             thin = self._is_low_coverage()
             title = "No downtime detected in observed checks" if thin else "No downtime recorded"
             text = (
-                f"All {self.kpis.total_checks:,} recorded checks succeeded, covering {self.kpis.coverage_pct:g}% "
+                f"All {self.locale.format_number(self.kpis.total_checks)} recorded checks succeeded, covering "
+                f"{self.locale.format_percent(self.kpis.coverage_pct, 1)} "
                 "of the reporting period. Downtime outside the recorded checks cannot be ruled out."
                 if thin
-                else f"All {self.kpis.total_checks:,} availability checks in this reporting period succeeded."
+                else f"All {self.locale.format_number(self.kpis.total_checks)} availability checks in this reporting period succeeded."
             )
             title_style = st["empty_title"]
         else:
