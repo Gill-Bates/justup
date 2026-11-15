@@ -319,6 +319,20 @@ def test_patch_standalone_recipient_still_needs_a_channel(client):
     assert client.patch(f"/recipients/{rid}", json={"email": None}).status_code == 400
 
 
+def test_recipient_create_and_phone_change_return_signal_lookup_warnings(client, monkeypatch):
+    warning = "Could not verify Signal registration: signal-cli timed out"
+    monkeypatch.setattr(recipients, "_check_signal_registration", lambda _phone: warning)
+
+    created = client.post("/recipients", json={"name": "On call", "phone": PHONE})
+    assert created.status_code == 201, created.text
+    assert created.json()["warnings"] == [warning]
+
+    recipient_id = created.json()["recipient"]["id"]
+    updated = client.patch(f"/recipients/{recipient_id}", json={"phone": PHONE_2})
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["warnings"] == [warning]
+
+
 def test_recipient_api_cannot_create_or_move_the_user_link(client, conn):
     other = _mk(conn, "other")
     response = client.post("/recipients", json={"name": "sneaky", "email": "s@example.org", "user_id": other["id"]})

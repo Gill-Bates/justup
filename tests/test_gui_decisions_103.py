@@ -9,9 +9,8 @@
 from __future__ import annotations
 
 import re
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-
-from matplotlib.figure import Figure
 
 from app.services import pdf_report, pdf_route_map
 from app.services import route_map_rules as rules
@@ -57,9 +56,17 @@ def test_downtime_widget_label_is_consistent() -> None:
     assert "Downtime Overview" not in template + registry
 
 
-def test_shared_axis_style_keeps_x_grid_off_and_y_grid_on() -> None:
-    ax = Figure().subplots()
-    pdf_report._apply_axis_style(ax)  # noqa: SLF001
-    assert not ax.spines["top"].get_visible() and not ax.spines["right"].get_visible()
-    assert not any(line.get_visible() for line in ax.xaxis.get_gridlines())
-    assert all(line.get_visible() for line in ax.yaxis.get_gridlines())
+def test_pdf_performance_charts_are_native_reportlab_flowables() -> None:
+    start = datetime(2026, 11, 1, tzinfo=UTC)
+    end = start + timedelta(days=1)
+    points = [{"ts": start.isoformat(), "value": 12.5}, {"ts": end.isoformat(), "value": 18.75}]
+    line = pdf_report._create_response_time_chart(points, start, end)  # noqa: SLF001
+    uptime = pdf_report._create_uptime_chart(  # noqa: SLF001
+        [{"ts": start.isoformat(), "value": 1}, {"ts": end.isoformat(), "value": 0}], start, end
+    )
+    coverage = pdf_report._create_coverage_bar(  # noqa: SLF001
+        [{"ts": start.isoformat(), "value": 1}], start, end
+    )
+    assert isinstance(line, pdf_report.pdf_charts.ChartFlowable)
+    assert isinstance(uptime, pdf_report.pdf_charts.ChartFlowable)
+    assert isinstance(coverage, pdf_report.pdf_charts.ChartFlowable)

@@ -87,8 +87,10 @@ production installs do not download fonts or shaping data at
 runtime. IBM Plex Sans is checked for missing glyphs before shaping. Material Icons are a
 deliberate exception: they are symbol glyphs rather than prose and remain unshaped.
 
-Charts are rasterized separately by Matplotlib's Agg/FreeType text renderer. The PDF's
-ReportLab shaping settings do not apply to chart images; the chart configuration selects
-the same local IBM Plex Sans family. Changes to PDF typography must keep shaping contract
-tests and full-report rendering checks passing, including searchable/extractable text,
+Charts are drawn as ReportLab vector paths, lines and text with the embedded IBM Plex Sans
+fonts. Chart text therefore stays sharp at any zoom and remains searchable. The export uses
+the browser's resolved locale for number separators and date/time order; the report time zone
+continues to determine which local times appear. The worker carries that locale with each job,
+so concurrent exports can use different browser locales safely. Changes to PDF typography must
+keep shaping contract tests and full-report rendering checks passing, including searchable text,
 font embedding, and layout at the supported paper sizes.

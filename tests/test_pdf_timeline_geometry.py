@@ -9,7 +9,6 @@
 from __future__ import annotations
 
 import io
-from collections import Counter
 from datetime import UTC, datetime, timedelta
 
 from reportlab.pdfgen.canvas import Canvas
@@ -90,10 +89,7 @@ def test_chart_section_keeps_the_vector_chart_at_content_width() -> None:
 
 
 def test_timeline_and_latency_plot_edges_align() -> None:
-    http = [
-        {"ts": (START + timedelta(minutes=m)).isoformat(), "value": 100.0 + m % 7}
-        for m in range(0, 1440, 5)
-    ]
+    http = [{"ts": (START + timedelta(minutes=m)).isoformat(), "value": 100.0 + m % 7} for m in range(0, 1440, 5)]
     width = _builder()._chart_width_in()  # noqa: SLF001
     left_in = pdf_report._latency_plot_left_in(http, START, None, width)  # noqa: SLF001
     response = pdf_report._create_response_time_chart(  # noqa: SLF001

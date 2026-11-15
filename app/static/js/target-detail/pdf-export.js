@@ -15,25 +15,44 @@
 // Reentrancy guard: prevents double-click from spawning parallel requests
 let _pdfRequestInFlight = false;
 
-function _localeDatePattern(locale, options, sample) {
+function _localeDatePattern(locale, options, sample, integerFormat, hourCycle) {
+  const unpadded = {
+    year: sample.getUTCFullYear(),
+    month: sample.getUTCMonth() + 1,
+    day: sample.getUTCDate(),
+    hour: sample.getUTCHours(),
+    minute: sample.getUTCMinutes(),
+  };
   return new Intl.DateTimeFormat(locale, { ...options, calendar: "gregory", timeZone: "UTC" })
     .formatToParts(sample)
-    .map(({ type, value }) => ({
-      type,
-      sample: value,
-      pad: options[type] === "2-digit",
-    }));
+    .map(({ type, value }) => {
+      let numeric = unpadded[type];
+      if (type === "hour" && ["h11", "h12"].includes(hourCycle)) {
+        numeric = numeric % 12 || (hourCycle === "h11" ? 0 : 12);
+      }
+      return {
+        type,
+        sample: value,
+        pad: numeric !== undefined && ["year", "month", "day", "hour", "minute"].includes(type)
+          ? value !== integerFormat.format(numeric)
+          : false,
+      };
+    });
 }
 
 function _pdfLocaleProfile() {
   const locale = new Intl.DateTimeFormat().resolvedOptions().locale || navigator.language || "en-US";
-  const sample = new Date(Date.UTC(2006, 10, 21, 17, 43));
-  const numberParts = new Intl.NumberFormat(locale, {
+  const sample = new Date(Date.UTC(2006, 1, 3, 5, 7));
+  const integerFormat = new Intl.NumberFormat(locale, { useGrouping: false, maximumFractionDigits: 0 });
+  const numberFormat = new Intl.NumberFormat(locale, {
     style: "decimal",
-    useGrouping: true,
     maximumFractionDigits: 2,
-  }).formatToParts(1234567890.12);
+  });
+  const numberParts = numberFormat.formatToParts(1234567890.12);
   const integerGroups = numberParts.filter((part) => part.type === "integer").map((part) => Array.from(part.value).length);
+  const primaryGroup = integerGroups.at(-1);
+  const minimumGroupingDigits = [1, 2, 3, 4].find((digits) => numberFormat
+    .formatToParts(10 ** (primaryGroup + digits - 1)).some((part) => part.type === "group")) || 1;
   const percentParts = new Intl.NumberFormat(locale, {
     style: "percent",
     maximumFractionDigits: 1,
@@ -43,7 +62,8 @@ function _pdfLocaleProfile() {
   for (let i = firstNumber; i < percentParts.length; i += 1) {
     if (["integer", "group", "decimal", "fraction"].includes(percentParts[i].type)) lastNumber = i;
   }
-  const digitFormatter = new Intl.NumberFormat(locale, { useGrouping: false, maximumFractionDigits: 0 });
+  const hourCycle = new Intl.DateTimeFormat(locale, { hour: "numeric", calendar: "gregory", timeZone: "UTC" })
+    .resolvedOptions().hourCycle;
   const partFor = (hour) => new Intl.DateTimeFormat(locale, {
     hour: "numeric",
     calendar: "gregory",
@@ -52,24 +72,32 @@ function _pdfLocaleProfile() {
 
   return {
     locale,
-    hourCycle: new Intl.DateTimeFormat(locale, { hour: "numeric", calendar: "gregory", timeZone: "UTC" })
-      .resolvedOptions().hourCycle,
+    hourCycle,
     dayPeriod: { am: partFor(9), pm: partFor(21) },
     number: {
-      digits: Array.from({ length: 10 }, (_, digit) => digitFormatter.format(digit)),
+      digits: Array.from({ length: 10 }, (_, digit) => integerFormat.format(digit)),
       decimal: numberParts.find((part) => part.type === "decimal")?.value || ".",
       group: numberParts.find((part) => part.type === "group")?.value || "",
       integerGroups,
+      minimumGroupingDigits,
       minus: new Intl.NumberFormat(locale).formatToParts(-1).find((part) => part.type === "minusSign")?.value || "−",
       percentPrefix: percentParts.slice(0, firstNumber).map((part) => part.value).join(""),
       percentSuffix: percentParts.slice(lastNumber + 1).map((part) => part.value).join(""),
     },
     dates: {
-      time: _localeDatePattern(locale, { hour: "2-digit", minute: "2-digit" }, sample),
-      date: _localeDatePattern(locale, { year: "numeric", month: "numeric", day: "numeric" }, sample),
-      monthDay: _localeDatePattern(locale, { month: "numeric", day: "numeric" }, sample),
-      monthDayTime: _localeDatePattern(locale, { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }, sample),
-      fullDateTime: _localeDatePattern(locale, { year: "numeric", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }, sample),
+      time: _localeDatePattern(locale, { hour: "2-digit", minute: "2-digit" }, sample, integerFormat, hourCycle),
+      date: _localeDatePattern(locale, { year: "numeric", month: "2-digit", day: "2-digit" }, sample, integerFormat, hourCycle),
+      monthDay: _localeDatePattern(locale, { month: "2-digit", day: "2-digit" }, sample, integerFormat, hourCycle),
+      monthDayTime: _localeDatePattern(
+        locale, { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }, sample, integerFormat, hourCycle,
+      ),
+      fullDateTime: _localeDatePattern(
+        locale,
+        { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" },
+        sample,
+        integerFormat,
+        hourCycle,
+      ),
     },
   };
 }

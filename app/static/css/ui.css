@@ -767,6 +767,11 @@ textarea.smtp-editor-frame {
 	z-index: 1080;
 }
 
+/* Bootstrap's default close-glyph opacity falls below AA contrast on status fills. */
+.ui-toast-container .btn-close {
+	opacity: 1;
+}
+
 /* Mobile: center toast with consistent width and rounded corners.
    !important beats the Bootstrap position utilities (.end-0, .p-3) on the container. */
 @media (width <=576px) {
@@ -2563,7 +2568,7 @@ textarea.smtp-editor-frame {
 	.sticky-actions {
 		position: sticky;
 		bottom: calc(0px + env(safe-area-inset-bottom, 0px));
-		background: var(--bs-body-bg);
+		background: var(--ui-card-bg);
 		padding: 0.75rem;
 		border-top: 1px solid var(--bs-border-color);
 		z-index: 10;
@@ -2584,7 +2589,7 @@ textarea.smtp-editor-frame {
 		align-items: center;
 		min-height: var(--ui-action-bar-h);
 		padding: 0.75rem 0;
-		background: var(--bs-body-bg);
+		background: var(--ui-card-bg);
 		border-top: 1px solid var(--bs-border-color);
 	}
 

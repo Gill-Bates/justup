@@ -20,6 +20,7 @@ const PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <link rel="stylesheet" href="/static/css/bootstrap.min.css"><link rel="stylesheet" href="/static/css/material-icons.css"><link rel="stylesheet" href="/static/css/gentelella-layout.css"><link rel="stylesheet" href="/static/css/ui.css">
 </head><body><button type="button" id="opener">Open</button>
 ${readFileSync(MODALS, "utf8").replace(/\{#[\s\S]*?#\}/g, "")}
+<div class="toast-container position-fixed top-0 end-0 p-3 ui-toast-container"><div id="global-toast" class="toast align-items-center text-bg-success border-0" role="alert" aria-live="assertive" aria-atomic="true"><div class="d-flex"><div class="toast-body" id="global-toast-body"></div><button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button></div></div></div>
 ${SCRIPTS.map((src) => `<script src="/static/js/${src}"></script>`).join("")}</body></html>`;
 const VIEWPORTS = [
 	{ name: "1280x720", width: 1280, height: 720 },
@@ -61,6 +62,23 @@ const state = (page) => page.evaluate((groups) => {
 	return out;
 }, GROUP);
 const allVisible = (s, channel, expected) => assert.deepEqual(s[channel], [expected, expected, expected], `${channel} group visible=${expected}: ${JSON.stringify(s)}`);
+const rgbChannels = (color) => color.match(/[\d.]+/g).slice(0, 3).map(Number);
+const relativeLuminance = (color) => {
+	const [r, g, b] = rgbChannels(color).map((value) => {
+		const channel = value / 255;
+		return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+	});
+	return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+};
+const contrastRatio = (foreground, background) => {
+	const [lighter, darker] = [relativeLuminance(foreground), relativeLuminance(background)].sort((a, b) => b - a);
+	return (lighter + 0.05) / (darker + 0.05);
+};
+const blend = (foreground, background, opacity) => {
+	const foregroundChannels = rgbChannels(foreground);
+	const backgroundChannels = rgbChannels(background);
+	return `rgb(${foregroundChannels.map((value, index) => Math.round(value * opacity + backgroundChannels[index] * (1 - opacity))).join(", ")})`;
+};
 // Tab through the whole dialog twice and report every id that received focus.
 const tabOrder = async (page) => {
 	const seen = new Set();
@@ -251,6 +269,83 @@ test("Edit Recipient closes on Save before the server answers and reopens on fai
 	await page.waitForFunction(() => window.__toasts.some(([t]) => t === "danger"));
 	assert.equal(await page.isVisible("#edit-recipient-error"), true);
 	assert.deepEqual(errors, [], errors.join("\n"));
+});
+
+test("mocked Signal lookup warnings reach the create and background edit toast @modal @recipient-channels", async ({ page, base }) => {
+	const warning = "Could not verify Signal registration: signal-cli timed out";
+	await page.goto(base);
+	await page.evaluate((message) => {
+		window.__toastCalls = [];
+		const show = window.justUpToast.show.bind(window.justUpToast);
+		window.justUpToast.show = (text, type) => {
+			window.__toastCalls.push([type, text]);
+			show(text, type);
+		};
+		const response = (body, status = 200) => ({ ok: status < 400, status, json: () => Promise.resolve(body) });
+		const recipient = { id: 1, name: "Martin", is_enabled: true, enable_for_all_targets: false, phone: "+4915100000001", email: null, targets: [] };
+		window.apiFetch = (url, options = {}) => {
+			if (url === "/signal/status") return Promise.resolve(response({ reachable: true, registered: true, linked: true }));
+			if (url === "/recipients" && options.method === "POST") return Promise.resolve(response({ recipient, warnings: [message] }, 201));
+			if (url === "/recipients" && !options.method) return Promise.resolve(response([]));
+			if (url === "/recipients/1" && options.method === "PATCH") return Promise.resolve(response({ recipient, warnings: [message] }));
+			if (url === "/recipients/1") return Promise.resolve(response(recipient));
+			return Promise.resolve(response([]));
+		};
+	}, warning);
+
+	await transitionModal(page, "addRecipientModal", "show");
+	await page.fill("#recipient-name", "Martin");
+	await page.check("#recipient-signal-enabled");
+	await page.fill("#recipient-phone", "+4915100000001");
+	await page.click("#add-recipient-btn");
+	await page.waitForFunction(() => window.__toastCalls.length === 1);
+	assert.deepEqual(await page.evaluate(() => window.__toastCalls), [["warning", warning]]);
+	assert.equal(await page.locator("#global-toast").getAttribute("class").then((value) => value.includes("text-bg-warning")), true);
+	assert.equal((await page.locator("#global-toast-body .ju-warning").innerText()).replace(/\s+/g, " ").trim(), `warning ${warning}`);
+	assert.equal(await page.locator("#global-toast .btn-close").evaluate((el) => el.classList.contains("btn-close-white")), false);
+
+	await page.evaluate(() => window.SettingsPage.Recipients.editRecipient(1));
+	await page.waitForFunction(() => document.getElementById("editRecipientModal").classList.contains("show"));
+	await page.fill("#edit-recipient-phone", "+4915100000002");
+	await page.click("#edit-recipient-btn");
+	await page.waitForFunction(() => window.__toastCalls.length === 2);
+	assert.deepEqual(await page.evaluate(() => window.__toastCalls), [["warning", warning], ["warning", warning]]);
+	assert.equal((await page.locator("#global-toast-body .ju-warning").innerText()).replace(/\s+/g, " ").trim(), `warning ${warning}`);
+});
+
+test("toast text, icons and close controls keep AA contrast in both themes @modal @toast-contrast", async ({ page, base }) => {
+	const failures = [];
+	await page.goto(base);
+	for (const viewport of [{ width: 1280, height: 720 }, { width: 390, height: 844 }]) {
+		await page.setViewportSize(viewport);
+		for (const theme of ["light", "dark"]) {
+			await page.evaluate((value) => document.documentElement.setAttribute("data-bs-theme", value), theme);
+			for (const variant of ["success", "danger", "info", "warning"]) {
+				await page.evaluate((value) => window.justUpToast.show("Contrast sample", value), variant);
+				await page.waitForFunction(() => document.getElementById("global-toast").classList.contains("show"));
+				const colors = await page.evaluate(() => {
+					const toast = document.getElementById("global-toast");
+					const body = document.getElementById("global-toast-body");
+					const text = body.querySelector(".ju-warning") || body.querySelector("span:last-child");
+					const icon = body.querySelector(".material-icons");
+					const close = toast.querySelector(".btn-close");
+					return {
+						background: getComputedStyle(toast).backgroundColor,
+						text: getComputedStyle(text).color,
+						icon: getComputedStyle(icon).color,
+						close: close.classList.contains("btn-close-white") ? "rgb(255, 255, 255)" : "rgb(0, 0, 0)",
+						closeOpacity: Number(getComputedStyle(close).opacity),
+					};
+				});
+				const closeColor = blend(colors.close, colors.background, colors.closeOpacity);
+				for (const [part, foreground] of [["text", colors.text], ["icon", colors.icon], ["close", closeColor]]) {
+					const ratio = contrastRatio(foreground, colors.background);
+					if (ratio < 4.5) failures.push({ viewport, theme, variant, part, ratio: Number(ratio.toFixed(2)), colors });
+				}
+			}
+		}
+	}
+	assert.deepEqual(failures, [], `toast contrast below 4.5:1: ${JSON.stringify(failures)}`);
 });
 
 test("Signal switch stays off while the Signal account is not registered @modal @recipient-channels", async ({ page, base }) => {

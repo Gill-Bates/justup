@@ -226,6 +226,7 @@ def _draw_series(
     values: list[float],
     color: str,
     top: float,
+    series_label: str,
     peaks: list[tuple[datetime, datetime, float, float]],
     overflow: list[tuple[datetime, float]],
     max_labels: int,
@@ -323,7 +324,7 @@ def _draw_series(
         )
         placed.append((stamp, above))
 
-    entries = [("Median per interval" if peaks else "Measured", "line", color)]
+    entries = [(series_label, "line", color)]
     if peaks:
         entries.append(("Peak within interval (bucket maximum)", "line", "#b02a5b"))
     if overflow_marks:
@@ -342,6 +343,7 @@ def line_chart(
     color: str,
     ylabel: str,
     top: float,
+    series_label: str,
     ticks: list[float],
     peaks: list[tuple[datetime, datetime, float, float]],
     overflow: list[tuple[datetime, float]],
@@ -388,6 +390,7 @@ def line_chart(
             values=values,
             color=color,
             top=top,
+            series_label=series_label,
             peaks=peaks,
             overflow=overflow,
             max_labels=max_labels,
@@ -656,6 +659,7 @@ def multi_port_chart(
                 values=port["values"],
                 color=color,
                 top=top,
+                series_label=port["series_label"],
                 peaks=port["peaks"],
                 overflow=port["overflow"],
                 max_labels=1,

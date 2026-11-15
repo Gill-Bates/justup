@@ -8,11 +8,17 @@
 // Measured per scrollbar mode (classic, thin, hidden; hidden is layout-equivalent to overlay), desktop, tablet, phone and
 // effective browser zoom (a W x H window at zoom Z is a (W/Z) x (H/Z) CSS viewport at DPR Z; a viewport proxy, not the zoom feature).
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { devices } from "@playwright/test";
 import { test } from "./fixtures.mjs";
-import { effectiveZoom } from "./test-support.mjs";
+import { effectiveZoom, startStaticAppServer } from "./test-support.mjs";
 import { applyScrollbarMode, probeScrollbar, SCROLLBAR_MODES, waitForVisualStability } from "./harness.mjs";
 
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+const TARGET_ACTIONS = readFileSync(path.join(ROOT, "app", "templates", "target_form.html"), "utf8")
+	.match(/<div class="ui-form-actions sticky-actions sticky-actions--always[^>]*>[\s\S]*?<\/div>/)?.[0];
 const plain = (w, h, extra = {}) => ({ name: `${w}x${h}`, width: w, height: h, dsf: 1, ...extra });
 const zoom = effectiveZoom;
 const tablet = (name, label) => ({ name: label, width: devices[name].viewport.width, height: devices[name].viewport.height, dsf: devices[name].deviceScaleFactor, descriptor: devices[name] });
@@ -22,6 +28,44 @@ const VIEWPORTS = [
 	zoom(1920, 1080, 1.25), zoom(1920, 1080, 1.5), zoom(1280, 720, 2), zoom(1280, 720, 4),
 ];
 const TABS = ["general", "http", "network", "alerts"];
+
+const surfaceTest = test.extend({
+	surfaceBase: [async ({}, use) => {
+		const server = await startStaticAppServer({
+			root: ROOT,
+			renderPage: () => `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+				<link rel="stylesheet" href="/static/css/bootstrap.min.css"><link rel="stylesheet" href="/static/css/gentelella-layout.css"><link rel="stylesheet" href="/static/css/ui.css"></head>
+				<body><div class="ui-page"><main class="ju-content"><div class="card shadow-sm"><div class="card-body"><form id="target-form">${TARGET_ACTIONS}</form></div></div></main></div></body></html>`,
+		});
+		try {
+			await use(server.baseUrl);
+		} finally {
+			await server.close();
+		}
+	}, { scope: "worker" }],
+});
+
+surfaceTest("target form action bar uses the card surface in both themes on desktop and mobile @target-action-surface", async ({ page, surfaceBase }) => {
+	for (const viewport of [plain(1280, 720), plain(390, 844)]) {
+		await page.setViewportSize({ width: viewport.width, height: viewport.height });
+		await page.goto(surfaceBase, { waitUntil: "load" });
+		for (const theme of ["light", "dark"]) {
+			await page.evaluate((value) => document.documentElement.setAttribute("data-bs-theme", value), theme);
+			const surface = await page.evaluate(() => {
+				const actions = document.querySelector("#target-form .ui-form-actions");
+				const card = actions.closest(".card");
+				return {
+					actions: getComputedStyle(actions).backgroundColor,
+					card: getComputedStyle(card).backgroundColor,
+					position: getComputedStyle(actions).position,
+				};
+			});
+			assert.equal(surface.actions, surface.card, `${theme} ${viewport.name}: action bar and card backgrounds differ (${JSON.stringify(surface)})`);
+			assert.notEqual(surface.actions, "rgba(0, 0, 0, 0)", `${theme} ${viewport.name}: sticky action bar is transparent`);
+			assert.equal(surface.position, "sticky", `${theme} ${viewport.name}: action bar is no longer sticky`);
+		}
+	}
+});
 
 // Containers that scroll by a few pixels only, and every element wider than the viewport.
 const MEASURE = () => {

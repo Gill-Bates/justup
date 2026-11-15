@@ -907,7 +907,7 @@ def test_ongoing_outage_kpi_matches_log_with_naive_samples(monkeypatch):
 
 
 def _no_charts(monkeypatch):
-    """Skip the slow matplotlib rendering; page flow is driven by the tables and text."""
+    """Skip chart drawing when only page flow from tables and text is under test."""
     monkeypatch.setattr(pdf_report, "_create_uptime_chart", lambda *a, **k: None)
     monkeypatch.setattr(pdf_report, "_create_response_time_chart", lambda *a, **k: None)
     monkeypatch.setattr(pdf_report, "_create_status_code_chart", lambda *a, **k: None)
@@ -1400,7 +1400,8 @@ def test_tls_leads_with_versions_and_findings_and_names_the_scan_time(monkeypatc
     monkeypatch.setattr(b, "_get_ssl_data", lambda: _tls_result())
     b._add_ssl_summary()
     text = _texts(b)
-    assert "TLS Scan Time" in text and "2026-10-30 12:05" in text and "not part of the reporting period" in text
+    assert "TLS Scan Time" in text and "10/30/2026, 12:05 PM" in text
+    assert "not part of the reporting period" in text
     assert text.index("Supported Versions") < text.index("Heartbleed") < text.index("Cipher Suite Example")
     assert text.index("Cipher Suite Example") < text.index("Cipher Suites by Protocol (technical detail)")
     assert "Preferred Cipher" not in text
@@ -1683,29 +1684,29 @@ def _display(n=168, base=80.0, *, peaks=None, rollup_until=0, bad=()):
     return out
 
 
-def _capture_axes(monkeypatch, make):
-    figs = []
-    monkeypatch.setattr(pdf_report, "_fig_png", lambda fig: figs.append(fig) or b"png")
-    make()
-    return figs
+def _capture_chart_text(monkeypatch, make):
+    drawn = []
 
+    def capture(_canvas, x, y, text, **_kwargs):
+        drawn.append((str(text), x, y))
 
-def _tick_labels(ax) -> list[str]:
-    fmt = ax.yaxis.get_major_formatter()
-    return [fmt(t, i) for i, t in enumerate(ax.get_yticks())]
+    monkeypatch.setattr(pdf_report, "_draw_text", capture)
+    chart = make()
+    output = io.BytesIO()
+    canvas = Canvas(output, pageCompression=0)
+    chart.wrap(chart.base_width, chart.base_height)
+    chart.drawOn(canvas, 0, 0)
+    canvas.save()
+    return chart, drawn, output.getvalue()
 
 
 def test_response_time_legend_is_below_plot(monkeypatch):
-    (fig,) = _capture_axes(
+    _chart, drawn, _pdf = _capture_chart_text(
         monkeypatch,
         lambda: pdf_report._create_response_time_chart(_display(), _CH_START, _CH_END, sla_threshold_ms=500),
     )
-    ax = fig.axes[0]
-    canvas = FigureCanvasAgg(fig)
-    canvas.draw()
-    legend = ax.get_legend().get_window_extent(canvas.get_renderer())
-    assert legend.y1 < ax.get_window_extent().y0
-    assert legend.y0 >= 0
+    legend_y = [y for text, _x, y in drawn if text == "Median per interval"]
+    assert legend_y and max(legend_y) < 43
 
 
 @pytest.mark.parametrize(
@@ -1737,57 +1738,46 @@ def test_nice_ticks_are_round_ascending_numbers(top, expected):
 )
 def test_latency_axis_is_linear_short_and_plain_numbers(monkeypatch, base, peaks, sla, label):
     data = _display(base=base, peaks=peaks)
-    (fig,) = _capture_axes(
+    view = pdf_report._build_view(data, UTC)
+    top, ticks = pdf_report._axis_scale([view], sla)
+    chart, drawn, pdf = _capture_chart_text(
         monkeypatch,
         lambda: pdf_report._create_response_time_chart(data, _CH_START, _CH_END, sla_threshold_ms=sla),
     )
-    ax = fig.axes[0]
-    assert ax.get_yscale() == "linear", label
-    assert ax.get_ylabel() == "Response time (ms)", label
-    assert ax.yaxis.label.get_rotation() == 0, label
-    assert ax.get_position().x0 <= 0.06, label  # keep only tick-label space outside the plot
-    labels = _tick_labels(ax)
-    assert all(re.fullmatch(r"\d{1,3}(,\d{3})*(\.\d+)?", t) for t in labels), (label, labels)
-    assert len(labels) <= 8 and ax.get_ylim()[0] == 0
-    # An extreme spike must not flatten the normal values: the axis stays near the typical range.
+    assert isinstance(chart, pdf_report.pdf_charts.ChartFlowable), label
+    assert len(ticks) <= 8 and ticks[0] == 0 and top == ticks[-1]
+    assert b"/Subtype /Image" not in pdf
     if peaks and max(peaks.values()) >= 2000:
-        assert ax.get_ylim()[1] < max(3 * (base + 10) * 1.5, (sla or 0) * 1.5)
-        assert any("2,400 ms" in t.get_text() for t in ax.texts)
-    legend = [t.get_text() for t in ax.get_legend().get_texts()]
-    assert not any("Raw peak" in t for t in legend)
+        assert top < max(3 * (base + 10) * 1.5, (sla or 0) * 1.5)
+        assert any("2,400 ms" in text for text, _x, _y in drawn)
+    assert not any("Raw peak" in text for text, _x, _y in drawn)
     if peaks and max(peaks.values()) >= 400:
-        assert any("Peak within interval" in t for t in legend)
+        assert any("Peak within interval" in text for text, _x, _y in drawn)
 
 
-def test_peak_bars_span_only_their_interval_and_distant_sla_stays_off_the_scale(monkeypatch):
+def test_peak_label_is_deduplicated_and_distant_sla_stays_off_the_scale(monkeypatch):
+    start = _CH_START
+    end = start + timedelta(days=1)
     minutes = [
         {
-            "ts": (_CH_START + timedelta(minutes=i)).isoformat(),
+            "ts": (start + timedelta(minutes=i)).isoformat(),
             "value": 80.0,
             "max": 900.0 if i == 700 else 90.0,
-            "bucket_end": (_CH_START + timedelta(minutes=i + 1)).isoformat(),
+            "bucket_end": (start + timedelta(minutes=i + 1)).isoformat(),
         }
         for i in range(1440)
     ]
-    (fig,) = _capture_axes(
+    chart, drawn, pdf = _capture_chart_text(
         monkeypatch,
-        lambda: pdf_report._create_response_time_chart(
-            minutes, _CH_START, _CH_START + timedelta(days=1), sla_threshold_ms=5000
-        ),
+        lambda: pdf_report._create_response_time_chart(minutes, start, end, sla_threshold_ms=5000),
     )
-    ax = fig.axes[0]
-    peak_rgb = mcolors.to_rgb(pdf_report.PEAK_COLOR)
-    peak_bars = [
-        c
-        for c in ax.collections
-        if isinstance(c, LineCollection) and tuple(c.get_colors()[0][:3]) == pytest.approx(peak_rgb)
-    ]
-    horizontal = [seg for c in peak_bars for seg in c.get_segments() if seg[0][1] == seg[1][1]]
-    assert horizontal and all(
-        mdates.num2date(seg[1][0]) - mdates.num2date(seg[0][0]) <= timedelta(minutes=1, seconds=1) for seg in horizontal
-    )
-    assert ax.get_ylim()[1] < 5000 / 2
-    assert any("SLA 5,000 ms (above scale)" in t.get_text() for t in ax.texts)
+    view = pdf_report._build_view(minutes, UTC)
+    top, _ticks = pdf_report._axis_scale([view], 5000)
+    assert isinstance(chart, pdf_report.pdf_charts.ChartFlowable)
+    assert top < 5000 / 2
+    assert sum(text == "900 ms" for text, _x, _y in drawn) == 1
+    assert any("SLA 5,000 ms (above scale)" in text for text, _x, _y in drawn)
+    assert b"/Subtype /Image" not in pdf
 
 
 def test_normal_variation_draws_no_peak_markers():
@@ -1824,7 +1814,7 @@ def test_caption_lists_peaks_and_explains_a_higher_interval_maximum():
     data = _display(peaks={40: 2400})
     samples = [{"ts": d["ts"], "value": d["value"]} for d in data]
     note = PDFReportBuilder._latency_note(samples, data, UTC, None)
-    assert "2,400 ms (05-05 16:00–17:00)" in note
+    assert "2,400 ms (05/05, 04:00 PM–05:00 PM)" in note
     assert "above the maximum of the plotted sample series" in note
     assert "above the axis" in note and "marked at the top edge" in note
     # Without display data the caption is just the summary statistics
@@ -1835,22 +1825,18 @@ def test_caption_lists_peaks_and_explains_a_higher_interval_maximum():
     assert "above the maximum" not in consistent
 
 
-def test_multi_port_uses_independent_scales_when_ranges_differ_widely(monkeypatch):
+def test_multi_port_uses_independent_scales_when_ranges_differ_widely():
     ports = {22: _display(base=5), 443: _display(base=25, peaks={30: 300}), 8443: _display(base=400, peaks={80: 1500})}
-    (fig,) = _capture_axes(monkeypatch, lambda: pdf_report._create_multi_port_tcp_chart(ports, _CH_START, _CH_END))
-    panels = fig.axes
-    assert [ax.get_yscale() for ax in panels] == ["linear"] * 3
-    assert all(ax.get_position().x0 <= 0.06 for ax in panels)
-    assert len({ax.get_ylim()[1] for ax in panels}) == 3
-    assert all(re.fullmatch(r"[\d,]+", t) for ax in panels for t in _tick_labels(ax))
-    assert any("300 ms" in t.get_text() for t in panels[1].texts) and any(
-        "1,500 ms" in t.get_text() for t in panels[2].texts
-    )
+    _views, scales, _widest = pdf_report._port_scales(ports, UTC)
+    assert len({scale[0] for scale in scales.values()}) == 3
+    assert all(scale[0] == scale[1][-1] and len(scale[1]) <= 8 for scale in scales.values())
+    chart = pdf_report._create_multi_port_tcp_chart(ports, _CH_START, _CH_END)
+    assert isinstance(chart, pdf_report.pdf_charts.ChartFlowable)
     note = PDFReportBuilder._multi_port_note(ports, UTC)
     assert "independent Y scales" in note and "port 8443 1,500 ms" in note
     close = {22: _display(base=20), 443: _display(base=40)}
-    (fig,) = _capture_axes(monkeypatch, lambda: pdf_report._create_multi_port_tcp_chart(close, _CH_START, _CH_END))
-    assert fig.axes[0].get_ylim() == fig.axes[1].get_ylim()
+    _close_views, close_scales, _close_widest = pdf_report._port_scales(close, UTC)
+    assert close_scales[22][0] == close_scales[443][0]
     assert "shared time axis and Y scale" in PDFReportBuilder._multi_port_note(close, UTC)
 
 
@@ -1985,10 +1971,10 @@ def test_pdf_report_number_rejects_boolean_and_non_finite_values(value, expected
 
 def test_every_above_scale_marker_keeps_its_value_label(monkeypatch):
     peaks = {40: 2400, 41: 3452, 42: 2903, 118: 4318}
-    (fig,) = _capture_axes(
+    _chart, drawn, _pdf = _capture_chart_text(
         monkeypatch,
         lambda: pdf_report._create_response_time_chart(_display(base=80, peaks=peaks), _CH_START, _CH_END),
     )
-    texts = [t.get_text() for t in fig.axes[0].texts]
+    texts = [text for text, _x, _y in drawn]
     for value in ("2,400 ms", "3,452 ms", "2,903 ms", "4,318 ms"):
         assert value in texts, (value, texts)

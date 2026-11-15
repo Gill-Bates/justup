@@ -13,9 +13,11 @@ come from app/utils/report_metrics.py and app/utils/uptime_metric.py.
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.parse import quote
 
 import pytest
 from cryptography.fernet import Fernet
@@ -27,6 +29,7 @@ from app.api.auth import get_current_user
 from app.db import sqlite as sqlite_db
 from app.db import tsdb as tsdb_db
 from app.services import pdf_report
+from app.services.pdf_locale import PDFLocale
 from app.services.pdf_worker import PDFJobRequest, PDFWorker
 from app.utils import crypto
 from app.utils.availability_series import AvailabilitySeries
@@ -102,7 +105,9 @@ def _create_target(db_path: Path, **flags) -> dict:
         sqlite_db.close_connection(conn)
 
 
-def _collect_via_endpoint(tmp_path: Path, monkeypatch, **flags) -> pdf_report.ReportData:
+def _collect_via_endpoint(
+    tmp_path: Path, monkeypatch, *, request_headers: dict[str, str] | None = None, **flags
+) -> pdf_report.ReportData:
     db_path = tmp_path / "db" / "justup.db"
     target = _create_target(db_path, **flags)
     captured: list[pdf_report.ReportData] = []
@@ -117,7 +122,9 @@ def _collect_via_endpoint(tmp_path: Path, monkeypatch, **flags) -> pdf_report.Re
         app.dependency_overrides[get_conn] = lambda: conn
         app.dependency_overrides[get_current_user] = lambda: {"id": 1, "is_admin": True}
         resp = TestClient(app).get(
-            f"/reports/targets/{target['id']}/pdf", params={"since": FROM.isoformat(), "until": TO.isoformat()}
+            f"/reports/targets/{target['id']}/pdf",
+            params={"since": FROM.isoformat(), "until": TO.isoformat()},
+            headers=request_headers,
         )
         assert resp.status_code == 200
     finally:
@@ -125,7 +132,9 @@ def _collect_via_endpoint(tmp_path: Path, monkeypatch, **flags) -> pdf_report.Re
     return captured[0]
 
 
-def _collect_via_worker(tmp_path: Path, monkeypatch, **flags) -> pdf_report.ReportData:
+def _collect_via_worker(
+    tmp_path: Path, monkeypatch, *, locale: PDFLocale | None = None, **flags
+) -> pdf_report.ReportData:
     db_path = tmp_path / "db" / "justup.db"
     target = _create_target(db_path, **flags)
     captured: list[pdf_report.ReportData] = []
@@ -146,6 +155,7 @@ def _collect_via_worker(tmp_path: Path, monkeypatch, **flags) -> pdf_report.Repo
                     page_size="a4",
                     db_path=db_path,
                     tsdb_dir=tmp_path,
+                    locale=locale or PDFLocale.default(),
                 )
             )
             await asyncio.wait_for(worker.queue.join(), 30)
@@ -156,6 +166,62 @@ def _collect_via_worker(tmp_path: Path, monkeypatch, **flags) -> pdf_report.Repo
 
     asyncio.run(run())
     return captured[0]
+
+
+def _browser_profile(locale: str) -> PDFLocale:
+    fixtures = json.loads((Path(__file__).parent / "fixtures" / "pdf_locale_profiles.json").read_text(encoding="utf-8"))
+    return PDFLocale.from_browser(fixtures[locale]["profile"])
+
+
+def _profile_header(locale: str) -> dict[str, str]:
+    fixtures = json.loads((Path(__file__).parent / "fixtures" / "pdf_locale_profiles.json").read_text(encoding="utf-8"))
+    profile = json.dumps(fixtures[locale]["profile"], ensure_ascii=False)
+    return {"X-Justup-Locale-Profile": quote(profile, safe="-_.!~*'()")}
+
+
+def test_sync_pdf_request_carries_browser_locale_profile(tmp_path, monkeypatch):
+    report = _collect_via_endpoint(tmp_path, monkeypatch, request_headers=_profile_header("de-DE"))
+    assert report.locale.tag == "de-DE"
+
+
+def test_async_pdf_request_carries_browser_locale_to_worker_job(tmp_path, monkeypatch):
+    db_path = tmp_path / "db" / "justup.db"
+    target = _create_target(db_path)
+    queued: list[PDFJobRequest] = []
+
+    async def capture(job: PDFJobRequest) -> None:
+        queued.append(job)
+
+    monkeypatch.setattr(reports, "submit_pdf_job", capture)
+    conn = sqlite_db.connect(db_path)
+    try:
+        user_id = sqlite_db.create_user(
+            conn,
+            username="locale-admin",
+            password_hash=Fernet.generate_key().decode("ascii"),
+            is_admin=True,
+        )
+        app = FastAPI()
+        app.add_exception_handler(RateLimitExceededError, rate_limit_exceeded_handler)
+        app.state.db_path = db_path
+        app.state.tsdb_dir = tmp_path
+        app.include_router(reports.router)
+        app.dependency_overrides[get_conn] = lambda: conn
+        app.dependency_overrides[get_current_user] = lambda: {"id": user_id, "is_admin": True}
+        response = TestClient(app).post(
+            f"/reports/targets/{target['id']}/pdf/request",
+            params={"since": FROM.isoformat(), "until": TO.isoformat()},
+            headers=_profile_header("fr-FR"),
+        )
+        assert response.status_code == 200, response.text
+    finally:
+        sqlite_db.close_connection(conn)
+    assert len(queued) == 1 and queued[0].locale.tag == "fr-FR"
+
+
+def test_worker_keeps_locale_on_each_pdf_report_data(tmp_path, monkeypatch):
+    report = _collect_via_worker(tmp_path, monkeypatch, locale=_browser_profile("hi-IN"))
+    assert report.locale.tag == "hi-IN"
 
 
 @pytest.fixture(params=[_collect_via_endpoint, _collect_via_worker], ids=["endpoint", "worker"])

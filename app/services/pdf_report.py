@@ -801,6 +801,7 @@ def _create_line_chart(
         color=color,
         ylabel=ylabel,
         top=top,
+        series_label="Median per interval" if view.has_intervals else "Measured",
         ticks=ticks,
         peaks=peaks,
         overflow=overflow,
@@ -1086,6 +1087,7 @@ def _create_multi_port_tcp_chart(
             {
                 "port": port,
                 "color": TCP_PORT_COLORS[idx % len(TCP_PORT_COLORS)],
+                "series_label": "Median per interval" if view.has_intervals else "Measured",
                 "top": top,
                 "ticks": ticks,
                 "times": times,
@@ -1718,7 +1720,8 @@ def _build_route_entries(
             span = f"{node['first_hop']}–{node['last_hop']}"
             first_note = f" · includes {FIRST_HOP_LABEL.lower()}" if members[0]["kind"] == "first" else ""
             if members[0]["location"] == "unlocated":
-                title, detail = f"{locale.format_number(node['count'])} measured hops", [f"{LOCATION_UNKNOWN}{first_note}"]
+                title = f"{locale.format_number(node['count'])} measured hops"
+                detail = [f"{LOCATION_UNKNOWN}{first_note}"]
             else:
                 title = _place(members[0]["city"], members[0]["country"])
                 detail = [f"{locale.format_number(node['count'])} hops measured{first_note}"]
@@ -2281,7 +2284,7 @@ class PDFReportBuilder:
         now = datetime.now(tz=UTC)
         build_suffix = f" ({BUILD_INFO[:7]})" if BUILD_INFO and BUILD_INFO != "dev" else ""
         footer_text = (
-            f"v{VERSION}{build_suffix} | © {self.locale.format_number(now.year)} Gill-Bates "
+            f"v{VERSION}{build_suffix} | © {self.locale.format_number(now.year, grouping=False)} Gill-Bates "
             "| Lightweight Uptime Monitor | "
         )
         footer_text_x = logo_x + logo_width + 2 * mm
@@ -3282,8 +3285,7 @@ class PDFReportBuilder:
         latency = _hop_latency(reply)
         if reply and latency:
             parts.append(
-                "RTT at last responding hop "
-                f"{self.locale.format_number(latency, max_fraction=1, min_fraction=1)} ms"
+                f"RTT at last responding hop {self.locale.format_number(latency, max_fraction=1, min_fraction=1)} ms"
             )
         self._chapter_header("Network Path", " · ".join(parts))
         self._add_route_map(display_hops, geo_points)
@@ -3401,9 +3403,7 @@ class PDFReportBuilder:
 
             lat = _hop_latency(hop)
             latency = (
-                f"{self.locale.format_number(lat, max_fraction=1, min_fraction=1)} ms"
-                if lat and not silent
-                else "—"
+                f"{self.locale.format_number(lat, max_fraction=1, min_fraction=1)} ms" if lat and not silent else "—"
             )  # interpolated values are not measurements
 
             if synthetic:
@@ -4004,7 +4004,10 @@ class PDFReportBuilder:
                 f"{self.locale.format_percent(self.kpis.coverage_pct, 1)} "
                 "of the reporting period. Downtime outside the recorded checks cannot be ruled out."
                 if thin
-                else f"All {self.locale.format_number(self.kpis.total_checks)} availability checks in this reporting period succeeded."
+                else (
+                    f"All {self.locale.format_number(self.kpis.total_checks)} availability checks "
+                    "in this reporting period succeeded."
+                )
             )
             title_style = st["empty_title"]
         else:

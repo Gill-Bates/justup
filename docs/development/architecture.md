@@ -10,7 +10,7 @@ that process, so do not run several app processes against one data directory.
 | Storage | SQLite (`data/sqlite/justup.db`), time series in `data/tsdb` |
 | Frontend | Bootstrap 5, HTMX, plain JavaScript without a build step |
 | Maps and charts | Leaflet, Chart.js (served locally) |
-| PDF | ReportLab, matplotlib |
+| PDF | ReportLab (native vector charts) |
 | Notifications | SMTP, signal-cli |
 
 A watchdog restarts crashed background services; their state is part of the

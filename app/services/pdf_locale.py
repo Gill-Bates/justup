@@ -36,6 +36,7 @@ class PDFLocale:
     am: str
     pm: str
     patterns: dict[str, tuple[tuple[str, str, bool], ...]]
+    minimum_grouping_digits: int = 1
 
     @classmethod
     def default(cls, tag: str = "en-US") -> PDFLocale:
@@ -61,17 +62,17 @@ class PDFLocale:
                     ("dayPeriod", "PM", False),
                 ),
                 "date": (
-                    ("month", "11", False),
+                    ("month", "11", True),
                     ("literal", "/", False),
-                    ("day", "21", False),
+                    ("day", "21", True),
                     ("literal", "/", False),
                     ("year", "2006", False),
                 ),
-                "monthDay": (("month", "11", False), ("literal", "/", False), ("day", "21", False)),
+                "monthDay": (("month", "11", True), ("literal", "/", False), ("day", "21", True)),
                 "monthDayTime": (
-                    ("month", "11", False),
+                    ("month", "11", True),
                     ("literal", "/", False),
-                    ("day", "21", False),
+                    ("day", "21", True),
                     ("literal", ", ", False),
                     ("hour", "05", True),
                     ("literal", ":", False),
@@ -80,9 +81,9 @@ class PDFLocale:
                     ("dayPeriod", "PM", False),
                 ),
                 "fullDateTime": (
-                    ("month", "11", False),
+                    ("month", "11", True),
                     ("literal", "/", False),
-                    ("day", "21", False),
+                    ("day", "21", True),
                     ("literal", "/", False),
                     ("year", "2006", False),
                     ("literal", ", ", False),
@@ -114,6 +115,9 @@ class PDFLocale:
         ):
             raise ValueError("invalid locale digits")
         integer_groups = number.get("integerGroups")
+        minimum_grouping_digits = number.get("minimumGroupingDigits", 1)
+        if type(minimum_grouping_digits) is not int or not 1 <= minimum_grouping_digits <= 4:
+            raise ValueError("invalid minimum grouping digits")
         if (
             not isinstance(integer_groups, list)
             or not integer_groups
@@ -160,6 +164,7 @@ class PDFLocale:
             am=periods["am"],
             pm=periods["pm"],
             patterns=patterns,
+            minimum_grouping_digits=minimum_grouping_digits,
         )
 
     def format_number(
@@ -186,7 +191,7 @@ class PDFLocale:
         fraction = fraction.rstrip("0")
         if len(fraction) < min_fraction:
             fraction += "0" * (min_fraction - len(fraction))
-        if grouping and self.group:
+        if grouping and self.group and len(integer) >= self.primary_group + self.minimum_grouping_digits:
             pieces = []
             size = self.primary_group
             while len(integer) > size:

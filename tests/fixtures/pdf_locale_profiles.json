@@ -1,0 +1,1658 @@
+{
+  "de-DE": {
+    "profile": {
+      "locale": "de-DE",
+      "hourCycle": "h23",
+      "dayPeriod": {
+        "am": "",
+        "pm": ""
+      },
+      "number": {
+        "digits": [
+          "0",
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6",
+          "7",
+          "8",
+          "9"
+        ],
+        "decimal": ",",
+        "group": ".",
+        "integerGroups": [
+          1,
+          3,
+          3,
+          3
+        ],
+        "minimumGroupingDigits": 1,
+        "minus": "-",
+        "percentPrefix": "",
+        "percentSuffix": " %"
+      },
+      "dates": {
+        "time": [
+          {
+            "type": "hour",
+            "sample": "05",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": ":",
+            "pad": false
+          },
+          {
+            "type": "minute",
+            "sample": "07",
+            "pad": true
+          }
+        ],
+        "date": [
+          {
+            "type": "day",
+            "sample": "03",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": ".",
+            "pad": false
+          },
+          {
+            "type": "month",
+            "sample": "02",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": ".",
+            "pad": false
+          },
+          {
+            "type": "year",
+            "sample": "2006",
+            "pad": false
+          }
+        ],
+        "monthDay": [
+          {
+            "type": "day",
+            "sample": "03",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": ".",
+            "pad": false
+          },
+          {
+            "type": "month",
+            "sample": "02",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": ".",
+            "pad": false
+          }
+        ],
+        "monthDayTime": [
+          {
+            "type": "day",
+            "sample": "03",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": ".",
+            "pad": false
+          },
+          {
+            "type": "month",
+            "sample": "02",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": "., ",
+            "pad": false
+          },
+          {
+            "type": "hour",
+            "sample": "05",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": ":",
+            "pad": false
+          },
+          {
+            "type": "minute",
+            "sample": "07",
+            "pad": true
+          }
+        ],
+        "fullDateTime": [
+          {
+            "type": "day",
+            "sample": "03",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": ".",
+            "pad": false
+          },
+          {
+            "type": "month",
+            "sample": "02",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": ".",
+            "pad": false
+          },
+          {
+            "type": "year",
+            "sample": "2006",
+            "pad": false
+          },
+          {
+            "type": "literal",
+            "sample": ", ",
+            "pad": false
+          },
+          {
+            "type": "hour",
+            "sample": "05",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": ":",
+            "pad": false
+          },
+          {
+            "type": "minute",
+            "sample": "07",
+            "pad": true
+          }
+        ]
+      }
+    },
+    "expected": {
+      "number": "1.234.567,25",
+      "fourDigits": "1.000",
+      "percent": "12,5 %",
+      "dates": {
+        "time": "07:03",
+        "date": "05.02.2026",
+        "monthDay": "05.02.",
+        "monthDayTime": "05.02., 07:03",
+        "fullDateTime": "05.02.2026, 07:03"
+      }
+    }
+  },
+  "en-US": {
+    "profile": {
+      "locale": "en-US",
+      "hourCycle": "h12",
+      "dayPeriod": {
+        "am": "AM",
+        "pm": "PM"
+      },
+      "number": {
+        "digits": [
+          "0",
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6",
+          "7",
+          "8",
+          "9"
+        ],
+        "decimal": ".",
+        "group": ",",
+        "integerGroups": [
+          1,
+          3,
+          3,
+          3
+        ],
+        "minimumGroupingDigits": 1,
+        "minus": "-",
+        "percentPrefix": "",
+        "percentSuffix": "%"
+      },
+      "dates": {
+        "time": [
+          {
+            "type": "hour",
+            "sample": "05",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": ":",
+            "pad": false
+          },
+          {
+            "type": "minute",
+            "sample": "07",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": " ",
+            "pad": false
+          },
+          {
+            "type": "dayPeriod",
+            "sample": "AM",
+            "pad": false
+          }
+        ],
+        "date": [
+          {
+            "type": "month",
+            "sample": "02",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": "/",
+            "pad": false
+          },
+          {
+            "type": "day",
+            "sample": "03",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": "/",
+            "pad": false
+          },
+          {
+            "type": "year",
+            "sample": "2006",
+            "pad": false
+          }
+        ],
+        "monthDay": [
+          {
+            "type": "month",
+            "sample": "02",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": "/",
+            "pad": false
+          },
+          {
+            "type": "day",
+            "sample": "03",
+            "pad": true
+          }
+        ],
+        "monthDayTime": [
+          {
+            "type": "month",
+            "sample": "02",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": "/",
+            "pad": false
+          },
+          {
+            "type": "day",
+            "sample": "03",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": ", ",
+            "pad": false
+          },
+          {
+            "type": "hour",
+            "sample": "05",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": ":",
+            "pad": false
+          },
+          {
+            "type": "minute",
+            "sample": "07",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": " ",
+            "pad": false
+          },
+          {
+            "type": "dayPeriod",
+            "sample": "AM",
+            "pad": false
+          }
+        ],
+        "fullDateTime": [
+          {
+            "type": "month",
+            "sample": "02",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": "/",
+            "pad": false
+          },
+          {
+            "type": "day",
+            "sample": "03",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": "/",
+            "pad": false
+          },
+          {
+            "type": "year",
+            "sample": "2006",
+            "pad": false
+          },
+          {
+            "type": "literal",
+            "sample": ", ",
+            "pad": false
+          },
+          {
+            "type": "hour",
+            "sample": "05",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": ":",
+            "pad": false
+          },
+          {
+            "type": "minute",
+            "sample": "07",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": " ",
+            "pad": false
+          },
+          {
+            "type": "dayPeriod",
+            "sample": "AM",
+            "pad": false
+          }
+        ]
+      }
+    },
+    "expected": {
+      "number": "1,234,567.25",
+      "fourDigits": "1,000",
+      "percent": "12.5%",
+      "dates": {
+        "time": "07:03 AM",
+        "date": "02/05/2026",
+        "monthDay": "02/05",
+        "monthDayTime": "02/05, 07:03 AM",
+        "fullDateTime": "02/05/2026, 07:03 AM"
+      }
+    }
+  },
+  "fr-FR": {
+    "profile": {
+      "locale": "fr-FR",
+      "hourCycle": "h23",
+      "dayPeriod": {
+        "am": "",
+        "pm": ""
+      },
+      "number": {
+        "digits": [
+          "0",
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6",
+          "7",
+          "8",
+          "9"
+        ],
+        "decimal": ",",
+        "group": " ",
+        "integerGroups": [
+          1,
+          3,
+          3,
+          3
+        ],
+        "minimumGroupingDigits": 1,
+        "minus": "-",
+        "percentPrefix": "",
+        "percentSuffix": " %"
+      },
+      "dates": {
+        "time": [
+          {
+            "type": "hour",
+            "sample": "05",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": ":",
+            "pad": false
+          },
+          {
+            "type": "minute",
+            "sample": "07",
+            "pad": true
+          }
+        ],
+        "date": [
+          {
+            "type": "day",
+            "sample": "03",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": "/",
+            "pad": false
+          },
+          {
+            "type": "month",
+            "sample": "02",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": "/",
+            "pad": false
+          },
+          {
+            "type": "year",
+            "sample": "2006",
+            "pad": false
+          }
+        ],
+        "monthDay": [
+          {
+            "type": "day",
+            "sample": "03",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": "/",
+            "pad": false
+          },
+          {
+            "type": "month",
+            "sample": "02",
+            "pad": true
+          }
+        ],
+        "monthDayTime": [
+          {
+            "type": "day",
+            "sample": "03",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": "/",
+            "pad": false
+          },
+          {
+            "type": "month",
+            "sample": "02",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": " ",
+            "pad": false
+          },
+          {
+            "type": "hour",
+            "sample": "05",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": ":",
+            "pad": false
+          },
+          {
+            "type": "minute",
+            "sample": "07",
+            "pad": true
+          }
+        ],
+        "fullDateTime": [
+          {
+            "type": "day",
+            "sample": "03",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": "/",
+            "pad": false
+          },
+          {
+            "type": "month",
+            "sample": "02",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": "/",
+            "pad": false
+          },
+          {
+            "type": "year",
+            "sample": "2006",
+            "pad": false
+          },
+          {
+            "type": "literal",
+            "sample": " ",
+            "pad": false
+          },
+          {
+            "type": "hour",
+            "sample": "05",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": ":",
+            "pad": false
+          },
+          {
+            "type": "minute",
+            "sample": "07",
+            "pad": true
+          }
+        ]
+      }
+    },
+    "expected": {
+      "number": "1 234 567,25",
+      "fourDigits": "1 000",
+      "percent": "12,5 %",
+      "dates": {
+        "time": "07:03",
+        "date": "05/02/2026",
+        "monthDay": "05/02",
+        "monthDayTime": "05/02 07:03",
+        "fullDateTime": "05/02/2026 07:03"
+      }
+    }
+  },
+  "hi-IN": {
+    "profile": {
+      "locale": "hi-IN",
+      "hourCycle": "h12",
+      "dayPeriod": {
+        "am": "am",
+        "pm": "pm"
+      },
+      "number": {
+        "digits": [
+          "0",
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6",
+          "7",
+          "8",
+          "9"
+        ],
+        "decimal": ".",
+        "group": ",",
+        "integerGroups": [
+          1,
+          2,
+          2,
+          2,
+          3
+        ],
+        "minimumGroupingDigits": 1,
+        "minus": "-",
+        "percentPrefix": "",
+        "percentSuffix": "%"
+      },
+      "dates": {
+        "time": [
+          {
+            "type": "hour",
+            "sample": "05",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": ":",
+            "pad": false
+          },
+          {
+            "type": "minute",
+            "sample": "07",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": " ",
+            "pad": false
+          },
+          {
+            "type": "dayPeriod",
+            "sample": "am",
+            "pad": false
+          }
+        ],
+        "date": [
+          {
+            "type": "day",
+            "sample": "03",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": "/",
+            "pad": false
+          },
+          {
+            "type": "month",
+            "sample": "02",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": "/",
+            "pad": false
+          },
+          {
+            "type": "year",
+            "sample": "2006",
+            "pad": false
+          }
+        ],
+        "monthDay": [
+          {
+            "type": "day",
+            "sample": "03",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": "/",
+            "pad": false
+          },
+          {
+            "type": "month",
+            "sample": "02",
+            "pad": true
+          }
+        ],
+        "monthDayTime": [
+          {
+            "type": "day",
+            "sample": "03",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": "/",
+            "pad": false
+          },
+          {
+            "type": "month",
+            "sample": "02",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": ", ",
+            "pad": false
+          },
+          {
+            "type": "hour",
+            "sample": "05",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": ":",
+            "pad": false
+          },
+          {
+            "type": "minute",
+            "sample": "07",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": " ",
+            "pad": false
+          },
+          {
+            "type": "dayPeriod",
+            "sample": "am",
+            "pad": false
+          }
+        ],
+        "fullDateTime": [
+          {
+            "type": "day",
+            "sample": "03",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": "/",
+            "pad": false
+          },
+          {
+            "type": "month",
+            "sample": "02",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": "/",
+            "pad": false
+          },
+          {
+            "type": "year",
+            "sample": "2006",
+            "pad": false
+          },
+          {
+            "type": "literal",
+            "sample": ", ",
+            "pad": false
+          },
+          {
+            "type": "hour",
+            "sample": "05",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": ":",
+            "pad": false
+          },
+          {
+            "type": "minute",
+            "sample": "07",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": " ",
+            "pad": false
+          },
+          {
+            "type": "dayPeriod",
+            "sample": "am",
+            "pad": false
+          }
+        ]
+      }
+    },
+    "expected": {
+      "number": "12,34,567.25",
+      "fourDigits": "1,000",
+      "percent": "12.5%",
+      "dates": {
+        "time": "07:03 am",
+        "date": "05/02/2026",
+        "monthDay": "05/02",
+        "monthDayTime": "05/02, 07:03 am",
+        "fullDateTime": "05/02/2026, 07:03 am"
+      }
+    }
+  },
+  "tr-TR": {
+    "profile": {
+      "locale": "tr-TR",
+      "hourCycle": "h23",
+      "dayPeriod": {
+        "am": "",
+        "pm": ""
+      },
+      "number": {
+        "digits": [
+          "0",
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6",
+          "7",
+          "8",
+          "9"
+        ],
+        "decimal": ",",
+        "group": ".",
+        "integerGroups": [
+          1,
+          3,
+          3,
+          3
+        ],
+        "minimumGroupingDigits": 1,
+        "minus": "-",
+        "percentPrefix": "%",
+        "percentSuffix": ""
+      },
+      "dates": {
+        "time": [
+          {
+            "type": "hour",
+            "sample": "05",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": ":",
+            "pad": false
+          },
+          {
+            "type": "minute",
+            "sample": "07",
+            "pad": true
+          }
+        ],
+        "date": [
+          {
+            "type": "day",
+            "sample": "03",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": ".",
+            "pad": false
+          },
+          {
+            "type": "month",
+            "sample": "02",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": ".",
+            "pad": false
+          },
+          {
+            "type": "year",
+            "sample": "2006",
+            "pad": false
+          }
+        ],
+        "monthDay": [
+          {
+            "type": "day",
+            "sample": "03",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": "/",
+            "pad": false
+          },
+          {
+            "type": "month",
+            "sample": "02",
+            "pad": true
+          }
+        ],
+        "monthDayTime": [
+          {
+            "type": "day",
+            "sample": "03",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": "/",
+            "pad": false
+          },
+          {
+            "type": "month",
+            "sample": "02",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": " ",
+            "pad": false
+          },
+          {
+            "type": "hour",
+            "sample": "05",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": ":",
+            "pad": false
+          },
+          {
+            "type": "minute",
+            "sample": "07",
+            "pad": true
+          }
+        ],
+        "fullDateTime": [
+          {
+            "type": "day",
+            "sample": "03",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": ".",
+            "pad": false
+          },
+          {
+            "type": "month",
+            "sample": "02",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": ".",
+            "pad": false
+          },
+          {
+            "type": "year",
+            "sample": "2006",
+            "pad": false
+          },
+          {
+            "type": "literal",
+            "sample": " ",
+            "pad": false
+          },
+          {
+            "type": "hour",
+            "sample": "05",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": ":",
+            "pad": false
+          },
+          {
+            "type": "minute",
+            "sample": "07",
+            "pad": true
+          }
+        ]
+      }
+    },
+    "expected": {
+      "number": "1.234.567,25",
+      "fourDigits": "1.000",
+      "percent": "%12,5",
+      "dates": {
+        "time": "07:03",
+        "date": "05.02.2026",
+        "monthDay": "05/02",
+        "monthDayTime": "05/02 07:03",
+        "fullDateTime": "05.02.2026 07:03"
+      }
+    }
+  },
+  "ar-EG": {
+    "profile": {
+      "locale": "ar-EG",
+      "hourCycle": "h12",
+      "dayPeriod": {
+        "am": "ص",
+        "pm": "م"
+      },
+      "number": {
+        "digits": [
+          "٠",
+          "١",
+          "٢",
+          "٣",
+          "٤",
+          "٥",
+          "٦",
+          "٧",
+          "٨",
+          "٩"
+        ],
+        "decimal": "٫",
+        "group": "٬",
+        "integerGroups": [
+          1,
+          3,
+          3,
+          3
+        ],
+        "minimumGroupingDigits": 1,
+        "minus": "-",
+        "percentPrefix": "",
+        "percentSuffix": "٪؜"
+      },
+      "dates": {
+        "time": [
+          {
+            "type": "hour",
+            "sample": "٠٥",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": ":",
+            "pad": false
+          },
+          {
+            "type": "minute",
+            "sample": "٠٧",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": " ",
+            "pad": false
+          },
+          {
+            "type": "dayPeriod",
+            "sample": "ص",
+            "pad": false
+          }
+        ],
+        "date": [
+          {
+            "type": "day",
+            "sample": "٠٣",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": "‏/",
+            "pad": false
+          },
+          {
+            "type": "month",
+            "sample": "٠٢",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": "‏/",
+            "pad": false
+          },
+          {
+            "type": "year",
+            "sample": "٢٠٠٦",
+            "pad": false
+          }
+        ],
+        "monthDay": [
+          {
+            "type": "day",
+            "sample": "٠٣",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": "‏/",
+            "pad": false
+          },
+          {
+            "type": "month",
+            "sample": "٠٢",
+            "pad": true
+          }
+        ],
+        "monthDayTime": [
+          {
+            "type": "day",
+            "sample": "٠٣",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": "‏/",
+            "pad": false
+          },
+          {
+            "type": "month",
+            "sample": "٠٢",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": "، ",
+            "pad": false
+          },
+          {
+            "type": "hour",
+            "sample": "٠٥",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": ":",
+            "pad": false
+          },
+          {
+            "type": "minute",
+            "sample": "٠٧",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": " ",
+            "pad": false
+          },
+          {
+            "type": "dayPeriod",
+            "sample": "ص",
+            "pad": false
+          }
+        ],
+        "fullDateTime": [
+          {
+            "type": "day",
+            "sample": "٠٣",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": "‏/",
+            "pad": false
+          },
+          {
+            "type": "month",
+            "sample": "٠٢",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": "‏/",
+            "pad": false
+          },
+          {
+            "type": "year",
+            "sample": "٢٠٠٦",
+            "pad": false
+          },
+          {
+            "type": "literal",
+            "sample": "، ",
+            "pad": false
+          },
+          {
+            "type": "hour",
+            "sample": "٠٥",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": ":",
+            "pad": false
+          },
+          {
+            "type": "minute",
+            "sample": "٠٧",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": " ",
+            "pad": false
+          },
+          {
+            "type": "dayPeriod",
+            "sample": "ص",
+            "pad": false
+          }
+        ]
+      }
+    },
+    "expected": {
+      "number": "١٬٢٣٤٬٥٦٧٫٢٥",
+      "fourDigits": "١٬٠٠٠",
+      "percent": "١٢٫٥٪؜",
+      "dates": {
+        "time": "٠٧:٠٣ ص",
+        "date": "٠٥‏/٠٢‏/٢٠٢٦",
+        "monthDay": "٠٥‏/٠٢",
+        "monthDayTime": "٠٥‏/٠٢، ٠٧:٠٣ ص",
+        "fullDateTime": "٠٥‏/٠٢‏/٢٠٢٦، ٠٧:٠٣ ص"
+      }
+    }
+  },
+  "th-TH": {
+    "profile": {
+      "locale": "th-TH",
+      "hourCycle": "h23",
+      "dayPeriod": {
+        "am": "",
+        "pm": ""
+      },
+      "number": {
+        "digits": [
+          "0",
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6",
+          "7",
+          "8",
+          "9"
+        ],
+        "decimal": ".",
+        "group": ",",
+        "integerGroups": [
+          1,
+          3,
+          3,
+          3
+        ],
+        "minimumGroupingDigits": 1,
+        "minus": "-",
+        "percentPrefix": "",
+        "percentSuffix": "%"
+      },
+      "dates": {
+        "time": [
+          {
+            "type": "hour",
+            "sample": "05",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": ":",
+            "pad": false
+          },
+          {
+            "type": "minute",
+            "sample": "07",
+            "pad": true
+          }
+        ],
+        "date": [
+          {
+            "type": "day",
+            "sample": "03",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": "/",
+            "pad": false
+          },
+          {
+            "type": "month",
+            "sample": "02",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": "/",
+            "pad": false
+          },
+          {
+            "type": "year",
+            "sample": "2006",
+            "pad": false
+          }
+        ],
+        "monthDay": [
+          {
+            "type": "day",
+            "sample": "03",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": "/",
+            "pad": false
+          },
+          {
+            "type": "month",
+            "sample": "02",
+            "pad": true
+          }
+        ],
+        "monthDayTime": [
+          {
+            "type": "day",
+            "sample": "03",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": "/",
+            "pad": false
+          },
+          {
+            "type": "month",
+            "sample": "02",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": " ",
+            "pad": false
+          },
+          {
+            "type": "hour",
+            "sample": "05",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": ":",
+            "pad": false
+          },
+          {
+            "type": "minute",
+            "sample": "07",
+            "pad": true
+          }
+        ],
+        "fullDateTime": [
+          {
+            "type": "day",
+            "sample": "03",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": "/",
+            "pad": false
+          },
+          {
+            "type": "month",
+            "sample": "02",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": "/",
+            "pad": false
+          },
+          {
+            "type": "year",
+            "sample": "2006",
+            "pad": false
+          },
+          {
+            "type": "literal",
+            "sample": " ",
+            "pad": false
+          },
+          {
+            "type": "hour",
+            "sample": "05",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": ":",
+            "pad": false
+          },
+          {
+            "type": "minute",
+            "sample": "07",
+            "pad": true
+          }
+        ]
+      }
+    },
+    "expected": {
+      "number": "1,234,567.25",
+      "fourDigits": "1,000",
+      "percent": "12.5%",
+      "dates": {
+        "time": "07:03",
+        "date": "05/02/2026",
+        "monthDay": "05/02",
+        "monthDayTime": "05/02 07:03",
+        "fullDateTime": "05/02/2026 07:03"
+      }
+    }
+  },
+  "es-ES": {
+    "profile": {
+      "locale": "es-ES",
+      "hourCycle": "h23",
+      "dayPeriod": {
+        "am": "",
+        "pm": ""
+      },
+      "number": {
+        "digits": [
+          "0",
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6",
+          "7",
+          "8",
+          "9"
+        ],
+        "decimal": ",",
+        "group": ".",
+        "integerGroups": [
+          1,
+          3,
+          3,
+          3
+        ],
+        "minimumGroupingDigits": 2,
+        "minus": "-",
+        "percentPrefix": "",
+        "percentSuffix": " %"
+      },
+      "dates": {
+        "time": [
+          {
+            "type": "hour",
+            "sample": "05",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": ":",
+            "pad": false
+          },
+          {
+            "type": "minute",
+            "sample": "07",
+            "pad": true
+          }
+        ],
+        "date": [
+          {
+            "type": "day",
+            "sample": "03",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": "/",
+            "pad": false
+          },
+          {
+            "type": "month",
+            "sample": "02",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": "/",
+            "pad": false
+          },
+          {
+            "type": "year",
+            "sample": "2006",
+            "pad": false
+          }
+        ],
+        "monthDay": [
+          {
+            "type": "day",
+            "sample": "3",
+            "pad": false
+          },
+          {
+            "type": "literal",
+            "sample": "/",
+            "pad": false
+          },
+          {
+            "type": "month",
+            "sample": "2",
+            "pad": false
+          }
+        ],
+        "monthDayTime": [
+          {
+            "type": "day",
+            "sample": "3",
+            "pad": false
+          },
+          {
+            "type": "literal",
+            "sample": "/",
+            "pad": false
+          },
+          {
+            "type": "month",
+            "sample": "2",
+            "pad": false
+          },
+          {
+            "type": "literal",
+            "sample": ", ",
+            "pad": false
+          },
+          {
+            "type": "hour",
+            "sample": "05",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": ":",
+            "pad": false
+          },
+          {
+            "type": "minute",
+            "sample": "07",
+            "pad": true
+          }
+        ],
+        "fullDateTime": [
+          {
+            "type": "day",
+            "sample": "03",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": "/",
+            "pad": false
+          },
+          {
+            "type": "month",
+            "sample": "02",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": "/",
+            "pad": false
+          },
+          {
+            "type": "year",
+            "sample": "2006",
+            "pad": false
+          },
+          {
+            "type": "literal",
+            "sample": ", ",
+            "pad": false
+          },
+          {
+            "type": "hour",
+            "sample": "05",
+            "pad": true
+          },
+          {
+            "type": "literal",
+            "sample": ":",
+            "pad": false
+          },
+          {
+            "type": "minute",
+            "sample": "07",
+            "pad": true
+          }
+        ]
+      }
+    },
+    "expected": {
+      "number": "1.234.567,25",
+      "fourDigits": "1000",
+      "percent": "12,5 %",
+      "dates": {
+        "time": "07:03",
+        "date": "05/02/2026",
+        "monthDay": "5/2",
+        "monthDayTime": "5/2, 07:03",
+        "fullDateTime": "05/02/2026, 07:03"
+      }
+    }
+  }
+}
