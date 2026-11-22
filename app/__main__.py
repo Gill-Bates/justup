@@ -12,13 +12,7 @@ import contextlib
 import logging
 import sys
 
-# Unified log format with timestamp (gray timestamp if TTY)
-_is_tty = sys.stderr.isatty()
-if _is_tty:
-    _LOG_FORMAT = "\033[90m%(asctime)s\033[0m | %(levelname)-7s | \033[36m%(name)s\033[0m | %(message)s"
-else:
-    _LOG_FORMAT = "%(asctime)s | %(levelname)-7s | %(name)s | %(message)s"
-_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
+from .utils.logging_config import LOG
 
 
 class _AccessToDebugFilter(logging.Filter):
@@ -42,14 +36,8 @@ UVICORN_LOG_CONFIG = {
         "access_debug": {"()": _AccessToDebugFilter},
     },
     "formatters": {
-        "default": {
-            "format": _LOG_FORMAT,
-            "datefmt": _DATE_FORMAT,
-        },
-        "access": {
-            "format": _LOG_FORMAT,
-            "datefmt": _DATE_FORMAT,
-        },
+        "default": {"()": LOG.formatter},
+        "access": {"()": LOG.formatter},
     },
     "handlers": {
         "default": {

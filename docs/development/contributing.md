@@ -17,7 +17,7 @@ On a shared machine run the heavy ones (`pytest -n auto`, `npm test`, `node test
 
 ## Conventions
 
-- Ruff for lint and format (`line-length = 120`, Python 3.13).
+- Ruff for lint and format (`line-length = 120`, Python 3.14).
 - Routes contain no SQL; they call repositories in `app/db/`.
 - Prefer module-level imports; use function-local imports only to avoid circular imports.
 - Keep modules and functions small and focused; some large modules exist.

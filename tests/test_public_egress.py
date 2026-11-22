@@ -8,17 +8,13 @@
 
 from __future__ import annotations
 
-import datetime as dt
 import errno
-import io
 import socket
-import ssl
 import threading
 import time
-from pathlib import Path
-from tempfile import TemporaryDirectory
 
 import pytest
+from gillbates_public_ip import FAMILIES, Target
 
 from app.services import geo_resolver as gr
 from app.services import public_egress as pe
@@ -30,64 +26,41 @@ V4 = "93.184.216.34"
 V6 = "2606:2800:220:1:248:1893:25c8:1946"
 V4_OTHER = "198.51.100.7"  # documentation range is non-global; used only where a *different* value is needed
 V4_ALT = "8.8.4.4"
-HOSTS = {p.host for providers in pe.PROVIDERS.values() for p in providers}
-
-
-def reply(body: bytes | str, status: int = 200, extra: str = "") -> bytes:
-    data = body.encode() if isinstance(body, str) else body
-    head = f"HTTP/1.1 {status} X\r\nContent-Length: {len(data)}\r\n{extra}\r\n".encode()
-    return head + data
-
-
-class FakeSock:
-    def __init__(self, response: bytes) -> None:
-        self._response = response
-        self.sent = b""
-
-    def sendall(self, data: bytes) -> None:
-        self.sent += data
-
-    def makefile(self, *_args, **_kwargs):
-        return io.BytesIO(self._response)
-
-    def settimeout(self, _value) -> None:  # pragma: no cover - interface only
-        pass
-
-    def close(self) -> None:
-        pass
 
 
 class Net:
-    """Scripted network: ``answers[(family, host)]`` is response bytes or an exception to raise on connect."""
+    """Scripted echo targets: ``answers[(family, name)]`` is the answer text or an exception to raise."""
+
+    NAMES = ("icanhazip", "ipify")
 
     def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        self.answers: dict[tuple[str, str], bytes | BaseException] = {}
-        self.dns: dict[tuple[str, str], list[str] | BaseException] = {}
-        self.connects: list[tuple[str, str, str]] = []
-        monkeypatch.setattr(pe.socket, "getaddrinfo", self.resolve_scripted)
-        monkeypatch.setattr(pe, "_open_tls", self.open_tls)
+        self.answers: dict[tuple[str, str], str | BaseException] = {}
+        self.connects: list[tuple[str, str]] = []
+        self.gate: threading.Event | None = None
+        self.hang: dict[str, threading.Event] = {}
+        targets = tuple(Target(name, family, self._fetcher(family, name)) for family in FAMILIES for name in self.NAMES)
+        monkeypatch.setattr(pe, "TARGETS", targets)
+        monkeypatch.setattr(pe, "_local_probe", lambda _family: "10.0.0.1")
 
-    def resolve_scripted(self, host, _port, family=0, *_args, **_kwargs):
-        key = ("ipv6" if family == socket.AF_INET6 else "ipv4", host)
-        answer = self.dns.get(key)
-        if answer is None:
-            answer = [V6 if key[0] == "ipv6" else V4]
-        if isinstance(answer, BaseException):
-            raise answer
-        return [(family, socket.SOCK_STREAM, 6, "", (a, 443)) for a in answer]
+    def _fetcher(self, family: str, name: str):
+        def fetch(_timeout: float) -> str:
+            self.connects.append((family, name))
+            if self.gate is not None:
+                self.gate.wait(2)
+            if family in self.hang:
+                self.hang[family].wait(5)
+            answer = self.answers.get((family, name))
+            if isinstance(answer, BaseException):
+                raise answer
+            if answer is None:
+                raise OSError(errno.ECONNREFUSED, "no scripted answer")
+            return answer
 
-    def open_tls(self, family, address, host, _timeout):
-        self.connects.append((family, address, host))
-        answer = self.answers.get((family, host))
-        if isinstance(answer, BaseException):
-            raise answer
-        if answer is None:
-            raise OSError(errno.ECONNREFUSED, "no scripted answer")
-        return FakeSock(answer)
+        return fetch
 
-    def set_family(self, family: str, body, **kw) -> None:
-        for provider in pe.PROVIDERS[family]:
-            self.answers[(family, provider.host)] = reply(body, **kw) if not isinstance(body, BaseException) else body
+    def set_family(self, family: str, body) -> None:
+        for name in self.NAMES:
+            self.answers[(family, name)] = body
 
     def down(self, family: str, exc: BaseException) -> None:
         self.set_family(family, exc)
@@ -131,7 +104,7 @@ def test_ipv4_success(net):
     result = pe.get_public_egress()
     assert result["ipv4"]["status"] == "available"
     assert result["ipv4"]["address"] == V4
-    assert result["ipv4"]["sources"] == [p.host for p in pe.PROVIDERS["ipv4"]]
+    assert sorted(result["ipv4"]["sources"]) == sorted(Net.NAMES)
     assert result["cached"] is False
 
 
@@ -153,8 +126,7 @@ def test_ipv4_only_marks_ipv6_unavailable_without_blocking_ipv4(net):
 
 
 def test_ipv6_only_marks_ipv4_unavailable(net):
-    net.dns[("ipv4", pe.PROVIDERS["ipv4"][0].host)] = socket.gaierror(socket.EAI_NONAME, "no A record")
-    net.dns[("ipv4", pe.PROVIDERS["ipv4"][1].host)] = socket.gaierror(socket.EAI_NONAME, "no A record")
+    net.down("ipv4", no_route())
     net.set_family("ipv6", V6)
     result = pe.get_public_egress()
     assert result["ipv4"]["status"] == "unavailable"
@@ -173,20 +145,18 @@ def test_ipv6_lookup_never_uses_ipv4_and_vice_versa(net):
     net.set_family("ipv4", V4)
     net.down("ipv6", no_route())
     pe.get_public_egress()
-    for family, address, host in net.connects:
-        provider_family = "ipv6" if host in {p.host for p in pe.PROVIDERS["ipv6"]} else "ipv4"
-        assert family == provider_family
-        assert (":" in address) == (family == "ipv6")
+    assert {family for family, _name in net.connects} == {"ipv4", "ipv6"}
+    assert all(name in Net.NAMES for _family, name in net.connects)
 
 
 def test_one_provider_down_still_available_from_the_other(net):
-    first, second = pe.PROVIDERS["ipv4"]
-    net.answers[("ipv4", first.host)] = OSError(errno.ECONNREFUSED, "refused")
-    net.answers[("ipv4", second.host)] = reply(V4)
+    first, second = Net.NAMES
+    net.answers[("ipv4", first)] = OSError(errno.ECONNREFUSED, "refused")
+    net.answers[("ipv4", second)] = V4
     net.down("ipv6", no_route())
     result = pe.get_public_egress()
     assert result["ipv4"]["status"] == "available"
-    assert result["ipv4"]["sources"] == [second.host]
+    assert result["ipv4"]["sources"] == [second]
 
 
 # ─── 6-9: failures ───────────────────────────────────────────────────────────
@@ -202,8 +172,7 @@ def test_no_internet_is_unavailable_for_both(net):
 
 def test_dns_failure_is_a_failed_lookup_not_an_address(net):
     for family in ("ipv4", "ipv6"):
-        for provider in pe.PROVIDERS[family]:
-            net.dns[(family, provider.host)] = socket.gaierror(socket.EAI_AGAIN, "temporary failure")
+        net.set_family(family, socket.gaierror(socket.EAI_AGAIN, "temporary failure"))
     result = pe.get_public_egress()
     assert result["ipv4"]["status"] == "failed"
     assert result["ipv4"]["reason"] == "dns_failed"
@@ -228,14 +197,7 @@ def test_timeout_is_failed(net):
 
 def test_overall_budget_bounds_a_hanging_provider(net, monkeypatch):
     release = threading.Event()
-    real = net.open_tls
-
-    def slow(family, address, host, timeout):
-        if family == "ipv6":
-            release.wait(5)
-        return real(family, address, host, timeout)
-
-    monkeypatch.setattr(pe, "_open_tls", slow)
+    net.hang["ipv6"] = release
     monkeypatch.setattr(pe, "OVERALL_BUDGET_SECONDS", 0.3)
     net.set_family("ipv4", V4)
     net.set_family("ipv6", V6)
@@ -245,51 +207,6 @@ def test_overall_budget_bounds_a_hanging_provider(net, monkeypatch):
     assert time.monotonic() - started < 3
     assert result["ipv4"]["address"] == V4
     assert (result["ipv6"]["status"], result["ipv6"]["reason"]) == ("failed", "timeout")
-
-
-def _threads(prefix: str) -> int:
-    return sum(1 for t in threading.enumerate() if t.name.startswith(prefix))
-
-
-def test_hanging_dns_cannot_pile_up_threads_or_block_the_service(net, monkeypatch):
-    release = threading.Event()
-    started = []
-    real = net.resolve_scripted
-
-    def hanging(host, port, family=0, *args, **kwargs):
-        started.append(host)
-        release.wait(10)
-        return real(host, port, family, *args, **kwargs)
-
-    monkeypatch.setattr(pe.socket, "getaddrinfo", hanging)
-    monkeypatch.setattr(pe, "DNS_TIMEOUT_SECONDS", 0.2)
-    monkeypatch.setattr(pe, "OVERALL_BUDGET_SECONDS", 2.0)
-    monkeypatch.setattr(pe, "MIN_REFRESH_INTERVAL_SECONDS", 0.0)
-    net.set_family("ipv4", V4)
-    net.set_family("ipv6", V6)
-    try:
-        for _ in range(6):  # repeated refreshes while all four resolver calls stay blocked
-            began = time.monotonic()
-            result = pe.get_public_egress(refresh=True)
-            assert time.monotonic() - began < 2.0
-            assert result["ipv4"]["status"] == result["ipv6"]["status"] == "failed"
-        assert result["ipv4"]["reason"] == "busy"  # later refreshes are refused, not queued
-        assert len(started) == 4  # only the first refresh reached the resolver
-        assert _threads("public-egress-dns") <= pe.MAX_PENDING_DNS
-        assert _threads("public-egress_") <= pe.MAX_PENDING_FETCHES
-    finally:
-        release.set()
-    monkeypatch.setattr(pe.socket, "getaddrinfo", real)
-    deadline = time.monotonic() + 5
-    while True:  # slots are freed by the released threads; the service then works again
-        recovered = pe.get_public_egress(refresh=True)
-        # Both families: slots free up one by one, so IPv4 can recover a refresh before IPv6 does.
-        if (
-            recovered["ipv4"]["status"] == "available" and recovered["ipv6"]["status"] == "available"
-        ) or time.monotonic() > deadline:
-            break
-        time.sleep(0.05)
-    assert recovered["ipv4"]["address"] == V4 and recovered["ipv6"]["address"] == V6
 
 
 # ─── 10-12: wrong or non-public answers ──────────────────────────────────────
@@ -348,150 +265,13 @@ def test_non_ip_answers_are_rejected(net, body):
     assert result["ipv4"]["address"] is None
 
 
-def test_blocked_dns_answer_is_not_contacted(net):
-    for provider in pe.PROVIDERS["ipv4"]:
-        net.dns[("ipv4", provider.host)] = ["127.0.0.1"]
-    net.down("ipv6", no_route())
-    result = pe.get_public_egress()
-    assert result["ipv4"]["reason"] == "blocked_target"
-    assert not [c for c in net.connects if c[0] == "ipv4"]
-
-
-def test_connects_to_the_validated_address_with_the_provider_hostname(net):
-    net.set_family("ipv4", V4)
-    net.down("ipv6", no_route())
-    pe.get_public_egress()
-    ipv4_connects = [c for c in net.connects if c[0] == "ipv4"]
-    assert {c[2] for c in ipv4_connects} == {p.host for p in pe.PROVIDERS["ipv4"]}
-    assert {c[1] for c in ipv4_connects} == {V4}
-
-
-# ─── 13-15: redirect, TLS, size ──────────────────────────────────────────────
-
-
-def test_redirect_is_not_followed(net):
-    net.set_family("ipv4", "", status=302, extra="Location: https://evil.example/\r\n")
-    net.down("ipv6", no_route())
-    result = pe.get_public_egress()
-    assert result["ipv4"]["status"] == "failed"
-    assert result["ipv4"]["reason"] == "redirect"
-    assert not [c for c in net.connects if c[2] == "evil.example"]
-
-
-def test_http_error_status_is_failed(net):
-    net.set_family("ipv4", V4, status=503)
-    net.down("ipv6", no_route())
-    assert pe.get_public_egress()["ipv4"]["reason"] == "http_status"
-
-
-def test_invalid_certificate_is_failed(net):
-    net.down("ipv4", ssl.SSLCertVerificationError(1, "certificate verify failed"))
-    net.down("ipv6", ssl.SSLCertVerificationError(1, "certificate verify failed"))
-    result = pe.get_public_egress()
-    assert result["ipv4"]["reason"] == "tls_failed"
-    assert result["ipv6"]["address"] is None
-
-
-def test_oversized_answer_is_rejected(net):
-    net.set_family("ipv4", "8" * (pe.MAX_RESPONSE_BYTES + 50))
-    net.down("ipv6", no_route())
-    result = pe.get_public_egress()
-    assert result["ipv4"]["reason"] == "response_too_large"
-
-
-def _self_signed(directory: Path) -> tuple[Path, Path]:
-    from cryptography import x509
-    from cryptography.hazmat.primitives import hashes, serialization
-    from cryptography.hazmat.primitives.asymmetric import ec
-    from cryptography.x509.oid import NameOID
-
-    key = ec.generate_private_key(ec.SECP256R1())
-    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "localhost")])
-    now = dt.datetime.now(dt.UTC)
-    cert = (
-        x509.CertificateBuilder()
-        .subject_name(name)
-        .issuer_name(name)
-        .public_key(key.public_key())
-        .serial_number(x509.random_serial_number())
-        .not_valid_before(now - dt.timedelta(days=1))
-        .not_valid_after(now + dt.timedelta(days=1))
-        .add_extension(x509.SubjectAlternativeName([x509.DNSName("localhost")]), critical=False)
-        .sign(key, hashes.SHA256())
-    )
-    cert_path, key_path = directory / "c.pem", directory / "k.pem"
-    cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
-    key_path.write_bytes(
-        key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
-    )
-    return cert_path, key_path
-
-
-def test_open_tls_really_verifies_the_certificate(monkeypatch):
-    """Real TLS handshake against a local server with an untrusted certificate: must be refused."""
-    with TemporaryDirectory(prefix="justup-egress-") as tmp:
-        cert, key = _self_signed(Path(tmp))
-        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        context.load_cert_chain(cert, key)
-        server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server.bind(("127.0.0.1", 0))
-        server.listen(1)
-        port = server.getsockname()[1]
-
-        def serve() -> None:
-            try:
-                conn, _ = server.accept()
-                try:
-                    context.wrap_socket(conn, server_side=True)
-                except (ssl.SSLError, OSError):
-                    pass
-                finally:
-                    conn.close()
-            except OSError:
-                pass
-
-        thread = threading.Thread(target=serve, daemon=True)
-        thread.start()
-        monkeypatch.setattr(pe, "HTTPS_PORT", port)
-        try:
-            with pytest.raises(ssl.SSLCertVerificationError):
-                pe._open_tls("ipv4", "127.0.0.1", "localhost", 3.0)  # noqa: SLF001
-        finally:
-            server.close()
-            thread.join(2)
-
-
-def test_open_tls_uses_exactly_the_requested_family(monkeypatch):
-    seen: list[int] = []
-
-    class Boom:
-        def __init__(self, family, *_args):
-            seen.append(family)
-
-        def settimeout(self, _t):
-            pass
-
-        def connect(self, _addr):
-            raise OSError(errno.ENETUNREACH, "unreachable")
-
-        def close(self):
-            pass
-
-    monkeypatch.setattr(pe.socket, "socket", Boom)
-    with pytest.raises(OSError):
-        pe._open_tls("ipv6", V6, "ipv6.icanhazip.com", 1.0)  # noqa: SLF001
-    with pytest.raises(OSError):
-        pe._open_tls("ipv4", V4, "ipv4.icanhazip.com", 1.0)  # noqa: SLF001
-    assert seen == [socket.AF_INET6, socket.AF_INET]
-
-
 # ─── 16: disagreement, stale ─────────────────────────────────────────────────
 
 
 def test_different_answers_from_independent_providers_are_inconsistent(net):
-    first, second = pe.PROVIDERS["ipv4"]
-    net.answers[("ipv4", first.host)] = reply(V4)
-    net.answers[("ipv4", second.host)] = reply(V4_ALT)
+    first, second = Net.NAMES
+    net.answers[("ipv4", first)] = V4
+    net.answers[("ipv4", second)] = V4_ALT
     net.down("ipv6", no_route())
     result = pe.get_public_egress()["ipv4"]
     assert result["status"] == "inconsistent"
@@ -661,15 +441,8 @@ def test_cache_ttl(net, monkeypatch):
     assert len(net.connects) > calls
 
 
-def test_parallel_requests_share_one_lookup(net, monkeypatch):
-    gate = threading.Event()
-    real = net.open_tls
-
-    def gated(family, address, host, timeout):
-        gate.wait(2)
-        return real(family, address, host, timeout)
-
-    monkeypatch.setattr(pe, "_open_tls", gated)
+def test_parallel_requests_share_one_lookup(net):
+    gate = net.gate = threading.Event()
     net.set_family("ipv4", V4)
     net.set_family("ipv6", V6)
     results: list[pe.EgressResult] = []
@@ -705,7 +478,7 @@ def test_proxy_environment_is_reported_and_not_used(net, monkeypatch):
     assert pe.get_public_egress()["proxy_env"] is False
     monkeypatch.setenv("HTTPS_PROXY", "http://proxy.invalid:3128")
     assert pe.get_public_egress()["proxy_env"] is True  # flag follows the environment even on a cached result
-    assert not [c for c in net.connects if "proxy" in c[2]]
+    assert not [c for c in net.connects if "proxy" in c[1]]
 
 
 # ─── 20-21: API ──────────────────────────────────────────────────────────────

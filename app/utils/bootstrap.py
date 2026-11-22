@@ -155,7 +155,7 @@ def _read_meta(db_path: Path) -> dict[str, str]:
     """Validators (ETag/Last-Modified) stored next to the database; empty if unavailable."""
     try:
         data = json.loads(_meta_path(db_path).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return {}
     if not isinstance(data, dict):
         return {}
@@ -330,7 +330,7 @@ def _is_inside_geoip_dir(data_dir: Path, path: Path) -> bool:
     """True if ``path`` resolves to a location inside ``<data_dir>/geoip`` (no traversal, no symlink escape)."""
     try:
         path.resolve().relative_to((data_dir / "geoip").resolve())
-    except (ValueError, OSError):
+    except ValueError, OSError:
         return False
     return True
 

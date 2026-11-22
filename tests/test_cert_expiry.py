@@ -129,7 +129,7 @@ def test_expired_certificate_reports_negative_remaining_time(tmp_path, monkeypat
                 conn, _addr = listener.accept()
                 with server_ctx.wrap_socket(conn, server_side=True):
                     pass
-            except (OSError, ssl.SSLError):
+            except OSError, ssl.SSLError:
                 continue
 
     thread = threading.Thread(target=_serve, daemon=True)
@@ -167,7 +167,7 @@ def test_expired_certificate_retry_shares_the_timeout_budget(tmp_path, monkeypat
             time.sleep(0.6)
             with server_ctx.wrap_socket(conn, server_side=True):
                 pass
-        except (OSError, ssl.SSLError):
+        except OSError, ssl.SSLError:
             pass
         try:
             stalled, _addr = listener.accept()
@@ -234,7 +234,7 @@ def test_unverified_retry_must_not_turn_expiry_into_ok(tmp_path, monkeypatch):
                 conn, _addr = listener.accept()
                 with ctx.wrap_socket(conn, server_side=True):
                     pass
-            except (OSError, ssl.SSLError):
+            except OSError, ssl.SSLError:
                 continue
 
     thread = threading.Thread(target=_serve, daemon=True)
@@ -280,7 +280,7 @@ def _check_ip_target(tmp_path, monkeypatch, san_ip: str, *, expired: bool = Fals
                 conn, _addr = listener.accept()
                 with server_ctx.wrap_socket(conn, server_side=True):
                     pass
-            except (OSError, ssl.SSLError):
+            except OSError, ssl.SSLError:
                 continue
 
     thread = threading.Thread(target=_serve, daemon=True)

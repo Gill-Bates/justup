@@ -27,7 +27,7 @@ def get_session_max_days(conn: sqlite3.Connection) -> int:
 
     try:
         days = int(get_setting(conn, SettingKeys.SESSION_MAX_DAYS, SESSION_MAX_DAYS_DEFAULT))
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         days = SESSION_MAX_DAYS_DEFAULT
     return max(SESSION_MAX_DAYS_MIN, min(days, SESSION_MAX_DAYS_MAX))
 

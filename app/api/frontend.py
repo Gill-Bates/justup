@@ -380,7 +380,7 @@ def _row_get(row, key: str, default=None):
     """Safely get value from sqlite3.Row object (which doesn't have .get() method)."""
     try:
         return row[key]
-    except (KeyError, IndexError):
+    except KeyError, IndexError:
         return default
 
 
@@ -1025,7 +1025,7 @@ def _nmap_version() -> str:
                 re.match(r"^Nmap version ([0-9]+(?:\.[0-9]+)+)\b", result.stdout) if result.returncode == 0 else None
             )
             label = match.group(1) if match else "not available"
-        except (OSError, subprocess.TimeoutExpired):
+        except OSError, subprocess.TimeoutExpired:
             label = "not available"
         ttl = _SIGNAL_CLI_TTL_OK_SECONDS if label != "not available" else _SIGNAL_CLI_TTL_FAILED_SECONDS
         _nmap_cache = (time.monotonic() + ttl, label)
@@ -2009,7 +2009,7 @@ async def _run_traceroute_fragment(
             hop_data["loc_precision"] = view["precision"]
         try:
             hop_data["on_map"] = int(h.get("hop")) in mapped_hops
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             hop_data["on_map"] = False
 
         # IPv6 OPTIMIZATION: Shorten long IPv6 addresses for table display
@@ -2056,7 +2056,7 @@ async def _run_traceroute_fragment(
                 route_start_is_mapped = range_start <= start_hop_number <= range_end
             else:
                 route_start_is_mapped = int(first_mapped.get("hop")) == start_hop_number
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             route_start_is_mapped = False
 
     sequence_hops = expand_sequence_hops(display_hops)

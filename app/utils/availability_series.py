@@ -127,7 +127,7 @@ class AvailabilitySeries:
             for point in items:
                 try:
                     ts = datetime.fromisoformat(point["ts"])
-                except (KeyError, TypeError, ValueError):
+                except KeyError, TypeError, ValueError:
                     skipped += 1
                     continue
                 value = point.get("value")

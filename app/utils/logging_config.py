@@ -17,6 +17,8 @@ import logging
 import sys
 import time
 
+from gillbates_logging import LineLog
+
 
 class HealthEndpointFilter(logging.Filter):
     """Filter that limits /health endpoint logging to once per minute.
@@ -40,25 +42,12 @@ class HealthEndpointFilter(logging.Filter):
         return True
 
 
-# Unified format: timestamp | level | logger | message
-_is_tty = sys.stderr.isatty()
-if _is_tty:
-    _fmt = "\033[90m%(asctime)s\033[0m | %(levelname)-7s | \033[36m%(name)s\033[0m | %(message)s"
-else:
-    _fmt = "%(asctime)s | %(levelname)-7s | %(name)s | %(message)s"
-
-_datefmt = "%Y-%m-%d %H:%M:%S"
-
-logging.basicConfig(
-    level=logging.INFO,
-    format=_fmt,
-    datefmt=_datefmt,
-    handlers=[logging.StreamHandler(sys.stderr)],
-    force=True,
-)
+# One line per record (UTC time | level | source | message), control characters escaped.
+LOG = LineLog("justup")
+LOG.setup("INFO")
 
 # Apply same format to uvicorn loggers (including access logs)
-_formatter = logging.Formatter(_fmt, datefmt=_datefmt)
+_formatter = LOG.formatter()
 _health_filter = HealthEndpointFilter(interval=60)
 
 for _logger_name in ("uvicorn", "uvicorn.error", "uvicorn.access"):

@@ -133,7 +133,7 @@ def _drain_stream(stream) -> None:
     try:
         for _ in iter(stream.readline, ""):
             pass
-    except (OSError, ValueError):
+    except OSError, ValueError:
         pass
 
 

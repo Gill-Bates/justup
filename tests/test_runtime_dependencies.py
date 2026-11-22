@@ -99,14 +99,28 @@ def test_runtime_dependencies_allow_latest_compatible_releases():
         assert not any(spec.operator in ("<", "<=") for spec in dep.specifier), f"{dep.name} has an upper version cap"
 
 
+# The only URL requirements: the shared gillbates-* packages, pinned by release tag in the private
+# python-libraries repository (installed in their own step, see the Dockerfile and ci.yml).
+_SHARED_PACKAGE_URL = re.compile(
+    r"git\+https://github\.com/Gill-Bates/python-libraries\.git@(gillbates-[a-z-]+)-v\d+\.\d+\.\d+"
+    r"#subdirectory=packages/[a-z-]+"
+)
+
+
 def test_no_direct_dependency_is_a_url_or_vcs_requirement():
     for dep in _direct_dependencies():
-        assert dep.url is None, f"{dep.name} is installed from a URL ({dep.url}); use a declared distribution release"
+        if dep.url is None:
+            continue
+        match = _SHARED_PACKAGE_URL.fullmatch(dep.url)
+        assert match and match.group(1) == dep.name, (
+            f"{dep.name} is installed from a URL ({dep.url}); only tag-pinned gillbates-* packages may be"
+        )
 
 
 def test_runtime_installers_do_not_reference_github_sslyze_sources():
     for rel in ("pyproject.toml", "docker/Dockerfile", ".github/workflows/ci.yml"):
         text = (ROOT / rel).read_text(encoding="utf-8")
+        text = _SHARED_PACKAGE_URL.sub("", text)
         assert not re.search(r"github\.com/nabla-c0d3/sslyze/(archive|tarball|zipball)|git\+https?://", text), rel
 
 
@@ -381,7 +395,8 @@ def test_ci_resolves_runtime_manifest_and_checks_all_wheels():
     text = CI_WORKFLOW.read_text(encoding="utf-8")
     assert "docker/requirements.lock" not in text
     assert "verify_wheel_provenance" in text
-    assert 'python tools/pyproject-deps.py > "$RUNNER_TEMP/requirements-runtime.txt"' in text
+    assert 'python tools/pyproject-deps.py > "$RUNNER_TEMP/requirements-all.txt"' in text
+    assert "grep -v ' @ git+'" in text, "the wheel-only step must exclude the git-pinned shared packages"
     assert "pip install --only-binary=:all:" in text
     assert "pip check" in text
     assert '--find-links docker/vendor/wheels -r "$RUNNER_TEMP/requirements-runtime.txt"' in text

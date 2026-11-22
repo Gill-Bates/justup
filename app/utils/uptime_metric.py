@@ -28,7 +28,7 @@ def read_flag(target: Mapping[str, Any] | Any, key: str) -> bool:
     """Read a flag from a dict or sqlite3.Row; a missing column counts as disabled."""
     try:
         return bool(target[key])
-    except (KeyError, IndexError, TypeError):
+    except KeyError, IndexError, TypeError:
         return False
 
 
@@ -40,7 +40,7 @@ def has_udp_ports(target: Mapping[str, Any] | Any) -> bool:
     """
     try:
         return bool(parse_port_list(target["udp_ports"]))
-    except (KeyError, IndexError, TypeError, ValueError):
+    except KeyError, IndexError, TypeError, ValueError:
         return False
 
 

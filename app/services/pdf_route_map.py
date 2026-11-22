@@ -229,7 +229,7 @@ def _contains_hop(point: dict[str, Any], hop: int) -> bool:
     if not hop_range:
         try:
             return int(point.get("hop")) == hop
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return False
     try:
         low, high = (int(v) for v in str(hop_range).split("-", maxsplit=1))
@@ -404,7 +404,7 @@ def build_route_map_model(
     if display_hops:
         try:
             start_hop = int(display_hops[0].get("hop"))
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             start_hop = None
     features = route_map_features(points)
     return RouteMapModel(

@@ -79,7 +79,7 @@ async def csp_report(request: Request) -> Response:
             return Response(status_code=413)
     try:
         fields = _extract(json.loads(bytes(body)))
-    except (ValueError, RecursionError):
+    except ValueError, RecursionError:
         fields = {}
     if fields:
         _log.warning("CSP_VIOLATION %s", " ".join(f"{k}={v!r}" for k, v in fields.items()))

@@ -182,7 +182,7 @@ class PDFLocale:
                 return "n/a"
             quantum = Decimal(1).scaleb(-max_fraction)
             number = number.quantize(quantum, rounding=ROUND_HALF_UP)
-        except (InvalidOperation, ValueError):
+        except InvalidOperation, ValueError:
             return "n/a"
         negative = number < 0
         absolute = abs(number)
@@ -262,6 +262,6 @@ def from_request_headers(locale_profile: str | None, accept_language: str | None
             if len(decoded) > 4096:
                 return PDFLocale.default(fallback)
             return PDFLocale.from_browser(json.loads(decoded))
-        except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError):
+        except ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError:
             pass
     return PDFLocale.default(fallback)

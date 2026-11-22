@@ -181,7 +181,7 @@ class PasswordHash:
         try:
             algo, iter_s, salt_b64, hash_b64 = value.split("$", 3)
             return cls(algo=algo, iterations=int(iter_s), salt_b64=salt_b64, hash_b64=hash_b64)
-        except (ValueError, AttributeError):
+        except ValueError, AttributeError:
             raise ValueError("Invalid password hash format") from None
 
 

@@ -50,7 +50,7 @@ def _read_int(path: str) -> int | None:
     try:
         raw = Path(path).read_text().strip()
         return int(raw) if raw.isdigit() else None
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return None
 
 
@@ -58,7 +58,7 @@ def _effective_cores() -> int:
     """CPU cores usable by this process (affinity and cgroup quota aware)."""
     try:
         cores = len(os.sched_getaffinity(0))
-    except (AttributeError, OSError):
+    except AttributeError, OSError:
         cores = os.cpu_count() or 1
 
     quota: float | None = None
@@ -66,7 +66,7 @@ def _effective_cores() -> int:
         parts = Path("/sys/fs/cgroup/cpu.max").read_text().split()
         if len(parts) == 2 and parts[0] != "max":
             quota = int(parts[0]) / int(parts[1])
-    except (OSError, ValueError, ZeroDivisionError):
+    except OSError, ValueError, ZeroDivisionError:
         pass
     if quota is None:  # cgroup v1
         q = _read_int("/sys/fs/cgroup/cpu/cpu.cfs_quota_us")
@@ -90,7 +90,7 @@ def _available_memory() -> int | None:
             if line.startswith("MemAvailable:"):
                 candidates.append(int(line.split()[1]) * 1024)
                 break
-    except (OSError, ValueError, IndexError):
+    except OSError, ValueError, IndexError:
         pass
     return min(candidates) if candidates else None
 

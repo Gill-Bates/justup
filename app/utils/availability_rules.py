@@ -169,7 +169,7 @@ def downtime_series(target: object) -> list[tuple[str, str]]:
     def text(key: str) -> str:
         try:
             return str(target[key] or "")  # type: ignore[index]
-        except (KeyError, IndexError, TypeError):
+        except KeyError, IndexError, TypeError:
             return ""
 
     result: list[tuple[str, str]] = []

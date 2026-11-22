@@ -496,7 +496,7 @@ def _analyze_security(plugins: dict, target_url: str) -> dict[str, Any]:
                     if _DEBUG_HEADER_RE.search(_TRACE_EXCLUSIONS.sub(" ", s)):
                         debug_detected = True
                         break
-                except (TypeError, ValueError):
+                except TypeError, ValueError:
                     pass
 
     return {

@@ -1456,7 +1456,7 @@ def _deduplicate_geo_points(points: list[dict]) -> list[dict]:
             return False  # an estimate never merges into a reliable hop (or the reverse)
         try:
             return int(p.get("hop")) == int(run_last.get("hop")) + 1
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return False
 
     runs: list[list[dict]] = []

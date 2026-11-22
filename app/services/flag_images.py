@@ -92,7 +92,7 @@ def _download(client: httpx.Client, code: str, deadline: float) -> bytes | None:
                 data += chunk
                 if len(data) > MAX_BYTES or time.monotonic() > deadline:
                     return None
-    except (httpx.HTTPError, ValueError, OSError):
+    except httpx.HTTPError, ValueError, OSError:
         return None
     return bytes(data) if _validated_png(bytes(data)) else None
 

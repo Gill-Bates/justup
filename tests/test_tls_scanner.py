@@ -792,7 +792,7 @@ class _TlsServer:
                     request = tls_conn.recv(8192)
                     if request:
                         tls_conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
-            except (OSError, ssl.SSLError):
+            except OSError, ssl.SSLError:
                 conn.close()
 
     def close(self):
@@ -880,7 +880,7 @@ def test_legacy_tls10_server_is_flagged(tls_server):
                 )
                 ctx.minimum_version = ssl.TLSVersion(0x301)
             ctx.set_ciphers("ALL:@SECLEVEL=0")
-        except (ssl.SSLError, ValueError):
+        except ssl.SSLError, ValueError:
             pytest.skip("local OpenSSL cannot offer TLS 1.0")
 
     r = _scan(tls_server(configure=legacy))

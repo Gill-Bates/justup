@@ -237,7 +237,7 @@ def _result_for(failure: Failure) -> DeliveryResult:
 def _accepts_kwarg(func: Callable[..., Any], name: str) -> bool:
     try:
         params = inspect.signature(func).parameters
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return False
     return name in params or any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
 
@@ -1596,7 +1596,7 @@ class NotificationSpooler:
                     """,
                     (key, slot.isoformat(), stamp),
                 )
-        except (maintenance.StaleWorkError, maintenance.MaintenanceActiveError):
+        except maintenance.StaleWorkError, maintenance.MaintenanceActiveError:
             return DeliveryResult("deferred", "maintenance")  # window/restore in progress: defer instead of sending
         wait = (slot - now).total_seconds()
         if wait <= 0:
@@ -1606,7 +1606,7 @@ class NotificationSpooler:
             with section(), self._db_conn(immediate=True) as conn:
                 if self._expire_claimed(conn, item, stamp, _utcnow()):
                     return DeliveryResult("expired", "expired")
-        except (maintenance.StaleWorkError, maintenance.MaintenanceActiveError):
+        except maintenance.StaleWorkError, maintenance.MaintenanceActiveError:
             return DeliveryResult("deferred", "maintenance")
         return None
 

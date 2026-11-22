@@ -92,7 +92,7 @@ def load(path: Path | None = None) -> tuple[str, str] | None:
             fd = -1
             data = json.load(fh)
         username, password = data["username"], data["password"]
-    except (OSError, ValueError, KeyError, TypeError):
+    except OSError, ValueError, KeyError, TypeError:
         return None
     finally:
         if fd >= 0:

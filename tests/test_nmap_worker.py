@@ -145,7 +145,7 @@ class TestWorkerProtocol:
                 writer.write(b"x" * (nmap_worker.MAX_REQUEST_BYTES * 2) + b"\n")
                 try:
                     await writer.drain()
-                except (ConnectionError, OSError):
+                except ConnectionError, OSError:
                     return {"error": {}}
                 line = await asyncio.wait_for(reader.readline(), timeout=10)
                 return json.loads(line) if line else {"error": {}}

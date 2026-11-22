@@ -53,7 +53,7 @@ def normalise_status(value: object) -> str:
 def _get(source: Mapping[str, Any] | Any, key: str) -> Any:
     try:
         return source[key]
-    except (KeyError, IndexError, TypeError):
+    except KeyError, IndexError, TypeError:
         return None
 
 
@@ -126,7 +126,7 @@ def _udp_result_is_stale(checked_at: object, interval_seconds: object, now: date
         return False
     try:
         interval = udp_interval_seconds(int(interval_seconds or 0))
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         interval = udp_interval_seconds(0)
     return now - checked > timedelta(seconds=interval * UDP_RESULT_MAX_AGE_FACTOR)
 

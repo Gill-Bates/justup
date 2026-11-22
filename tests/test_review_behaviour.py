@@ -347,12 +347,12 @@ def _tls_server(certfile, keyfile):
         while not stop.is_set():
             try:
                 conn, _ = srv.accept()
-            except (TimeoutError, OSError):
+            except TimeoutError, OSError:
                 continue
             try:
                 with ctx.wrap_socket(conn, server_side=True):
                     pass
-            except (ssl.SSLError, OSError):
+            except ssl.SSLError, OSError:
                 pass
 
     t = threading.Thread(target=loop, daemon=True)

@@ -174,7 +174,7 @@ def validate_pop_record(
     try:
         lat = float(lat)
         lon = float(lon)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return ValidationResult(valid=False, error="lat/lon must be numeric")
 
     canonical_code = canonical_code.lower().strip()
@@ -248,7 +248,7 @@ def _parse_retry_after(value: str) -> int | None:
         return min(int(value), cap) if len(value) <= 9 else cap
     try:
         delta = (parsedate_to_datetime(value) - datetime.now(UTC)).total_seconds()
-    except (TypeError, ValueError, OverflowError):
+    except TypeError, ValueError, OverflowError:
         return None
     return min(math.ceil(delta), cap) if delta >= 0 else None
 

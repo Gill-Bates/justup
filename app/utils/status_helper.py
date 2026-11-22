@@ -121,7 +121,7 @@ def build_target_status(row: sqlite3.Row, cached: sqlite3.Row | None) -> dict[st
         if _col(cached, "tcp_port_status"):
             try:
                 result["tcp_port_status"] = json.loads(cached["tcp_port_status"])
-            except (json.JSONDecodeError, TypeError):
+            except json.JSONDecodeError, TypeError:
                 result["tcp_port_status"] = {}
 
     if bool(row["enable_cert_expiration"]) and cached["cert_days_left"] is not None:

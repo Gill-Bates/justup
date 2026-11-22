@@ -140,7 +140,7 @@ def line_ts(line: str) -> datetime | None:
         return None
     try:
         return parse_utc(json.loads(line)["ts"])
-    except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+    except json.JSONDecodeError, KeyError, TypeError, ValueError:
         return None
 
 

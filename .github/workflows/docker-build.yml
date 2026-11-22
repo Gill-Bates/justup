@@ -42,7 +42,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: "3.13"
+          python-version: "3.14"
 
       - name: Validate tag, version and main ancestry
         id: tag
@@ -87,6 +87,8 @@ jobs:
     name: CI gate
     needs: preflight
     uses: ./.github/workflows/ci.yml
+    secrets:
+      RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
     permissions:
       contents: read
 
@@ -123,7 +125,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: "3.13"
+          python-version: "3.14"
 
       - name: Validate Docker Hub secrets
         env:
@@ -170,14 +172,14 @@ jobs:
           set -euo pipefail
 
           # By digest: both architectures build on the same index even if the tag moves mid-run.
-          python_base="python:3.13-slim"
+          python_base="python:3.14-slim"
           digest="$(docker buildx imagetools inspect "$python_base" \
             --format '{{.Manifest.Digest}}')"
           if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
             echo "ERROR: could not resolve a valid digest for ${python_base}" >&2
             exit 1
           fi
-          python_base="python:3.13-slim@${digest}"
+          python_base="python:3.14-slim@${digest}"
 
           # Resolved once here, not per Docker build.
           signal_cli_version="$(curl -fsSL --retry 3 \
@@ -337,9 +339,12 @@ jobs:
           BUILD_DATE: ${{ needs.meta.outputs.build_date }}
           VCS_REF: ${{ github.sha }}
           TEST_IMAGE: ${{ matrix.test_image }}
+          PYTHON_LIBRARIES_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         run: |
           set -euo pipefail
+          : "${PYTHON_LIBRARIES_TOKEN:?Missing RELEASE_TOKEN secret}"
           docker buildx build \
+            --secret id=python_libraries_token,env=PYTHON_LIBRARIES_TOKEN \
             --pull \
             --platform "$PLATFORM" \
             --target runtime \

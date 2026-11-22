@@ -252,7 +252,7 @@ def _row_value(row: Any, key: str, default: Any = None) -> Any:
     """Read a column that may be missing in rows of older fixtures."""
     try:
         return row[key]
-    except (KeyError, IndexError):
+    except KeyError, IndexError:
         return default
 
 

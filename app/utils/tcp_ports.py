@@ -70,7 +70,7 @@ def protocol_scan_hosts(target: Any) -> dict[str, str]:
     def field(key: str) -> str:
         try:
             return str(target[key] or "")
-        except (KeyError, IndexError):
+        except KeyError, IndexError:
             return ""
 
     host = field("host")

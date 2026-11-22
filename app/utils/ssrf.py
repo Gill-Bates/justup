@@ -69,7 +69,7 @@ def resolve_validated(host: str, *, allow_private: bool) -> list[IPAddress] | No
     except ValueError:
         try:
             infos = socket.getaddrinfo(host, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
-        except (socket.gaierror, UnicodeError):
+        except socket.gaierror, UnicodeError:
             return None
         addresses = []
         for info in infos:

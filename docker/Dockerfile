@@ -4,7 +4,7 @@
 # Python dependencies resolve from pyproject.toml at build time, using wheels only.
 # The vendored SSLyze wheel is verified against its provenance; the release passes PYTHON_BASE as a
 # digest so both architectures share one base.
-ARG PYTHON_BASE=python:3.13-slim
+ARG PYTHON_BASE=python:3.14-slim
 # Java LTS line of the signal-cli runtime; the newest patch of it is taken at build time.
 ARG JAVA_MAJOR=25
 # Rust toolchain of the libsignal build stage (both architectures). It must provide exactly the release in
@@ -30,19 +30,30 @@ WORKDIR /build
 # archive but from the vendored, SHA-256-pinned justUp wheel (docker/vendor/wheels/,
 # provenance in docker/vendor/PROVENANCE.json); --find-links points pip at it.
 # A missing wheel, a wrong hash or a wrong platform fails the build.
+# The pure-Python gillbates-* packages (git-pinned in pyproject.toml) are installed afterwards in the same
+# layer without --only-binary; git and the BuildKit secret python_libraries_token exist only inside this RUN.
 # pip is the one shipped in the digest-pinned base image and is not upgraded here.
 COPY pyproject.toml /build/pyproject.toml
 COPY tools/pyproject-deps.py /build/tools/pyproject-deps.py
 COPY docker/vendor/wheels/ /tmp/wheels/
 COPY docker/vendor/PROVENANCE.json /tmp/PROVENANCE.json
 
-RUN test -n "$BUILD_DATE" \
- && python /build/tools/pyproject-deps.py > /tmp/requirements-runtime.txt \
+RUN --mount=type=secret,id=python_libraries_token,required=true \
+    test -n "$BUILD_DATE" \
+ && python /build/tools/pyproject-deps.py > /tmp/requirements-all.txt \
+ && grep -v ' @ git+' /tmp/requirements-all.txt > /tmp/requirements-runtime.txt \
+ && grep ' @ git+' /tmp/requirements-all.txt > /tmp/requirements-shared.txt \
  && python -c 'import hashlib,json,pathlib; p=json.load(open("/tmp/PROVENANCE.json")); w=pathlib.Path("/tmp/wheels")/pathlib.Path(p["wheel"]).name; assert w.is_file() and w.name=="sslyze-{}-{}.whl".format(p["version"],p["tags"]); assert w.stat().st_size==p["size_bytes"] and hashlib.sha256(w.read_bytes()).hexdigest()==p["sha256"]' \
  && pip install --no-cache-dir --root-user-action=ignore --only-binary=:all: \
         --find-links /tmp/wheels -r /tmp/requirements-runtime.txt \
+ && apt-get update && apt-get install -y --no-install-recommends git \
+ && GIT_TERMINAL_PROMPT=0 GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=credential.helper GIT_CONFIG_VALUE_0= \
+    GIT_CONFIG_KEY_1=credential.helper \
+    GIT_CONFIG_VALUE_1='!f() { echo username=x-access-token; echo "password=$(cat /run/secrets/python_libraries_token)"; }; f' \
+    pip install --no-cache-dir --root-user-action=ignore -r /tmp/requirements-shared.txt \
+ && apt-get purge -y --auto-remove git && rm -rf /var/lib/apt/lists/* \
  && pip check \
- && rm -rf /tmp/requirements-runtime.txt /tmp/PROVENANCE.json /tmp/wheels
+ && rm -rf /tmp/requirements-all.txt /tmp/requirements-runtime.txt /tmp/requirements-shared.txt /tmp/PROVENANCE.json /tmp/wheels
 
 
 # ──────────────────────────────────────────────────────────────
@@ -51,12 +62,12 @@ RUN test -n "$BUILD_DATE" \
 FROM deps-builder AS clean-deps
 
 # Direct rm is safer than 'pip uninstall pip' which can leave partial state
-RUN rm -rf /usr/local/lib/python3.13/site-packages/pip* \
-           /usr/local/lib/python3.13/site-packages/setuptools* \
-           /usr/local/lib/python3.13/site-packages/wheel* \
-           /usr/local/lib/python3.13/site-packages/_distutils_hack* \
-           /usr/local/lib/python3.13/site-packages/distutils-precedence.pth \
- && find /usr/local/lib/python3.13/site-packages -type d -name "tests" -prune -exec rm -rf {} + || true
+RUN rm -rf /usr/local/lib/python3.14/site-packages/pip* \
+           /usr/local/lib/python3.14/site-packages/setuptools* \
+           /usr/local/lib/python3.14/site-packages/wheel* \
+           /usr/local/lib/python3.14/site-packages/_distutils_hack* \
+           /usr/local/lib/python3.14/site-packages/distutils-precedence.pth \
+ && find /usr/local/lib/python3.14/site-packages -type d -name "tests" -prune -exec rm -rf {} + || true
 
 
 # ──────────────────────────────────────────────────────────────
@@ -574,19 +585,19 @@ RUN groupadd -r -g 10001 justup-nmap \
 WORKDIR /app
 
 # Python dependencies from clean-deps (build-only tooling removed)
-COPY --from=clean-deps /usr/local/lib/python3.13/site-packages /usr/local/lib/python3.13/site-packages
+COPY --from=clean-deps /usr/local/lib/python3.14/site-packages /usr/local/lib/python3.14/site-packages
 
 # The base image ships pip/setuptools/wheel; nothing at runtime installs packages,
 # so drop them (and their vendored libraries, plus the ensurepip pip wheel that
 # could re-bootstrap pip) from the final image.
-RUN rm -rf /usr/local/lib/python3.13/site-packages/pip* \
-           /usr/local/lib/python3.13/site-packages/setuptools* \
-           /usr/local/lib/python3.13/site-packages/wheel* \
-           /usr/local/lib/python3.13/site-packages/_distutils_hack* \
-           /usr/local/lib/python3.13/site-packages/pkg_resources* \
-           /usr/local/lib/python3.13/site-packages/distutils-precedence.pth \
-           /usr/local/lib/python3.13/ensurepip/_bundled \
-           /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.13 /usr/local/bin/wheel
+RUN rm -rf /usr/local/lib/python3.14/site-packages/pip* \
+           /usr/local/lib/python3.14/site-packages/setuptools* \
+           /usr/local/lib/python3.14/site-packages/wheel* \
+           /usr/local/lib/python3.14/site-packages/_distutils_hack* \
+           /usr/local/lib/python3.14/site-packages/pkg_resources* \
+           /usr/local/lib/python3.14/site-packages/distutils-precedence.pth \
+           /usr/local/lib/python3.14/ensurepip/_bundled \
+           /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.14 /usr/local/bin/wheel
 
 # The service writes under /app/data; source files stay read-only to its UID.
 COPY --from=app-source /build/app/ /src/app/

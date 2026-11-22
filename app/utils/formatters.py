@@ -51,7 +51,7 @@ def row_to_alert_dict(row: sqlite3.Row) -> dict[str, Any]:
     if row["recipients_notified"]:
         try:
             recipients = json.loads(row["recipients_notified"])
-        except (json.JSONDecodeError, TypeError):
+        except json.JSONDecodeError, TypeError:
             recipients = []
 
     started_at = normalize_datetime(row["started_at"])

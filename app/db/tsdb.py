@@ -1114,7 +1114,7 @@ def _resample_points(
     for p in points:
         try:
             val = float(p.value)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             continue
         b = _bucket_key(ensure_utc(p.ts), bucket_seconds)
         buckets.setdefault(b, []).append(val)
@@ -1247,7 +1247,7 @@ def downsample_series(
                 continue
             try:
                 val = float(p.value)
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 continue
             if math.isfinite(val):
                 buckets.setdefault(_bucket_key(p.ts, bucket_seconds), []).append(val)
@@ -1934,7 +1934,7 @@ def query_display_series(
                     item = json.loads(line)
                     ts = parse_utc(item["ts"])
                     value = float(item["value"])
-                except (ValueError, TypeError, KeyError, json.JSONDecodeError):
+                except ValueError, TypeError, KeyError, json.JSONDecodeError:
                     continue
                 if ts is None or ts < start or ts > end or not math.isfinite(value):
                     continue
@@ -2229,7 +2229,7 @@ def _transitions_from_snapshots(
                 item = json.loads(line)
                 ts = parse_utc(item["ts"])
                 up = item["value"]
-            except (ValueError, TypeError, KeyError, json.JSONDecodeError):
+            except ValueError, TypeError, KeyError, json.JSONDecodeError:
                 continue
             # Same binary rule as count_binary_points(): 0.7, 1.5, NaN, inf and strings are no state.
             if ts is None or ts < start or ts > end or up not in (0, 1):

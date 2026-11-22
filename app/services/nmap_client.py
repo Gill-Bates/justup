@@ -32,7 +32,7 @@ def worker_status() -> dict[str, object]:
         return dict(LOCAL_STATUS)
     try:
         status = json.loads(WORKER_STATUS_PATH.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return {"state": "unknown", "detail": "", "restarts": 0}
     return status if isinstance(status, dict) and isinstance(status.get("state"), str) else {"state": "unknown"}
 
@@ -54,7 +54,7 @@ async def probe_socket(timeout: float = 2.0) -> bool:
     try:
         async with asyncio.timeout(timeout):
             _, writer = await asyncio.open_unix_connection(SOCKET_PATH)
-    except (OSError, TimeoutError):
+    except OSError, TimeoutError:
         return False
     writer.close()
     with suppress(OSError):

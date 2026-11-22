@@ -161,7 +161,7 @@ def _key_info(public_key: Any) -> tuple[str, int | None, Check]:
 def _san_entries(cert: x509.Certificate) -> tuple[str, ...]:
     try:
         ext = cert.extensions.get_extension_for_oid(ExtensionOID.SUBJECT_ALTERNATIVE_NAME)
-    except (x509.ExtensionNotFound, ValueError):
+    except x509.ExtensionNotFound, ValueError:
         return ()
     return tuple(str(v) for v in ext.value.get_values_for_type(x509.DNSName)) + tuple(
         str(v) for v in ext.value.get_values_for_type(x509.IPAddress)
@@ -172,7 +172,7 @@ def _hostname_matches(cert: x509.Certificate, host: str) -> bool:
     """RFC 6125 subset: SAN only (no CN fallback), single left-most wildcard label, IP SANs for IP targets."""
     try:
         san = cert.extensions.get_extension_for_oid(ExtensionOID.SUBJECT_ALTERNATIVE_NAME).value
-    except (x509.ExtensionNotFound, ValueError):
+    except x509.ExtensionNotFound, ValueError:
         return False
     try:
         ip = ipaddress.ip_address(host)

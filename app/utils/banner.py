@@ -4,57 +4,32 @@
 # Copyright (C) 2026 Gill-Bates http://github.com/Gill-Bates
 #
 
-"""
-Banner Module.
-Displays the application header/logo.
-"""
+"""Startup banner: the justUp! logo on top of the shared banner renderer (colour only on a TTY)."""
 
 from __future__ import annotations
 
-import sys
+import gillbates_logging
 
 from .version import VERSION as _DEFAULT_VERSION
 from .version import get_build_info
 
+TITLE = ">>> Uptime Monitor - done right! <<<"
+
+_LOGO = r"""
+   _           _     _   _       _
+  (_)_   _ ___| |_  | | | |_ __ | |
+  | | | | / __| __| | | | | '_ \| |
+  | | |_| \__ \ |_  | |_| | |_) |_|
+ _/ |\__,_|___/\__|  \___/| .__/(_)
+|__/                      |_|
+"""
+
 
 def print_banner(version: str | None = None) -> None:
-    """
-    Prints the ASCII banner to stdout and automatically centers the text below it
-    based on the banner's maximum line width.
-    """
+    """Print the centred logo, title and version line to stdout."""
     if version is None:
         version = _DEFAULT_VERSION
     build_info = get_build_info()
     if build_info and build_info != "dev":
         build_info = build_info[:7]
-
-    is_tty = sys.stdout.isatty()
-
-    if is_tty:
-        cyan = "\033[96m"
-        white = "\033[97m"
-        gray = "\033[90m"
-        reset = "\033[0m"
-        bold = "\033[1m"
-    else:
-        cyan = white = gray = reset = bold = ""
-
-    banner = r"""
-   _           _     _   _       _ 
-  (_)_   _ ___| |_  | | | |_ __ | |
-  | | | | / __| __| | | | | '_ \| |
-  | | |_| \__ \ |_  | |_| | |_) |_|
- _/ |\__,_|___/\__|  \___/| .__/(_)
-|__/                      |_|      
-    """
-
-    lines = [line for line in banner.split("\n") if line]
-    banner_width = max((len(line) for line in lines), default=40)
-
-    title_text = ">>> Uptime Monitor - done right! <<<"
-    version_text = f"v{version} ({build_info}) | by Gill-Bates"
-
-    print(f"{cyan}{bold}{banner}{reset}")
-    print(f"{white}{title_text.center(banner_width)}{reset}")
-    print(f"{gray}{version_text.center(banner_width)}{reset}")
-    print()
+    gillbates_logging.print_banner(_LOGO, TITLE, (f"v{version} ({build_info}) | by Gill-Bates",))

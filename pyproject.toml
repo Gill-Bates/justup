@@ -6,8 +6,11 @@ build-backend = "setuptools.build_meta"
 name = "justup"
 version = "1.0.4"
 description = "justUp! - Lightweight Uptime Monitor"
-requires-python = ">=3.13"
+requires-python = ">=3.14"
 license = "MIT"
+# The gillbates-* packages come from the private python-libraries repository, pinned by release tag; they
+# are the only requirements installed from git (pure Python, so a wheel is built on the fly: Docker and CI
+# install them in a separate step without --only-binary, with a token that never reaches the image).
 # Dependency note: PyPI sslyze 6.3.1 caps cryptography<47 and so blocks the patched
 # cryptography 50.x. Upstream lifted the cap on its release branch (commit e064c2c8,
 # 6.3.1 plus one setup.py line) but has not tagged a release. justUp therefore ships
@@ -24,6 +27,8 @@ dependencies = [
     "email-validator>=2.3.0",
     "fastapi>=0.162.3",
     "geoip2>=5.3.0",
+    "gillbates-logging @ git+https://github.com/Gill-Bates/python-libraries.git@gillbates-logging-v0.10.0#subdirectory=packages/logging",
+    "gillbates-public-ip @ git+https://github.com/Gill-Bates/python-libraries.git@gillbates-public-ip-v0.10.0#subdirectory=packages/public-ip",
     "httpx>=0.28.1",
     "jinja2>=3.1.6",
     "markdown>=3.11.3",
@@ -75,7 +80,7 @@ asyncio_default_fixture_loop_scope = "function"
 # --------------------------------------------------------------------------- #
 [tool.ruff]
 line-length = 120
-target-version = "py313"
+target-version = "py314"
 # app/justup-cli has no .py extension, so ruff would skip it during discovery.
 extend-include = ["app/justup-cli"]
 # node_modules, .venv, build/ and dist/ are already in ruff's default
@@ -191,9 +196,6 @@ extend-immutable-calls = [
 [tool.ruff.lint.per-file-ignores]
 # app/justup-cli is a CLI entry point: printing to stdout is its job.
 "app/justup-cli" = ["T20"]
-# The startup banner writes to stdout, and its ASCII art is padded with
-# trailing spaces that keep the box aligned.
-"app/utils/banner.py" = ["T20", "W291"]
 # The canonical header path line (`# app/services/ixp_import.py`) parses as code.
 "app/services/ixp_import.py" = ["ERA001"]
 # Assertions are the direct contract checks in pytest cases.

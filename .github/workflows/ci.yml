@@ -19,6 +19,9 @@ on:
   workflow_dispatch:
   # The release workflow calls this as its gate, independent of push and PR filters.
   workflow_call:
+    secrets:
+      RELEASE_TOKEN:
+        required: false
 
 permissions:
   contents: read
@@ -50,9 +53,9 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          # Matches requires-python in pyproject.toml and the python:3.13-slim
+          # Matches requires-python in pyproject.toml and the python:3.14-slim
           # stages in docker/Dockerfile.
-          python-version: "3.13"
+          python-version: "3.14"
           cache: pip
           cache-dependency-path: pyproject.toml
 
@@ -70,11 +73,21 @@ jobs:
             bash docker/vendor/sslyze/build-wheel.sh "$wheel" pyproject.toml \
             docker/vendor/PROVENANCE.json python
       - name: Install latest compatible runtime dependencies
+        env:
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         run: |
           set -euo pipefail
-          python tools/pyproject-deps.py > "$RUNNER_TEMP/requirements-runtime.txt"
+          : "${RELEASE_TOKEN:?Missing RELEASE_TOKEN secret (not available to pull requests from forks)}"
+          python tools/pyproject-deps.py > "$RUNNER_TEMP/requirements-all.txt"
+          grep -v ' @ git+' "$RUNNER_TEMP/requirements-all.txt" > "$RUNNER_TEMP/requirements-runtime.txt"
+          grep ' @ git+' "$RUNNER_TEMP/requirements-all.txt" > "$RUNNER_TEMP/requirements-shared.txt"
           pip install --only-binary=:all: \
             --find-links docker/vendor/wheels -r "$RUNNER_TEMP/requirements-runtime.txt"
+          # Private shared packages: token via a credential helper, never in the URL or the log.
+          export GIT_TERMINAL_PROMPT=0 GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=credential.helper GIT_CONFIG_VALUE_0=
+          export GIT_CONFIG_KEY_1=credential.helper
+          export GIT_CONFIG_VALUE_1='!f() { echo username=x-access-token; echo "password=${RELEASE_TOKEN}"; }; f'
+          pip install --find-links docker/vendor/wheels -r "$RUNNER_TEMP/requirements-shared.txt"
           pip check
 
       # Dev tools are a separate, deliberate step: pyproject.toml pins them with
@@ -98,7 +111,7 @@ jobs:
           for arch in x86_64 aarch64; do
             pip download --quiet --dest "$RUNNER_TEMP/wheels-${arch}" \
               --only-binary=:all: --find-links docker/vendor/wheels \
-              --python-version 3.13 --implementation cp --abi cp313 --abi abi3 --abi none \
+              --python-version 3.14 --implementation cp --abi cp314 --abi abi3 --abi none \
               --platform "manylinux_2_28_${arch}" --platform "manylinux_2_17_${arch}" \
               --platform "manylinux2014_${arch}" --platform any \
               -r "$RUNNER_TEMP/requirements-runtime.txt"
@@ -246,7 +259,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: "3.13"
+          python-version: "3.14"
           cache: pip
           cache-dependency-path: pyproject.toml
 
@@ -257,11 +270,21 @@ jobs:
           cache: npm
 
       - name: Install latest compatible runtime dependencies
+        env:
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         run: |
           set -euo pipefail
-          python tools/pyproject-deps.py > "$RUNNER_TEMP/requirements-runtime.txt"
+          : "${RELEASE_TOKEN:?Missing RELEASE_TOKEN secret (not available to pull requests from forks)}"
+          python tools/pyproject-deps.py > "$RUNNER_TEMP/requirements-all.txt"
+          grep -v ' @ git+' "$RUNNER_TEMP/requirements-all.txt" > "$RUNNER_TEMP/requirements-runtime.txt"
+          grep ' @ git+' "$RUNNER_TEMP/requirements-all.txt" > "$RUNNER_TEMP/requirements-shared.txt"
           pip install --only-binary=:all: \
             --find-links docker/vendor/wheels -r "$RUNNER_TEMP/requirements-runtime.txt"
+          # Private shared packages: token via a credential helper, never in the URL or the log.
+          export GIT_TERMINAL_PROMPT=0 GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=credential.helper GIT_CONFIG_VALUE_0=
+          export GIT_CONFIG_KEY_1=credential.helper
+          export GIT_CONFIG_VALUE_1='!f() { echo username=x-access-token; echo "password=${RELEASE_TOKEN}"; }; f'
+          pip install --find-links docker/vendor/wheels -r "$RUNNER_TEMP/requirements-shared.txt"
           pip check
 
       - name: Install dev tools
@@ -447,7 +470,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: "3.13"
+          python-version: "3.14"
           cache: pip
           cache-dependency-path: pyproject.toml
 
@@ -458,11 +481,21 @@ jobs:
           cache: npm
 
       - name: Install latest compatible runtime dependencies
+        env:
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         run: |
           set -euo pipefail
-          python tools/pyproject-deps.py > "$RUNNER_TEMP/requirements-runtime.txt"
+          : "${RELEASE_TOKEN:?Missing RELEASE_TOKEN secret (not available to pull requests from forks)}"
+          python tools/pyproject-deps.py > "$RUNNER_TEMP/requirements-all.txt"
+          grep -v ' @ git+' "$RUNNER_TEMP/requirements-all.txt" > "$RUNNER_TEMP/requirements-runtime.txt"
+          grep ' @ git+' "$RUNNER_TEMP/requirements-all.txt" > "$RUNNER_TEMP/requirements-shared.txt"
           pip install --only-binary=:all: \
             --find-links docker/vendor/wheels -r "$RUNNER_TEMP/requirements-runtime.txt"
+          # Private shared packages: token via a credential helper, never in the URL or the log.
+          export GIT_TERMINAL_PROMPT=0 GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=credential.helper GIT_CONFIG_VALUE_0=
+          export GIT_CONFIG_KEY_1=credential.helper
+          export GIT_CONFIG_VALUE_1='!f() { echo username=x-access-token; echo "password=${RELEASE_TOKEN}"; }; f'
+          pip install --find-links docker/vendor/wheels -r "$RUNNER_TEMP/requirements-shared.txt"
           pip check
 
       - name: Install frontend tools

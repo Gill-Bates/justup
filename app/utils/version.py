@@ -62,7 +62,7 @@ def get_build_info() -> str:
     """Build info (git commit) from the optional BUILD_INFO file, or 'dev'."""
     try:
         return (_PROJECT_ROOT / "BUILD_INFO").read_text(encoding="utf-8").strip() or "dev"
-    except (OSError, UnicodeDecodeError):
+    except OSError, UnicodeDecodeError:
         return "dev"
 
 

@@ -140,7 +140,7 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) ->
         if response is not None:
             writer.write(json.dumps(response, separators=(",", ":")).encode() + b"\n")
             await writer.drain()
-    except (BrokenPipeError, ConnectionResetError, OSError):
+    except BrokenPipeError, ConnectionResetError, OSError:
         pass
     finally:
         if disconnect_task is not None and not disconnect_task.done():

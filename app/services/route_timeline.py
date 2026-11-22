@@ -63,7 +63,7 @@ def timeline_node(hop: dict, *, mapped_hops: set[int], is_first: bool, is_destin
     """Build one timeline node. A hop without map location is not failed; the two axes stay separate."""
     try:
         number: int | None = int(hop.get("hop"))
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         number = None
     measurement = timeline_measurement(hop)
     located = number is not None and number in mapped_hops
@@ -274,7 +274,7 @@ def mapped_hop_numbers(geo_points: Iterable[dict]) -> set[int]:
                 mapped.update(range(start, end + 1))
             elif point.get("hop") is not None:
                 mapped.add(int(point["hop"]))
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             continue
     return mapped
 
@@ -300,5 +300,5 @@ def route_start_is_mapped(start_hop: object, geo_points: list[dict]) -> bool:
             low, high = (int(value) for value in hop_range.split("-", maxsplit=1))
             return low <= number <= high
         return int(first.get("hop")) == number
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return False

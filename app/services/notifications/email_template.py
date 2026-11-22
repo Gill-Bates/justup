@@ -758,7 +758,7 @@ def _format_timestamp(ts: str | datetime | None, fallback: str = "N/A") -> str:
     if isinstance(ts, str):
         try:
             return _to_utc(datetime.fromisoformat(ts)).strftime("%Y-%m-%d %H:%M:%S UTC")
-        except (ValueError, AttributeError):
+        except ValueError, AttributeError:
             return ts  # Return raw string if unparseable
 
     return fallback
@@ -969,7 +969,7 @@ def build_alert_context(alert_data: dict[str, Any], target_data: dict[str, Any])
             resolved = assume_utc(datetime.fromisoformat(str(resolved_at_raw)))
             duration_seconds = int((resolved - started).total_seconds())
             duration = format_duration(duration_seconds)
-        except (ValueError, AttributeError, TypeError):
+        except ValueError, AttributeError, TypeError:
             duration = "N/A"
     elif started_at_raw:
         # Alert still active: calculate duration from start until now
@@ -978,7 +978,7 @@ def build_alert_context(alert_data: dict[str, Any], target_data: dict[str, Any])
             now = datetime.now(UTC)
             duration_seconds = int((now - started).total_seconds())
             duration = f"{format_duration(duration_seconds)} (ongoing)"
-        except (ValueError, AttributeError, TypeError):
+        except ValueError, AttributeError, TypeError:
             duration = "Ongoing"
     else:
         duration = "N/A"

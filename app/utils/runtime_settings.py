@@ -67,7 +67,7 @@ def _db_ident(db_path: Path) -> str:
         return raw
     try:
         return str(db_path.resolve())
-    except (OSError, RuntimeError):
+    except OSError, RuntimeError:
         return str(Path(raw).absolute())
 
 
@@ -152,7 +152,7 @@ def get_runtime_int(key: str | SettingKeys, default: int, *, minimum: int, maxim
     """Read an integer setting; invalid or out-of-range values fall back to ``default``."""
     try:
         value = int(get_runtime_setting(key, default))
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return default
     return value if minimum <= value <= maximum else default
 

@@ -120,23 +120,23 @@ def _row_to_public(row, recipient=None) -> UserPublic:
     # sqlite3.Row supports dict-like indexing but not .get() - use try/except for optional fields
     try:
         is_active = bool(row["is_active"])
-    except (KeyError, IndexError):
+    except KeyError, IndexError:
         is_active = True
     try:
         last_login_at = row["last_login_at"]
-    except (KeyError, IndexError):
+    except KeyError, IndexError:
         last_login_at = None
     try:
         can_close_alerts = bool(row["can_close_alerts"])
-    except (KeyError, IndexError):
+    except KeyError, IndexError:
         can_close_alerts = False
     try:
         last_login_ip = row["last_login_ip"]
-    except (KeyError, IndexError):
+    except KeyError, IndexError:
         last_login_ip = None
     try:
         must_change_password = bool(row["must_change_password"])
-    except (KeyError, IndexError):
+    except KeyError, IndexError:
         must_change_password = False
     return UserPublic(
         id=int(row["id"]),
@@ -204,7 +204,7 @@ def login(request: Request, payload: LoginRequest, conn=Depends(get_conn)):
 
     try:
         is_active = int(user["is_active"])
-    except (KeyError, IndexError):
+    except KeyError, IndexError:
         is_active = 1
     if is_active != 1:
         verify_password(payload.password, _DUMMY_PASSWORD_HASH)

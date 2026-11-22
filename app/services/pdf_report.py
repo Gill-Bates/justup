@@ -286,7 +286,7 @@ def _run_traceroute_with_interpolation(
             hop_data["loc_precision"] = view["precision"]
         try:
             hop_data["on_map"] = int(h.get("hop")) in mapped_hops
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             hop_data["on_map"] = False
         if target_ip and ip == target_ip:
             hop_data["_destination"] = True
@@ -540,7 +540,7 @@ def _num(raw: Any) -> float | None:
         return None
     try:
         value = float(raw)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
     return value if math.isfinite(value) else None
 
@@ -1657,7 +1657,7 @@ GEOIP_FOOTNOTE = "Locations are GeoIP estimates; schematic, not geographically s
 def _hop_number(hop: dict[str, Any]) -> int | None:
     try:
         return int(hop.get("hop"))
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
 
 

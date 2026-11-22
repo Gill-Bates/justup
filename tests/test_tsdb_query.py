@@ -47,7 +47,7 @@ def _reference(p: Path, since, until, limit, latest):
             ts = parse_utc(obj["ts"])
             if ts is None:
                 continue
-        except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+        except json.JSONDecodeError, KeyError, TypeError, ValueError:
             continue
         if since and ts < since:
             continue

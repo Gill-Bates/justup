@@ -110,7 +110,7 @@ def _old_global_delay(conn: sqlite3.Connection) -> int:
     try:
         stored = json.loads(row[0])
         value = int(stored or DEFAULT_TARGET_DOWN_ALERT_DELAY_MINUTES)
-    except (ValueError, TypeError, OverflowError):
+    except ValueError, TypeError, OverflowError:
         _log.warning("Stored %s is not a number; using the default", _OLD_DELAY_SETTING_KEY)
         return DEFAULT_TARGET_DOWN_ALERT_DELAY_MINUTES
     return max(TARGET_DOWN_ALERT_DELAY_MINUTES_MIN, min(TARGET_DOWN_ALERT_DELAY_MINUTES_MAX, value))

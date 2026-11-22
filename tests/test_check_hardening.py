@@ -114,7 +114,7 @@ def test_http_head_returns_after_the_headers_and_never_reads_an_endless_body():
                 writer.write(b"400\r\n" + b"x" * 1024 + b"\r\n")
                 await writer.drain()
                 await asyncio.sleep(0)
-        except (ConnectionError, asyncio.CancelledError):
+        except ConnectionError, asyncio.CancelledError:
             pass
         finally:
             writer.close()

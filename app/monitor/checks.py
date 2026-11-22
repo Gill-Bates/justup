@@ -301,7 +301,7 @@ def _resolve_and_check_host(host: str) -> bool:
             ip = ipaddress.ip_address(ip_str)
             if _is_ip_blocked_for_ssrf(ip):
                 return True
-        except (ValueError, IndexError):
+        except ValueError, IndexError:
             continue
 
     return False
@@ -444,7 +444,7 @@ def _system_addresses(host: str, skip_ssrf_check: bool) -> list[str]:
     """All A/AAAA addresses of the system resolver; blocked ones are dropped unless the check is skipped."""
     try:
         infos = socket.getaddrinfo(host, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
-    except (OSError, UnicodeError):
+    except OSError, UnicodeError:
         return []
     found: list[str] = []
     for info in infos:

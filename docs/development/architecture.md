@@ -6,7 +6,7 @@ that process, so do not run several app processes against one data directory.
 
 | Area | Technology |
 | --- | --- |
-| Runtime | Python 3.13, Uvicorn, FastAPI |
+| Runtime | Python 3.14, Uvicorn, FastAPI |
 | Storage | SQLite (`data/sqlite/justup.db`), time series in `data/tsdb` |
 | Frontend | Bootstrap 5, HTMX, plain JavaScript without a build step |
 | Maps and charts | Leaflet, Chart.js (served locally) |

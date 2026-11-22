@@ -42,7 +42,7 @@ def _count_stream(opener, path: Path) -> tuple[int, int] | None:
             while chunk := f.read(_CHUNK):
                 nbytes += len(chunk)
                 lines += chunk.count(b"\n")
-    except (OSError, EOFError, zlib.error):
+    except OSError, EOFError, zlib.error:
         return None
     return lines, nbytes
 

@@ -737,7 +737,7 @@ def migrate_staged_application_database(extracted_data: Path) -> tuple[int, int]
         checkpoint = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
         if checkpoint is None or checkpoint[0] != 0 or (checkpoint[1] >= 0 and checkpoint[1] != checkpoint[2]):
             raise BackupError("Staging WAL checkpoint failed; existing data was not changed.")
-    except (BackupError, sqlite_db.DatabaseQuiescedError):
+    except BackupError, sqlite_db.DatabaseQuiescedError:
         raise  # the latter means a restore already completed and the instance awaits its restart
     except Exception as exc:
         _log.error("Staged application database migration or validation failed: %s", exc)

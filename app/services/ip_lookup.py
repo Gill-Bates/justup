@@ -102,7 +102,7 @@ def _parse_retry_after(value: str | None) -> float | None:
         seconds = (
             float(value) if value.isdigit() else (parsedate_to_datetime(value) - datetime.now(UTC)).total_seconds()
         )
-    except (TypeError, ValueError, OverflowError):
+    except TypeError, ValueError, OverflowError:
         return None
     return min(max(seconds, 0.0), _RETRY_AFTER_MAX)
 
@@ -128,7 +128,7 @@ def public_ip(value: str | None) -> str | None:
     """Return a canonical globally routable IP, never a hostname or internal address."""
     try:
         address = ipaddress.ip_address(value)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
     return str(address) if address.is_global else None
 

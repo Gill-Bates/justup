@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- Python ≥ 3.13
+- Python ≥ 3.14
 - Node.js 24 (for JS/CSS lint and `node:test`; the major CI pins in `ci.yml`, keep it in step)
 - The system tools `ping` (for checks) and `nmap` (for traceroute and port scans)
 
