@@ -46,7 +46,7 @@ RUN --mount=type=secret,id=python_libraries_token,required=true \
  && python -c 'import hashlib,json,pathlib; p=json.load(open("/tmp/PROVENANCE.json")); w=pathlib.Path("/tmp/wheels")/pathlib.Path(p["wheel"]).name; assert w.is_file() and w.name=="sslyze-{}-{}.whl".format(p["version"],p["tags"]); assert w.stat().st_size==p["size_bytes"] and hashlib.sha256(w.read_bytes()).hexdigest()==p["sha256"]' \
  && pip install --no-cache-dir --root-user-action=ignore --only-binary=:all: \
         --find-links /tmp/wheels -r /tmp/requirements-runtime.txt \
- && apt-get update && apt-get install -y --no-install-recommends git \
+ && apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends git \
  && GIT_TERMINAL_PROMPT=0 GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=credential.helper GIT_CONFIG_VALUE_0= \
     GIT_CONFIG_KEY_1=credential.helper \
     GIT_CONFIG_VALUE_1='!f() { echo username=x-access-token; echo "password=$(cat /run/secrets/python_libraries_token)"; }; f' \
@@ -437,7 +437,7 @@ RUN apt-get update && apt-get upgrade -y && DEBIAN_FRONTEND=noninteractive apt-g
  && gpg --dearmor -o /usr/share/keyrings/adoptium.gpg /tmp/adoptium.key \
  && rm /tmp/adoptium.key \
  && echo "deb [signed-by=/usr/share/keyrings/adoptium.gpg] https://packages.adoptium.net/artifactory/deb $(. /etc/os-release && echo "$VERSION_CODENAME") main" > /etc/apt/sources.list.d/adoptium.list \
- && apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+ && apt-get update && apt-get upgrade -y && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     "temurin-${JAVA_MAJOR}-jdk" \
  && rm -rf /var/lib/apt/lists/*
 

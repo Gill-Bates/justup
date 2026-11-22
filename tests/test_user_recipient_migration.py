@@ -363,7 +363,7 @@ def _app_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("JUSTUP_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("SECRET_KEY", Fernet.generate_key().decode())
     monkeypatch.setattr(crypto, "_primary_key", None)
-    monkeypatch.setattr(bootstrap, "_download_geoip_db", lambda *_a, **_k: None)
+    monkeypatch.setattr(bootstrap, "_refresh_geoip", lambda *_a, **_k: None)
     return tmp_path
 
 

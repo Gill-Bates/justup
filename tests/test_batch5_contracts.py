@@ -10,10 +10,8 @@
 from __future__ import annotations
 
 import io
-import json
 import os
 import tarfile
-import time
 from pathlib import Path
 
 import pytest
@@ -354,139 +352,6 @@ def test_csrf_cookie_secure_only_with_trusted_forwarded_proto():
     assert f"max-age={SESSION_MAX_DAYS_MAX * 24 * 3600}" in cookie
 
 
-# --- CR-05 / CR-06: GeoIP download limits and change detection --------------------------------
-
-
-class _FakeResponse:
-    def __init__(self, body: bytes, headers: dict[str, str] | None = None) -> None:
-        self._buf = io.BytesIO(body)
-        self.headers = headers or {}
-
-    def read(self, n: int = -1) -> bytes:
-        return self._buf.read(n)
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *_):
-        return False
-
-
-def _stub_download(monkeypatch, response: _FakeResponse, limit: int = 100):
-    monkeypatch.setattr(bootstrap, "GEOIP_MAX_BYTES", limit)
-    monkeypatch.setattr(bootstrap, "urlopen", lambda *_a, **_k: response)
-    monkeypatch.setattr(bootstrap, "_verify_mmdb", lambda _p, *_a, **_k: True)
-
-
-@pytest.mark.parametrize(
-    ("body", "headers"),
-    [
-        (b"x" * 10, {"Content-Length": "101"}),  # declared too large
-        (b"x" * 101, {}),  # no header, body too large
-        (b"x" * 101, {"Content-Length": "5"}),  # lying header
-    ],
-)
-def test_geoip_download_over_limit_aborts_and_keeps_existing(tmp_path, monkeypatch, body, headers):
-    target = tmp_path / "GeoLite2-City.mmdb"
-    target.write_bytes(b"old-valid")
-    _stub_download(monkeypatch, _FakeResponse(body, headers))
-    assert bootstrap._download_geoip_db(target, force=True) is None
-    assert target.read_bytes() == b"old-valid"
-    assert not list(tmp_path.glob("geoip_*"))
-
-
-def test_geoip_download_exactly_at_limit_is_installed(tmp_path, monkeypatch):
-    target = tmp_path / "GeoLite2-City.mmdb"
-    _stub_download(monkeypatch, _FakeResponse(b"x" * 100, {"Content-Length": "100", "ETag": '"e1"'}))
-    assert bootstrap._download_geoip_db(target) == target
-    assert target.stat().st_size == 100
-    assert bootstrap._read_meta(target) == {"etag": '"e1"'}
-    assert not list(tmp_path.glob("geoip_*"))
-
-
-def test_geoip_update_reason(tmp_path):
-    db = tmp_path / "GeoLite2-City.mmdb"
-    db.write_bytes(b"x" * 10)
-    meta = bootstrap._meta_path(db)
-    meta.write_text(json.dumps({"etag": '"a"', "last_modified": ""}))
-    # same size, changed ETag -> update
-    assert bootstrap._update_reason(db, 10, {"size": 10, "etag": '"b"', "last_modified": None})
-    # unchanged ETag -> keep, even if the size differs
-    assert bootstrap._update_reason(db, 10, {"size": 99, "etag": '"a"', "last_modified": None}) is None
-    # remote down -> keep
-    assert bootstrap._update_reason(db, 10, None) is None
-    # no validators: size fallback
-    meta.unlink()
-    assert bootstrap._update_reason(db, 10, {"size": 11, "etag": None, "last_modified": None})
-    assert bootstrap._update_reason(db, 10, {"size": 10, "etag": None, "last_modified": None}) is None
-
-
-def test_geoip_update_reason_max_age_without_indicator(tmp_path):
-    db = tmp_path / "GeoLite2-City.mmdb"
-    db.write_bytes(b"x")
-    remote = {"size": None, "etag": None, "last_modified": None}
-    assert bootstrap._update_reason(db, 1, remote) is None
-    old = time.time() - bootstrap.GEOIP_MAX_AGE_SECONDS - 60
-    os.utime(db, (old, old))
-    assert bootstrap._update_reason(db, 1, remote)
-
-
-def _aged(db, seconds_old):
-    """Pin the clock and the file age so the age rule is deterministic."""
-    now = 2_000_000_000.0
-    os.utime(db, (now - seconds_old, now - seconds_old))
-    return now
-
-
-@pytest.mark.parametrize(
-    "remote",
-    [
-        {"size": 10, "etag": '"b"', "last_modified": None},  # remote validator, none stored locally
-        {"size": 10, "etag": None, "last_modified": "Mon, 01 Jan 2026 00:00:00 GMT"},
-        {"size": 10, "etag": None, "last_modified": None},  # only the size, unchanged
-        {"size": None, "etag": '"b"', "last_modified": None},  # validator without size
-    ],
-)
-def test_geoip_update_reason_falls_back_to_max_age_without_comparable_validator(tmp_path, monkeypatch, remote):
-    db = tmp_path / "GeoLite2-City.mmdb"
-    db.write_bytes(b"x" * 10)  # no meta sidecar
-    monkeypatch.setattr(bootstrap.time, "time", lambda: _aged(db, bootstrap.GEOIP_MAX_AGE_SECONDS + 60))
-    assert bootstrap._update_reason(db, 10, remote) == "database older than maximum age"
-    monkeypatch.setattr(bootstrap.time, "time", lambda: _aged(db, bootstrap.GEOIP_MAX_AGE_SECONDS - 60))
-    assert bootstrap._update_reason(db, 10, remote) is None
-
-
-def test_geoip_update_reason_age_does_not_override_validators_or_size(tmp_path, monkeypatch):
-    db = tmp_path / "GeoLite2-City.mmdb"
-    db.write_bytes(b"x" * 10)
-    bootstrap._meta_path(db).write_text(json.dumps({"etag": '"a"', "last_modified": ""}))
-    monkeypatch.setattr(bootstrap.time, "time", lambda: _aged(db, bootstrap.GEOIP_MAX_AGE_SECONDS * 3))
-    # an unchanged validator proves the remote file is the same one: keep, however old the file is
-    assert bootstrap._update_reason(db, 10, {"size": 10, "etag": '"a"', "last_modified": None}) is None
-    # a changed validator updates a young file with an unchanged size
-    monkeypatch.setattr(bootstrap.time, "time", lambda: _aged(db, 60))
-    assert bootstrap._update_reason(db, 10, {"size": 10, "etag": '"b"', "last_modified": None}) == "etag changed"
-    # a changed size wins over the age rule
-    bootstrap._meta_path(db).unlink()
-    assert "size changed" in bootstrap._update_reason(db, 10, {"size": 11, "etag": None, "last_modified": None})
-    # an unreachable remote keeps even an old database
-    monkeypatch.setattr(bootstrap.time, "time", lambda: _aged(db, bootstrap.GEOIP_MAX_AGE_SECONDS * 3))
-    assert bootstrap._update_reason(db, 10, None) is None
-
-
-def test_geoip_stale_database_is_downloaded_when_size_and_validators_are_inconclusive(tmp_path, monkeypatch):
-    target = tmp_path / "GeoLite2-City.mmdb"
-    target.write_bytes(b"x" * 10)
-    old = time.time() - bootstrap.GEOIP_MAX_AGE_SECONDS - 60
-    os.utime(target, (old, old))
-    monkeypatch.setattr(bootstrap, "_verify_mmdb", lambda _p, *_a, **_k: True)
-    monkeypatch.setattr(bootstrap, "_check_remote_meta", lambda *_a: {"size": 10, "etag": '"b"', "last_modified": None})
-    _stub_download(monkeypatch, _FakeResponse(b"y" * 10, {"Content-Length": "10", "ETag": '"b"'}))
-    assert bootstrap._download_geoip_db(target) == target
-    assert target.read_bytes() == b"y" * 10  # replaced, not kept
-    assert bootstrap._read_meta(target) == {"etag": '"b"'}  # the next start compares validators
-
-
 # --- CR-09: dotenv parsing --------------------------------------------------------------------
 
 
@@ -536,7 +401,7 @@ def test_alert_status_constants_match_stored_values():
 
 
 def test_bootstrap_keeps_existing_geoip_setting_and_seeds_missing(tmp_path, monkeypatch):
-    monkeypatch.setattr(bootstrap, "_download_geoip_db", lambda *_a, **_k: None)
+    monkeypatch.setattr(bootstrap, "_refresh_geoip", lambda *_a, **_k: None)
     db = tmp_path / "sqlite" / "justup.db"
     db.parent.mkdir()
     conn = sqlite_db.connect(db)
@@ -593,32 +458,17 @@ def test_validate_runtime_config_accepts_valid_key(monkeypatch, caplog):
 
 
 def test_geoip_build_info_defaults_to_configured_data_dir(tmp_path, monkeypatch):
-    import sys
     import types
 
-    (tmp_path / bootstrap.GEOIP_DB_RELPATH).parent.mkdir()
-    (tmp_path / bootstrap.GEOIP_DB_RELPATH).write_bytes(b"x")
-    meta = types.SimpleNamespace(database_type="GeoLite2-City", build_epoch=123)
+    seen: list[tuple[object, str]] = []
 
-    class _Reader:
-        def __init__(self, path):
-            self.path = path
+    def fake_databases(city_path):
+        return types.SimpleNamespace(build_info=lambda kind: seen.append((city_path, kind)) or ("GeoLite2-City", 123))
 
-        def __enter__(self):
-            assert Path(self.path) == tmp_path / bootstrap.GEOIP_DB_RELPATH
-            return self
-
-        def __exit__(self, *_a):
-            return False
-
-        def metadata(self):
-            return meta
-
-    fake_db = types.SimpleNamespace(Reader=_Reader)
-    monkeypatch.setitem(sys.modules, "geoip2", types.SimpleNamespace(database=fake_db))
-    monkeypatch.setitem(sys.modules, "geoip2.database", fake_db)
+    monkeypatch.setattr(bootstrap, "geoip_databases", fake_databases)
     monkeypatch.setattr(bootstrap, "DATA_DIR", tmp_path)
     assert bootstrap.get_geoip_build_info() == ("GeoLite2-City", 123)
+    assert seen == [(tmp_path / bootstrap.GEOIP_DB_RELPATH, "city")]
 
 
 def test_bootstrap_data_dir_is_the_config_data_dir_with_justup_data_dir(tmp_path):
@@ -650,7 +500,7 @@ def _default_setting_values():
 def test_fresh_db_is_seeded_with_defaults_and_settings_fallback_agrees(tmp_path, monkeypatch):
     from app.api.settings import _load
 
-    monkeypatch.setattr(bootstrap, "_download_geoip_db", lambda *_a, **_k: None)
+    monkeypatch.setattr(bootstrap, "_refresh_geoip", lambda *_a, **_k: None)
     db = tmp_path / "sqlite" / "justup.db"
     db.parent.mkdir()
     bootstrap.bootstrap(db, tmp_path / "tsdb", tmp_path)
@@ -669,7 +519,7 @@ def test_fresh_db_is_seeded_with_defaults_and_settings_fallback_agrees(tmp_path,
 
 
 def test_bootstrap_seeds_only_missing_settings_and_keeps_custom_values(tmp_path, monkeypatch):
-    monkeypatch.setattr(bootstrap, "_download_geoip_db", lambda *_a, **_k: None)
+    monkeypatch.setattr(bootstrap, "_refresh_geoip", lambda *_a, **_k: None)
     db = tmp_path / "sqlite" / "justup.db"
     db.parent.mkdir()
     bootstrap.bootstrap(db, tmp_path / "tsdb", tmp_path)

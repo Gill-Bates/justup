@@ -17,7 +17,6 @@ PDF report shows the hops as a table and as an offline route map
 
 from __future__ import annotations
 
-import contextlib
 import functools
 import hashlib
 import ipaddress
@@ -31,19 +30,18 @@ from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor, wait
 from contextvars import ContextVar
 from pathlib import Path
-from threading import Lock
 from typing import Any, TypedDict
 
 from app.db.pop_locations import valid_coordinates
 from app.services import geo_resolver as gr
 from app.services import ixp_index
 from app.services.geo_resolver import MAX_CITY_RADIUS_KM
+from app.services.geoip import databases as geoip_databases
 from app.services.ip_lookup import lookup_online_sources, public_ip
 from app.services.pop_codes import lookup_pop_code, observe_unknown_pop
 from app.services.traceroute_service import NO_IP_MARKERS, STATUS_OK, STATUS_PARTIAL, STATUS_TIMEOUT
 from app.utils.constants import (
     DEFAULT_ONLINE_GEO_FALLBACK_ENABLED,
-    GEOIP_ASN_DB_RELPATH,
     GEOIP_DB_RELPATH,
     PROVIDER_LOOKUP_CACHE_TTL_DEFAULT,
     PROVIDER_LOOKUP_CACHE_TTL_MAX,
@@ -154,20 +152,6 @@ def shorten_ipv6_for_display(ip: str, max_length: int = IPV6_DISPLAY_MAX_LENGTH)
     return ip[: max_length - len(IPV6_TRUNCATION_SUFFIX)] + IPV6_TRUNCATION_SUFFIX
 
 
-# Try to import geoip2 - if not available, geolocation will be disabled
-try:
-    import geoip2.database
-    import geoip2.errors
-
-    _HAS_GEOIP = True
-    _AddressNotFoundError: type[Exception] = geoip2.errors.AddressNotFoundError
-except ImportError:
-    _log.info("geoip2 not installed, geolocation disabled")
-    _HAS_GEOIP = False
-
-    class _AddressNotFoundError(Exception):  # placeholder so the except clause below stays valid
-        pass
-
 # Path for the MaxMind City database
 # Single location: data_dir/geoip/GeoLite2-City.mmdb (Docker: /app/data/, local dev: ./data/)
 
@@ -184,88 +168,13 @@ def _get_geoip_path() -> Path:
     return app_dir / "data" / GEOIP_DB_RELPATH
 
 
-# Global reader instance (lazy-initialized, thread-safe).
-# Locking scheme: _reader_lock serialises (re)loading; _reader_query_lock serialises queries and
-# the close of a replaced reader; _geo_cache_lock is a leaf lock that guards the cache AND the
-# (reader, generation) pair, so a lookup can tell whether its reader was swapped meanwhile.
-_reader: Any | None = None
-_reader_generation = 0  # bumped (with the cache cleared) on every reader swap
-_reader_stamp: tuple[int, int, int] | None = None  # (mtime_ns, inode, size) of the opened DB file
-# One-time logging flag (avoids log spam, but allows retry when DB appears)
-_db_not_found_logged = False
-# Lock for thread-safe reader initialization
-_reader_lock = Lock()
-# Lock for thread-safe reader queries (MaxMind C extension may not be thread-safe)
-_reader_query_lock = Lock()
-
-
-def _db_stamp(path: Path) -> tuple[int, int, int] | None:
-    try:
-        st = path.stat()
-    except OSError:
-        return None
-    return (st.st_mtime_ns, st.st_ino, st.st_size)
+def _databases():
+    return geoip_databases(_get_geoip_path())
 
 
 def geoip_signature() -> tuple[int, int, int] | None:
     """Identity (mtime, inode, size) of the GeoLite2 file, or None without one; changes when it is replaced."""
-    return _db_stamp(_get_geoip_path())
-
-
-def _get_reader() -> Any | None:
-    """
-    Get or initialize the GeoIP reader (lazy-init pattern, thread-safe).
-
-    Uses double-checked locking to avoid race conditions during initialization.
-    This prevents issues with:
-    - Memory leaks on reloads
-    - Fork/worker problems (uvicorn/gunicorn)
-    - Hot-swap of the database file
-
-    Note: If DB is not found initially but appears later (e.g., volume mount,
-    hot-reload), subsequent calls will detect and initialize the reader.
-    The reader is reopened (and the result cache cleared) when the DB file is replaced.
-    """
-    global _reader, _reader_stamp, _reader_generation, _db_not_found_logged
-
-    if not _HAS_GEOIP:
-        return None
-    # Fast path: reuse the reader while the database file is unchanged.
-    db_path = _get_geoip_path()
-    if _reader is not None and _db_stamp(db_path) == _reader_stamp:
-        return _reader
-
-    with _reader_lock:
-        if _reader is not None and _db_stamp(db_path) == _reader_stamp:
-            return _reader
-        if not db_path.exists():
-            # A deleted file keeps the already opened reader usable.
-            if _reader is None and not _db_not_found_logged:
-                _db_not_found_logged = True
-                _log.info(
-                    "GeoLite2-City.mmdb not found at %s. Geolocation disabled. Will retry on next request.", db_path
-                )
-            return _reader
-
-        stamp = _db_stamp(db_path)
-        try:
-            fresh = geoip2.database.Reader(str(db_path))
-        except Exception as e:  # noqa: BLE001 - geolocation boundary: any GeoIP/library failure degrades to no-result
-            _log.warning("Failed to initialize GeoIP reader from %s: %s", db_path, e)
-            return _reader  # keep serving from the previous reader if there is one
-        previous = _reader
-        # Swap reader, generation and cache atomically: results derived from the old database
-        # (including cached misses) are stale after a swap and in-flight writers are rejected.
-        with _geo_cache_lock:
-            _reader, _reader_stamp = fresh, stamp
-            _reader_generation += 1
-            _geo_cache.clear()
-        _log.info("Initialized GeoIP reader from %s", db_path)
-        if previous is not None:
-            # No thread may be mid-query on the reader being closed; closing is best effort.
-            with _reader_query_lock, contextlib.suppress(Exception):
-                previous.close()
-    return _reader
+    return _databases().signature("city")
 
 
 class GeoLocation(TypedDict):
@@ -275,57 +184,6 @@ class GeoLocation(TypedDict):
     country: str | None
     accuracy_radius_km: float | None
     city_is_region: bool
-
-
-# Manual cache for geolocate_ip (replaces @lru_cache to avoid caching when reader unavailable)
-_geo_cache: dict[str, GeoLocation | None] = {}
-_geo_cache_lock = Lock()  # Thread-safe cache access
-_geo_cache_max_size = 512
-
-
-class _ReaderSwappedError(Exception):
-    """The reader fetched by a lookup was replaced before the lookup could use it."""
-
-
-_MAX_READER_ATTEMPTS = 3
-
-
-def _cache_put(ip: str, value: GeoLocation | None, generation: int) -> None:
-    """Cache a result unless the database was swapped since it was read."""
-    with _geo_cache_lock:
-        if generation != _reader_generation:
-            return
-        if ip not in _geo_cache and len(_geo_cache) >= _geo_cache_max_size:
-            _geo_cache.pop(next(iter(_geo_cache)))  # evict the oldest so a full cache keeps serving new hops
-        _geo_cache[ip] = value
-
-
-def _read_record(reader: Any, ip: str) -> tuple[int, dict[str, Any] | None]:
-    """Query ``reader`` and copy the record to plain Python values; return (generation, record).
-
-    The record is None for an address that is not in the database. The query lock also keeps a
-    swapping thread from closing the reader mid-query, and the extraction must happen under it:
-    the result object references C memory that another query could overwrite.
-    """
-    with _reader_query_lock:
-        with _geo_cache_lock:
-            if _reader is not None and reader is not _reader:
-                raise _ReaderSwappedError
-            generation = _reader_generation
-        try:
-            r = reader.city(ip)
-            return generation, {
-                "lat": r.location.latitude,
-                "lon": r.location.longitude,
-                "accuracy_radius": r.location.accuracy_radius,
-                "city": r.city.name if r.city else None,
-                "country": r.country.iso_code if r.country else None,
-                # GeoLite2 often has coordinates and a region but no city (common for IPv6 and
-                # smaller carriers); the subdivision then names the place instead of "Unknown".
-                "subdivision": r.subdivisions.most_specific.name if r.subdivisions else None,
-            }
-        except _AddressNotFoundError:
-            return generation, None
 
 
 def _to_geo_location(ip: str, record: dict[str, Any]) -> GeoLocation | None:
@@ -367,12 +225,8 @@ def geolocate_ip(ip: str) -> GeoLocation | None:
     """
     Geolocate an IP address to lat/lon/city/country with the local GeoLite2 database.
 
-    Results are cached (512 entries). The reader is validated first, so a replaced database
-    file also invalidates cached results. Only definitive answers are cached (a hit, or an
-    address that is not in the database); an unavailable reader, a swapped reader or a
-    transient reader error is never cached.
-
-    Skips non-routable IPs (private, loopback, link-local, reserved, multicast; CGN is private).
+    Caching and the reload on a replaced file are done by ``gillbates_geoip``. Skips non-routable IPs
+    (private, loopback, link-local, reserved, multicast; CGN is private).
 
     Returns:
         Dict with keys lat, lon, city, country (ISO code), accuracy_radius_km, city_is_region,
@@ -385,25 +239,12 @@ def geolocate_ip(ip: str) -> GeoLocation | None:
         return None
     if _not_in_geoip(ip_obj):
         return None
-
-    for _attempt in range(_MAX_READER_ATTEMPTS):
-        reader = _get_reader()  # also detects a replaced database file and drops stale cache entries
-        if not reader:
-            return None  # not cached: the database may appear later
-        with _geo_cache_lock:
-            if ip in _geo_cache:
-                return _geo_cache[ip]
-        try:
-            generation, record = _read_record(reader, ip)
-        except _ReaderSwappedError:
-            continue  # fetch the current reader and retry
-        except Exception as e:  # noqa: BLE001 - geolocation boundary: any GeoIP/library failure degrades to no-result
-            _log.debug("GeoIP lookup failed for %s: %s", ip, e)
-            return None  # transient: not cached
-        result = _to_geo_location(ip, record) if record is not None else None
-        _cache_put(ip, result, generation)
-        return result
-    return None
+    try:
+        record = _databases().locate(ip)
+    except Exception as e:  # noqa: BLE001 - geolocation boundary: any GeoIP/library failure degrades to no-result
+        _log.debug("GeoIP lookup failed for %s: %s", ip, e)
+        return None
+    return _to_geo_location(ip, dict(record)) if record is not None else None
 
 
 _ISO_COUNTRY_CODES = frozenset(
@@ -429,64 +270,21 @@ def geolocate_country(ip: str) -> str | None:
         return None
     if _not_in_geoip(address):
         return None
-    for _attempt in range(_MAX_READER_ATTEMPTS):
-        reader = _get_reader()
-        if not reader:
-            return None
-        try:
-            _, record = _read_record(reader, ip)
-        except _ReaderSwappedError:
-            continue
-        except Exception as exc:  # noqa: BLE001 - GeoIP failure must not affect quality monitoring
-            _log.debug("GeoIP country lookup failed for %s: %s", ip, exc)
-            return None
-        code = record.get("country") if record else None
-        return code.upper() if isinstance(code, str) and code.upper() in _ISO_COUNTRY_CODES else None
-    return None
+    try:
+        code = _databases().lookup_country(ip)
+    except Exception as exc:  # noqa: BLE001 - GeoIP failure must not affect quality monitoring
+        _log.debug("GeoIP country lookup failed for %s: %s", ip, exc)
+        return None
+    return code.upper() if isinstance(code, str) and code.upper() in _ISO_COUNTRY_CODES else None
 
 
-# Local GeoLite2-ASN lookup. Same lifecycle as the City reader (lazy open, reopen when the file is
-# replaced, previous reader kept when the new file is unreadable), with its own small state. The
-# path is fixed inside the geoip data dir; it never comes from a setting or a request.
-_asn_reader: Any | None = None
-_asn_stamp: tuple[int, int, int] | None = None
-_asn_failed_stamp: tuple[int, int, int] | None = None  # unreadable file already reported; not retried until it changes
-_asn_lock = Lock()  # serialises (re)loading and queries (the C extension may not be thread-safe)
+# Local GeoLite2-ASN lookup (the file path is fixed inside the geoip data dir).
 _ASN_ORG_MAX = 120
-
-
-def _get_asn_path() -> Path:
-    """Path of the GeoLite2-ASN file; beside the City file, inside the geoip directory."""
-    return _get_geoip_path().parent / GEOIP_ASN_DB_RELPATH.name
 
 
 def asn_signature() -> tuple[int, int, int] | None:
     """Identity (mtime, inode, size) of the GeoLite2-ASN file, or None without one."""
-    return _db_stamp(_get_asn_path())
-
-
-def _asn_reader_locked() -> Any | None:
-    """Current ASN reader; call with ``_asn_lock`` held."""
-    global _asn_reader, _asn_stamp, _asn_failed_stamp
-    if not _HAS_GEOIP:
-        return None
-    path = _get_asn_path()
-    stamp = _db_stamp(path)
-    if _asn_reader is not None and stamp == _asn_stamp:
-        return _asn_reader
-    if stamp is None or stamp == _asn_failed_stamp:
-        return _asn_reader  # a deleted or known-unreadable file keeps the opened reader usable
-    try:
-        fresh = geoip2.database.Reader(str(path))
-    except Exception as exc:  # noqa: BLE001 - corrupt or unreadable file degrades to no result
-        _asn_failed_stamp = stamp
-        _log.warning("Failed to initialize GeoIP ASN reader from %s: %s", path, type(exc).__name__)
-        return _asn_reader
-    previous, _asn_reader, _asn_stamp = _asn_reader, fresh, stamp
-    if previous is not None:
-        with contextlib.suppress(Exception):
-            previous.close()
-    return _asn_reader
+    return _databases().signature("asn")
 
 
 def geolocate_asn(ip: str) -> tuple[str | None, str | None]:
@@ -502,16 +300,7 @@ def geolocate_asn(ip: str) -> tuple[str | None, str | None]:
     if _not_in_geoip(address) or not address.is_global:  # also CGN (100.64/10) and documentation ranges
         return None, None
     try:
-        with _asn_lock:
-            reader = _asn_reader_locked()
-            if reader is None:
-                return None, None
-            try:
-                record = reader.asn(ip)
-                number = record.autonomous_system_number
-                org = record.autonomous_system_organization
-            except _AddressNotFoundError:
-                return None, None
+        number, org = _databases().lookup_asn(ip)
     except Exception as exc:  # noqa: BLE001 - ASN enrichment must never break its caller
         _log.debug("GeoIP ASN lookup failed for %s: %s", ip, type(exc).__name__)
         return None, None

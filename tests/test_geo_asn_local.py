@@ -6,13 +6,14 @@
 
 """Local GeoLite2-ASN lookup and its use for the public egress card; no network, a tiny hand-built mmdb."""
 
-# ruff: noqa: SLF001, ARG001, PTH105 - white-box tests of module state; fixtures used for their side effects
+# ruff: noqa: ARG001, PTH105 - white-box tests of module state; fixtures used for their side effects
 from __future__ import annotations
 
 import os
 
 import pytest
 
+from app.services import geoip as geoip_service
 from app.services import public_egress as pe
 from app.services import traceroute_geo as tg
 from tests import _support  # noqa: F401 - imported for its sys.path side effect
@@ -27,16 +28,23 @@ NETWORKS = {
 }
 
 
+@pytest.fixture(autouse=True)
+def _tiny_databases(monkeypatch: pytest.MonkeyPatch):
+    """The hand-built mmdb files are far below the production size floors."""
+    monkeypatch.setattr(geoip_service, "MIN_CITY_BYTES", 1)
+    monkeypatch.setattr(geoip_service, "MIN_ASN_BYTES", 1)
+    geoip_service.close_all()
+    yield
+    geoip_service.close_all()
+
+
 @pytest.fixture
 def asn_dir(monkeypatch: pytest.MonkeyPatch, tmp_path):
     """Data dir whose geoip/ folder is the only place the ASN file is looked up."""
     monkeypatch.setenv("JUSTUP_DATA_DIR", str(tmp_path))
-    monkeypatch.setattr(tg, "_asn_reader", None)
-    monkeypatch.setattr(tg, "_asn_stamp", None)
-    monkeypatch.setattr(tg, "_asn_failed_stamp", None)
+    geoip_service.close_all()
     yield tmp_path / "geoip"
-    if tg._asn_reader is not None:
-        tg._asn_reader.close()
+    geoip_service.close_all()
 
 
 def _write(directory, networks=NETWORKS):
@@ -116,10 +124,6 @@ def test_unreadable_replacement_keeps_the_previous_reader(asn_dir) -> None:
     assert tg.geolocate_asn(V4) == ("AS3320", "Deutsche Telekom AG")
     (asn_dir / "GeoLite2-ASN.mmdb").unlink()
     assert tg.geolocate_asn(V4) == ("AS3320", "Deutsche Telekom AG")
-
-
-def test_path_stays_inside_the_geoip_dir(asn_dir, tmp_path) -> None:
-    assert tg._get_asn_path() == tmp_path / "geoip" / "GeoLite2-ASN.mmdb"
 
 
 # ─── public egress enrichment ────────────────────────────────────────────────
@@ -247,9 +251,7 @@ def test_route_returns_asn_without_enhanced_accuracy_and_without_any_outbound_ca
     monkeypatch.setattr(pe, "online_fallback_enabled", lambda: False)
     monkeypatch.setattr(pe, "resolve_location", lambda _a: _decision())
     monkeypatch.setattr(pe, "geolocate_country", lambda _a: None)
-    monkeypatch.setattr(tg, "_asn_reader", None)
-    monkeypatch.setattr(tg, "_asn_stamp", None)
-    monkeypatch.setattr(tg, "_asn_failed_stamp", None)
+    geoip_service.close_all()
     monkeypatch.setattr(pe, "MIN_REFRESH_INTERVAL_SECONDS", 0.0)
     pe.reset_state()
     data_dir = env["db_path"].parent.parent  # the env fixture points JUSTUP_DATA_DIR at its temp dir
@@ -266,6 +268,5 @@ def test_route_returns_asn_without_enhanced_accuracy_and_without_any_outbound_ca
         assert (geo["asn"], geo["as_org"], geo["city"]) == ("AS3320", "Deutsche Telekom AG", "Bonn")
         assert outbound == []
     finally:
-        if tg._asn_reader is not None:
-            tg._asn_reader.close()
+        geoip_service.close_all()
         pe.reset_state()

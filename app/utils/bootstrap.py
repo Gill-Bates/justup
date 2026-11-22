@@ -8,19 +8,13 @@
 
 from __future__ import annotations
 
-import contextlib
-import hashlib
-import json
 import logging
-import os
-import tempfile
-import time
-from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from urllib.error import URLError
-from urllib.request import Request, urlopen
+
+from gillbates_geoip import GeoIPUnavailableError
 
 from ..db import sqlite as sqlite_db
+from ..services.geoip import databases as geoip_databases
 from . import bootstrap_credentials
 from .config import DATA_DIR
 from .constants import (
@@ -34,296 +28,33 @@ from .constants import (
 
 _log = logging.getLogger(__name__)
 
-# GeoLite2 database download URL (P3TERX mirror, updated regularly)
-GEOIP_DOWNLOAD_URL = "https://github.com/P3TERX/GeoLite.mmdb/raw/download/GeoLite2-City.mmdb"
-
-# GeoLite2-ASN comes from the same keyless mirror (no MaxMind licence key involved)
-GEOIP_ASN_DOWNLOAD_URL = "https://github.com/P3TERX/GeoLite.mmdb/raw/download/GeoLite2-ASN.mmdb"
-# Plausibility ceiling for the download (the City database is well below 100 MB)
-GEOIP_MAX_BYTES = 200 * 1024 * 1024
-# Re-download after this age when the remote offers no usable change indicator
-GEOIP_MAX_AGE_SECONDS = 45 * 24 * 3600
-
-# The MMDB file ends with a metadata section that starts with this marker
-MMDB_METADATA_MARKER = b"\xab\xcd\xefMaxMind.com"
-
-
-GEOIP_MIN_BYTES = 10_000_000
-# The ASN database is ~9 MB, well below the City floor
-GEOIP_ASN_MIN_BYTES = 1_000_000
-
-
-@dataclass(frozen=True)
-class _GeoipDb:
-    """Static description of one managed GeoLite2 edition (all values are constants, never user input)."""
-
-    label: str
-    url: str
-    type_marker: str
-    min_bytes: int
-
-
-_CITY_DB = _GeoipDb("City", GEOIP_DOWNLOAD_URL, "City", GEOIP_MIN_BYTES)
-_ASN_DB = _GeoipDb("ASN", GEOIP_ASN_DOWNLOAD_URL, "ASN", GEOIP_ASN_MIN_BYTES)
-
 
 def get_geoip_build_info(
     data_dir: Path | None = None, relpath: PurePosixPath = GEOIP_DB_RELPATH
 ) -> tuple[str, int] | None:
-    """
-    Get GeoIP database type and build epoch (City by default, pass GEOIP_ASN_DB_RELPATH for ASN).
+    """Type and build epoch of the City database, or of the ASN one when ``relpath`` is the ASN path."""
+    if data_dir is None:
+        data_dir = DATA_DIR
+    kind = "asn" if relpath == GEOIP_ASN_DB_RELPATH else "city"
+    return geoip_databases(data_dir / GEOIP_DB_RELPATH).build_info(kind)
 
-    Returns:
-            Tuple of (database_type, build_epoch) or None if unavailable
-    """
+
+def _refresh_geoip(data_dir: Path, *, auto_update: bool) -> None:
+    """Download or refresh both databases through ``gillbates_geoip``; never raises (startup must not fail)."""
+    city_path = data_dir / GEOIP_DB_RELPATH
+    asn_path = data_dir / GEOIP_ASN_DB_RELPATH
+    for label, path in (("City", city_path), ("ASN", asn_path)):
+        if not _is_inside_geoip_dir(data_dir, path):
+            _log.error("GeoIP %s path leaves the geoip data directory, skipped", label)
+            return
+    if not auto_update and city_path.exists() and asn_path.exists():
+        return
+    if not auto_update:
+        _log.info("GeoIP database missing, downloading (auto-update disabled, initial download only)...")
     try:
-        import geoip2.database
-
-        if data_dir is None:
-            data_dir = DATA_DIR
-
-        db_path = data_dir / relpath
-        if not db_path.exists():
-            return None
-
-        with geoip2.database.Reader(str(db_path)) as reader:
-            return (reader.metadata().database_type, reader.metadata().build_epoch)
-    except Exception:  # noqa: BLE001 - bootstrap resilience: log and fall back so startup never crashes
-        return None
-
-
-def _verify_mmdb(file_path: Path, db: _GeoipDb = _CITY_DB) -> bool:
-    """
-    Verify that a file is a valid MaxMind MMDB database.
-
-    Checks:
-    1. File exists and is at least the edition's minimum size (City 10 MB, ASN 1 MB)
-    2. Contains the MMDB metadata marker
-    3. Can be opened by geoip2 library (if available)
-    """
-    if not file_path.exists():
-        return False
-
-    file_size = file_path.stat().st_size
-    # City DB is ~60MB; the floor is a constant, never read from the environment.
-    _min_size = db.min_bytes
-
-    if file_size < _min_size:
-        _log.warning("GeoIP database too small: %d bytes (minimum: %d)", file_size, _min_size)
-        return False
-
-    # Check for MMDB metadata marker in last 128KB of file
-    try:
-        with Path(file_path).open("rb") as f:
-            f.seek(max(0, file_size - 131072))
-            tail = f.read()
-            if MMDB_METADATA_MARKER not in tail:
-                _log.warning("GeoIP database missing MMDB metadata marker")
-                return False
-    except OSError as e:
-        _log.warning("Failed to read GeoIP database: %s", e)
-        return False
-
-    try:
-        import geoip2.database
-
-        with geoip2.database.Reader(str(file_path)) as reader:
-            if db.type_marker not in reader.metadata().database_type:
-                _log.warning("GeoIP database is not %s type: %s", db.label, reader.metadata().database_type)
-                return False
-            _log.info(
-                "GeoIP database verified: %s, build %d", reader.metadata().database_type, reader.metadata().build_epoch
-            )
-    except ImportError:
-        _log.debug("geoip2 not installed, skipping deep verification")
-    except Exception as e:  # noqa: BLE001 - bootstrap resilience: log and fall back so startup never crashes
-        _log.warning("GeoIP database verification failed: %s", e)
-        return False
-
-    return True
-
-
-class _DownloadTooLargeError(Exception):
-    """The GeoIP download exceeds GEOIP_MAX_BYTES."""
-
-
-def _meta_path(db_path: Path) -> Path:
-    return db_path.with_name(db_path.name + ".meta.json")
-
-
-def _read_meta(db_path: Path) -> dict[str, str]:
-    """Validators (ETag/Last-Modified) stored next to the database; empty if unavailable."""
-    try:
-        data = json.loads(_meta_path(db_path).read_text(encoding="utf-8"))
-    except OSError, ValueError:
-        return {}
-    if not isinstance(data, dict):
-        return {}
-    return {k: v for k in ("etag", "last_modified") if isinstance(v := data.get(k), str) and v}
-
-
-def _write_meta(db_path: Path, headers) -> None:
-    meta = {
-        "etag": headers.get("ETag") or "",
-        "last_modified": headers.get("Last-Modified") or "",
-    }
-    try:
-        _meta_path(db_path).write_text(json.dumps(meta), encoding="utf-8")
-    except OSError as e:
-        # A stale sidecar would trigger a re-download on every start
-        with contextlib.suppress(OSError):
-            _meta_path(db_path).unlink(missing_ok=True)
-        _log.warning("Could not store GeoIP validators: %s", e)
-
-
-def _check_remote_meta(db: _GeoipDb = _CITY_DB) -> dict[str, object] | None:
-    """
-    Query size and validators of the remote file via HEAD request.
-
-    Returns a dict with ``size`` (int | None), ``etag`` and ``last_modified``
-    (str | None), or None if the remote could not be reached.
-    """
-    try:
-        req = Request(db.url, method="HEAD", headers={"User-Agent": "justUp-Monitor/1.0"})  # noqa: S310 - fixed https constant URL
-        with urlopen(req, timeout=30) as response:  # noqa: S310 - fixed https constant URL, no user-controlled scheme
-            content_length = response.headers.get("Content-Length")
-            return {
-                "size": int(content_length) if content_length and content_length.isdigit() else None,
-                "etag": response.headers.get("ETag") or None,
-                "last_modified": response.headers.get("Last-Modified") or None,
-            }
-    except Exception as e:  # noqa: BLE001 - bootstrap resilience: log and fall back so startup never crashes
-        _log.debug("Failed to check remote GeoIP metadata: %s", e)
-    return None
-
-
-def _update_reason(geoip_path: Path, local_size: int, remote: dict[str, object] | None) -> str | None:
-    """Return why the local database should be replaced, or None to keep it.
-
-    Comparable validators win over size; size is only a fallback. When neither shows a change
-    (no stored validator, same size) the database is still refreshed once it exceeds
-    GEOIP_MAX_AGE_SECONDS, so a stale file cannot persist forever.
-    """
-    if remote is None:
-        return None  # remote unreachable: keep the existing database
-    stored = _read_meta(geoip_path)
-    for field in ("etag", "last_modified"):
-        if remote.get(field) and stored.get(field):
-            return None if remote[field] == stored[field] else f"{field} changed"
-    size = remote.get("size")
-    if isinstance(size, int) and size != local_size:
-        return f"size changed (local: {local_size:,}, remote: {size:,})"
-    try:
-        age = time.time() - geoip_path.stat().st_mtime
-    except OSError:
-        return None
-    return "database older than maximum age" if age > GEOIP_MAX_AGE_SECONDS else None
-
-
-def _copy_limited(response, dest: Path, max_bytes: int | None = None) -> tuple[int, str]:
-    """Stream ``response`` into ``dest``; abort past ``max_bytes``. Returns (bytes, sha256 hex)."""
-    max_bytes = GEOIP_MAX_BYTES if max_bytes is None else max_bytes
-    declared = response.headers.get("Content-Length")
-    if declared and declared.isdigit() and int(declared) > max_bytes:
-        raise _DownloadTooLargeError(f"declared size {declared} exceeds limit {max_bytes}")
-    downloaded = 0
-    hasher = hashlib.sha256()
-    with dest.open("wb") as f:
-        while True:
-            chunk = response.read(65536)
-            if not chunk:
-                break
-            downloaded += len(chunk)
-            if downloaded > max_bytes:
-                raise _DownloadTooLargeError(f"download exceeds limit {max_bytes}")
-            f.write(chunk)
-            hasher.update(chunk)
-    return downloaded, hasher.hexdigest()
-
-
-def _download_geoip_db(target_path: Path, force: bool = False, db: _GeoipDb = _CITY_DB) -> Path | None:
-    """
-    Download a GeoLite2 database (City by default, ``db`` selects the edition) if not present, invalid, or outdated.
-
-    Args:
-            target_path: Where to save the database.
-            force: If True, skip the update check and always download.
-            db: Edition (URL, expected type, minimum size).
-
-    Returns the path to the database if successful, None otherwise.
-    """
-    geoip_path = target_path
-    local_exists = geoip_path.exists()
-    local_size = geoip_path.stat().st_size if local_exists else 0
-
-    if local_exists and _verify_mmdb(geoip_path, db):
-        if not force:
-            reason = _update_reason(geoip_path, local_size, _check_remote_meta(db))
-            if reason is None:
-                _log.debug("GeoIP database kept (up-to-date or remote check inconclusive): %s", geoip_path)
-                return geoip_path
-            _log.info("GeoIP database update needed: %s", reason)
-        else:
-            _log.info("GeoIP database force update requested")
-    elif local_exists:
-        _log.warning("GeoIP database exists but failed verification, re-downloading...")
-
-    _log.info("Downloading GeoIP %s database from %s...", db.label, db.url)
-
-    geoip_path.parent.mkdir(parents=True, exist_ok=True)
-
-    # Download to temp file first, then verify before moving
-    temp_fd = None
-    temp_path = None
-    try:
-        # Create temp file in target directory (same filesystem = atomic rename)
-        temp_fd, temp_path_str = tempfile.mkstemp(suffix=".mmdb.tmp", prefix="geoip_", dir=str(geoip_path.parent))
-        temp_path = Path(temp_path_str)
-
-        # Close fd immediately, open by path to prevent fd leak
-        os.close(temp_fd)
-        temp_fd = None
-
-        req = Request(db.url, headers={"User-Agent": "justUp-Monitor/1.0"})  # noqa: S310 - fixed https constant URL
-
-        with urlopen(req, timeout=120) as response:  # noqa: S310 - fixed https constant URL, no user-controlled scheme
-            content_type = response.headers.get("Content-Type", "")
-            if "text/html" in content_type.lower():
-                _log.error("GeoIP download returned HTML instead of binary data")
-                return None
-
-            downloaded, digest = _copy_limited(response, temp_path)
-            _log.info("Downloaded %s bytes, SHA256: %s...", f"{downloaded:,}", digest[:16])
-            response_headers = response.headers
-
-        if not _verify_mmdb(temp_path, db):
-            _log.error("Downloaded GeoIP database failed verification - possibly corrupted or malicious")
-            return None
-
-        # Atomic rename (same filesystem guarantees atomicity)
-        temp_path.rename(geoip_path)
-        temp_path = None  # Renamed successfully, don't try to cleanup
-        _write_meta(geoip_path, response_headers)
-        _log.info("GeoIP database installed: %s", geoip_path)
-        return geoip_path
-
-    except _DownloadTooLargeError as e:
-        _log.error("GeoIP download rejected: %s", e)
-        return None
-    except URLError as e:
-        _log.warning("Failed to download GeoIP database: %s", e)
-        return None
-    except Exception as e:  # noqa: BLE001 - bootstrap resilience: log and fall back so startup never crashes
-        _log.error("GeoIP database download error: %s", e)
-        return None
-    finally:
-        # Cleanup: close fd if still open, remove temp file on failure
-        if temp_fd is not None:
-            with contextlib.suppress(OSError):
-                os.close(temp_fd)
-        if temp_path and temp_path.exists():
-            with contextlib.suppress(OSError):
-                temp_path.unlink()
+        geoip_databases(city_path).ensure()
+    except GeoIPUnavailableError as exc:
+        _log.warning("GeoIP download failed: %s", exc)
 
 
 def _is_inside_geoip_dir(data_dir: Path, path: Path) -> bool:
@@ -391,21 +122,6 @@ def bootstrap(db_path: Path, tsdb_dir: Path, data_dir: Path | None = None) -> bo
 
     # GeoIP download AFTER database connection is closed (avoid lock contention)
     if data_dir is not None and geoip_auto_update is not None:
-        # City and ASN are handled as one unit under one switch but independently: a failure of one
-        # (the downloader never raises) neither blocks the other nor startup.
-        for edition, relpath in ((_CITY_DB, GEOIP_DB_RELPATH), (_ASN_DB, GEOIP_ASN_DB_RELPATH)):
-            geoip_path = data_dir / relpath
-            if not _is_inside_geoip_dir(data_dir, geoip_path):
-                _log.error("GeoIP %s path leaves the geoip data directory, skipped", edition.label)
-                continue
-            if geoip_auto_update:
-                _download_geoip_db(target_path=geoip_path, force=False, db=edition)
-            elif not geoip_path.exists():
-                # Always download if missing, regardless of setting
-                _log.info(
-                    "GeoIP %s database missing, downloading (auto-update disabled, initial download only)...",
-                    edition.label,
-                )
-                _download_geoip_db(target_path=geoip_path, force=False, db=edition)
+        _refresh_geoip(data_dir, auto_update=geoip_auto_update)
 
     return admin_created

@@ -498,144 +498,22 @@ def test_route_result_does_not_depend_on_online_response_order(env: _Env, monkey
 # --- GeoLite2 hot reload ---------------------------------------------------------------------------------
 
 
-class _FakeReader:
-    """Raises when used after close, like the MaxMind reader; returns its own id as latitude."""
+class _FakeDatabases:
+    """Stands in for ``gillbates_geoip.GeoIPDatabases``; only what ``traceroute_geo`` calls."""
 
-    instances = 0
+    def __init__(self, country: str | None = None) -> None:
+        self.country = country
 
-    def __init__(self, _path: str) -> None:
-        type(self).instances += 1
-        self.ident = type(self).instances
-        self.closed = False
-
-    def city(self, _ip: str):
-        if self.closed:
-            raise ValueError("Attempt to read from a closed MaxMind DB.")
-        time.sleep(0.001)
-        ns = type("N", (), {})
-        record = ns()
-        record.location = type("L", (), {"latitude": float(self.ident), "longitude": 1.0, "accuracy_radius": 10})()
-        record.city = type("C", (), {"name": "Berlin"})()
-        record.country = type("K", (), {"iso_code": "DE"})()
-        record.subdivisions = None
-        return record
-
-    def close(self) -> None:
-        self.closed = True
+    def lookup_country(self, _ip: str) -> str | None:
+        return self.country
 
 
-@pytest.fixture
-def geodb(monkeypatch: pytest.MonkeyPatch, tmp_path):
-    db = tmp_path / "GeoLite2-City.mmdb"
-    db.write_bytes(b"v1")
-    _FakeReader.instances = 0
-    monkeypatch.setattr(traceroute_geo, "_HAS_GEOIP", True)
-    monkeypatch.setattr(traceroute_geo, "_get_geoip_path", lambda: db)
-    monkeypatch.setattr(traceroute_geo.geoip2.database, "Reader", _FakeReader)
-    monkeypatch.setattr(traceroute_geo, "_reader", None)
-    monkeypatch.setattr(traceroute_geo, "_reader_stamp", None)
-    monkeypatch.setattr(traceroute_geo, "_geo_cache", {})
-
-    def replace(content: bytes) -> None:
-        db.write_bytes(content)  # a different size is enough for the stamp to change
-
-    return replace
-
-
-def test_replaced_database_invalidates_cached_results(geodb) -> None:
-    assert traceroute_geo.geolocate_ip("8.8.8.8")["lat"] == 1.0
-    assert traceroute_geo.geolocate_ip("8.8.8.8")["lat"] == 1.0  # served from the cache
-    geodb(b"version-two")
-    assert traceroute_geo.geolocate_ip("8.8.8.8")["lat"] == 2.0  # a cached IP notices the swap
-
-
-def test_country_lookup_accepts_record_without_coordinates(geodb, monkeypatch) -> None:
-    monkeypatch.setattr(
-        traceroute_geo, "_read_record", lambda _reader, _ip: (1, {"country": "DE", "lat": None, "lon": None})
-    )
+def test_country_lookup_accepts_record_without_coordinates(monkeypatch) -> None:
+    monkeypatch.setattr(traceroute_geo, "_databases", lambda: _FakeDatabases("de"))
     assert traceroute_geo.geolocate_country("8.8.8.8") == "DE"
     assert traceroute_geo.geolocate_country("127.0.0.1") is None
-    monkeypatch.setattr(traceroute_geo, "_read_record", lambda _reader, _ip: (1, {"country": "ZZ"}))
+    monkeypatch.setattr(traceroute_geo, "_databases", lambda: _FakeDatabases("ZZ"))
     assert traceroute_geo.geolocate_country("8.8.8.8") is None
-
-
-def test_anycast_record_with_only_registered_country_yields_no_country(monkeypatch) -> None:
-    # GeoLite2 gives anycast resolvers (1.1.1.1, 9.9.9.9) a registered_country but no country.
-    from types import SimpleNamespace as Ns
-
-    class Reader:
-        def city(self, _ip):
-            return Ns(
-                location=Ns(latitude=None, longitude=None, accuracy_radius=None),
-                city=Ns(name=None),
-                country=Ns(iso_code=None),
-                registered_country=Ns(iso_code="AU"),
-                subdivisions=Ns(most_specific=Ns(name=None)),
-            )
-
-    monkeypatch.setattr(traceroute_geo, "_reader", None)
-    monkeypatch.setattr(traceroute_geo, "_get_reader", Reader)
-    _, record = traceroute_geo._read_record(Reader(), "1.1.1.1")
-    assert record["country"] is None
-    assert traceroute_geo.geolocate_country("1.1.1.1") is None
-
-
-def test_lookup_holding_a_replaced_reader_retries_and_caches_nothing_stale(geodb, monkeypatch) -> None:
-    stale = traceroute_geo._get_reader()  # thread A fetched the reader ...
-    real_get = traceroute_geo._get_reader
-    calls = {"n": 0}
-
-    def get_reader():
-        calls["n"] += 1
-        if calls["n"] == 1:  # ... while thread B swaps the database and closes the old reader
-            geodb(b"version-two")
-            real_get()
-            return stale
-        return real_get()
-
-    monkeypatch.setattr(traceroute_geo, "_get_reader", get_reader)
-    assert stale.closed is False
-    result = traceroute_geo.geolocate_ip("8.8.8.8")
-    assert stale.closed is True and result is not None and result["lat"] == 2.0
-    assert traceroute_geo._geo_cache["8.8.8.8"]["lat"] == 2.0
-
-
-def test_concurrent_reloads_never_lose_or_cache_a_wrong_result(geodb) -> None:
-    errors: list[str] = []
-    stop = threading.Event()
-    workers = 6
-    done = [0] * workers  # completed lookups per worker (each worker writes only its own slot)
-
-    def worker(n: int) -> None:
-        while not stop.is_set():
-            ip = f"8.8.{n}.{time.monotonic_ns() % 200 + 1}"
-            if traceroute_geo.geolocate_ip(ip) is None:
-                errors.append(ip)
-            done[n] += 1
-
-    threads = [threading.Thread(target=worker, args=(i,), daemon=True) for i in range(workers)]
-    for t in threads:
-        t.start()
-    try:
-        for version in range(15):
-            geodb(b"x" * (version + 10))
-            # geolocate_ip() gives up after a few swapped-reader retries, so a swap must not overtake the same
-            # lookup repeatedly: every worker finishes a lookup after one swap before the next one.
-            seen = list(done)
-            deadline = time.monotonic() + 10
-            while any(d <= s for d, s in zip(done, seen, strict=True)) and time.monotonic() < deadline:
-                time.sleep(0.001)
-            assert time.monotonic() < deadline, "lookups stalled"
-    finally:
-        stop.set()
-        for t in threads:
-            t.join(timeout=2)
-    alive = [t.name for t in threads if t.is_alive()]
-    assert not alive, f"geo lookup workers did not stop: {alive}"
-    assert errors == []  # no transient failure is returned as "unknown"
-    assert all(v is not None for v in traceroute_geo._geo_cache.values())
-    latest = traceroute_geo._get_reader().ident
-    assert all(v["lat"] == float(latest) for v in traceroute_geo._geo_cache.values())  # no pre-swap entry survived
 
 
 @pytest.mark.parametrize(

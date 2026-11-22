@@ -121,15 +121,15 @@ def test_coarse_geoip_still_queries_online_but_keeps_evidenced_local_location(mo
 
 
 def test_geolite_zero_coordinates_are_valid(monkeypatch: pytest.MonkeyPatch) -> None:
-    record = SimpleNamespace(
-        location=SimpleNamespace(latitude=0.0, longitude=0.0, accuracy_radius=10),
-        city=SimpleNamespace(name="Null Island"),
-        country=SimpleNamespace(iso_code="GH"),
-        subdivisions=None,
-    )
-    reader = SimpleNamespace(city=lambda _ip: record)
-    monkeypatch.setattr(traceroute_geo, "_get_reader", lambda: reader)
-    monkeypatch.setattr(traceroute_geo, "_geo_cache", {})
+    record = {
+        "lat": 0.0,
+        "lon": 0.0,
+        "city": "Null Island",
+        "country": "GH",
+        "subdivision": None,
+        "accuracy_radius": 10,
+    }
+    monkeypatch.setattr(traceroute_geo, "_databases", lambda: SimpleNamespace(locate=lambda _ip: record))
     location = traceroute_geo.geolocate_ip("8.8.8.8")
     assert location["lat"] == location["lon"] == 0.0
     assert location["accuracy_radius_km"] == 10
