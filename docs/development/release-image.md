@@ -8,6 +8,7 @@ Release images are not bit-for-bit reproducible.
 |-------|-------------------|
 | Python base image | The release workflow (`.github/workflows/docker-build.yml`, step "Resolve rolling toolchain versions") resolves `python:3.14-slim` once per release to `python:3.14-slim@sha256:…` and passes it as `PYTHON_BASE` to both architecture builds. Both architectures therefore build on the same base index, even if the tag moves during the run. |
 | Rust toolchain of the libsignal stage | `RUST_IMAGE` in `docker/Dockerfile`, by tag and digest. |
+| Shared `gillbates-*` packages | Pinned by git tag in `pyproject.toml`, installed in `deps-builder` with the BuildKit secret `python_libraries_token` (the `RELEASE_TOKEN` secret in CI); git and the token exist only inside that `RUN`. |
 | Vendored SSLyze | The local wheel in `docker/vendor/wheels/`, pinned by version in `pyproject.toml` and verified against `docker/vendor/PROVENANCE.json`. |
 | signal-cli | Resolved once per release from the latest GitHub release and shared by both builds. Its asset is checked against the SHA-256 digest GitHub publishes. |
 | Built architecture digests | The workflow records one image digest per architecture and builds the manifest from those digests. |

@@ -17,9 +17,12 @@ sudo apt-get install iputils-ping nmap
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python tools/pyproject-deps.py > /tmp/justup-runtime-requirements.txt
+python tools/pyproject-deps.py | grep -v ' @ git+' > /tmp/justup-runtime-requirements.txt
 pip install --only-binary=:all: \
   --find-links docker/vendor/wheels -r /tmp/justup-runtime-requirements.txt
+# Shared packages from the private python-libraries repository (see below)
+pip install -e /opt/python-libraries/packages/geoip \
+  -e /opt/python-libraries/packages/logging -e /opt/python-libraries/packages/public-ip
 python tools/pyproject-deps.py dev > /tmp/justup-dev-requirements.txt
 pip install --only-binary=:all: -r /tmp/justup-dev-requirements.txt
 python tools/pyproject-deps.py docs > /tmp/justup-docs-requirements.txt
@@ -32,6 +35,16 @@ the own, provenance-documented wheel is obtained via `--find-links docker/vendor
 Docker and CI verify its SHA-256 against `docker/vendor/PROVENANCE.json` before installation.
 Dev tools remain pinned in the `dev` extra; MkDocs tools are in the
 `docs` extra. `tools/pyproject-deps.py` prints the respective direct dependencies.
+
+### Shared packages
+
+`gillbates-geoip` (GeoLite2 download and lookups), `gillbates-logging` (log line format, startup banner) and
+`gillbates-public-ip` (public egress address) come from the private `Gill-Bates/python-libraries`
+repository. `pyproject.toml` pins each by release tag (`gillbates-<name>-vX.Y.Z`); the tag must exist before
+a build. For local work install them editable from a checkout, as above. CI installs them from the pinned tag
+with the `RELEASE_TOKEN` secret; a Docker build reads the token from the BuildKit secret
+`python_libraries_token` (`--secret id=python_libraries_token,env=PYTHON_LIBRARIES_TOKEN`), so it never ends up in a
+layer or in the image history.
 
 ## Frontend tools
 
