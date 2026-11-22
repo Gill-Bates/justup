@@ -510,7 +510,7 @@ def test_app_lifespan_supervises_services_and_leaves_no_threads(tmp_path: Path, 
 
     monkeypatch.setenv("JUSTUP_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("SECRET_KEY", Fernet.generate_key().decode())
-    monkeypatch.setattr(bootstrap, "_refresh_geoip", lambda *_a, **_k: None)
+    monkeypatch.setattr(bootstrap, "refresh_geoip", lambda *_a, **_k: None)
     before = {t.ident for t in threading.enumerate()}
 
     app = create_app()
@@ -544,7 +544,7 @@ def test_pop_refresh_error_pauses_instead_of_spinning(tmp_path: Path, monkeypatc
 
     monkeypatch.setenv("JUSTUP_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("SECRET_KEY", Fernet.generate_key().decode())
-    monkeypatch.setattr(bootstrap, "_refresh_geoip", lambda *_a, **_k: None)
+    monkeypatch.setattr(bootstrap, "refresh_geoip", lambda *_a, **_k: None)
     calls = 0
 
     def failing(*_a, **_k):

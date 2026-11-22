@@ -285,7 +285,7 @@ def test_settings_response_has_no_such_field(api):
 
 
 def test_bootstrap_does_not_seed_the_removed_key(tmp_path, monkeypatch):
-    monkeypatch.setattr(bootstrap, "_refresh_geoip", lambda *_a, **_k: None)
+    monkeypatch.setattr(bootstrap, "refresh_geoip", lambda *_a, **_k: None)
     db = tmp_path / "sqlite" / "justup.db"
     db.parent.mkdir()
     bootstrap.bootstrap(db, tmp_path / "tsdb", tmp_path)
@@ -450,7 +450,7 @@ def _app_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("JUSTUP_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("SECRET_KEY", Fernet.generate_key().decode())
     monkeypatch.setattr(crypto, "_primary_key", None)
-    monkeypatch.setattr(bootstrap, "_refresh_geoip", lambda *_a, **_k: None)
+    monkeypatch.setattr(bootstrap, "refresh_geoip", lambda *_a, **_k: None)
     return tmp_path
 
 

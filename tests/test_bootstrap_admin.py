@@ -401,7 +401,7 @@ def test_stale_file_without_a_matching_account_is_removed(conn, pending_file, ca
 
 
 def test_full_start_sequence_shows_until_the_password_is_changed(tmp_path: Path, monkeypatch, capsys):
-    monkeypatch.setattr(bootstrap, "_refresh_geoip", lambda *_a, **_k: None)
+    monkeypatch.setattr(bootstrap, "refresh_geoip", lambda *_a, **_k: None)
     data_dir = tmp_path / "data"
     db_path, tsdb_dir = data_dir / "sqlite" / "justup.db", data_dir / "tsdb"
     db_path.parent.mkdir(parents=True)

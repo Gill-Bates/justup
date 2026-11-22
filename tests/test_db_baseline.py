@@ -227,7 +227,7 @@ def test_geo_opt_out_survives_reinitialisation_and_bootstrap(tmp_path: Path, mon
     from cryptography.fernet import Fernet
 
     monkeypatch.setenv("SECRET_KEY", Fernet.generate_key().decode())
-    monkeypatch.setattr(bootstrap, "_refresh_geoip", lambda *_a, **_k: None)
+    monkeypatch.setattr(bootstrap, "refresh_geoip", lambda *_a, **_k: None)
     db = tmp_path / "sqlite" / "justup.db"
     db.parent.mkdir()
     bootstrap.bootstrap(db, tmp_path / "tsdb", tmp_path)
@@ -327,7 +327,7 @@ def test_bootstrap_refuses_an_old_database_and_keeps_it_byte_identical(tmp_path:
     from cryptography.fernet import Fernet
 
     monkeypatch.setenv("SECRET_KEY", Fernet.generate_key().decode())
-    monkeypatch.setattr(bootstrap, "_refresh_geoip", lambda *_a, **_k: None)
+    monkeypatch.setattr(bootstrap, "refresh_geoip", lambda *_a, **_k: None)
     db = tmp_path / "sqlite" / "justup.db"
     _old_unversioned(db)
     before = _snapshot(db.parent)

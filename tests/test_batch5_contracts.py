@@ -401,7 +401,7 @@ def test_alert_status_constants_match_stored_values():
 
 
 def test_bootstrap_keeps_existing_geoip_setting_and_seeds_missing(tmp_path, monkeypatch):
-    monkeypatch.setattr(bootstrap, "_refresh_geoip", lambda *_a, **_k: None)
+    monkeypatch.setattr(bootstrap, "refresh_geoip", lambda *_a, **_k: None)
     db = tmp_path / "sqlite" / "justup.db"
     db.parent.mkdir()
     conn = sqlite_db.connect(db)
@@ -500,7 +500,7 @@ def _default_setting_values():
 def test_fresh_db_is_seeded_with_defaults_and_settings_fallback_agrees(tmp_path, monkeypatch):
     from app.api.settings import _load
 
-    monkeypatch.setattr(bootstrap, "_refresh_geoip", lambda *_a, **_k: None)
+    monkeypatch.setattr(bootstrap, "refresh_geoip", lambda *_a, **_k: None)
     db = tmp_path / "sqlite" / "justup.db"
     db.parent.mkdir()
     bootstrap.bootstrap(db, tmp_path / "tsdb", tmp_path)
@@ -519,7 +519,7 @@ def test_fresh_db_is_seeded_with_defaults_and_settings_fallback_agrees(tmp_path,
 
 
 def test_bootstrap_seeds_only_missing_settings_and_keeps_custom_values(tmp_path, monkeypatch):
-    monkeypatch.setattr(bootstrap, "_refresh_geoip", lambda *_a, **_k: None)
+    monkeypatch.setattr(bootstrap, "refresh_geoip", lambda *_a, **_k: None)
     db = tmp_path / "sqlite" / "justup.db"
     db.parent.mkdir()
     bootstrap.bootstrap(db, tmp_path / "tsdb", tmp_path)

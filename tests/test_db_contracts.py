@@ -466,7 +466,7 @@ def test_lifespan_stops_owners_before_closing_connections(tmp_path: Path, monkey
 
     monkeypatch.setenv("JUSTUP_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("SECRET_KEY", Fernet.generate_key().decode())
-    monkeypatch.setattr(bootstrap, "_refresh_geoip", lambda *_a, **_k: None)
+    monkeypatch.setattr(bootstrap, "refresh_geoip", lambda *_a, **_k: None)
     order: list[str] = []
 
     real_stop = MonitorScheduler.stop

@@ -41,21 +41,21 @@ def _touch(data_dir, *relpaths) -> None:
 
 def test_auto_update_on_always_asks_the_package(tmp_path, recorder) -> None:
     _touch(tmp_path, GEOIP_DB_RELPATH, GEOIP_ASN_DB_RELPATH)
-    bootstrap._refresh_geoip(tmp_path, auto_update=True)
+    bootstrap.refresh_geoip(tmp_path, auto_update=True)
     assert recorder.calls == 1
 
 
 def test_auto_update_off_downloads_only_missing_files(tmp_path, recorder) -> None:
     _touch(tmp_path, GEOIP_DB_RELPATH, GEOIP_ASN_DB_RELPATH)
-    bootstrap._refresh_geoip(tmp_path, auto_update=False)
+    bootstrap.refresh_geoip(tmp_path, auto_update=False)
     assert recorder.calls == 0
     (tmp_path / GEOIP_ASN_DB_RELPATH).unlink()
-    bootstrap._refresh_geoip(tmp_path, auto_update=False)
+    bootstrap.refresh_geoip(tmp_path, auto_update=False)
     assert recorder.calls == 1
 
 
 def test_a_failed_download_never_blocks_startup(tmp_path, monkeypatch) -> None:
     rec = _Recorder(GeoIPUnavailableError("offline"))
     monkeypatch.setattr(bootstrap, "geoip_databases", lambda _city_path: rec)
-    bootstrap._refresh_geoip(tmp_path, auto_update=True)
+    bootstrap.refresh_geoip(tmp_path, auto_update=True)
     assert rec.calls == 1

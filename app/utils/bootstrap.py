@@ -39,7 +39,7 @@ def get_geoip_build_info(
     return geoip_databases(data_dir / GEOIP_DB_RELPATH).build_info(kind)
 
 
-def _refresh_geoip(data_dir: Path, *, auto_update: bool) -> None:
+def refresh_geoip(data_dir: Path, *, auto_update: bool) -> None:
     """Download or refresh both databases through ``gillbates_geoip``; never raises (startup must not fail)."""
     city_path = data_dir / GEOIP_DB_RELPATH
     asn_path = data_dir / GEOIP_ASN_DB_RELPATH
@@ -122,6 +122,6 @@ def bootstrap(db_path: Path, tsdb_dir: Path, data_dir: Path | None = None) -> bo
 
     # GeoIP download AFTER database connection is closed (avoid lock contention)
     if data_dir is not None and geoip_auto_update is not None:
-        _refresh_geoip(data_dir, auto_update=geoip_auto_update)
+        refresh_geoip(data_dir, auto_update=geoip_auto_update)
 
     return admin_created
