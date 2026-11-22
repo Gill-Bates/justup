@@ -1,4 +1,10 @@
 ## [1.0.4] - 2026-xx-xx
+- `New` PDF reports use your browser's locale for number separators, percentages and date/time order; the report time zone still decides which local times appear.
+- `Changed` **Breaking (API):** `POST /recipients`, and `PATCH /recipients/{id}` with a changed phone number, answer `409` while no Signal account is registered. Register one under Settings > Signal first.
+- `Changed` The Signal switch in the recipient dialogs stays locked, with a link to Settings > Signal, until a Signal account is registered; an already active switch can still be turned off.
+- `Changed` **Save** in the Edit Recipient dialog closes it at once and finishes in the background; a failure reopens the dialog with the error and your input.
+- `Changed` PDF charts are vector graphics: they stay sharp at any zoom and their text is searchable. The image no longer ships Matplotlib and is smaller.
+- `Fix` A failed or unavailable Signal lookup no longer reads as "not registered": saving a recipient shows "Could not verify" instead, and a negative answer is cached only after repeated lookups agree.
 
 <details markdown="1">
 <summary>Previous versions...</summary>

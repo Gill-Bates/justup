@@ -58,8 +58,8 @@ server-side validation.
 | `POST` | `/ui/notifications/{id}/dismiss` | hide one notification for the caller only |
 | `GET`, `POST` | `/groups` | list / create groups |
 | `GET`, `PATCH`, `DELETE` | `/groups/{group_id}` | read, change, delete group (`409` if the name exists or targets still use the group, `404` if unknown) |
-| `GET`, `POST` | `/recipients` | list / create recipients (`409` if the phone number already exists); `enable_for_all_targets` assigns the recipient to every target |
-| `GET`, `PATCH`, `DELETE` | `/recipients/{recipient_id}` | read, change, delete recipient (`PATCH` of `enable_for_all_targets`: `true` assigns to all targets, `false` after `true` removes from all; `DELETE` of a recipient that belongs to a user answers `409`) |
+| `GET`, `POST` | `/recipients` | list / create recipients (`409` if the phone number already exists or no Signal account is registered); `enable_for_all_targets` assigns the recipient to every target |
+| `GET`, `PATCH`, `DELETE` | `/recipients/{recipient_id}` | read, change, delete recipient (`PATCH` with a changed phone number answers `409` while no Signal account is registered; `PATCH` of `enable_for_all_targets`: `true` assigns to all targets, `false` after `true` removes from all; `DELETE` of a recipient that belongs to a user answers `409`) |
 | `POST` | `/recipients/verify-signal` | verify Signal number |
 | `POST` | `/recipients/{recipient_id}/test` | queue a test message to the saved Signal/email channel (`channel`: `signal`, `email`, `all`; admin; 30 s cooldown per recipient and channel) |
 | `GET` | `/recipients/{recipient_id}/test/{queue_id}` | delivery state of a test message: `pending`, `sent` (accepted by the SMTP server; final delivery is not verifiable), `failed` (admin) |

@@ -24,6 +24,10 @@ all assignments, including manual ones, will be removed. Cancel keeps the edits 
 switch; phone number, hint and Send test appear when it is on. Values you typed stay while the dialog
 is open. On save, a switched-off channel is cleared (the recipient keeps only the channels that are on),
 and at least one channel must be on.
+Without a registered Signal account (Settings > Signal), the Signal switch stays locked and links to
+that page; an already active switch can still be switched off. The server enforces the same rule:
+saving a phone number answers `409`. In the Edit Recipient dialog, **Save** closes the dialog at once and
+finishes in the background; if it fails, the dialog reopens with the error and your input.
 **Search:** the field above the recipients list filters while you type, like the Targets search. It matches
 name, email address and Signal number (case-insensitive, ignoring accents and extra spaces) and runs only in
 the browser; the text is not stored or sent anywhere. Escape or the clear button resets it. Without a hit the
@@ -34,7 +38,9 @@ saving, pausing or deleting; creating a new recipient clears it so the new entry
 channels; the Edit Recipient dialog tests Signal and email separately. Tests use the
 saved values, work for disabled recipients, and are not retried on failure.
 
-**Signal status:** the Signal column shows whether the number is registered with Signal. The
+**Signal status:** the Signal column shows whether the number is registered with Signal. A failed
+lookup is retried; saving a recipient warns "Could not verify" when no answer arrives, which is not
+the same as "not registered". A negative answer is cached only after all lookups agree. The
 answer is cached for 24 hours. The *Re-check Signal* button (circular arrows, in the row actions)
 asks signal-cli again for that recipient and replaces the cached answer (a number checked in the
 last 10 seconds is answered from the cache); admins only, at most
